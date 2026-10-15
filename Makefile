@@ -84,9 +84,9 @@ build/test_menu_position: src/menu_position.c src/menu_position.h tests/test_men
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/menu_position.c tests/test_menu_position.c $(LDFLAGS) -o $@
 
-build/test_usb_media: tests/test_usb_media.c src/usb_media.c src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
+build/test_usb_media: src/library_index.c src/library_index.h tests/test_usb_media.c src/usb_media.c src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_media.c src/usb_media.c src/usb_art.c src/menu_ui.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/usb_art.c src/menu_ui.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
 
 test-media: build/test_usb_media
 	python3 tests/test_media_tools.py

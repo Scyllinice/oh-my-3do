@@ -72,7 +72,7 @@ const char *menu_cover_find(const MenuCover *covers, size_t count, const char *p
 int menu_support_entry(const char *name, int directory, int root)
 {
     static const char *files[] = {"boot.iso", "menu-demo.iso", "ohmy3do.ini", "favorites.txt",
-        "boot.iso.sha256", "menu-demo.iso.sha256", "last-position.txt", "recent.txt", "diagnostics.txt"};
+        "library.3di", "boot.iso.sha256", "menu-demo.iso.sha256", "last-position.txt", "recent.txt", "diagnostics.txt"};
     size_t i;
     if (!root) return 0;
     if (directory) return !menu_path_compare(name, "covers") || !menu_path_compare(name, "saves") || !menu_path_compare(name,"previews") || !menu_path_compare(name,"music");

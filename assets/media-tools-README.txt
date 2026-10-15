@@ -12,7 +12,7 @@ Install the image library once (Windows):
 Audit existing covers without changing files:
   py resize-covers.py "E:/covers" --check
 This reports dimensions, mode and size. Exit status 1 means some images would
-benefit from preparation; 0 means every image is already 64x80 RGB PNG.
+benefit from preparation; 0 means every image is already 84x105 RGB PNG.
 
 Resize one image and give it the game's basename:
   py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
@@ -20,7 +20,7 @@ Resize one image and give it the game's basename:
 Or convert a whole folder, keeping each image's basename:
   py resize-covers.py "Downloads/artwork" "E:/covers"
 
-The output is a 64x80 RGB PNG. Images are fitted without cropping, with dark
+The output is a 84x105 RGB PNG. Images are fitted without cropping, with dark
 padding, transparency composited, and EXIF orientation corrected. JPEG, PNG,
 WebP, BMP, TIFF and GIF inputs are supported when available in Pillow. Animated
 inputs use the first frame. Originals are never replaced. Existing output files
@@ -41,7 +41,7 @@ Copy unmodified PNGs into the USB covers folder, using the game's basename:
   USB/Games/Road Rash.iso
   USB/covers/Road Rash.png
 
-PNGs: up to 1024x1024 pixels and 512 KiB. Prepared 64x80 RGB PNGs avoid
+PNGs: up to 1024x1024 pixels and 512 KiB. Prepared 84x105 RGB PNGs avoid
 console-side resizing and alpha blending. The indexer warns about larger PNGs
 without changing them. The menu caches six decoded covers for repeat visits.
 Regenerate the index after adding, removing or renaming games/media.
@@ -52,7 +52,11 @@ Windows example (change E:/ to the USB drive):
 Linux/macOS example:
   python3 index-media.py /path/to/USB
 
-The indexer changes only index.3di files in covers/ and previews/.
+The indexer writes index.3di in covers/ and previews/, plus library.3di at the
+USB root. Find uses library.3di instead of scanning folders on the console.
+Regenerate these indices after changing the games or media on the drive.
+Prepare covers from original artwork for the sharpest detail; previously reduced
+64x80 files cannot recover detail when enlarged. Video previews remain 64x80.
 It preserves existing valid associations, including converted .3dc covers.
 It does not convert or modify PNGs. The same game basename in different folders
 shares its matching media. Cold boot or refresh at USB root reloads indices.

@@ -81,6 +81,18 @@ def main():
             image.write_bytes(data); output.write_bytes(expected); run(binary,'png',image,output)
         for name,data in [('empty',b''),('oversize',png(1025,1,2,8,b'\0')),('shortpixels',png(64,80,2,8,b'\0\xff\0\0'))]:
             image=folder/(name+'.png'); image.write_bytes(data); run(binary,'badpng',image)
+        # Covers preserve every native pixel; old 64x80 covers gain interpolated shades.
+        native=folder/'native.png'; expected_native=folder/'native.rgb555'
+        sample_native=lambda x,y: ((x*3)%256,(y*2)%256,(x+y)%256)
+        native.write_bytes(png(84,105,2,8,b''.join(b'\0'+b''.join(bytes(sample_native(x,y)) for x in range(84)) for y in range(105))))
+        expected_native.write_bytes(b''.join(rgb555((*sample_native(x,y),255)) for y in range(105) for x in range(84)))
+        run(binary,'cover',native,expected_native)
+        checker=folder/'checker.png'
+        checker.write_bytes(png(64,80,2,8,b''.join(b'\0'+b''.join(b'\xff\xff\xff' if (x+y)%2==0 else b'\0\0\0' for x in range(64)) for y in range(80))))
+        run(binary,'smooth',checker)
+        legacy=folder/'legacy.3dc'; red=rgb555((255,0,0,255))*5120
+        legacy.write_bytes(b'OM3DCOV1'+struct.pack('>HHIII',64,80,len(red),binascii.crc32(red),0)+red)
+        run(binary,'legacycover',legacy)
         payload=rgb555((255,0,0,255))*5120+rgb555((0,0,255,255))*5120
         video=folder/'Game.3dv'; video.write_bytes(b'OM3DVID1'+struct.pack('>HHIIHH',64,80,len(payload),binascii.crc32(payload),2,6)+payload+b'END3DV01')
         run(binary,'video',video)
@@ -89,10 +101,20 @@ def main():
         run(binary,'video',maximal)
         usb=folder/'usb'; (usb/'covers').mkdir(parents=True); (usb/'previews').mkdir()
         (usb/'Game.iso').write_bytes(b''); (usb/'boot.iso').write_bytes(b'')
+        bare=folder/'bare'; bare.mkdir(); (bare/'Game.iso').write_bytes(b''); indexer.index(bare)
+        run(binary,'library',bare/'library.3di'); assert not (bare/'covers').exists()
+        empty=folder/'empty'; empty.mkdir(); indexer.index(empty); run(binary,'emptylibrary',empty/'library.3di')
         source=usb/'covers/Game.png'; source.write_bytes(cases[0][0]); before=source.read_bytes()
         shutil.copyfile(video,usb/'previews/Game.3dv'); indexer.index(usb)
         assert source.read_bytes()==before
+        run(binary,'library',usb/'library.3di')
         run(binary,'index',usb/'covers/index.3di')
+        damaged_library=bytearray((usb/'library.3di').read_bytes()); damaged_library[-9]^=1
+        (folder/'bad-library.3di').write_bytes(damaged_library); run(binary,'badlibrary',folder/'bad-library.3di')
+        for bad_path in [b'../Game.iso\0',b'/Game.iso\0',b'Games//Game.iso\0',b'Game.png\0']:
+            body=struct.pack('>H',len(bad_path))+bad_path
+            invalid=b'OM3DLIB1'+struct.pack('>IIII',1,len(body),binascii.crc32(body),0)+body+b'END3DL01'
+            (folder/'bad-library.3di').write_bytes(invalid); run(binary,'badlibrary',folder/'bad-library.3di')
         # Re-indexing is deterministic and preserves valid converted associations.
         old=(usb/'covers/index.3di').read_bytes(); indexer.index(usb)
         assert (usb/'covers/index.3di').read_bytes()==old

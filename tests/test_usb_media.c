@@ -1,4 +1,5 @@
 #include "usb_media.h"
+#include "library_index.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,7 @@ static int transfer(void *context,const unsigned char *packet,unsigned char *rep
         size_t offset=((size_t)packet[1]*256+packet[2])*4;
         assert(offset+4 <= sizeof(f->buffer)); memcpy(f->buffer+offset,packet+3,4);
     } else if (packet[0] == 0xe1) {
-        assert(!strncmp((char *)f->buffer,"covers/",7) || !strncmp((char *)f->buffer,"previews/",9));
+        assert(!strncmp((char *)f->buffer,"covers/",7) || !strncmp((char *)f->buffer,"previews/",9) || !strcmp((char *)f->buffer,"library.3di"));
         f->pos=0; f->opened=1; reply[1]=1; *length=3;
     } else if (packet[0] == 0xe3) {
         size_t n=(size_t)packet[1]*256+packet[2], actual=n;
@@ -55,26 +56,39 @@ static unsigned char *load(const char *name,size_t *size)
 }
 int main(int argc,char **argv)
 {
-    Fake f; Ode ode; UsbPreview preview; unsigned char pixels[USB_ART_PIXELS], *expected;
+    Fake f; Ode ode; UsbPreview preview; unsigned char pixels[USB_COVER_PIXELS], *expected;
     size_t bytes, original; int calls, i;
+    int (*decode)(Ode *,OdeReadBuffer,const char *,unsigned char *,MediaCancel,void *)=usb_png_pixels;
     assert(argc >= 3); memset(&f,0,sizeof(f)); memset(&preview,0,sizeof(preview));
     f.data=load(argv[2],&f.size); original=f.size; reset(&f,&ode);
-    if (!strcmp(argv[1],"png")) {
-        assert(argc == 4); expected=load(argv[3],&bytes); assert(bytes == USB_ART_PIXELS);
-        assert(!usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f));
+    if (!strcmp(argv[1],"cover")) decode=usb_png_cover;
+    if (!strcmp(argv[1],"png") || !strcmp(argv[1],"cover")) {
+        assert(argc == 4); expected=load(argv[3],&bytes); assert(bytes == (!strcmp(argv[1],"cover") ? USB_COVER_PIXELS : USB_ART_PIXELS));
+        assert(!decode(&ode,reader,"Game.png",pixels,cancel,&f));
         assert(!memcmp(pixels,expected,bytes)); free(expected); calls=f.calls;
         for (i=1;i<=calls;++i) {
             reset(&f,&ode); f.fail_at=i;
-            assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0);
+            assert(decode(&ode,reader,"Game.png",pixels,cancel,&f) < 0);
         }
         for (i=1;i<=12 && (size_t)i < original;++i) {
             reset(&f,&ode); f.size=original-i;
-            assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
+            assert(decode(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
         }
         f.size=original; reset(&f,&ode); f.cancel_after=10;
-        assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed && !ode.navigation_failed);
+        assert(decode(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed && !ode.navigation_failed);
         reset(&f,&ode); f.data[original-1]^=1;
-        assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
+        assert(decode(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
+    } else if (!strcmp(argv[1],"legacycover")) {
+        size_t pixel;
+        assert(!usb_legacy_cover(&ode,reader,"Game.3dc",pixels,cancel,&f));
+        for (pixel=0;pixel<USB_COVER_PIXELS;pixel+=2) assert(pixels[pixel]==0x7c && !pixels[pixel+1]);
+        reset(&f,&ode); f.cancel_after=10;
+        assert(usb_legacy_cover(&ode,reader,"Game.3dc",pixels,cancel,&f)<0 && f.closed);
+    } else if (!strcmp(argv[1],"smooth")) {
+        unsigned int center;
+        assert(!usb_png_cover(&ode,reader,"Game.png",pixels,cancel,&f));
+        center=((unsigned int)pixels[(52*84+42)*2]<<8)|pixels[(52*84+42)*2+1];
+        assert(center && center!=0x7fff && (center&31)==((center>>5)&31) && (center&31)==((center>>10)&31));
     } else if (!strcmp(argv[1],"badpng")) {
         assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
     } else if (!strcmp(argv[1],"video")) {
@@ -93,6 +107,32 @@ int main(int argc,char **argv)
         assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f) < 0 && f.closed && !ode.navigation_failed);
         reset(&f,&ode); f.data[20]=1;
         assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f) < 0);
+    } else if (!strcmp(argv[1],"emptylibrary")) {
+        LibraryCatalog catalog;
+        memset(&catalog,0,sizeof(catalog));
+        assert(!library_index_load(&ode,reader,"/Storage",&catalog,cancel,&f));
+        assert(catalog.valid && !catalog.count); library_catalog_free(&catalog);
+    } else if (!strcmp(argv[1],"library") || !strcmp(argv[1],"badlibrary")) {
+        LibraryCatalog catalog;
+        memset(&catalog,0,sizeof(catalog));
+        if (!strcmp(argv[1],"badlibrary")) {
+            assert(library_index_load(&ode,reader,"/Storage",&catalog,cancel,&f)<0 && !catalog.valid);
+        } else {
+            assert(!library_index_load(&ode,reader,"/Storage/USB A",&catalog,cancel,&f));
+            assert(catalog.valid && catalog.count==1 && !strcmp(catalog.paths[0],"/Storage/USB A/Game.iso"));
+            calls=f.calls; library_catalog_free(&catalog);
+            for (i=1;i<=calls;++i) {
+                reset(&f,&ode); f.fail_at=i;
+                assert(library_index_load(&ode,reader,"/Storage",&catalog,cancel,&f)<0 && !catalog.valid);
+            }
+            for (i=1;i<=8;++i) {
+                reset(&f,&ode); f.size=original-i;
+                assert(library_index_load(&ode,reader,"/Storage",&catalog,cancel,&f)<0 && !catalog.valid && f.closed);
+            }
+            f.size=original; reset(&f,&ode); f.cancel_after=10;
+            assert(library_index_load(&ode,reader,"/Storage",&catalog,cancel,&f)==1 && f.closed && !catalog.valid);
+        }
+        library_catalog_free(&catalog);
     } else if (!strcmp(argv[1],"index")) {
         UsbArtIndex index; memset(&index,0,sizeof(index));
         assert(!usb_media_index_load(&ode,reader,&index,"covers"));

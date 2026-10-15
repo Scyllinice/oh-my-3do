@@ -4,6 +4,9 @@
 #include "menu_ui.h"
 
 #define USB_ART_PIXELS (64 * 80 * 2)
+#define USB_COVER_WIDTH 84
+#define USB_COVER_HEIGHT 105
+#define USB_COVER_PIXELS (USB_COVER_WIDTH * USB_COVER_HEIGHT * 2)
 typedef struct UsbArtIndex {
     MenuCover *entries;
     size_t count;

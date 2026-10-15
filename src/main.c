@@ -13,6 +13,7 @@
 #include "nvram_io.h"
 #include "library_features.h"
 #include "library_navigation.h"
+#include "library_index.h"
 #include "menu_settings.h"
 #include "menu_position.h"
 
@@ -29,7 +30,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.11.2"
+#define MENU_VERSION "0.12.0"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -71,6 +72,8 @@ typedef struct Menu {
     CCB *splash;
     int booting;
     LibraryCatalog catalog;
+    unsigned long catalog_volume;
+    size_t search_matches[LIBRARY_CATALOG_MAX], search_count;
     unsigned long search_redraw;
     u32 suppress_buttons;
     int usb_music_result;
@@ -477,7 +480,7 @@ static void media_cel(Menu *menu,CCB *source)
 {
     CCB copy=*source;
     copy.ccb_XPos=19<<16; copy.ccb_YPos=59<<16;
-    copy.ccb_HDX=(1<<20)*21/16; copy.ccb_VDY=(1<<16)*21/16;
+    copy.ccb_HDX=(1<<20)*84/source->ccb_Width; copy.ccb_VDY=(1<<16)*105/source->ccb_Height;
     draw_cel(menu,&copy);
 }
 static void media_placeholder(Menu *menu,int folder)
@@ -707,8 +710,8 @@ static int read_usb_cover(void *context)
 {
     UsbCoverRead *read = (UsbCoverRead *)context;
     if (!menu_path_compare(read->filename+strlen(read->filename)-4,".png"))
-        return usb_png_pixels(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
-    return usb_art_pixels(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels);
+        return usb_png_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
+    return usb_legacy_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
 }
 
 static unsigned char *music_allocate(void *context,const UsbMusicSpec *spec)
@@ -790,7 +793,8 @@ static void update_cover(Menu *menu)
         CCB *cover;
         const char *message;
         unsigned int i;
-        int result;
+        int result, width, height;
+        size_t bytes;
         unsigned long started, commands, volume;
         lookup = path + 9; /* remove /Storage/ */
         if (menu->depth && !(menu->path_ids[0] & 0xffffffUL))
@@ -800,10 +804,12 @@ static void update_cover(Menu *menu)
         volume=entry->toc_id&0xff000000UL;
         if (!cover_cache_contains(&menu->cover_cache,volume,file) && now_ms(menu)-menu->selection_since<350UL) return;
         menu->cover_attempted=1;
-        cover = CreateCel(64, 80, 16, CREATECEL_UNCODED, NULL);
+        width=USB_COVER_WIDTH; height=USB_COVER_HEIGHT;
+        bytes=(size_t)width*height*2;
+        cover = CreateCel(width,height,16,CREATECEL_UNCODED,NULL);
         if (!cover && menu->cover_cache.clock) {
             cover_cache_clear(&menu->cover_cache);
-            cover=CreateCel(64,80,16,CREATECEL_UNCODED,NULL);
+            cover=CreateCel(width,height,16,CREATECEL_UNCODED,NULL);
             if (cover && now_ms(menu)-menu->selection_since<350UL) {
                 UnloadCel(cover); menu->cover_attempted=0; return;
             }
@@ -813,7 +819,7 @@ static void update_cover(Menu *menu)
             route[i].id = menu->path_ids[i];
             route[i].name = menu->path[i];
         }
-        if (cover_cache_get(&menu->cover_cache,volume,file,(unsigned char *)cover->ccb_SourcePtr)) {
+        if (cover_cache_get(&menu->cover_cache,volume,file,(unsigned char *)cover->ccb_SourcePtr,bytes)) {
             menu->cover_cached=1; menu->cover_load_ms=menu->cover_commands=0;
             menu->cover=cover; goto positioned;
         }
@@ -835,7 +841,7 @@ static void update_cover(Menu *menu)
         if (result < 0 || menu->media_cancelled) UnloadCel(cover);
         else {
             menu->cover = cover;
-            cover_cache_put(&menu->cover_cache,volume,file,(const unsigned char *)cover->ccb_SourcePtr);
+            cover_cache_put(&menu->cover_cache,volume,file,(const unsigned char *)cover->ccb_SourcePtr,bytes);
         }
         if (result == -2 || menu->bus.timed_out) {
             menu->ode.navigation_failed = 1;
@@ -1744,33 +1750,70 @@ static int search_progress(void *context,size_t games)
         menu->suppress_buttons|=ControlB; return 1;
     }
     if (now_ms(menu)-menu->search_redraw>=150UL) {
-        format(menu->status,"Scanning library: %lu games / B cancels",(unsigned long)games);
+        (void)games; strcpy(menu->status,"Loading search index... B cancels");
         menu->tool_message=menu->status; draw(menu); menu->search_redraw=now_ms(menu);
     }
     return 0;
 }
+typedef struct SearchIndexRead {
+    Menu *menu;
+    char prefix[ODE_MAX_NAME+10];
+} SearchIndexRead;
+static int index_cancel(void *context) { return search_progress(context,0); }
+static int read_search_index(void *context)
+{
+    SearchIndexRead *read=(SearchIndexRead *)context;
+    int result=library_index_load(&read->menu->ode,ode_bus_read_buffer,read->prefix,
+        &read->menu->catalog,index_cancel,read->menu);
+    if (result==-3) {
+        cover_cache_clear(&read->menu->cover_cache);
+        result=library_index_load(&read->menu->ode,ode_bus_read_buffer,read->prefix,
+            &read->menu->catalog,index_cancel,read->menu);
+    }
+    return result;
+}
 static void search_library(Menu *menu,int rebuild)
 {
     ArtRouteStep route[MAX_DEPTH];
+    SearchIndexRead *read;
+    unsigned long volume=menu->depth ? menu->path_ids[0]&0xff000000UL :
+        (menu->listing.count ? menu->listing.entries[0]->toc_id&0xff000000UL : 0);
     int result=0;
+    size_t i;
     if (menu->demo) { menu->tool_message="Library search needs an ODE."; return; }
+    if (menu->config_result!=0 || strcmp(menu->ode.identity,"LOCODE")) {
+        menu->tool_message="Search needs a valid USB config."; return;
+    }
     if (!menu->ready || menu->bus.timed_out || menu->ode.navigation_failed) {
         menu->tool_message="ODE unavailable. Restart console."; return;
     }
-    if (!menu->catalog.valid || rebuild) {
-        stop_preview(menu); current_route(menu,route);
-        menu->search_redraw=0;
-        menu->tool_message="Scanning library... B cancels"; draw(menu);
-        result=library_catalog_build(&menu->ode,route,menu->depth,&menu->listing,
-            menu->config.folder_workaround,&menu->catalog,search_progress,menu);
+    if (!menu->depth) for (i=0;i<menu->listing.count;++i)
+        if (menu->listing.entries[i]->is_directory && !(menu->listing.entries[i]->toc_id&0xffffffUL)) {
+            menu->tool_message="Open a USB drive before searching."; return;
+        }
+    if (!menu->catalog.valid || rebuild || menu->catalog_volume!=volume) {
+        read=(SearchIndexRead *)malloc(sizeof(*read));
+        if (!read) { menu->tool_message="Not enough search memory."; return; }
+        read->menu=menu; strcpy(read->prefix,"/Storage");
+        if (menu->depth && !(menu->path_ids[0]&0xffffffUL)) { strcat(read->prefix,"/"); strcat(read->prefix,menu->path[0]); }
+        stop_preview(menu); current_route(menu,route); menu->search_redraw=0;
+        menu->tool_message="Loading search index... B cancels"; draw(menu);
+        result=art_at_root(&menu->ode,route,menu->depth,&menu->listing,
+            menu->config.folder_workaround,read_search_index,read);
+        free(read);
         if (result) {
-            menu->tool_message=result==1 ? "Search cancelled." : (result==-2 ? "Folder I/O failed. Restart console." : "Not enough search memory.");
+            menu->tool_message=result==1 ? "Search cancelled." : (result==-2 ? "Folder I/O failed. Restart console." : (result==-3 ? "Not enough search memory." : "Run index-media.py on the USB drive."));
             if (result==-2 || menu->bus.timed_out || menu->ode.navigation_failed) menu->ready=menu->view_valid=0;
             return;
         }
+        menu->catalog_volume=volume;
     }
-    menu->tool_message=menu->catalog.truncated ? "Partial library. Limit reached." : NULL;
-    menu->tools=TOOL_RESULTS; menu->tool_selected=0; menu->selection_since=now_ms(menu);
+    menu->search_count=0;
+    for (i=0;i<menu->catalog.count;++i) {
+        const char *path=menu->catalog.paths[i], *name=strrchr(path,'/');
+        if (menu_name_matches(name ? name+1 : path,menu->find_query)) menu->search_matches[menu->search_count++]=i;
+    }
+    menu->tool_message=NULL; menu->tools=TOOL_RESULTS; menu->tool_selected=0; menu->selection_since=now_ms(menu);
 }
 static void find_input(Menu *menu, u32 pressed)
 {
@@ -1894,12 +1937,12 @@ static void draw_tools(Menu *menu)
         label(menu,24,194,"Music + display apply now. C saves.",MUTED,UI_FONT_SMALL);
         label(menu,270,64,start ? "2 / 2" : "1 / 2",MUTED,UI_FONT_SMALL);
     } else if (menu->tools == TOOL_RESULTS) {
-        count=library_catalog_count(&menu->catalog,menu->find_query);
+        count=menu->search_count;
         start=menu->tool_selected/6*6;
         format(line,"%lu matches for: %.24s",(unsigned long)count,*menu->find_query ? menu->find_query : "All games");
         label(menu,22,82,line,MUTED,UI_FONT_SMALL);
         for (i=start;i<count && i<start+6;++i) {
-            const char *path=library_catalog_match(&menu->catalog,menu->find_query,i);
+            const char *path=menu->catalog.paths[menu->search_matches[i]];
             const char *name=strrchr(path,'/')+1;
             int y=99+(int)(i-start)*13;
             if (i==menu->tool_selected) rectangle(menu,16,y-1,287,13,LINE);
@@ -1907,7 +1950,7 @@ static void draw_tools(Menu *menu)
         }
         if (!count) label(menu,22,112,"No games matched. Start to edit.",TEXT,UI_FONT_SMALL);
         else {
-            const char *path=library_catalog_match(&menu->catalog,menu->find_query,menu->tool_selected);
+            const char *path=menu->catalog.paths[menu->search_matches[menu->tool_selected]];
             size_t length=(size_t)(strrchr(path,'/')-path);
             int room=280*(320-2*menu->config.screen_margin)/320;
             size_t start=0;
@@ -1918,7 +1961,7 @@ static void draw_tools(Menu *menu)
         }
     } else if (menu->tools == TOOL_FIND) {
         format(line,"Find: %s_",menu->find_query); tool_line(menu,0,line,TEXT);
-        tool_line(menu,1,"Searches game names across the drive.",MUTED);
+        tool_line(menu,1,"Drive-wide search / PC index.",MUTED);
         for (i = 0; i < 40; ++i) {
             char key[3]; key[0] = find_keys[i]; key[1] = 0;
             if (key[0] == ' ') strcpy(key,"SP");
@@ -1998,7 +2041,7 @@ static void draw_tools(Menu *menu)
         const char *controls = "A:Select B:Back";
         if (menu->tools == TOOL_GROUP) controls = "A:Queue set X:Only this B:Cancel";
         else if (menu->tools == TOOL_FAVORITES) controls = menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel" : "A:Open C:Add X:Remove B:Back";
-        else if (menu->tools == TOOL_RESULTS) controls = "A:Open Start:Edit X:Rescan B:Back";
+        else if (menu->tools == TOOL_RESULTS) controls = "A:Open Start:Edit X:Reload B:Back";
         else if (menu->tools == TOOL_FIND) controls = "Arrows:Choose A:Key B:Cancel";
         else if (menu->tools == TOOL_CONFIG) controls = "Left/Right:Change C:Save B:Back";
         else if (menu->tools == TOOL_BACKUP_DETAILS) controls = "A:Continue C:Old/New B:Back";
@@ -2154,7 +2197,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if (page == TOOL_RESULTS) {
         if (pressed & ControlStart) { menu->tools=TOOL_FIND; menu->tool_message=NULL; return; }
         if (pressed & ControlX) { search_library(menu,1); return; }
-        count=library_catalog_count(&menu->catalog,menu->find_query);
+        count=menu->search_count;
     }
     if (page==TOOL_RESULTS && count) {
         if (pressed & (ControlRight | ControlRightShift)) {
@@ -2258,7 +2301,7 @@ static void tools_input(Menu *menu, u32 pressed)
             menu->tools = 0; review_queue(menu);
         }
     } else if (page == TOOL_RESULTS && count) {
-        const char *path=library_catalog_match(&menu->catalog,menu->find_query,menu->tool_selected);
+        const char *path=menu->catalog.paths[menu->search_matches[menu->tool_selected]];
         if (path) open_saved_path(menu,path);
     } else if (page == TOOL_FAVORITES || page == TOOL_RECENT) open_favorite(menu);
     else if (page == TOOL_BACKUP_DETAILS) menu->tools = TOOL_CONFIRM_BACKUP;
@@ -2275,6 +2318,18 @@ static void tools_input(Menu *menu, u32 pressed)
     } else if (page == TOOL_CONFIRM_RESTORE) {
         restore_selected(menu); menu->tools = TOOL_ARCHIVE; menu->tool_selected = menu->save_selected;
     }
+}
+
+static void toggle_tools(Menu *menu)
+{
+    if (menu->favorites_move) cancel_favorites_move(menu);
+    if (menu->tools) {
+        if (menu->tools==TOOL_GROUP) ode_playlist_dispose(&menu->group);
+        save_archive_free(&menu->pending);
+        menu->tools=menu->review=0; selection_changed(menu);
+    } else menu->tools=TOOL_HOME;
+    menu->tool_selected=0; menu->tool_message=NULL;
+    menu->c_pending=menu->alphabet_active=0;
 }
 
 int main(int argc, char **argv)
@@ -2358,8 +2413,7 @@ int main(int argc, char **argv)
         if ((buttons & (ControlLeftShift | ControlRightShift)) ==
                 (ControlLeftShift | ControlRightShift) &&
                 (pressed & (ControlLeftShift | ControlRightShift))) {
-            if (menu.favorites_move) cancel_favorites_move(&menu);
-            menu.tools = TOOL_HOME; menu.tool_selected = 0; menu.tool_message = NULL; menu.c_pending = 0; menu.alphabet_active = 0;
+            toggle_tools(&menu);
             pressed = 0;
         }
         if (menu.tools) {

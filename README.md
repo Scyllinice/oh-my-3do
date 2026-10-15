@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.11.2**.
+restore, plus optional menu music. The current version is **0.12.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -56,6 +56,7 @@ Outputs in `iso/`:
 | `covers/` | Raw PNGs or converted thumbnails and checked index |
 | `previews/` | Optional converted silent clips and checked index |
 | `saves/` | Copy this folder to USB for save backups |
+| `library.3di` | Search index generated on the PC by `index-media.py` |
 
 Builds preserve existing `iso/ohmy3do.ini` and `iso/favorites.txt`. Source
 examples are `ohmy3do.ini` and `favorites.example.txt`. Build audits and signed
@@ -220,18 +221,29 @@ game, and malformed lists are not overwritten automatically.
 
 Tools → Find a game opens a controller keyboard. Use the arrows to choose a
 character, **A** to enter it, **X** to erase, **C** to clear, and **Start** to
-search. `SP` enters a space. Search matches game-image names across folders and
-available volumes, ignoring ASCII case. An empty query lists all games.
+search. `SP` enters a space. Search matches game-image names across folders on the
+selected USB drive, ignoring ASCII case. An empty query lists all games.
 
-The first search scans the drive; **B** cancels and returns to the original
-folder. The scan reads directory listings without mounting games or writing an
-index file. Game paths stay in RAM for later searches during the session.
+Run the updated `index-media.py` on the PC before using Find:
+
+```powershell
+py index-media.py M:/
+```
+
+The same command creates cover/preview associations and `library.3di` at the
+USB root, even when there is no artwork. Find loads this checked file once and
+keeps it in RAM. It does not recursively scan folders on the console. Matching
+runs once per submitted query; drawing and navigating results use a stored match
+list. The initial index read still requires a USB-root round trip.
+
 Results show the selected game's folder to distinguish duplicate names.
 **A** opens that folder and selects the game; it does not launch automatically.
-**Start** or **B** returns to the keyboard, **X** rescans after library changes,
-and Left/Right or L/R pages through results. The cache holds up to 2,048 paths
-and 128 KiB of path text, with 32 levels of folders. A limit displays a partial
-library notice. Support folders and the menu ISOs are excluded.
+**Start** or **B** returns to the keyboard, **X** reloads the index, and Left/Right
+or L/R pages through results. Regenerate the index after adding or moving games.
+Search covers the selected USB volume; enter a volume before searching from a
+multi-device root. The index supports 2,048 games and 128 KiB of cached paths.
+Support folders and the menu ISOs are excluded. A missing or invalid index shows
+setup instructions instead of starting a slow directory scan.
 
 Both position recording and recent-game recording can be disabled in Settings. Existing INIs use enabled defaults for these new options. Holding X
 at startup skips these USB extras. Each USB volume has its own files; startup
@@ -359,12 +371,17 @@ Game media belongs in `/covers` and `/previews` on USB, outside `boot.iso`. PNG
 covers can be copied directly: no image conversion or ISO rebuild is needed. The
 menu decodes them into the cover area and preserves their aspect ratio.
 Transparency is blended against the artwork background. PNGs can be up to
-1024×1024 pixels and 512 KiB. For faster loading, prepare opaque 64×80 RGB
-PNGs with the tool below; these avoid resizing and alpha blending on the console.
+1024×1024 pixels and 512 KiB. For faster loading, prepare opaque 84×105 RGB
+PNGs with the tool below; these match the artwork panel at native size and
+avoid resizing and alpha blending on the console. Earlier versions reduced
+covers to 64×80 and then stretched them; native PNG covers now retain all 84×105
+pixels. Smaller PNGs and legacy 64×80 converted covers use smooth enlargement.
+For sharper detail, prepare covers again from the original artwork, since an
+already reduced image cannot recover discarded detail.
 RGB, RGBA, grayscale, indexed, 1/2/4/8/16-bit and interlaced PNGs
 are supported where valid for their color type. JPEGs still need conversion.
 
-The menu keeps six decoded covers in RAM (up to 60 KiB of pixel data). Returning
+The menu keeps six decoded covers in RAM (about 104 KiB of pixel data). Returning
 to a cached cover skips USB access, PNG decoding, and the normal selection wait.
 Cache entries are separated by USB volume. Press **X** in the browser to refresh
 after replacing cover files; reconnecting clears the cache as well. Cache
@@ -386,7 +403,7 @@ py resize-covers.py "Downloads/artwork" "E:/covers"
 py index-media.py E:/
 ```
 
-The tool creates 64×80 RGB PNGs, matching the cover texture used by the menu.
+The tool creates 84×105 RGB PNGs, matching the cover texture used by the menu.
 It preserves aspect ratio with dark padding, applies EXIF rotation, and blends
 transparency against the artwork background. JPEG, PNG, WebP, BMP, TIFF, and GIF
 are supported through Pillow; animated inputs use the first frame. Originals
@@ -405,7 +422,7 @@ in `tools/`. Docker includes its dependencies after rebuilding the image:
 Copy the prepared covers to USB and regenerate its media index. Existing valid
 PNGs can still be copied directly; resizing is optional. `--check` reports each
 image's dimensions, mode, and size, and exits with status 1 if preparation is
-recommended. `index-media.py` also warns about PNGs larger than 64×80 without
+recommended. `index-media.py` also warns about PNGs different from 84×105 without
 changing the artwork. Prepare replacements in a separate folder, then copy the
 prepared PNGs into `covers/` and regenerate the index. Diagnostic exports include
 the last cover load's milliseconds, ODE command count, and cache-hit flag.
@@ -438,9 +455,9 @@ python3 tools/index-media.py /path/to/USB
 
 On Windows, run `py tools/index-media.py E:/`, substituting the USB drive
 letter. With the portable ZIP, run `py index-media.py E:/` from its extracted
-folder. The indexer scans game paths and writes small `index.3di` files, leaving
-the media files unchanged. The firmware does not list PNGs or preview files in
-its browser, so these indices are still needed. Existing valid associations are
+folder. The indexer scans game paths and writes small `index.3di` files plus
+`library.3di` for Find, leaving the media files unchanged. The firmware does not
+list PNGs or preview files in its browser, so these indices are still needed. Existing valid associations are
 preserved when their game and media files still exist, including older `.3dc`
 covers; a matching PNG basename takes precedence. Games in different folders
 with the same basename share the matching artwork. Each index supports up to

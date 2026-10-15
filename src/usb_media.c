@@ -52,7 +52,9 @@ done:
 typedef struct PngCanvas {
     unsigned char *pixels;
     unsigned short xb[1025], yb[1025];
-    unsigned int width, height, left, top;
+    unsigned int width, height, left, top, target_width, target_height;
+    unsigned int source_width, source_height;
+    unsigned char *small;
     int complete, native;
     unsigned int rendered;
     MediaCancel cancel;
@@ -63,12 +65,17 @@ static void png_init(pngle_t *png, uint32_t w, uint32_t h)
 {
     PngCanvas *canvas = (PngCanvas *)pngle_get_user_data(png);
     unsigned int i;
-    canvas->native=w==64 && h==80;
-    canvas->width = 64; canvas->height = (unsigned int)(h*64/w);
-    if (canvas->height > 80) { canvas->height = 80; canvas->width = (unsigned int)(w*80/h); }
+    canvas->source_width=w; canvas->source_height=h;
+    canvas->native=w==canvas->target_width && h==canvas->target_height;
+    canvas->width=canvas->target_width; canvas->height=(unsigned int)(h*canvas->target_width/w);
+    if (canvas->height>canvas->target_height) { canvas->height=canvas->target_height; canvas->width=(unsigned int)(w*canvas->target_height/h); }
+    if (w<=canvas->target_width && h<=canvas->target_height && !canvas->native) {
+        canvas->small=(unsigned char *)calloc(w*h,2);
+        if (!canvas->small) { pngle_abort(png); return; }
+    }
     if (!canvas->width) canvas->width = 1;
     if (!canvas->height) canvas->height = 1;
-    canvas->left = (64-canvas->width)/2; canvas->top = (80-canvas->height)/2;
+    canvas->left = (canvas->target_width-canvas->width)/2; canvas->top = (canvas->target_height-canvas->height)/2;
     for (i=0;i<=w;++i) canvas->xb[i]=(unsigned short)((i*canvas->width+w-1)/w);
     for (i=0;i<=h;++i) canvas->yb[i]=(unsigned short)((i*canvas->height+h-1)/h);
 }
@@ -77,27 +84,68 @@ static void png_draw(pngle_t *png, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     PngCanvas *c = (PngCanvas *)pngle_get_user_data(png);
     unsigned int dx, dy, color, r, g, b, a = rgba[3];
     if (!(++c->rendered & 4095U) && c->cancel && c->cancel(c->context)) { pngle_abort(png); return; }
-    if (x+w > 1024 || y+h > 1024 || c->xb[x] == c->xb[x+w] || c->yb[y] == c->yb[y+h]) return;
+    if (x+w>c->source_width || y+h>c->source_height || x+w>1024 || y+h>1024) return;
+    if (!c->small && (c->xb[x]==c->xb[x+w] || c->yb[y]==c->yb[y+h])) return;
     if (a==255) color=((rgba[0]>>3)<<10)|((rgba[1]>>3)<<5)|(rgba[2]>>3);
     else {
         r=(rgba[0]*a+8*(255-a)+127)/255; g=(rgba[1]*a+16*(255-a)+127)/255; b=(rgba[2]*a+33*(255-a)+127)/255;
         color=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
     }
+    if (c->small) {
+        for (dy=y;dy<y+h;++dy) for (dx=x;dx<x+w;++dx) {
+            unsigned int pos=(dy*c->source_width+dx)*2;
+            c->small[pos]=(unsigned char)(color>>8); c->small[pos+1]=(unsigned char)color;
+        }
+        return;
+    }
     if (c->native && w==1 && h==1) {
         unsigned int pos;
-        if (x>=64 || y>=80) return;
-        pos=(y*64+x)*2;
+        if (x>=c->target_width || y>=c->target_height) return;
+        pos=(y*c->target_width+x)*2;
         c->pixels[pos]=(unsigned char)(color>>8); c->pixels[pos+1]=(unsigned char)color;
         return;
     }
     for (dy=c->yb[y];dy<c->yb[y+h];++dy) for (dx=c->xb[x];dx<c->xb[x+w];++dx) {
-        unsigned int pos=((dy+c->top)*64+dx+c->left)*2;
+        unsigned int pos=((dy+c->top)*c->target_width+dx+c->left)*2;
         c->pixels[pos]=(unsigned char)(color>>8); c->pixels[pos+1]=(unsigned char)color;
     }
 }
+static unsigned int small_pixel(const PngCanvas *c,unsigned int x,unsigned int y)
+{
+    unsigned int pos=(y*c->source_width+x)*2;
+    return ((unsigned int)c->small[pos]<<8)|c->small[pos+1];
+}
+static int smooth_canvas(PngCanvas *c)
+{
+    unsigned int x,y;
+    if (c->small) for (y=0;y<c->height;++y) {
+        unsigned long sy=c->height>1 ? (y*(c->source_height-1)*256UL)/(c->height-1) : 0;
+        unsigned int y0=(unsigned int)(sy>>8), y1=y0+1<c->source_height ? y0+1 : y0, fy=(unsigned int)(sy&255);
+        if (!(y&7U) && c->cancel && c->cancel(c->context)) return -1;
+        for (x=0;x<c->width;++x) {
+            unsigned long sx=c->width>1 ? (x*(c->source_width-1)*256UL)/(c->width-1) : 0;
+            unsigned int x0=(unsigned int)(sx>>8), x1=x0+1<c->source_width ? x0+1 : x0, fx=(unsigned int)(sx&255);
+            unsigned int colors[4], channel, color=0, pos;
+            colors[0]=small_pixel(c,x0,y0); colors[1]=small_pixel(c,x1,y0);
+            colors[2]=small_pixel(c,x0,y1); colors[3]=small_pixel(c,x1,y1);
+            for (channel=0;channel<3;++channel) {
+                unsigned int shift=channel*5;
+                unsigned long top=((colors[0]>>shift)&31)*(256UL-fx)+((colors[1]>>shift)&31)*fx;
+                unsigned long bottom=((colors[2]>>shift)&31)*(256UL-fx)+((colors[3]>>shift)&31)*fx;
+                unsigned int value=(unsigned int)((top*(256-fy)+bottom*fy+32768UL)>>16);
+                color|=value<<shift;
+            }
+            pos=((y+c->top)*c->target_width+x+c->left)*2;
+            c->pixels[pos]=(unsigned char)(color>>8); c->pixels[pos+1]=(unsigned char)color;
+        }
+    }
+    return 0;
+}
 static void png_done(pngle_t *png)
 {
-    ((PngCanvas *)pngle_get_user_data(png))->complete=1;
+    PngCanvas *c=(PngCanvas *)pngle_get_user_data(png);
+    if (smooth_canvas(c)<0) { pngle_abort(png); return; }
+    c->complete=1;
 }
 static int png_feed(pngle_t *png, unsigned char *pending, size_t *used, const unsigned char *data, size_t bytes)
 {
@@ -110,8 +158,8 @@ static int png_feed(pngle_t *png, unsigned char *pending, size_t *used, const un
     memmove(pending,pending+consumed,*used);
     return 0;
 }
-int usb_png_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
-                   unsigned char *pixels, MediaCancel cancel, void *context)
+static int png_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
+                   unsigned char *pixels, MediaCancel cancel, void *context,unsigned int width,unsigned int height)
 {
     static const unsigned char iend_crc[4] = {0xae,0x42,0x60,0x82};
     unsigned char block[2048], pending[2064];
@@ -129,8 +177,8 @@ int usb_png_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
         word(block+16) > 1024 || word(block+20) > 1024 || block[28] > 1) goto done;
     png = pngle_new(); canvas = (PngCanvas *)calloc(1,sizeof(*canvas));
     if (!png || !canvas) goto done;
-    canvas->pixels=pixels; canvas->cancel=cancel; canvas->context=context;
-    for (i=0;i<USB_ART_PIXELS;i+=2) { pixels[i]=4; pixels[i+1]=0x44; }
+    canvas->pixels=pixels; canvas->cancel=cancel; canvas->context=context; canvas->target_width=width; canvas->target_height=height;
+    for (i=0;i<width*height*2;i+=2) { pixels[i]=4; pixels[i+1]=0x44; }
     pngle_set_user_data(png,canvas); pngle_set_init_callback(png,png_init);
     pngle_set_draw_callback(png,png_draw); pngle_set_done_callback(png,png_done);
     if (png_feed(png,pending,&used,block,33) < 0) goto done;
@@ -160,7 +208,30 @@ int usb_png_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
     }
     if (!used) result=0;
 done:
-    pngle_destroy(png); free(canvas);
+    pngle_destroy(png); if (canvas) free(canvas->small); free(canvas);
     if (usb_file_close(ode) < 0) result=-1;
     return result;
+}
+
+int usb_png_pixels(Ode *ode,OdeReadBuffer reader,const char *filename,unsigned char *pixels,MediaCancel cancel,void *context)
+{
+    return png_pixels(ode,reader,filename,pixels,cancel,context,64,80);
+}
+int usb_png_cover(Ode *ode,OdeReadBuffer reader,const char *filename,unsigned char *pixels,MediaCancel cancel,void *context)
+{
+    return png_pixels(ode,reader,filename,pixels,cancel,context,USB_COVER_WIDTH,USB_COVER_HEIGHT);
+}
+
+int usb_legacy_cover(Ode *ode,OdeReadBuffer reader,const char *filename,unsigned char *pixels,MediaCancel cancel,void *context)
+{
+    PngCanvas *c=(PngCanvas *)calloc(1,sizeof(*c));
+    int result=-1;
+    if (!c) return -1;
+    c->small=(unsigned char *)malloc(USB_ART_PIXELS);
+    if (!c->small) { free(c); return -1; }
+    c->source_width=64; c->source_height=80;
+    c->target_width=c->width=USB_COVER_WIDTH; c->target_height=c->height=USB_COVER_HEIGHT;
+    c->pixels=pixels; c->cancel=cancel; c->context=context;
+    if (!(cancel && cancel(context)) && !usb_art_pixels(ode,reader,filename,c->small)) result=smooth_canvas(c);
+    free(c->small); free(c); return result;
 }

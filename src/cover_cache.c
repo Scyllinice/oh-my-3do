@@ -24,22 +24,22 @@ int cover_cache_contains(const CoverCache *cache,unsigned long volume,const char
         if (cache->entries[i].pixels && cache->entries[i].volume==volume && !menu_path_compare(cache->entries[i].file,file)) return 1;
     return 0;
 }
-int cover_cache_get(CoverCache *cache,unsigned long volume,const char *file,unsigned char *pixels)
+int cover_cache_get(CoverCache *cache,unsigned long volume,const char *file,unsigned char *pixels,size_t bytes)
 {
     int i;
     for (i=0;i<COVER_CACHE_SLOTS;++i) {
         CoverCacheEntry *entry=&cache->entries[i];
-        if (entry->pixels && entry->volume==volume && !menu_path_compare(entry->file,file)) {
-            memcpy(pixels,entry->pixels,USB_ART_PIXELS); entry->stamp=tick(cache); return 1;
+        if (entry->pixels && entry->bytes==bytes && entry->volume==volume && !menu_path_compare(entry->file,file)) {
+            memcpy(pixels,entry->pixels,bytes); entry->stamp=tick(cache); return 1;
         }
     }
     return 0;
 }
-void cover_cache_put(CoverCache *cache,unsigned long volume,const char *file,const unsigned char *pixels)
+void cover_cache_put(CoverCache *cache,unsigned long volume,const char *file,const unsigned char *pixels,size_t bytes)
 {
     int i, slot=0;
     CoverCacheEntry *entry;
-    if (!usb_media_filename(file)) return;
+    if (!usb_media_filename(file) || (bytes!=USB_ART_PIXELS && bytes!=USB_COVER_PIXELS)) return;
     for (i=0;i<COVER_CACHE_SLOTS;++i) {
         if (!cache->entries[i].pixels || (cache->entries[i].volume==volume && !menu_path_compare(cache->entries[i].file,file))) {
             slot=i; break;
@@ -47,8 +47,12 @@ void cover_cache_put(CoverCache *cache,unsigned long volume,const char *file,con
         if (cache->entries[i].stamp<cache->entries[slot].stamp) slot=i;
     }
     entry=&cache->entries[slot];
-    if (!entry->pixels) entry->pixels=(unsigned char *)malloc(USB_ART_PIXELS);
+    if (!entry->pixels || entry->bytes<bytes) {
+        unsigned char *next=(unsigned char *)realloc(entry->pixels,bytes);
+        if (!next) return;
+        entry->pixels=next;
+    }
     if (!entry->pixels) return; /* Caching is optional under memory pressure. */
-    memcpy(entry->pixels,pixels,USB_ART_PIXELS); strcpy(entry->file,file);
+    entry->bytes=bytes; memcpy(entry->pixels,pixels,bytes); strcpy(entry->file,file);
     entry->volume=volume; entry->stamp=tick(cache);
 }

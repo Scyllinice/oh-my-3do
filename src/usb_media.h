@@ -12,6 +12,10 @@ void usb_preview_free(UsbPreview *preview);
 /* Call only while at the selected USB root; names come from checked indices. */
 int usb_png_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels, MediaCancel cancel, void *context);
+int usb_png_cover(Ode *ode, OdeReadBuffer reader, const char *filename,
+                   unsigned char *pixels, MediaCancel cancel, void *context);
+int usb_legacy_cover(Ode *ode, OdeReadBuffer reader, const char *filename,
+                   unsigned char *pixels, MediaCancel cancel, void *context);
 int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
                      UsbPreview *preview, MediaCancel cancel, void *context);
 int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Index unmodified PNG covers and prepared previews already on a USB drive."""
+"""Index games for Find and associate PNG covers/prepared previews on USB."""
 import argparse
 import binascii
 from pathlib import Path
@@ -55,6 +55,19 @@ def index(root):
         games.append((fold(game), game, fold(path.stem)))
     if len({key for key, _, _ in games}) != len(games):
         raise ValueError("Game paths collide when ignoring ASCII case")
+    library_rows=[]
+    for _,game,_ in sorted(games):
+        raw=game.encode()+b"\0"
+        if any(len(part.encode())>=1024 for part in game.split('/')) or len(game.split('/'))>33:
+            raise ValueError(f"Game path exceeds menu navigation limits: {game}")
+        library_rows.append(struct.pack('>H',len(raw))+raw)
+    library_payload=b''.join(library_rows)
+    if len(games)>2048 or len(library_payload)+9*len(games)>128*1024:
+        raise ValueError('Search index exceeds 2048 games or 128 KiB of paths')
+    library_data=b'OM3DLIB1'+struct.pack('>IIII',len(games),len(library_payload),binascii.crc32(library_payload),0)+library_payload+b'END3DL01'
+    library=root/'library.3di'
+    if library.is_symlink() or (library.exists() and not library.is_file()):
+        raise ValueError('Search index must be a regular file')
     oversized = []
     outputs = []
     for folder, suffix in (("covers", ".png"), ("previews", ".3dv")):
@@ -76,7 +89,7 @@ def index(root):
                     header = stream.read(24)
                 if len(header) == 24 and header[:8] == b'\x89PNG\r\n\x1a\n' and header[12:16] == b'IHDR':
                     w, h = struct.unpack_from('>II', header, 16)
-                    if w > 64 or h > 80:
+                    if (w,h) != (84,105):
                         oversized.append((name,w,h))
             key = fold(path.stem)
             if key in assets:
@@ -99,10 +112,15 @@ def index(root):
         data = b"OM3DIDX1"+struct.pack(">IIII",len(rows),len(payload),binascii.crc32(payload),0)+payload
         outputs.append((directory, data, len(rows)))
     if oversized:
-        print(f'{len(oversized)} PNG cover(s) exceed 64x80 and need more console decoding work:')
+        print(f'{len(oversized)} PNG cover(s) differ from the native 84x105 cover size:')
         for name,w,h in oversized[:5]:
             print(f'  {name}: {w}x{h}')
-        print('Use resize-covers.py with a separate output folder for 64x80 PNGs; originals were not changed.')
+        print('Use resize-covers.py with a separate output folder for 84x105 PNGs; originals were not changed.')
+    # Validate every index before replacing any existing output.
+    temporary=root/'library.3di.tmp'
+    if temporary.is_symlink(): raise ValueError('Temporary search index must not be a symlink')
+    temporary.write_bytes(library_data); temporary.replace(library)
+    print(f'Indexed {len(games)} games for Find in {library}')
     # Validate both indices before replacing either. Media files stay untouched.
     for directory, data, count in outputs:
         temporary = directory/"index.3di.tmp"

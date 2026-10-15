@@ -26,6 +26,7 @@ STUBS = r'''
 #include "nvram_io.h"
 #include "library_features.h"
 #include "library_navigation.h"
+#include "library_index.h"
 #include "menu_settings.h"
 #include "menu_position.h"
 #include "ui_font.h"
@@ -111,7 +112,7 @@ static int preview_png_load(Ode *ode,OdeReadBuffer reader,const char *file,unsig
     (void)ode; (void)reader; (void)file;
     ++preview_png_loads;
     if (preview_png_fail || (cancel && cancel(context))) return -1;
-    memset(pixels,preview_png_loads,USB_ART_PIXELS); return 0;
+    memset(pixels,preview_png_loads,USB_COVER_PIXELS); return 0;
 }
 static unsigned long preview_buttons;
 typedef struct { unsigned long cped_ButtonBits; } ControlPadEventData;
@@ -148,10 +149,11 @@ static CCB preview_loaded={2, 0, 0, 0};
 #define MEMTYPE_CEL 0
 static CCB *LoadCel(char *file, unsigned long flags) {
     (void)file; (void)flags; ++preview_cel_calls;
+    preview_loaded.ccb_Width=64; preview_loaded.ccb_Height=80;
     return preview_cel_fail ? NULL : &preview_loaded;
 }
 static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
-    static unsigned char pixels[USB_ART_PIXELS];
+    static unsigned char pixels[USB_COVER_PIXELS];
     (void)flags; (void)data;
     if (bpp==4) {
         static CCB fonts[128];
@@ -164,7 +166,7 @@ static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
         cel->ccb_PLUTPtr=palettes[count++]; cel->ccb_HDX=1<<20; cel->ccb_VDY=1<<16;
         cel->ccb_Width=w; cel->ccb_Height=h; return cel;
     }
-    preview_loaded.ccb_SourcePtr=pixels;
+    preview_loaded.ccb_SourcePtr=pixels; preview_loaded.ccb_Width=w; preview_loaded.ccb_Height=h;
     ++preview_cel_calls;
     return preview_cel_fail ? NULL : &preview_loaded;
 }
@@ -249,6 +251,7 @@ int main(int argc, char **argv) {
     menu.settings_usb_covers=1;
     menu.font_ccb=*GetCurrentFont()->font_CCB; menu.have_font=1;
     logo.ccb_XPos=16L<<16; logo.ccb_YPos=8L<<16; logo.ccb_HDX=1L<<20; logo.ccb_VDY=1L<<16;
+    cover.ccb_Width=64; cover.ccb_Height=80;
     cover.ccb_XPos=236L<<16; cover.ccb_YPos=86L<<16; cover.ccb_HDX=1L<<20; cover.ccb_VDY=1L<<16;
     show_demo(&menu);
     menu.logo=&logo;
@@ -320,7 +323,7 @@ int main(int argc, char **argv) {
         menu.usb_art.entries[1].path="Disc 1.iso"; menu.usb_art.entries[1].file="Disc.png";
         menu.selected=2; preview_cel_fail=0;
         selection_changed(&menu); preview_now+=350; update_cover(&menu);
-        if (!menu.cover || preview_png_loads!=1 || menu.cover_cached) abort();
+        if (!menu.cover || preview_png_loads!=1 || menu.cover_cached || menu.cover->ccb_Width!=84 || menu.cover->ccb_Height!=105) abort();
         menu.selected=3; selection_changed(&menu); preview_now+=349; update_cover(&menu);
         if (menu.cover || preview_png_loads!=1) abort();
         ++preview_now; update_cover(&menu); if (!menu.cover || preview_png_loads!=2) abort();
@@ -469,7 +472,7 @@ int main(int argc, char **argv) {
         tools_input(&menu,ControlLeft); if (menu.find_key != 0) abort();
         tools_input(&menu,ControlA); tools_input(&menu,ControlStart);
         if (menu.tools!=TOOL_FIND || !menu.tool_message) abort();
-        menu.demo=0; menu.ready=1; menu.catalog.valid=1;
+        menu.demo=0; menu.ready=1; menu.depth=0; menu.catalog.valid=1;
         menu.catalog.paths=(char **)calloc(2,sizeof(char *));
         menu.catalog.paths[0]=strcpy((char *)malloc(40),"/Storage/Games/Alpha.iso");
         menu.catalog.paths[1]=strcpy((char *)malloc(40),"/Storage/Other/Beta.iso"); menu.catalog.count=2;
@@ -477,6 +480,9 @@ int main(int argc, char **argv) {
         if (menu.tools!=TOOL_RESULTS || library_catalog_count(&menu.catalog,menu.find_query)!=2) abort();
         tools_input(&menu,ControlB); if (menu.tools!=TOOL_FIND) abort();
         library_catalog_free(&menu.catalog); menu.demo=1; menu.tools=0;
+        toggle_tools(&menu); if (menu.tools!=TOOL_HOME) abort();
+        menu.tools=TOOL_FIND; toggle_tools(&menu); if (menu.tools || menu.review) abort();
+        menu.tools=TOOL_CONFIG; toggle_tools(&menu); if (menu.tools) abort();
         preview_buttons=ControlB;
         if (!search_progress(&menu,0) || menu.suppress_buttons!=ControlB) abort();
         preview_buttons=0; menu.suppress_buttons=0;
@@ -488,6 +494,9 @@ int main(int argc, char **argv) {
         if (!menu.favorites_move || strcmp(menu.favorites.paths[0],"Second.iso")) abort();
         tools_input(&menu,ControlB);
         if (menu.favorites_move || strcmp(menu.favorites.paths[0],"First.iso")) abort();
+        tools_input(&menu,ControlRightShift); tools_input(&menu,ControlDown);
+        toggle_tools(&menu);
+        if (menu.tools || menu.favorites_move || strcmp(menu.favorites.paths[0],"First.iso")) abort();
         menu_favorites_free(&menu.favorites);
         /* Actual persistence controllers, with only the USB file transport replaced. */
         preview_text_enabled=1; preview_reads=preview_writes=0;
@@ -713,6 +722,7 @@ int main(int argc, char **argv) {
         menu.catalog.paths=(char **)calloc(2,sizeof(char *));
         menu.catalog.paths[0]="/Storage/Games/US/Doom.iso";
         menu.catalog.paths[1]="/Storage/Games/Japan/Doom.iso"; menu.catalog.count=2;
+        menu.search_count=2; menu.search_matches[0]=0; menu.search_matches[1]=1;
     }
     if (argc > 1 && !strcmp(argv[1],"find")) { menu.tools=TOOL_FIND; strcpy(menu.find_query,"ROAD"); menu.find_key=17; }
     if (argc > 1 && !strcmp(argv[1],"filtered")) strcpy(menu.filter,"disc 1");
@@ -777,14 +787,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        loading + '\n#undef ode_read_directory\n#define usb_preview_load preview_video_load\n#define usb_png_pixels preview_png_load\n' + covers + '\n#undef usb_preview_load\n#undef usb_png_pixels\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        loading + '\n#undef ode_read_directory\n#define usb_preview_load preview_video_load\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
                         str(ROOT / "src/menu_ui.c"), str(ROOT / "src/ui_font.c"),
                         str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_usb.c"),
-                        str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
+                        str(ROOT / "src/library_index.c"), str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
                         str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
