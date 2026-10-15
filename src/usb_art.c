@@ -274,7 +274,9 @@ int usb_file_text(Ode *ode, OdeReadBuffer reader, const char *name, char *out, s
     if (!capacity || usb_file_open(ode,name) < 0) return -1;
     while (used < capacity) {
         size_t i, n = capacity - used;
-        if (n > sizeof(block)) n = sizeof(block);
+        /* Short text is common at launch. Clear/read 128 bytes at a time
+         * instead of issuing 512 FIFO-word commands before its first byte. */
+        if (n > 128) n = 128;
         for (i = 0; i < (n+3)/4; ++i) if (buffer_word(ode,(unsigned int)i,zero) < 0) goto done;
         memset(packet,0,sizeof(packet)); packet[0] = 0xe3; packet[1] = (unsigned char)(n >> 8); packet[2] = (unsigned char)n;
         if (exchange(ode,packet,reply,4) < 0 || reply[1] != packet[1] || reply[2] != packet[2]) goto done;

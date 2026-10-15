@@ -98,6 +98,7 @@ static int preview_text_write(Ode *ode, OdeReadBuffer reader, const char *name, 
 #define ControlLeft 4
 #define ControlRight 8
 #define ControlRightShift 1024
+#define ControlLeftShift 512
 #define ControlA 16
 #define ControlB 32
 #define ControlC 64
@@ -437,7 +438,18 @@ int main(int argc, char **argv) {
         tools_input(&menu,ControlC); if (*menu.find_query) abort();
         tools_input(&menu,ControlLeft); if (menu.find_key != 0) abort();
         tools_input(&menu,ControlA); tools_input(&menu,ControlStart);
-        if (menu.tools || strcmp(menu.filter,"A") || menu.selected) abort();
+        if (menu.tools!=TOOL_FIND || !menu.tool_message) abort();
+        menu.demo=0; menu.ready=1; menu.catalog.valid=1;
+        menu.catalog.paths=(char **)calloc(2,sizeof(char *));
+        menu.catalog.paths[0]=strcpy((char *)malloc(40),"/Storage/Games/Alpha.iso");
+        menu.catalog.paths[1]=strcpy((char *)malloc(40),"/Storage/Other/Beta.iso"); menu.catalog.count=2;
+        tools_input(&menu,ControlStart);
+        if (menu.tools!=TOOL_RESULTS || library_catalog_count(&menu.catalog,menu.find_query)!=2) abort();
+        tools_input(&menu,ControlB); if (menu.tools!=TOOL_FIND) abort();
+        library_catalog_free(&menu.catalog); menu.demo=1; menu.tools=0;
+        preview_buttons=ControlB;
+        if (!search_progress(&menu,0) || menu.suppress_buttons!=ControlB) abort();
+        preview_buttons=0; menu.suppress_buttons=0;
         menu.filter[0]=0;
         /* Move cancellation is local and never writes to the demo USB bus. */
         menu_favorites_parse(&menu.favorites,"First.iso\nSecond.iso\n",21);
@@ -469,8 +481,13 @@ int main(int argc, char **argv) {
         record_launch(&menu,"/Storage/Other.iso");
         if (strcmp(preview_recent,"Other.iso\nGames/D (Disc 1).iso\n")) abort();
         {
+            int reads=preview_reads, writes=preview_writes;
+            record_launch(&menu,"/Storage/Other.iso");
+            if (preview_reads!=reads || preview_writes!=writes) abort();
+        }
+        {
             int writes=preview_writes;
-            strcpy(preview_recent,"../bad.iso\n"); record_launch(&menu,"/Storage/New.iso");
+            menu.recent_valid=0; strcpy(preview_recent,"../bad.iso\n"); record_launch(&menu,"/Storage/New.iso");
             if (preview_writes != writes || menu.recent_result != -1) abort();
             preview_read_fail=1; record_launch(&menu,"/Storage/New.iso");
             if (preview_writes != writes) abort();
@@ -661,6 +678,12 @@ int main(int argc, char **argv) {
         menu.settings_folder_workaround=menu.config.folder_workaround;
     }
     if (argc > 1 && !strcmp(argv[1],"display-save")) { menu.tools=TOOL_CONFIG; menu.tool_selected=11; }
+    if (argc>1 && !strcmp(argv[1],"results")) {
+        menu.tools=TOOL_RESULTS; strcpy(menu.find_query,"doom"); menu.catalog.valid=1;
+        menu.catalog.paths=(char **)calloc(2,sizeof(char *));
+        menu.catalog.paths[0]="/Storage/Games/US/Doom.iso";
+        menu.catalog.paths[1]="/Storage/Games/Japan/Doom.iso"; menu.catalog.count=2;
+    }
     if (argc > 1 && !strcmp(argv[1],"find")) { menu.tools=TOOL_FIND; strcpy(menu.find_query,"ROAD"); menu.find_key=17; }
     if (argc > 1 && !strcmp(argv[1],"filtered")) strcpy(menu.filter,"disc 1");
     if (argc > 1 && !strcmp(argv[1],"unsaved")) { menu.tools=TOOL_CONFIG; menu.settings_recent_games=0; }
@@ -736,7 +759,7 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)

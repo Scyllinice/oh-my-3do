@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.10.1**.
+restore, plus optional menu music. The current version is **0.11.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -127,6 +127,8 @@ Press C on images to add up to 16 discs, then Start to review them:
 Queue edits happen in menu memory. Before launch, the menu validates every path,
 clears the firmware queue, and re-adds discs in the displayed order. It resolves
 fresh directory IDs and restores/verifies the browser folder between visits.
+Same-folder queues use one fresh directory listing and add every disc in place,
+avoiding repeated walks through the folder tree.
 This supports discs in different folders and volumes. A missing path prevents
 launch; an uncertain append/clear blocks further launch until a confirmed clear.
 An XBUS timeout or failed directory restoration requires a console restart. The
@@ -203,25 +205,35 @@ entry. A missing or renamed folder leaves the startup listing available. A
 malformed position file disables automatic position writes for the session;
 delete that file on a PC to start fresh. A failed write also stops automatic
 position saves for the session. Position data supports the browser's depth and
-path limits.
+path limits. The loading artwork stays visible until startup settings and the
+saved location are ready, so the browser first appears at its saved size.
 
 Tools → Recent games lists up to ten recent launch selections, newest first.
 **A** opens the containing folder and selects the image; **Start** reloads the
 list. Paths are recorded in `recent.txt` just before handing control to a game,
 so a failed mount can still appear in the list. Repeating a selection moves it
-to the top without duplicates. Long paths may reduce the number of entries;
+to the top without duplicates. Reads and verified writes share one trip to the
+USB root, and repeating the newest cached selection skips the history write.
+Long paths may reduce the number of entries;
 paths of 1,024 bytes or more are not recorded. Missing paths do not launch a
 game, and malformed lists are not overwritten automatically.
 
 Tools → Find a game opens a controller keyboard. Use the arrows to choose a
 character, **A** to enter it, **X** to erase, **C** to clear, and **Start** to
-apply. `SP` enters a space. The filter matches names in the current folder,
-ignoring ASCII case. It does not recursively search the drive. **X in the
-browser** clears an active filter; changing folders clears it too. **B** cancels
-keyboard edits.
+search. `SP` enters a space. Search matches game-image names across folders and
+available volumes, ignoring ASCII case. An empty query lists all games.
 
-Both position recording and recent-game recording can be disabled in Appearance
-& settings. Existing INIs use enabled defaults for these new options. Holding X
+The first search scans the drive; **B** cancels and returns to the original
+folder. The scan reads directory listings without mounting games or writing an
+index file. Game paths stay in RAM for later searches during the session.
+Results show the selected game's folder to distinguish duplicate names.
+**A** opens that folder and selects the game; it does not launch automatically.
+**Start** or **B** returns to the keyboard, **X** rescans after library changes,
+and Left/Right or L/R pages through results. The cache holds up to 2,048 paths
+and 128 KiB of path text, with 32 levels of folders. A limit displays a partial
+library notice. Support folders and the menu ISOs are excluded.
+
+Both position recording and recent-game recording can be disabled in Settings. Existing INIs use enabled defaults for these new options. Holding X
 at startup skips these USB extras. Each USB volume has its own files; startup
 restoration uses the boot volume's position file. Recent paths retain volume
 labels where needed. A regular history-file failure does not prevent launch,
@@ -473,7 +485,9 @@ Music can be replaced from USB without rebuilding the ISO. Put the prepared
 track at `music/menu.3dm` on the USB drive. The menu loads and verifies the whole
 track before playback, then the 3DO DSP decodes it directly from RAM. Music
 performs no USB reads while playing, so cover loading does not compete with an
-audio stream. This adds a one-time load when music starts.
+audio stream. This adds a one-time load when music starts, after the browser has
+restored and displayed the saved folder. Press a controller button during music
+loading to cancel it.
 
 Prepare a track with the Docker image, which includes FFmpeg and the pinned
 [3at native audio encoder](https://github.com/trapexit/3at):

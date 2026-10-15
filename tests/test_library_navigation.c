@@ -13,6 +13,9 @@ static const Node tree[] = {
     {3,0,0x01000002UL,"D (Disc 1).iso"}, {2,0,0x02000001UL,"Other.iso"},
     {1,1,0x01000002UL,"covers"}, {1,0,0x01000003UL,"boot.iso"}
 };
+static int cancel_after, scan_ticks;
+static int scan_progress(void *context,size_t games) { (void)context; (void)games; return cancel_after && ++scan_ticks==cancel_after; }
+static int bulk_mode;
 static int current, calls, fail_at, callback_count, mutate_on_callback;
 void ode_listing_init(OdeListing *l) { memset(l,0,sizeof(*l)); }
 void ode_listing_free(OdeListing *l) {
@@ -23,12 +26,18 @@ int ode_read_directory(Ode *ode, OdeListing *l)
 {
     size_t i;
     if(fault(ode)) return -1;
-    ode_listing_free(l); l->entries=(const MenuEntry **)calloc(10,sizeof(MenuEntry *)); assert(l->entries);
+    ode_listing_free(l); l->entries=(const MenuEntry **)calloc(bulk_mode ? 1100 : 10,sizeof(MenuEntry *)); assert(l->entries);
     l->has_parent=current != 0; l->parent_id=(tree[current].id & 0xff000000UL)|0xffffffUL;
     for(i=1;i<sizeof(tree)/sizeof(tree[0]);++i) if(tree[i].parent == current) {
         MenuEntry *e=(MenuEntry *)malloc(sizeof(*e)); assert(e);
         e->name=tree[i].name; e->toc_id=tree[i].id; e->is_directory=tree[i].directory;
         if(mutate_on_callback && current == 4) { free(e); continue; }
+        l->entries[l->count++]=e;
+    }
+    if (bulk_mode && (current==2 || current==3 || current==4)) for (i=0;i<1000;++i) {
+        MenuEntry *e=(MenuEntry *)malloc(sizeof(*e)+32); assert(e);
+        e->name=(char *)(e+1); sprintf((char *)e->name,"Bulk %04lu.iso",(unsigned long)i);
+        e->toc_id=(tree[current].id&0xff000000UL)|(i+100); e->is_directory=0;
         l->entries[l->count++]=e;
     }
     menu_sort(l->entries,l->count); return 0;
@@ -61,6 +70,8 @@ int main(void)
     Ode ode; OdeListing snapshot;
     ArtRouteStep route[3]; LibraryLocation *location;
     int total, i;
+    LibraryCatalog catalog;
+    memset(&catalog,0,sizeof(catalog));
     route[0].id=0x01000000UL; route[0].name="USB A";
     route[1].id=0x01000001UL; route[1].name="Games";
     route[2].id=0x01000001UL; route[2].name="Nested";
@@ -105,6 +116,34 @@ int main(void)
     assert(!library_open_directory(&ode,route,3,&snapshot,1,"/Storage",location));
     assert(current == 0 && !location->depth && location->listing.count == 2);
     ode_listing_free(&location->listing); free(location); ode_listing_free(&snapshot);
+    setup(&ode,&snapshot);
+    assert(!library_catalog_build(&ode,route,3,&snapshot,1,&catalog,scan_progress,NULL));
+    assert(current==4 && catalog.valid && !catalog.truncated && catalog.count==2);
+    assert(library_catalog_count(&catalog,"d (disc")==1 && library_catalog_count(&catalog,"OTHER")==1);
+    assert(!strcmp(library_catalog_match(&catalog,"other",0),"/Storage/USB B/Other.iso"));
+    assert(!library_catalog_match(&catalog,"missing",0));
+    total=calls; ode_listing_free(&snapshot);
+    for (i=1;i<=total;++i) {
+        setup(&ode,&snapshot); fail_at=i;
+        assert(library_catalog_build(&ode,route,3,&snapshot,1,&catalog,NULL,NULL)==-2);
+        assert(ode.navigation_failed && catalog.valid && catalog.count==2);
+        ode_listing_free(&snapshot);
+    }
+    /* Cancel at every scan checkpoint, including while inside another volume. */
+    for (i=1;i<=12;++i) {
+        setup(&ode,&snapshot); cancel_after=i; scan_ticks=0;
+        assert(library_catalog_build(&ode,route,3,&snapshot,1,&catalog,scan_progress,NULL)==1);
+        assert(current==4 && !ode.navigation_failed && catalog.count==2);
+        ode_listing_free(&snapshot);
+    }
+    bulk_mode=1; cancel_after=0; setup(&ode,&snapshot);
+    assert(!library_catalog_build(&ode,route,3,&snapshot,1,&catalog,NULL,NULL));
+    assert(catalog.valid && catalog.truncated && catalog.count==LIBRARY_CATALOG_MAX && current==4);
+    assert(library_catalog_count(&catalog,"Bulk")>0);
+    ode_listing_free(&snapshot); bulk_mode=0;
+    library_catalog_free(&catalog);
+    assert(!catalog.paths && !catalog.valid);
+    puts("Library catalog: both volumes, name matching, hidden support files, cancellation and every I/O failure passed");
     puts("Library navigation: cross-volume paths, repeated IDs, missing paths, every failure and retained favorite selection passed");
     return 0;
 }

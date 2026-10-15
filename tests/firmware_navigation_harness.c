@@ -287,6 +287,15 @@ int main(void)
                     !strcmp(currentImage.curPath,"0:\\Alpha\\Child") && !ode.navigation_failed,
                     "missing-queue-path-restores-browser");
     {
+        LibraryCatalog catalog;
+        memset(&catalog,0,sizeof(catalog));
+        failed += check(!library_catalog_build(&ode,route,2,&snapshot,1,&catalog,NULL,NULL) &&
+                        catalog.count==1 && !strcmp(catalog.paths[0],"/Storage/Alpha/Disc 1.iso") &&
+                        !strcmp(currentImage.curPath,"0:\\Alpha\\Child") && !ode.navigation_failed,
+                        "library-search-restores-repeated-IDs");
+        library_catalog_free(&catalog);
+    }
+    {
         LibraryLocation *location=(LibraryLocation *)malloc(sizeof(*location));
         if (!location) abort();
         failed += check(!library_open_directory(&ode,route,2,&snapshot,1,"/Storage/Alpha/Child",location) &&

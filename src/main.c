@@ -28,7 +28,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.10.1"
+#define MENU_VERSION "0.11.0"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -44,6 +44,7 @@
 #define TOOL_BACKUP_DETAILS 13
 #define TOOL_RECENT 14
 #define TOOL_FIND 15
+#define TOOL_RESULTS 16
 #define MAX_DEPTH 32
 #define BG (menu->config.theme == 1 ? MakeRGB15(0,0,0) : MakeRGB15(1,2,4))
 #define TEXT (menu->config.theme == 1 ? MakeRGB15(31,31,31) : MakeRGB15(29,29,26))
@@ -66,6 +67,11 @@ typedef struct UiText {
 typedef struct Menu {
     ScreenContext screen;
     MenuMusic music;
+    CCB *splash;
+    int booting;
+    LibraryCatalog catalog;
+    unsigned long search_redraw;
+    u32 suppress_buttons;
     int usb_music_result;
     u32 music_ignore_buttons;
     UiText text_cache[UI_TEXT_CACHE];
@@ -497,6 +503,13 @@ static void draw(Menu *menu)
     const char *message=menu->message;
     int left=menu->review ? 14 : 118, width=menu->review ? 292 : 190;
     int row_height=menu->config.large_titles ? 21 : 18;
+    if (menu->booting) {
+        menu->screen.sc_curScreen^=1;
+        if (menu->splash) DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],menu->splash);
+        else rectangle(menu,0,0,320,240,BG);
+        DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
+        return;
+    }
     if (menu->tools) { draw_tools(menu); return; }
     menu->text_cursor=0; menu->text_style=UI_FONT_NORMAL;
     if (menu->notice_active && now-menu->notice_since>=2500UL) menu->notice_active=0;
@@ -921,6 +934,8 @@ static void connect_ode(Menu *menu)
 {
     int config_result;
     ControlPadEventData pad;
+    menu->booting=1;
+    library_catalog_free(&menu->catalog);
     menu_music_close(&menu->music);
     ode_playlist_dispose(&menu->playlist);
     menu->review = 0;
@@ -950,11 +965,11 @@ static void connect_ode(Menu *menu)
     draw(menu);
     if (menu->bus.request < 0 && ode_bus_open(&menu->bus) < 0) {
         menu->message = "Cannot open XBUS. C: View demo";
-        return;
+        goto done;
     }
     if (ode_identify(&menu->ode) < 0 || ode_change_directory(&menu->ode, 0) < 0) {
         menu->message = menu->bus.timed_out ? "No ODE reply. C: View demo" : "ODE not available. C: View demo";
-        return;
+        goto done;
     }
     menu->message = "Reading USB config...";
     draw(menu);
@@ -971,18 +986,22 @@ static void connect_ode(Menu *menu)
     menu->saved_config = menu->config;
     if (menu->bus.timed_out) {
         menu->message = "Config I/O failed. Restart console.";
-        return;
+        goto done;
     }
     if (ode_playlist_clear(&menu->ode, &menu->playlist) < 0) {
         menu->message = menu->ode.error;
-        return;
+        goto done;
     }
     load_directory(menu, 0);
-    sync_music(menu);
     if (menu->ready && config_result == 0 && menu->config.remember_position) load_position(menu);
     if (menu->ready && config_result < 0) menu->message = "Config not loaded. Compat OFF.";
     else if (menu->ready && config_result == 1) menu->message = "USB config unsupported. Compat OFF.";
     else if (menu->ready && config_result == 2) menu->message = "Config skipped. Compat OFF.";
+done:
+    menu->booting=0;
+    if (menu->splash) { UnloadCel(menu->splash); menu->splash=NULL; }
+    draw(menu);
+    sync_music(menu);
 }
 
 static void go_back(Menu *menu)
@@ -1097,6 +1116,7 @@ static void start_queue(Menu *menu)
     if (menu->playlist.dirty && apply_queue(menu) < 0) { menu->message = menu->ode.error; return; }
     if (menu->playlist.count) record_launch(menu,menu->playlist.paths[0]);
     if (!menu->ready || menu->ode.navigation_failed || menu->bus.timed_out) return;
+    menu->message="Starting first queued disc..."; draw(menu);
     if (menu->playlist.count && menu->playlist.synchronized) menu_music_close(&menu->music);
     if (ode_playlist_start(&menu->ode, &menu->playlist) < 0) {
         menu->message = menu->ode.error;
@@ -1123,26 +1143,46 @@ static int queue_file_action(void *context, const MenuEntry *entry, const char *
 static int apply_queue(Menu *menu)
 {
     ArtRouteStep route[MAX_DEPTH];
+    const MenuEntry *entries[ODE_MAX_DISCS];
+    OdeListing fresh;
+    char *directory;
     size_t i;
-    int result = -1;
-    current_route(menu,route);
+    int local=0, result=-1;
+    current_route(menu,route); ode_listing_init(&fresh);
     if (menu->bus.timed_out || menu->ode.navigation_failed || !menu->playlist.synchronized) return -1;
-    menu->message = "Checking queued game paths..."; draw(menu);
-    /* Validate all names/paths before clearing the existing firmware queue. */
-    for (i = 0; i < menu->playlist.count; ++i)
-        if (library_visit(&menu->ode,route,menu->depth,&menu->listing,menu->config.folder_workaround,
-                          menu->playlist.paths[i],NULL,NULL) < 0) return -1;
+    directory=(char *)malloc(8193);
+    if (!directory) { menu->ode.error="Not enough queue memory"; return -1; }
+    menu->message="Checking queued game paths..."; draw(menu);
+    if (!directory_path(menu,directory,8193))
+        local=library_current_files(&menu->listing,directory,menu->playlist.paths,menu->playlist.count,entries);
+    if (local<0) { menu->ode.error="Queued path is missing"; goto checked; }
+    if (local) {
+        /* Re-read once for fresh TOC IDs. Same-folder sets need no root trips. */
+        if (ode_read_directory(&menu->ode,&fresh)<0) goto checked;
+        if (library_current_files(&fresh,directory,menu->playlist.paths,menu->playlist.count,entries)!=1) {
+            menu->ode.error="Queued path is missing"; goto checked;
+        }
+    } else {
+        for (i=0;i<menu->playlist.count;++i)
+            if (library_visit(&menu->ode,route,menu->depth,&menu->listing,menu->config.folder_workaround,
+                menu->playlist.paths[i],NULL,NULL)<0) goto checked;
+    }
     ode_playlist_dispose(&menu->group);
-    menu->message = "Applying disc queue..."; draw(menu);
-    if (ode_playlist_clear(&menu->ode,&menu->group) < 0) goto done;
-    for (i = 0; i < menu->playlist.count; ++i)
-        if (library_visit(&menu->ode,route,menu->depth,&menu->listing,menu->config.folder_workaround,
-                          menu->playlist.paths[i],queue_file_action,menu) < 0) goto done;
-    menu->playlist.dirty = 0; result = 0;
-done:
-    if (result < 0) menu->playlist.synchronized = 0;
+    menu->message="Applying disc queue..."; draw(menu);
+    if (ode_playlist_clear(&menu->ode,&menu->group)<0) goto uncertain;
+    for (i=0;i<menu->playlist.count;++i) {
+        if (local) {
+            if (ode_playlist_add(&menu->ode,&menu->group,entries[i],directory)<0) goto uncertain;
+        } else if (library_visit(&menu->ode,route,menu->depth,&menu->listing,menu->config.folder_workaround,
+            menu->playlist.paths[i],queue_file_action,menu)<0) goto uncertain;
+    }
+    menu->playlist.dirty=0; result=0; goto applied;
+uncertain:
+    menu->playlist.synchronized=0;
+applied:
     ode_playlist_dispose(&menu->group);
-    return result;
+checked:
+    ode_listing_free(&fresh); free(directory); return result;
 }
 static int offer_group(Menu *menu, const MenuEntry *entry)
 {
@@ -1346,23 +1386,46 @@ static void remember_position(Menu *menu, int force)
     }
     free(position); free(data);
 }
-static void record_launch(Menu *menu, const char *path)
+typedef struct RecentLaunch {
+    Menu *menu;
+    const char *path;
+} RecentLaunch;
+static int record_recent_at_root(void *context)
 {
-    char *data;
+    RecentLaunch *op=(RecentLaunch *)context;
+    Menu *menu=op->menu;
+    char *data=(char *)malloc(FAVORITES_BYTES);
     size_t length;
-    remember_position(menu,1);
-    if (!menu->config.recent_games || menu->config_result != 0 || !menu->ready ||
-        menu->bus.timed_out || menu->ode.navigation_failed || strncmp(path,"/Storage/",9)) return;
-    data = (char *)malloc(FAVORITES_BYTES);
-    if (!data) return;
-    menu->recent_result = -1; menu->recent_valid = 0;
-    if (!text_at_root(menu,"recent.txt",NULL,data,FAVORITES_BYTES,&length) &&
-        !menu_favorites_parse(&menu->recent,data,length) && menu->recent.count <= 10 &&
-        !menu_recent_push(&menu->recent,path+9) && !menu_favorites_format(&menu->recent,data,FAVORITES_BYTES) &&
-        !text_at_root(menu,"recent.txt",data,NULL,0,NULL)) {
-        menu->recent_result = 1; menu->recent_valid = 1;
+    int result=-1;
+    if (!data) return -1;
+    if (!menu->recent_valid) {
+        if (usb_file_text(&menu->ode,ode_bus_read_buffer,"recent.txt",data,FAVORITES_BYTES,&length)<0 ||
+            menu_favorites_parse(&menu->recent,data,length)<0 || menu->recent.count>10) goto done;
+        menu->recent_valid=1;
     }
-    free(data);
+    if (menu->recent.count && !menu_path_compare(menu->recent.paths[0],op->path)) { result=0; goto done; }
+    if (menu_recent_push(&menu->recent,op->path)<0 || menu_favorites_format(&menu->recent,data,FAVORITES_BYTES)<0) goto done;
+    result=usb_file_text_write(&menu->ode,ode_bus_read_buffer,"recent.txt",data);
+done:
+    if (result) menu->recent_valid=0;
+    free(data); return result;
+}
+static void record_launch(Menu *menu,const char *path)
+{
+    ArtRouteStep route[MAX_DEPTH];
+    RecentLaunch op;
+    int result;
+    menu->message="Saving launch history..."; draw(menu);
+    remember_position(menu,1);
+    if (!menu->config.recent_games || menu->config_result!=0 || !menu->ready ||
+        menu->demo || menu->bus.timed_out || menu->ode.navigation_failed || strncmp(path,"/Storage/",9)) return;
+    if (menu->recent_valid && menu->recent.count && !menu_path_compare(menu->recent.paths[0],path+9)) return;
+    current_route(menu,route); op.menu=menu; op.path=path+9;
+    result=art_at_root(&menu->ode,route,menu->depth,&menu->listing,menu->config.folder_workaround,record_recent_at_root,&op);
+    menu->recent_result=result ? -1 : 1;
+    if (result==-2 || menu->bus.timed_out || menu->ode.navigation_failed) {
+        menu->ready=menu->view_valid=0; menu->message="History I/O failed. Restart console.";
+    }
 }
 static void open_recent(Menu *menu)
 {
@@ -1645,6 +1708,42 @@ done:
     menu_favorites_free(&current); free(latest); free(desired);
 }
 static const char find_keys[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.";
+static int search_progress(void *context,size_t games)
+{
+    Menu *menu=(Menu *)context;
+    ControlPadEventData pad;
+    if (GetControlPad(1,0,&pad)>=0 && (pad.cped_ButtonBits&ControlB)) {
+        menu->suppress_buttons|=ControlB; return 1;
+    }
+    if (now_ms(menu)-menu->search_redraw>=150UL) {
+        format(menu->status,"Scanning library: %lu games / B cancels",(unsigned long)games);
+        menu->tool_message=menu->status; draw(menu); menu->search_redraw=now_ms(menu);
+    }
+    return 0;
+}
+static void search_library(Menu *menu,int rebuild)
+{
+    ArtRouteStep route[MAX_DEPTH];
+    int result=0;
+    if (menu->demo) { menu->tool_message="Library search needs an ODE."; return; }
+    if (!menu->ready || menu->bus.timed_out || menu->ode.navigation_failed) {
+        menu->tool_message="ODE unavailable. Restart console."; return;
+    }
+    if (!menu->catalog.valid || rebuild) {
+        stop_preview(menu); current_route(menu,route);
+        menu->search_redraw=0;
+        menu->tool_message="Scanning library... B cancels"; draw(menu);
+        result=library_catalog_build(&menu->ode,route,menu->depth,&menu->listing,
+            menu->config.folder_workaround,&menu->catalog,search_progress,menu);
+        if (result) {
+            menu->tool_message=result==1 ? "Search cancelled." : (result==-2 ? "Folder I/O failed. Restart console." : "Not enough search memory.");
+            if (result==-2 || menu->bus.timed_out || menu->ode.navigation_failed) menu->ready=menu->view_valid=0;
+            return;
+        }
+    }
+    menu->tool_message=menu->catalog.truncated ? "Partial library. Limit reached." : NULL;
+    menu->tools=TOOL_RESULTS; menu->tool_selected=0; menu->selection_since=now_ms(menu);
+}
 static void find_input(Menu *menu, u32 pressed)
 {
     size_t length = strlen(menu->find_query);
@@ -1658,8 +1757,7 @@ static void find_input(Menu *menu, u32 pressed)
     if ((pressed & ControlX) && length) menu->find_query[length-1] = 0;
     if (pressed & ControlC) menu->find_query[0] = 0;
     if (pressed & ControlStart) {
-        strcpy(menu->filter,menu->find_query); menu->selected = 0; menu->tools = 0;
-        menu->message = NULL; selection_changed(menu);
+        search_library(menu,0);
     }
 }
 static void tool_line(Menu *menu, int row, const char *line, Color color)
@@ -1688,6 +1786,7 @@ static void draw_tools(Menu *menu)
     if (menu->tools == TOOL_CONFIG) title = config_dirty(menu) ? "Settings / unsaved" : "Settings";
     if (menu->tools == TOOL_RECENT) title = "Recent games";
     if (menu->tools == TOOL_FIND) title = "Find a game";
+    if (menu->tools == TOOL_RESULTS) title = "Search results";
     if (menu->tools == TOOL_FAVORITES && menu->favorites_move) title = "Move favorite";
     if (menu->tools == TOOL_BACKUP_DETAILS) title = menu->details_new ? "New backup contents" : "Existing slot contents";
     menu->text_cursor=0; menu->text_style=UI_FONT_SMALL;
@@ -1766,16 +1865,39 @@ static void draw_tools(Menu *menu)
         }
         label(menu,24,194,"Music + display apply now. C saves.",MUTED,UI_FONT_SMALL);
         label(menu,270,64,start ? "2 / 2" : "1 / 2",MUTED,UI_FONT_SMALL);
+    } else if (menu->tools == TOOL_RESULTS) {
+        count=library_catalog_count(&menu->catalog,menu->find_query);
+        start=menu->tool_selected/6*6;
+        format(line,"%lu matches for: %.24s",(unsigned long)count,*menu->find_query ? menu->find_query : "All games");
+        label(menu,22,82,line,MUTED,UI_FONT_SMALL);
+        for (i=start;i<count && i<start+6;++i) {
+            const char *path=library_catalog_match(&menu->catalog,menu->find_query,i);
+            const char *name=strrchr(path,'/')+1;
+            int y=99+(int)(i-start)*13;
+            if (i==menu->tool_selected) rectangle(menu,16,y-1,287,13,LINE);
+            label_on(menu,22,y,name,i==menu->tool_selected ? TEXT : MUTED,UI_FONT_SMALL,i==menu->tool_selected ? LINE : PANEL);
+        }
+        if (!count) label(menu,22,112,"No games matched. Start to edit.",TEXT,UI_FONT_SMALL);
+        else {
+            const char *path=library_catalog_match(&menu->catalog,menu->find_query,menu->tool_selected);
+            size_t length=(size_t)(strrchr(path,'/')-path);
+            int room=280*(320-2*menu->config.screen_margin)/320;
+            size_t start=0;
+            while (start<length && ui_font_fit(path+start,length-start,room,UI_FONT_SMALL)<length-start) ++start;
+            length-=start; if (length>70) length=70;
+            memcpy(line,path+start,length); line[length]=0;
+            label(menu,22,185,line,MUTED,UI_FONT_SMALL);
+        }
     } else if (menu->tools == TOOL_FIND) {
         format(line,"Find: %s_",menu->find_query); tool_line(menu,0,line,TEXT);
-        tool_line(menu,1,"Filters names in this folder.",MUTED);
+        tool_line(menu,1,"Searches game names across the drive.",MUTED);
         for (i = 0; i < 40; ++i) {
             char key[3]; key[0] = find_keys[i]; key[1] = 0;
             if (key[0] == ' ') strcpy(key,"SP");
             if (i == (size_t)menu->find_key) rectangle(menu,22+(i%10)*27,111+(i/10)*17,19,13,LINE);
             text(menu,27+(i%10)*27,113+(i/10)*17,key,TEXT);
         }
-        text(menu,24,189,"Start:Apply X:Erase C:Clear",MUTED);
+        text(menu,24,189,"Start:Search X:Erase C:Clear",MUTED);
     } else if (menu->tools == TOOL_HELP) {
         static const char *help[] = {
             "A: Open folder / launch game", "B: Parent folder / cancel", "Up/Down: Select (hold to repeat)",
@@ -1848,6 +1970,7 @@ static void draw_tools(Menu *menu)
         const char *controls = "A:Select B:Back";
         if (menu->tools == TOOL_GROUP) controls = "A:Queue set X:Only this B:Cancel";
         else if (menu->tools == TOOL_FAVORITES) controls = menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel" : "A:Open C:Add X:Remove B:Back";
+        else if (menu->tools == TOOL_RESULTS) controls = "A:Open Start:Edit X:Rescan B:Back";
         else if (menu->tools == TOOL_FIND) controls = "Arrows:Choose A:Key B:Cancel";
         else if (menu->tools == TOOL_CONFIG) controls = "Left/Right:Change C:Save B:Back";
         else if (menu->tools == TOOL_BACKUP_DETAILS) controls = "A:Continue C:Old/New B:Back";
@@ -1991,6 +2114,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if (pressed & ControlB) {
         menu->tool_message = NULL;
         if (page == TOOL_HOME) { menu->tools = 0; selection_changed(menu); }
+        else if (page == TOOL_RESULTS) { menu->tools=TOOL_FIND; menu->tool_selected=0; }
         else if (page == TOOL_GROUP) { menu->tools = 0; ode_playlist_dispose(&menu->group); selection_changed(menu); }
         else if (page == TOOL_BACKUP_DETAILS) { menu->tools = TOOL_SLOTS; menu->tool_selected = menu->backup_slot; }
         else if (page == TOOL_ARCHIVE) { menu->tools = TOOL_SLOTS; menu->backup_mode = 0; menu->tool_selected = menu->backup_slot; }
@@ -1998,6 +2122,17 @@ static void tools_input(Menu *menu, u32 pressed)
         else if (page == TOOL_CONFIRM_BACKUP) { menu->tools = TOOL_SLOTS; menu->tool_selected = menu->backup_slot; }
         else { menu->tools = TOOL_HOME; menu->tool_selected = 0; save_archive_free(&menu->pending); }
         return;
+    }
+    if (page == TOOL_RESULTS) {
+        if (pressed & ControlStart) { menu->tools=TOOL_FIND; menu->tool_message=NULL; return; }
+        if (pressed & ControlX) { search_library(menu,1); return; }
+        count=library_catalog_count(&menu->catalog,menu->find_query);
+    }
+    if (page==TOOL_RESULTS && count) {
+        if (pressed & (ControlRight | ControlRightShift)) {
+            menu->tool_selected+=6; if (menu->tool_selected>=count) menu->tool_selected=count-1;
+        } else if (pressed & (ControlLeft | ControlLeftShift))
+            menu->tool_selected=menu->tool_selected>=6 ? menu->tool_selected-6 : 0;
     }
     if (page == TOOL_HOME) count = 8;
     if (page == TOOL_SAVES) count = menu->nvram.count;
@@ -2073,7 +2208,7 @@ static void tools_input(Menu *menu, u32 pressed)
         else if (selected == 4) menu->tools = TOOL_HELP;
         else if (selected == 5) menu->tools = TOOL_DIAG;
         else if (selected == 6) { menu->tools = TOOL_RECENT; open_recent(menu); }
-        else { menu->tools = TOOL_FIND; strcpy(menu->find_query,menu->filter); menu->find_key = 0; }
+        else { menu->tools = TOOL_FIND; menu->find_key = 0; }
     } else if (page == TOOL_SLOTS) {
         char path[40];
         menu->backup_slot = (unsigned int)menu->tool_selected;
@@ -2094,6 +2229,9 @@ static void tools_input(Menu *menu, u32 pressed)
             menu->playlist = menu->group; ode_playlist_init(&menu->group);
             menu->tools = 0; review_queue(menu);
         }
+    } else if (page == TOOL_RESULTS && count) {
+        const char *path=library_catalog_match(&menu->catalog,menu->find_query,menu->tool_selected);
+        if (path) open_saved_path(menu,path);
     } else if (page == TOOL_FAVORITES || page == TOOL_RECENT) open_favorite(menu);
     else if (page == TOOL_BACKUP_DETAILS) menu->tools = TOOL_CONFIRM_BACKUP;
     else if (page == TOOL_ARCHIVE && count) {
@@ -2144,6 +2282,11 @@ int main(int argc, char **argv)
         if (font && font->font_CCB) { menu.font_ccb = *font->font_CCB; menu.have_font = 1; }
     }
     menu.covers_enabled = menu_cover_count != 0;
+#ifndef MENU_DEMO
+    menu.splash=LoadCel("$boot/startup.cel",MEMTYPE_CEL);
+    if (menu.splash) menu.splash->ccb_Flags |= CCB_LAST;
+    menu.booting=1; draw(&menu);
+#endif
     menu.logo = LoadCel("$boot/logo.cel", MEMTYPE_CEL);
     if (menu.logo) {
         menu.logo->ccb_XPos = 16 << 16;
@@ -2172,6 +2315,8 @@ int main(int argc, char **argv)
             continue;
         }
         buttons = pad.cped_ButtonBits;
+        menu.suppress_buttons &= buttons;
+        buttons &= ~menu.suppress_buttons;
         pressed = buttons & ~previous;
         released = previous & ~buttons;
         if (buttons & (ControlUp | ControlDown | ControlLeft | ControlRight)) {

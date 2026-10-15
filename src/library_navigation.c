@@ -1,5 +1,6 @@
 #include "library_navigation.h"
 #include "menu_ui.h"
+#include "library_features.h"
 #include <stdlib.h>
 #include <string.h>
 static int same_listing(const OdeListing *a, const OdeListing *b)
@@ -152,4 +153,145 @@ int library_open_directory(Ode *ode, const ArtRouteStep *route, unsigned int dep
 {
     memset(location,0,sizeof(*location));
     return navigate(ode,route,depth,current,workaround,path,NULL,NULL,location,1);
+}
+
+void library_catalog_free(LibraryCatalog *catalog)
+{
+    size_t i;
+    for (i=0;i<catalog->count;++i) free(catalog->paths[i]);
+    free(catalog->paths); memset(catalog,0,sizeof(*catalog));
+}
+static int image_name(const char *name)
+{
+    size_t n=strlen(name);
+    return n>4 && (!menu_path_compare(name+n-4,".iso") || !menu_path_compare(name+n-4,".cue"));
+}
+static int catalog_matches(const char *path,const char *query)
+{
+    const char *name=strrchr(path,'/');
+    return menu_name_matches(name ? name+1 : path,query);
+}
+size_t library_catalog_count(const LibraryCatalog *catalog,const char *query)
+{
+    size_t i, count=0;
+    for (i=0;i<catalog->count;++i) if (catalog_matches(catalog->paths[i],query)) ++count;
+    return count;
+}
+const char *library_catalog_match(const LibraryCatalog *catalog,const char *query,size_t index)
+{
+    size_t i;
+    for (i=0;i<catalog->count;++i)
+        if (catalog_matches(catalog->paths[i],query) && !index--) return catalog->paths[i];
+    return NULL;
+}
+typedef struct ScanFrame {
+    OdeListing listing;
+    size_t next, length;
+    unsigned long parent;
+    int root;
+} ScanFrame;
+int library_catalog_build(Ode *ode,const ArtRouteStep *route,unsigned int depth,
+    const OdeListing *current,int workaround,LibraryCatalog *catalog,
+    LibraryScanProgress progress,void *context)
+{
+    ScanFrame *frames;
+    char *path;
+    LibraryCatalog next;
+    OdeProgress old_progress=ode->progress;
+    unsigned int level=0, i;
+    int result=-1;
+    if (ode->navigation_failed || depth>LIBRARY_DEPTH) return -2;
+    memset(&next,0,sizeof(next));
+    frames=(ScanFrame *)calloc(LIBRARY_DEPTH+1,sizeof(*frames));
+    path=(char *)malloc(9218);
+    next.paths=(char **)calloc(LIBRARY_CATALOG_MAX,sizeof(*next.paths));
+    if (!frames || !path || !next.paths) goto done;
+    ode->progress=NULL;
+    for (i=depth;i;--i)
+        if (ode_change_directory(ode,(route[i-1].id&0xff000000UL)|0xffffffUL)<0) goto fatal;
+    strcpy(path,"/Storage"); frames[0].length=8; frames[0].root=1;
+    if (ode_read_directory(ode,&frames[0].listing)<0) goto fatal;
+    for (;;) {
+        ScanFrame *frame=&frames[level];
+        const MenuEntry *entry;
+        size_t n;
+        if (progress && progress(context,next.count)) { result=1; goto restore; }
+        if (frame->next==frame->listing.count) {
+            if (!level) { result=0; goto restore; }
+            if (ode_change_directory(ode,frame->parent)<0) goto fatal;
+            ode_listing_free(&frame->listing); --level;
+            path[frames[level].length]=0;
+            continue;
+        }
+        entry=frame->listing.entries[frame->next++];
+        if (menu_support_entry(entry->name,entry->is_directory,frame->root) &&
+            !(entry->is_directory && !(entry->toc_id&0xffffffUL))) continue;
+        n=strlen(entry->name);
+        if (!n || !strcmp(entry->name,".") || !strcmp(entry->name,"..") ||
+            strchr(entry->name,'/') || strchr(entry->name,'\\') || strchr(entry->name,':')) continue;
+        if (frame->length+n+1>9216 || (entry->is_directory && level==LIBRARY_DEPTH)) {
+            next.truncated=1; continue;
+        }
+        path[frame->length]='/'; strcpy(path+frame->length+1,entry->name);
+        if (entry->is_directory) {
+            ScanFrame *child=&frames[level+1];
+            child->length=frame->length+n+1; child->next=0;
+            child->root=!(entry->toc_id&0xffffffUL);
+            child->parent=frame->listing.has_parent ? frame->listing.parent_id :
+                (entry->toc_id&0xff000000UL)|0xffffffUL;
+            if (ode_enter_directory(ode,&frame->listing,entry,workaround)<0) goto fatal;
+            ++level;
+            if (ode_read_directory(ode,&child->listing)<0) goto fatal;
+        } else {
+            if (image_name(entry->name)) {
+                n=strlen(path)+1;
+                if (next.count==LIBRARY_CATALOG_MAX || next.bytes+n>LIBRARY_CATALOG_BYTES) {
+                    next.truncated=1; result=0; goto restore;
+                }
+                next.paths[next.count]=(char *)malloc(n);
+                if (!next.paths[next.count]) { result=-1; goto restore; }
+                memcpy(next.paths[next.count++],path,n); next.bytes+=n;
+            }
+            path[frame->length]=0;
+        }
+    }
+restore:
+    while (level) {
+        if (ode_change_directory(ode,frames[level].parent)<0) goto fatal;
+        ode_listing_free(&frames[level--].listing);
+    }
+    ode_listing_free(&frames[0].listing);
+    if (descend(ode,route,depth,workaround)<0 ||
+        ode_read_directory(ode,&frames[0].listing)<0 || !same_listing(&frames[0].listing,current)) goto fatal;
+    if (!result) {
+        next.valid=1; library_catalog_free(catalog); *catalog=next; memset(&next,0,sizeof(next));
+    }
+    goto done;
+fatal:
+    ode->navigation_failed=1; ode->error="Search folder restore failed"; result=-2;
+done:
+    ode->progress=old_progress;
+    if (frames) for (i=0;i<=LIBRARY_DEPTH;++i) ode_listing_free(&frames[i].listing);
+    free(frames); free(path); library_catalog_free(&next);
+    return result;
+}
+
+int library_current_files(const OdeListing *listing,const char *directory,
+    char *const *paths,size_t count,const MenuEntry **entries)
+{
+    size_t i, j, length=strlen(directory);
+    /* Check every parent before reporting a missing local name; mixed-folder
+     * queues must use the existing full-path resolver for all entries. */
+    for (i=0;i<count;++i) {
+        const char *slash=strrchr(paths[i],'/');
+        if (!slash || (size_t)(slash-paths[i])!=length || strncmp(paths[i],directory,length)) return 0;
+    }
+    for (i=0;i<count;++i) {
+        const char *name=paths[i]+length+1;
+        for (j=0;j<listing->count;++j)
+            if (!listing->entries[j]->is_directory && !menu_path_compare(listing->entries[j]->name,name)) break;
+        if (j==listing->count) return -1;
+        entries[i]=listing->entries[j];
+    }
+    return 1;
 }

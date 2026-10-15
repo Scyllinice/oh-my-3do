@@ -11,6 +11,7 @@ stubs=r'''
 #include "library_navigation.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #define MAX_DEPTH 32
 typedef struct Menu {
@@ -21,14 +22,27 @@ typedef struct Menu {
     struct { int folder_workaround; } config;
     const char *message;
 } Menu;
-static int visits,fail_visit,clears,adds,preflights;
+static int visits,fail_visit,clears,adds,preflights,local_mode,fresh_reads;
+static int directory_path(Menu *m,char *out,size_t capacity) { (void)m;(void)capacity; strcpy(out,"/Storage/Games"); return local_mode ? 0 : -1; }
+int menu_path_compare(const char *a,const char *b) { return strcmp(a,b); }
+static int queue_read_directory(Ode *ode,OdeListing *listing) {
+    size_t i; static const char *names[]={"Disc 1.iso","Disc 2.iso","Disc 3.iso","Disc 4.iso"};
+    (void)ode; ++fresh_reads;
+    listing->entries=(const MenuEntry **)calloc(4,sizeof(MenuEntry *)); assert(listing->entries);
+    for (i=0;i<4;++i) {
+        MenuEntry *e=(MenuEntry *)calloc(1,sizeof(*e)); assert(e);
+        e->toc_id=i+1; e->name=names[i]; listing->entries[listing->count++]=e;
+    }
+    return 0;
+}
+#define ode_read_directory queue_read_directory
 static char remote[16][128];
 static void draw(Menu *m) { (void)m; }
 static int transfer(void *context,const unsigned char *p,unsigned char *r,size_t cap,size_t *size) {
     (void)context; memset(r,0,cap); r[0]=p[0];
-    if(p[0] == 0xc3) { assert(preflights == 2); ++clears; adds=0; *size=2; }
+    if(p[0] == 0xc3) { assert(local_mode ? fresh_reads==1 : preflights==2); ++clears; adds=0; *size=2; }
     else if(p[0] == 0xc1) *size=18;
-    else if(p[0] == 0xc4) { ++adds; r[1]=r[2]=1; *size=4; }
+    else if(p[0] == 0xc4) { if(local_mode) sprintf(remote[adds],"/Storage/Games/Disc %u.iso",p[4]); ++adds; r[1]=r[2]=1; *size=4; }
     else assert(0);
     return 0;
 }
@@ -65,12 +79,30 @@ int main(void) {
         assert(!strcmp(m.playlist.paths[0],"/Storage/Games/Disc 2.iso"));
         ode_playlist_dispose(&m.playlist); ode_playlist_dispose(&m.group);
     }
+    memset(&m,0,sizeof(m)); visits=clears=adds=preflights=fresh_reads=0; local_mode=1;
+    m.ode.transfer=transfer; m.playlist.synchronized=1;
+    queue_read_directory(&m.ode,&m.listing); fresh_reads=0;
+    assert(!ode_playlist_append_local(&m.ode,&m.playlist,"/Storage/Games/Disc 1.iso"));
+    assert(!ode_playlist_append_local(&m.ode,&m.playlist,"/Storage/Games/Disc 2.iso"));
+    assert(!ode_playlist_append_local(&m.ode,&m.playlist,"/Storage/Games/Disc 3.iso"));
+    assert(!ode_playlist_append_local(&m.ode,&m.playlist,"/Storage/Games/Disc 4.iso"));
+    assert(!ode_playlist_move_local(&m.playlist,3,0));
+    assert(!apply_queue(&m) && !visits && fresh_reads==1 && adds==4 && clears==1);
+    assert(!strcmp(remote[0],m.playlist.paths[0]));
+    assert(!strcmp(remote[3],m.playlist.paths[3]));
+    clears=adds=fresh_reads=0;
+    assert(!ode_playlist_append_local(&m.ode,&m.playlist,"/Storage/Games/Missing.iso"));
+    assert(apply_queue(&m)<0 && !clears && !adds && !fresh_reads && !visits && m.playlist.synchronized);
+    ode_playlist_dispose(&m.playlist); ode_playlist_dispose(&m.group); ode_listing_free(&m.listing);
+    puts("Same-folder four-disc queue: one fresh listing, no folder walks, reordered sequence preserved");
     puts("Queue workflow: all paths checked before clear; edited order applied; failed rebuilds cannot launch");
     return 0;
 }
 '''
 with tempfile.TemporaryDirectory(prefix='oh3do-queue-') as directory:
     path,binary=Path(directory)/'test.c',Path(directory)/'test'
-    path.write_text(stubs+controller+checks)
+    navigation=(root/'src/library_navigation.c').read_text()
+    resolver=navigation[navigation.index('int library_current_files('):]
+    path.write_text(stubs+resolver+controller+checks)
     subprocess.run([os.environ.get('CC','cc'),'-std=c89','-Wall','-Wextra','-Werror','-Isrc',str(path),'src/ode.c','src/menu_sort.c','-o',str(binary)],cwd=root,check=True)
     subprocess.run([str(binary)],check=True)

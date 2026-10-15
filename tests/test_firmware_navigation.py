@@ -28,7 +28,7 @@ def run_fixture(directory, source, name):
         "-I", str(ROOT / "src"), str(code), str(ROOT / "src/ode.c"),
         str(ROOT / "src/art_navigation.c"), str(ROOT / "src/library_navigation.c"),
         str(ROOT / "src/menu_ui.c"), str(ROOT / "src/cover_catalog.c"),
-        str(ROOT / "src/menu_sort.c"), "-o", str(binary),
+        str(ROOT / "src/menu_sort.c"), str(ROOT / "src/library_features.c"), "-o", str(binary),
     ], check=True)
     return subprocess.run([str(binary)], capture_output=True, text=True)
 

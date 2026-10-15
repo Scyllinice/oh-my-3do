@@ -21,7 +21,7 @@ result.check_returncode()
 text = assembly.read_text()
 # Saved registers add at most 64 bytes per function. Prevent activate's frame
 # from overlapping offer_group's existing large buffers on a single call chain.
-limits = {'sync_music': 1024, 'activate': 512, 'offer_group': 20000, 'remember_position': 512,
+limits = {'search_library': 512, 'apply_queue': 1024, 'sync_music': 1024, 'activate': 512, 'offer_group': 20000, 'remember_position': 512,
           'record_launch': 512, 'export_diagnostics': 8192, 'update_cover': 13000, 'update_preview': 1024}
 summary = []
 for name, limit in limits.items():
@@ -39,6 +39,7 @@ print('ARM stack: small launch/persistence frames; disc grouping and diagnostics
 frames = {}
 for source, names in {
     'main.c': ['update_cover'],
+    'library_navigation.c': ['library_catalog_build'],
     'usb_media.c': ['usb_png_pixels', 'usb_preview_load'],
     'usb_art.c': ['usb_file_read'],
     'png_decode.c': ['pngle_feed'],

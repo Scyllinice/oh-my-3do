@@ -9,6 +9,7 @@ test: build/test_usb_music build/test_menu_music build/test_ui_font build/test_u
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
 	python3 tests/test_queue_workflow.py
+	python3 tests/test_startup_workflow.py
 	python3 tests/test_favorites_workflow.py
 	./build/test_menu_position
 	./build/test_library_navigation
@@ -74,9 +75,9 @@ build/test_library_features: src/library_features.c src/library_features.h src/o
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/library_features.c src/ode.c src/menu_sort.c src/menu_ui.c src/cover_catalog.c tests/test_library_features.c $(LDFLAGS) -o $@
 
-build/test_library_navigation: src/library_navigation.c src/library_navigation.h src/menu_ui.c tests/test_library_navigation.c
+build/test_library_navigation: src/library_features.c src/library_navigation.c src/library_navigation.h src/menu_ui.c tests/test_library_navigation.c
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/library_navigation.c src/menu_sort.c src/menu_ui.c src/cover_catalog.c tests/test_library_navigation.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/library_navigation.c src/library_features.c src/menu_sort.c src/menu_ui.c src/cover_catalog.c tests/test_library_navigation.c $(LDFLAGS) -o $@
 
 build/test_menu_position: src/menu_position.c src/menu_position.h tests/test_menu_position.c
 	mkdir -p build

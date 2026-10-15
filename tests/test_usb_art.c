@@ -1,4 +1,5 @@
 #include "usb_art.h"
+#include "usb_file.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +10,7 @@ typedef struct FakeUsb {
     size_t index_size, image_size, position;
     const unsigned char *file;
     size_t size;
-    int calls, fail_at, closed, opened;
+    int calls, fail_at, closed, opened, words, reads;
 } FakeUsb;
 
 static void put32(unsigned char *p, unsigned long value)
@@ -31,13 +32,14 @@ static int transfer(void *context, const unsigned char *packet,
     *length=2;
     if (packet[0] == 0xe6) {
         size_t offset=((size_t)packet[1]*256+packet[2])*4;
+        ++fake->words;
         assert(offset+4 <= sizeof(fake->buffer));
         memcpy(fake->buffer+offset,packet+3,4);
     } else if (packet[0] == 0xe1) {
         size_t name_length=(size_t)packet[2]*256+packet[3];
         assert(!packet[1] && !packet[4] && !packet[5] && !packet[6]);
         assert(name_length == strlen((char *)fake->buffer)+1);
-        assert(!strncmp((char *)fake->buffer,"covers/",7));
+        assert(!strncmp((char *)fake->buffer,"covers/",7) || !strcmp((char *)fake->buffer,"recent.txt"));
         if (!strcmp((char *)fake->buffer,"covers/index.3di")) {
             fake->file=fake->index; fake->size=fake->index_size;
         } else { fake->file=fake->image; fake->size=fake->image_size; }
@@ -47,6 +49,7 @@ static int transfer(void *context, const unsigned char *packet,
         *length=3;
     } else if (packet[0] == 0xe3) {
         size_t requested=(size_t)packet[1]*256+packet[2], actual=requested;
+        ++fake->reads;
         assert(fake->opened && requested <= 2048);
         if (actual > fake->size-fake->position) actual=fake->size-fake->position;
         memcpy(fake->buffer,fake->file+fake->position,actual);
@@ -120,7 +123,27 @@ int main(int argc, char **argv)
         assert(usb_art_pixels(&ode,reader,index.entries[0].file,pixels) == 0);
         assert(!memcmp(pixels,fake.image+24,USB_ART_PIXELS));
         usb_art_index_free(&index);
-        puts("USB artwork: Python exporter -> C runtime roundtrip passed");
+        {
+        char text[512]; size_t length;
+        setup(&fake,&ode); memcpy(fake.image,"Games/D.iso\n",12); fake.image_size=12;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length));
+        assert(length==12 && !strcmp(text,"Games/D.iso\n") && fake.closed);
+        assert(fake.reads==1 && fake.words<40); /* formerly 128+ for this capacity, 512 for favorites */
+        calls=fake.calls;
+        for (i=1;i<=calls;++i) {
+            setup(&fake,&ode); fake.image_size=0; fake.fail_at=i;
+            assert(usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length)<0);
+        }
+        setup(&fake,&ode); memset(fake.image,'x',256); fake.image_size=256;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length));
+        assert(length==256 && fake.reads==3 && text[256]==0);
+        setup(&fake,&ode); memset(fake.image,'x',512); fake.image_size=512;
+        assert(usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length)<0 && fake.closed);
+        setup(&fake,&ode); fake.image_size=0;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && !length);
+    }
+    puts("USB text: bounded short reads, poisoned stale EOF, exact block boundaries and every I/O failure passed");
+    puts("USB artwork: Python exporter -> C runtime roundtrip passed");
         return 0;
     }
     assert(usb_art_crc32((const unsigned char *)"123456789",9) == 0xcbf43926UL);
@@ -161,6 +184,26 @@ int main(int argc, char **argv)
     setup(&fake,&ode); strcpy(ode.identity,"OTHER!");
     assert(usb_art_index_load(&ode,reader,&index) < 0 && !fake.calls);
     assert(usb_art_pixels(&ode,reader,"../../bad",pixels) < 0 && !fake.calls);
+    {
+        char text[512]; size_t length;
+        setup(&fake,&ode); memcpy(fake.image,"Games/D.iso\n",12); fake.image_size=12;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length));
+        assert(length==12 && !strcmp(text,"Games/D.iso\n") && fake.closed);
+        assert(fake.reads==1 && fake.words<40); /* formerly 128+ for this capacity, 512 for favorites */
+        calls=fake.calls;
+        for (i=1;i<=calls;++i) {
+            setup(&fake,&ode); fake.image_size=0; fake.fail_at=i;
+            assert(usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length)<0);
+        }
+        setup(&fake,&ode); memset(fake.image,'x',256); fake.image_size=256;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length));
+        assert(length==256 && fake.reads==3 && text[256]==0);
+        setup(&fake,&ode); memset(fake.image,'x',512); fake.image_size=512;
+        assert(usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length)<0 && fake.closed);
+        setup(&fake,&ode); fake.image_size=0;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && !length);
+    }
+    puts("USB text: bounded short reads, poisoned stale EOF, exact block boundaries and every I/O failure passed");
     puts("USB artwork: sequential reads, CRC, EOF, bounds and I/O failures passed");
     return 0;
 }
