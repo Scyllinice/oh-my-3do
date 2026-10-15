@@ -30,7 +30,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.12.1"
+#define MENU_VERSION "0.13.0"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2

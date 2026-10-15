@@ -3,6 +3,7 @@ CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 
 .PHONY: test test-firmware test-covers test-sdk test-media clean
 test: build/test_cover_cache build/test_usb_music build/test_menu_music build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+	python3 tests/test_organize_library.py
 	python3 tests/test_media_tools.py
 	python3 tests/test_music_sample.py
 	python3 tests/test_music_tools.py

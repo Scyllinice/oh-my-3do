@@ -27,6 +27,14 @@
 /last-position.txt
 /diagnostics.txt
 
+# Personal library reports, metadata caches and organizer journals
+/library-plan*.json
+/library-plan*.html
+/library-cache/
+.ohmy3do/
+*.sqlite
+*.sqlite-*
+
 # Python, compiler and editor output
 __pycache__/
 *.py[cod]

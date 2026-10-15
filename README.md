@@ -9,7 +9,9 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.12.1**.
+restore, plus optional menu music. PC tools can identify and organize a USB
+library, download covers, and build a game information database. The current
+version is **0.13.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -368,6 +370,109 @@ images, Nintendo 3DS files or game-progress editors. Invalid names, checksums,
 duplicates and lengths reject the whole archive. Files are self-delimiting so an
 old USB tail does not require unsupported truncate/seek commands.
 
+## USB library organizer
+
+`organize-library.py` runs on a PC with Python 3.9+. It is included in
+`media-tools.zip` alongside its `library-catalog.py`, `index-media.py`, and
+`resize-covers.py` dependencies. Keep the extracted tools together. Install
+Pillow for cover conversion:
+
+```powershell
+py -m pip install Pillow
+py organize-library.py scan M:/ --quick --plan library-plan.json
+```
+
+Run this from the extracted tools folder on the PC. Replace `M:/` with the USB
+drive. Scanning leaves USB files unchanged and produces `library-plan.json` and
+a searchable `library-plan.html` preview. The preview shows original/proposed
+paths, identification confidence, genre, publisher, year, and unresolved matches.
+
+The first scan downloads the [Libretro/Redump identification DAT](https://github.com/libretro/libretro-database)
+and the [LaunchBox metadata archive](https://forums.launchbox-app.com/topic/30123-launchbox-games-db-external-scraper/),
+currently about 104 MiB for the latter. Only 3DO records are retained in the
+parsed catalog; subsequent scans use a local PC cache. Metadata can be incomplete
+or inaccurate, and missing fields remain unknown. It describes games rather
+than guaranteeing dates or publishers for each regional pressing. Source URLs and download
+checksums accompany the generated database. No account or API key is needed.
+
+Open the HTML preview before applying changes. The layout is
+`Games/<region>/<game title>/<disc image>`, with discs of the same edition in
+one folder. For example:
+
+```text
+Games/USA/D (USA)/D (USA) (Disc 1).iso
+Games/USA/D (USA)/D (USA) (Disc 2).iso
+```
+
+`--quick` matches filenames without reading entire disc images. These matches
+are marked **review**, and moving them requires an explicit option:
+
+```powershell
+py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches
+```
+
+Without `--quick`, scanning reads each image/data file and compares complete
+SHA-1 hashes and sizes against the identification catalog. This can take a long
+time on a large USB drive. Checksum and explicit manual matches are marked
+**ready**; apply these without `--accept-name-matches`. The default DAT describes
+raw Redump dumps. Converted 2048-byte-sector ISOs often cannot match those
+checksums and still need a filename match or manual identification. `--dat`
+accepts a local clrmamepro-format DAT, including one for the ISO format in use.
+
+Ambiguous versions, fuzzy suggestions, broken/shared CUE sets, and destination
+collisions stay in place. No duplicate images are deleted. To resolve a match,
+put its relative USB path and exact catalog name in a PC-side overrides file,
+then rescan:
+
+```json
+{"Unsorted/game.iso": "Doom (USA, Japan)"}
+```
+
+```powershell
+py organize-library.py scan M:/ --quick --overrides overrides.json --plan library-plan.json
+```
+
+CUE sets move together. Companion files receive names derived from the disc
+and track number, and their CUE `FILE` references are updated. Comments, track
+directives, line endings, and supported source encodings are preserved. Only
+sibling-file references are supported; CUE paths into other folders need manual
+attention. Case-insensitive file references work on FAT and on a Linux-hosted
+test directory. A CUE and its referenced ISO are treated as one move group.
+
+Apply downloads available [Libretro box scans](https://github.com/libretro-thumbnails/libretro-thumbnails),
+prepares 84×105 RGB PNGs, and links them to the correct game paths. Existing
+cover and preview associations are preserved. Missing or ambiguous artwork is
+reported without blocking other games. `--no-covers` skips downloads. Use
+`--offline` on scan/apply to work from existing caches; `scan --refresh-catalog`
+refreshes the identification and metadata sources.
+
+Favorites, recent games, and the selected saved game are updated to the new
+paths. If a saved folder loses its contents, the saved position resets to the
+USB root. The search and artwork indices are rebuilt automatically. Original
+empty game folders are retained. `boot.iso`, INI settings, save backups, and
+music are left in place.
+
+The USB database lives in `.ohmy3do/library.sqlite`, with a readable
+`.ohmy3do/library.json` export. SQLite's `games` table contains paths, titles,
+regions, disc numbers, genre, publisher, year, developer, match type, and cover
+associations. These information fields are available for PC tools; the current
+console menu uses the generated search/artwork indices and does not yet display
+genre, publisher, or year.
+
+Apply prints an undo journal path. To restore original file paths and support
+files, use that relative path on the same USB root:
+
+```powershell
+py organize-library.py undo M:/ .ohmy3do/transactions/<printed-id>.json
+```
+
+The journal is written before moves and support-file replacements, including
+CUE edits. Apply attempts to undo a failed operation automatically. After an
+interruption, keep the journal and run undo before rescanning. Undo checks for
+later edits and refuses to replace changed files. Journals remain on USB after
+undo. Download caches remain on the PC. On Linux/macOS, replace `py` with
+`python3`; `--cache <folder>` before the subcommand selects a different PC cache.
+
 ## PNG covers and video previews
 
 Game media belongs in `/covers` and `/previews` on USB, outside `boot.iso`. PNG
@@ -448,7 +553,7 @@ USB/
 
 After copying PNGs, generate the media indices on a PC. Python 3 is enough;
 Docker and FFmpeg are not needed for PNG covers. The release includes a portable
-`media-tools.zip` with both Python tools, a quick-start guide and an original
+`media-tools.zip` with the portable Python tools, a quick-start guide and an original
 moving test-pattern clip. Rename that clip to match a game's basename for an
 initial preview test without installing FFmpeg. From a source checkout, run:
 

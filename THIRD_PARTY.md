@@ -18,6 +18,14 @@ relicense the 3DO SDK, Portfolio OS, firmware, games, or third-party artwork.
   repository contains no commercial game images or game box scans.
 - Personal cover associations, converted covers, USB backups, ISO builds and
   downloaded dependencies are excluded by `.gitignore`.
+- The PC library organizer downloads identification data from
+  [Libretro/Redump](https://github.com/libretro/libretro-database), metadata from
+  [LaunchBox](https://forums.launchbox-app.com/topic/30123-launchbox-games-db-external-scraper/),
+  and covers from [Libretro thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails).
+  These datasets and scans are fetched into a local cache, are not bundled with
+  the source, media tools ZIP or ISO, and retain their respective terms and
+  artwork rights. Generated databases record source URLs and data checksums;
+  this project's MIT license covers the organizer code, not downloaded data.
 
 Signed ISO outputs contain SDK runtime components. Consult the dependency terms
 when redistributing compiled images; this source license does not grant rights

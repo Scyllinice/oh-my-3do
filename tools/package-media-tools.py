@@ -9,6 +9,8 @@ ROOT=Path(__file__).resolve().parent.parent
 output=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'iso/media-tools.zip'
 output.parent.mkdir(parents=True,exist_ok=True)
 files={'index-media.py':'tools/index-media.py',
+       'organize-library.py':'tools/organize-library.py',
+       'library-catalog.py':'tools/library-catalog.py',
        'prepare-preview.py':'tools/prepare-preview.py',
        'resize-covers.py':'tools/resize-covers.py',
        'prepare-music.py':'tools/prepare-music.py',

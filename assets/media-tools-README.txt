@@ -2,7 +2,62 @@ Oh My 3DO media tools
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
-The tools do not rebuild boot.iso or download artwork, music or video.
+The tools do not rebuild boot.iso or download games, music or video.
+The optional organizer downloads game metadata and cover artwork.
+
+ORGANIZE A USB LIBRARY
+
+Keep all extracted scripts together on the PC. Python 3.9+ is required; install
+Pillow for covers with: py -m pip install Pillow
+
+Preview without modifying USB files:
+  py organize-library.py scan M:/ --quick --plan library-plan.json
+
+Open library-plan.html to review proposed moves and game information. Games use
+Games/<region>/<game title>/, with discs of the same edition together. The first
+scan downloads a Redump DAT and LaunchBox's metadata archive (about 104 MiB),
+cached on the PC. Subsequent scans use the cache. Metadata fields may be missing.
+
+Apply the reviewed filename matches, download covers, and build the database:
+  py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches
+
+Without --quick, scan reads the entire data files and compares their SHA-1 and
+size to the DAT. Checksum/manual matches can be applied without accepting name
+matches. Converted ISOs often differ from raw Redump hashes. Filename matches
+are unverified; ambiguous or fuzzy suggestions never move automatically.
+
+Resolve a match with a PC-side overrides.json object, for example:
+  {"Unsorted/game.iso": "Doom (USA, Japan)"}
+Then scan again with --overrides overrides.json. --dat can select a local
+clrmamepro-format DAT; --launchbox selects an existing Metadata.zip.
+
+CUE companions move and are renamed together; FILE references are updated.
+Only sibling-file references are supported. Shared/missing tracks, ambiguous
+matches, and destination collisions stay in place. No duplicate images are
+deleted. Existing artwork links are preserved; downloaded covers are native
+84x105 PNGs. Favorites, recent games, saved selection and media/search indices
+are updated. boot.iso, settings, NVRAM backups and music stay in place.
+
+The game information database is USB/.ohmy3do/library.sqlite, with a readable
+library.json beside it. It contains genre, publisher, year, developer and
+identification/source information. Current console menus do not display those
+metadata fields; search and covers work through the generated .3di indices.
+
+Apply prints a journal path. Undo using the printed path relative to USB:
+  py organize-library.py undo M:/ .ohmy3do/transactions/<printed-id>.json
+
+Failed apply operations attempt automatic undo. After an interruption, keep the
+journal and run undo before rescanning. Undo refuses to overwrite later edits.
+Original empty game folders and journals are retained. --no-covers on apply skips
+artwork; --offline uses cached data only. scan --refresh-catalog refreshes source
+downloads. --cache PATH before the subcommand selects a PC cache location.
+
+Data sources (downloaded separately; not bundled or covered by our MIT license):
+  https://github.com/libretro/libretro-database
+  https://gamesdb.launchbox-app.com/Metadata.zip
+  https://github.com/libretro-thumbnails/libretro-thumbnails
+
+Full details: https://github.com/Scyllinice/oh-my-3do#usb-library-organizer
 
 PREPARE COVERS
 
