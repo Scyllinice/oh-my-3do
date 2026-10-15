@@ -5,6 +5,7 @@ CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 test: build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
+	python3 tests/test_queue_workflow.py
 	./build/test_library_navigation
 	./build/test_library_features
 	./build/test_bus_diagnostics
