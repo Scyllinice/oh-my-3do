@@ -122,8 +122,26 @@ static void display_config(void)
     assert(c.folder_workaround && c.screen_margin == 12 && c.large_titles && c.theme == 2 && c.usb_covers);
     assert(menu_config_parse(&c,"screen_margin=13",16) < 0 && !c.folder_workaround && !c.screen_margin);
     assert(menu_config_parse(&c,"theme=3",7) < 0);
+    assert(c.remember_position && c.recent_games);
+    {
+        const char *library="[library]\nremember_position=0\nrecent_games=0\n";
+        assert(!menu_config_parse(&c,library,strlen(library)) && !c.remember_position && !c.recent_games);
+        assert(menu_config_parse(&c,"remember_position=2",19) < 0);
+    }
     assert(menu_config_parse(&c,"large_titles=2",14) < 0);
     assert(menu_config_parse(&c,"theme=1\ntheme=2",15) < 0);
+}
+
+static void default_template(void)
+{
+    char data[MENU_CONFIG_BYTES];
+    MenuConfig c;
+    FILE *file = fopen("ohmy3do.ini","rb");
+    size_t length;
+    assert(file); length = fread(data,1,sizeof(data),file);
+    assert(!ferror(file)); fclose(file);
+    assert(length < MENU_CONFIG_BYTES && !menu_config_parse(&c,data,length));
+    assert(!c.folder_workaround && c.usb_covers && c.remember_position && c.recent_games);
 }
 
 int main(void)
@@ -133,6 +151,7 @@ int main(void)
     MenuConfig config;
     int failed;
     parser();
+    default_template();
     display_config();
     setup(&fake, &ode);
     assert(menu_config_load(&ode, read_buffer, &config) == 0);

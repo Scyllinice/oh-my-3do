@@ -2,6 +2,7 @@
 **
 !Dockerfile
 !Makefile
+!ohmy3do.ini
 !docker/
 !docker/**
 !src/

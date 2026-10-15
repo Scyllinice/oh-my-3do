@@ -29,7 +29,7 @@ bad:
 }
 static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
                      const OdeListing *current, int workaround, const char *path,
-                     LibraryFileAction action, void *context, LibraryLocation *keep)
+                     LibraryFileAction action, void *context, LibraryLocation *keep, int folder)
 {
     OdeListing listing;
     unsigned long parents[LIBRARY_DEPTH];
@@ -40,7 +40,7 @@ static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
     int result = -1;
     size_t n;
     ode_listing_init(&listing);
-    if (ode->navigation_failed || depth > LIBRARY_DEPTH || strncmp(path,"/Storage/",9)) return -1;
+    if (ode->navigation_failed || depth > LIBRARY_DEPTH || (strncmp(path,"/Storage/",9) && !(folder && !strcmp(path,"/Storage")))) return -1;
     n = strlen(path);
     if (n > 9216) return -1;
     copy = (char *)malloc(n + 1);
@@ -48,7 +48,7 @@ static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
     memcpy(copy,path,n+1);
     /* Validate every component before changing firmware state. */
     part = copy + 9;
-    for (;;) {
+    if (!(folder && n == 8)) for (;;) {
         slash = strchr(part,'/'); if (slash) *slash = 0;
         if (!*part || !strcmp(part,".") || !strcmp(part,"..") || strlen(part) >= ODE_MAX_NAME || strchr(part,'\\') || strchr(part,':')) goto done;
         if (!slash) break;
@@ -57,6 +57,11 @@ static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
     ode->progress = NULL;
     for (i = depth; i; --i)
         if (ode_change_directory(ode,(route[i-1].id & 0xff000000UL) | 0xffffffUL) < 0) goto fatal;
+    if (folder && n == 8) {
+        if (ode_read_directory(ode,&listing) < 0) goto fatal;
+        keep->listing = listing; ode_listing_init(&listing); keep->depth = 0; keep->selected = 0;
+        result = 0; goto done;
+    }
     part = copy + 9;
     directory_end = strrchr(path,'/');
     for (;;) {
@@ -64,9 +69,9 @@ static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
         slash = strchr(part,'/'); if (slash) *slash = 0;
         if (ode_read_directory(ode,&listing) < 0) goto fatal;
         for (j = 0; j < listing.count; ++j)
-            if (!menu_path_compare(listing.entries[j]->name,part) && !!listing.entries[j]->is_directory == !!slash) break;
+            if (!menu_path_compare(listing.entries[j]->name,part) && !!listing.entries[j]->is_directory == !!(slash || folder)) break;
         if (j == listing.count) { ode->error = "Queued/favorite path is missing"; goto restore; }
-        if (!slash) {
+        if (!slash && !folder) {
             if (keep) {
                 size_t k;
                 int root = entered == 0 || (entered == 1 && !(keep->ids[0] & 0xffffffUL));
@@ -108,7 +113,13 @@ static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
             if (ode->navigation_failed) goto fatal;
             goto restore;
         }
-        ++entered; ode_listing_free(&listing); part = slash + 1;
+        ++entered; ode_listing_free(&listing);
+        if (!slash) {
+            if (ode_read_directory(ode,&listing) < 0) goto fatal;
+            keep->listing = listing; ode_listing_init(&listing); keep->depth = entered; keep->selected = 0;
+            result = 0; goto done;
+        }
+        part = slash + 1;
     }
 restore:
     ode_listing_free(&listing);
@@ -125,12 +136,20 @@ int library_visit(Ode *ode, const ArtRouteStep *route, unsigned int depth,
                    const OdeListing *current, int workaround, const char *path,
                    LibraryFileAction action, void *context)
 {
-    return navigate(ode,route,depth,current,workaround,path,action,context,NULL);
+    return navigate(ode,route,depth,current,workaround,path,action,context,NULL,0);
 }
 int library_open(Ode *ode, const ArtRouteStep *route, unsigned int depth,
                   const OdeListing *current, int workaround, const char *path,
                   LibraryLocation *location)
 {
     memset(location,0,sizeof(*location));
-    return navigate(ode,route,depth,current,workaround,path,NULL,NULL,location);
+    return navigate(ode,route,depth,current,workaround,path,NULL,NULL,location,0);
+}
+
+int library_open_directory(Ode *ode, const ArtRouteStep *route, unsigned int depth,
+                  const OdeListing *current, int workaround, const char *path,
+                  LibraryLocation *location)
+{
+    memset(location,0,sizeof(*location));
+    return navigate(ode,route,depth,current,workaround,path,NULL,NULL,location,1);
 }

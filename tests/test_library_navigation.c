@@ -87,6 +87,24 @@ int main(void)
     assert(current == 4 && !ode.navigation_failed); free(location);
     calls=0; assert(library_visit(&ode,route,3,&snapshot,1,"/Storage/../bad",action,NULL) < 0 && !calls && current == 4);
     ode_listing_free(&snapshot);
+    setup(&ode,&snapshot);
+    location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+    assert(!library_open_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Games",location));
+    assert(current == 3 && location->depth == 2 && !location->selected);
+    total=calls; ode_listing_free(&location->listing); free(location); ode_listing_free(&snapshot);
+    for(i=1;i<=total;++i) {
+        setup(&ode,&snapshot); fail_at=i;
+        location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+        assert(library_open_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Games",location) == -2);
+        assert(ode.navigation_failed); free(location); ode_listing_free(&snapshot);
+    }
+    setup(&ode,&snapshot); location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+    assert(library_open_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Missing",location) == -1);
+    assert(current == 4 && !ode.navigation_failed); free(location); ode_listing_free(&snapshot);
+    setup(&ode,&snapshot); location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+    assert(!library_open_directory(&ode,route,3,&snapshot,1,"/Storage",location));
+    assert(current == 0 && !location->depth && location->listing.count == 2);
+    ode_listing_free(&location->listing); free(location); ode_listing_free(&snapshot);
     puts("Library navigation: cross-volume paths, repeated IDs, missing paths, every failure and retained favorite selection passed");
     return 0;
 }

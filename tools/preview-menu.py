@@ -25,10 +25,12 @@ STUBS = r'''
 #include "library_features.h"
 #include "library_navigation.h"
 #include "menu_settings.h"
+#include "menu_position.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#define abort() do { fprintf(stderr,"Preview assertion failed at line %d\n",__LINE__); exit(1); } while (0)
 typedef unsigned long u32;
 typedef unsigned char u8;
 typedef int Item;
@@ -44,10 +46,41 @@ static void SetCurrentFontCCB(CCB *font) { preview_font=*font; }
 #define CREATECEL_UNCODED 0
 typedef struct { int sc_curScreen; Item sc_BitmapItems[2], sc_Screens[2]; } ScreenContext;
 typedef struct { int last_error, timed_out; unsigned long commands; unsigned char last_command, last_reply[32], failed_command, failed_status; int failure_error; size_t last_length; } OdeBus;
+static int preview_text_enabled, preview_reads, preview_writes, preview_read_fail, preview_write_fail;
+static char preview_position[9216], preview_recent[8192], preview_favorites[8192], preview_diagnostics[4096];
+static char *preview_text_slot(const char *name)
+{
+    if (!strcmp(name,"last-position.txt")) return preview_position;
+    if (!strcmp(name,"recent.txt")) return preview_recent;
+    if (!strcmp(name,"favorites.txt")) return preview_favorites;
+    if (!strcmp(name,"diagnostics.txt")) return preview_diagnostics;
+    return NULL;
+}
+static int preview_text_read(Ode *ode, OdeReadBuffer reader, const char *name, char *out, size_t capacity, size_t *length)
+{
+    char *slot=preview_text_slot(name);
+    (void)ode; (void)reader;
+    if (!preview_text_enabled || !slot) return -1;
+    ++preview_reads;
+    if (preview_read_fail || strlen(slot) >= capacity) return -1;
+    strcpy(out,slot); *length=strlen(slot); return 0;
+}
+static int preview_text_write(Ode *ode, OdeReadBuffer reader, const char *name, const char *text)
+{
+    char *slot=preview_text_slot(name);
+    (void)reader;
+    if (!preview_text_enabled || !slot) return -1;
+    ++preview_writes;
+    if (preview_write_fail) return -1;
+    strcpy(slot,text);
+    ((OdeBus *)ode->context)->last_command=0xe4;
+    return 0;
+}
 #define ControlUp 1
 #define ControlDown 2
 #define ControlLeft 4
 #define ControlRight 8
+#define ControlRightShift 1024
 #define ControlA 16
 #define ControlB 32
 #define ControlC 64
@@ -148,6 +181,8 @@ int main(int argc, char **argv) {
     CCB logo={1,0,0,0}, cover={2,0,0,0};
     memset(&menu, 0, sizeof(menu));
     menu_config_defaults(&menu.config);
+    menu.saved_config=menu.config; menu.settings_remember_position=menu.settings_recent_games=1;
+    menu.settings_usb_covers=1;
     menu.font_ccb=*GetCurrentFont()->font_CCB; menu.have_font=1;
     logo.ccb_XPos=16L<<16; logo.ccb_YPos=8L<<16; logo.ccb_HDX=1L<<20; logo.ccb_VDY=1L<<16;
     cover.ccb_XPos=236L<<16; cover.ccb_YPos=86L<<16; cover.ccb_HDX=1L<<20; cover.ccb_VDY=1L<<16;
@@ -213,10 +248,10 @@ int main(int argc, char **argv) {
         preview_now+=350;
         update_cover(&menu);
         if (preview_cel_calls != 2 || !menu.cover_attempted) abort();
-        /* Tools has four entries; Help/Diagnostics never touch USB. */
+        /* Tools wraps across nine entries; viewing Help/Diagnostics is read-only. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlUp);
-        if (menu.tool_selected != 6) abort();
+        if (menu.tool_selected != 8) abort();
         tools_input(&menu, ControlDown);
         if (menu.tool_selected != 0) abort();
         menu.tool_selected=5; tools_input(&menu, ControlA);
@@ -278,15 +313,106 @@ int main(int argc, char **argv) {
             !menu.config.folder_workaround || menu.config.usb_covers) abort();
         menu.config_result=2; tools_input(&menu,ControlC);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
-        menu.tool_selected=5; tools_input(&menu,ControlA);
+        menu.tool_selected=7; tools_input(&menu,ControlA);
         if (menu.config.screen_margin || menu.config.large_titles || menu.config.theme) abort();
         if (menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlB);
         menu.tool_selected=4; tools_input(&menu,ControlA);
         if (menu.tools != TOOL_CONFIG || menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
-        tools_input(&menu,ControlUp); if (menu.tool_selected != 6) abort();
+        tools_input(&menu,ControlUp); if (menu.tool_selected != 9) abort();
         tools_input(&menu,ControlA);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
+        /* Unsaved marker tracks all settings; discard restores the saved snapshot. */
+        menu.saved_config=menu.config;
+        menu.settings_folder_workaround=menu.config.folder_workaround;
+        menu.settings_usb_covers=menu.config.usb_covers;
+        menu.settings_remember_position=menu.config.remember_position;
+        menu.settings_recent_games=menu.config.recent_games;
+        if (config_dirty(&menu)) abort();
+        menu.tool_selected=5; tools_input(&menu,ControlA);
+        if (!config_dirty(&menu)) abort();
+        tools_input(&menu,ControlX); if (config_dirty(&menu)) abort();
+        menu.tools=TOOL_FIND; menu.find_query[0]=0; menu.find_key=0;
+        tools_input(&menu,ControlA); tools_input(&menu,ControlRight); tools_input(&menu,ControlA);
+        if (strcmp(menu.find_query,"AB")) abort();
+        tools_input(&menu,ControlX); if (strcmp(menu.find_query,"A")) abort();
+        tools_input(&menu,ControlC); if (*menu.find_query) abort();
+        tools_input(&menu,ControlLeft); if (menu.find_key != 0) abort();
+        tools_input(&menu,ControlA); tools_input(&menu,ControlStart);
+        if (menu.tools || strcmp(menu.filter,"A") || menu.selected) abort();
+        menu.filter[0]=0;
+        /* Move cancellation is local and never writes to the demo USB bus. */
+        menu_favorites_parse(&menu.favorites,"First.iso\nSecond.iso\n",21);
+        menu.favorites_valid=1; menu.tools=TOOL_FAVORITES; menu.tool_selected=0;
+        tools_input(&menu,ControlRightShift); tools_input(&menu,ControlDown);
+        if (!menu.favorites_move || strcmp(menu.favorites.paths[0],"Second.iso")) abort();
+        tools_input(&menu,ControlB);
+        if (menu.favorites_move || strcmp(menu.favorites.paths[0],"First.iso")) abort();
+        menu_favorites_free(&menu.favorites);
+        /* Actual persistence controllers, with only the USB file transport replaced. */
+        preview_text_enabled=1; preview_reads=preview_writes=0;
+        menu.demo=menu.tools=menu.review=0; menu.ready=1; menu.depth=0; menu.selected=2;
+        menu.config_result=0; menu.config.remember_position=menu.config.recent_games=1;
+        strcpy(menu.ode.identity,"LOCODE"); menu.ode.context=&menu.bus;
+        menu.bus.timed_out=menu.ode.navigation_failed=0;
+        menu.position_result=0; menu.position_dirty=1; memset(&menu.last_position,0,sizeof(menu.last_position));
+        menu.selection_since=0; preview_now=9000;
+        remember_position(&menu,0);
+        if (preview_writes != 1 || menu.position_result != 1 || !strstr(preview_position,"/Storage\n")) abort();
+        remember_position(&menu,0); if (preview_writes != 1) abort();
+        menu.selected=3; selection_changed(&menu); remember_position(&menu,0);
+        if (preview_writes != 1) abort();
+        preview_now+=2000; remember_position(&menu,0); if (preview_writes != 2) abort();
+        menu.config_result=2; menu.selected=4; remember_position(&menu,1);
+        if (preview_writes != 2) abort();
+        menu.config_result=0; menu.config.remember_position=0;
+        record_launch(&menu,"/Storage/Games/D (Disc 1).iso");
+        if (menu.recent_result != 1 || strcmp(preview_recent,"Games/D (Disc 1).iso\n")) abort();
+        record_launch(&menu,"/Storage/Other.iso");
+        if (strcmp(preview_recent,"Other.iso\nGames/D (Disc 1).iso\n")) abort();
+        {
+            int writes=preview_writes;
+            strcpy(preview_recent,"../bad.iso\n"); record_launch(&menu,"/Storage/New.iso");
+            if (preview_writes != writes || menu.recent_result != -1) abort();
+            preview_read_fail=1; record_launch(&menu,"/Storage/New.iso");
+            if (preview_writes != writes) abort();
+            preview_read_fail=0; preview_recent[0]=0; preview_write_fail=1;
+            record_launch(&menu,"/Storage/New.iso"); if (menu.recent_result != -1) abort();
+            preview_write_fail=0;
+        }
+        menu.bus.last_command=0x93; menu.bus.failed_command=0xe3; menu.bus.failed_status=0x10;
+        export_diagnostics(&menu);
+        if (menu.diagnostics_result != 1 || !strstr(preview_diagnostics,"last_command=93\n") ||
+            !strstr(preview_diagnostics,"last_fault_command=e3\n") || menu.bus.last_command != 0xe4) abort();
+        {
+            int reads=preview_reads, writes=preview_writes;
+            menu.bus.timed_out=1; export_diagnostics(&menu);
+            if (menu.diagnostics_result != -1 || preview_reads != reads || preview_writes != writes) abort();
+            menu.bus.timed_out=0; menu.config_result=2; export_diagnostics(&menu);
+            if (preview_reads != reads || preview_writes != writes) abort();
+            menu.config_result=0;
+        }
+        strcpy(preview_favorites,"First.iso\nSecond.iso\n");
+        menu_favorites_parse(&menu.favorites,preview_favorites,strlen(preview_favorites));
+        menu.favorites_valid=1; menu.tools=TOOL_FAVORITES; menu.tool_selected=0;
+        begin_favorites_move(&menu); menu_favorites_move(&menu.favorites,0,1); save_favorites_order(&menu);
+        if (menu.favorites_move || strcmp(preview_favorites,"Second.iso\nFirst.iso\n")) abort();
+        begin_favorites_move(&menu); menu_favorites_move(&menu.favorites,0,1);
+        strcpy(preview_favorites,"PC changed.iso\n");
+        {
+            int writes=preview_writes; save_favorites_order(&menu);
+            if (!menu.favorites_move || preview_writes != writes || !strstr(menu.tool_message,"changed")) abort();
+        }
+        cancel_favorites_move(&menu); menu_favorites_free(&menu.favorites); menu_favorites_free(&menu.recent);
+        menu.config.remember_position=1; menu.position_result=0; menu.selected=5;
+        preview_write_fail=1; remember_position(&menu,1);
+        if (menu.position_result != -1) abort();
+        {
+            int writes=preview_writes; remember_position(&menu,1);
+            if (preview_writes != writes) abort();
+        }
+        preview_write_fail=0;
+        preview_text_enabled=0; menu.config_result=2; menu.demo=1; menu.tools=0;
         /* Holding C for a letter jump never queues an image. */
         menu.tools=0; menu.review=menu.demo=0; menu.ready=1; menu.playlist.synchronized=1;
         if (browser_shortcuts(&menu,ControlC,ControlC,0) & ControlC) abort();
@@ -361,6 +487,12 @@ int main(int argc, char **argv) {
         menu.tools=TOOL_CONFIG; menu.settings_usb_covers=menu.config.usb_covers;
         menu.settings_folder_workaround=menu.config.folder_workaround;
     }
+    if (argc > 1 && !strcmp(argv[1],"find")) { menu.tools=TOOL_FIND; strcpy(menu.find_query,"ROAD"); menu.find_key=17; }
+    if (argc > 1 && !strcmp(argv[1],"filtered")) strcpy(menu.filter,"disc 1");
+    if (argc > 1 && !strcmp(argv[1],"unsaved")) { menu.tools=TOOL_CONFIG; menu.settings_recent_games=0; }
+    if (argc > 1 && !strcmp(argv[1],"recent")) {
+        menu.tools=TOOL_RECENT; menu_favorites_parse(&menu.recent,"Games/D (Disc 1).iso\nRoad Rash.iso\n",strlen("Games/D (Disc 1).iso\nRoad Rash.iso\n"));
+    }
     if (argc > 1 && !strcmp(argv[1],"large")) menu.config.large_titles=1;
     if (argc > 1 && !strcmp(argv[1],"margin")) menu.config.screen_margin=12;
     if (argc > 1 && !strcmp(argv[1],"contrast")) menu.config.theme=1;
@@ -408,18 +540,19 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        loading + '\n#undef ode_read_directory\n' + covers + demo + NVRAM_STUBS + queue + tools + MAIN)
+                        loading + '\n#undef ode_read_directory\n' + covers + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+        (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
                         str(ROOT / "src/menu_ui.c"),
                         str(ROOT / "src/usb_art.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_usb.c"),
                         str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
-                        str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"),
+                        str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
-        print("Menu view: retained loading list, failure gating, selection/notice timing and cover lifecycle passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "large", "margin", "contrast", "favorites", "slot-details"):
+        print("Menu view/input: browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)

@@ -13,6 +13,10 @@ void menu_favorites_free(MenuFavorites *favorites);
 int menu_favorites_parse(MenuFavorites *favorites, const char *data, size_t size);
 /* Canonical edit; preserves list on failure. 1 = already present/missing. */
 int menu_favorites_edit(MenuFavorites *favorites, const char *path, int remove);
+int menu_favorites_format(const MenuFavorites *favorites, char *out, size_t capacity);
+int menu_favorites_move(MenuFavorites *favorites, size_t from, size_t to);
+int menu_recent_push(MenuFavorites *recent, const char *path);
+int menu_name_matches(const char *name, const char *query);
 int menu_relative_path(const char *path);
 /* Strict same-folder sets, contiguous disc numbers from 1; duplicates/gaps
  * reject the suggestion. Matching never launches or changes a playlist. */

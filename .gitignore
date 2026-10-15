@@ -15,6 +15,12 @@
 *.3dc
 *.3di
 
+# Local USB menu state and diagnostic reports
+/favorites.txt
+/recent.txt
+/last-position.txt
+/diagnostics.txt
+
 # Python, compiler and editor output
 __pycache__/
 *.py[cod]

@@ -75,6 +75,60 @@ int menu_favorites_edit(MenuFavorites *f, const char *path, int remove)
     result = menu_favorites_parse(f,data,used);
     free(data); return result;
 }
+int menu_favorites_format(const MenuFavorites *f, char *out, size_t capacity)
+{
+    size_t i, used = 0;
+    if (!capacity) return -1;
+    for (i = 0; i < f->count; ++i) {
+        size_t n = strlen(f->paths[i]);
+        if (used+n+1 >= capacity) return -1;
+        memcpy(out+used,f->paths[i],n); used += n; out[used++] = '\n';
+    }
+    out[used] = 0; return 0;
+}
+int menu_favorites_move(MenuFavorites *f, size_t from, size_t to)
+{
+    const char *path;
+    if (from >= f->count || to >= f->count) return -1;
+    path = f->paths[from];
+    if (from < to) memmove(f->paths+from,f->paths+from+1,(to-from)*sizeof(*f->paths));
+    else if (from > to) memmove(f->paths+to+1,f->paths+to,(from-to)*sizeof(*f->paths));
+    f->paths[to] = path; return 0;
+}
+int menu_recent_push(MenuFavorites *f, const char *path)
+{
+    char *data;
+    size_t i, count = 1, used;
+    int result;
+    if (!menu_relative_path(path) || *path == '#' || *path == ';' || *path == ' ' || path[strlen(path)-1] == ' ') return -1;
+    data = (char *)malloc(FAVORITES_BYTES);
+    if (!data) return -1;
+    used = strlen(path); memcpy(data,path,used); data[used++] = '\n';
+    for (i = 0; i < f->count && count < 10; ++i) {
+        size_t n = strlen(f->paths[i]);
+        if (!menu_path_compare(path,f->paths[i])) continue;
+        if (used+n+1 >= FAVORITES_BYTES) break;
+        memcpy(data+used,f->paths[i],n); used += n; data[used++] = '\n'; ++count;
+    }
+    data[used] = 0; result = menu_favorites_parse(f,data,used); free(data); return result;
+}
+int menu_name_matches(const char *name, const char *query)
+{
+    const char *start;
+    if (!*query) return 1;
+    for (start = name; *start; ++start) {
+        const char *a = start, *b = query;
+        while (*a && *b) {
+            unsigned char x = (unsigned char)*a, y = (unsigned char)*b;
+            if (x >= 'a' && x <= 'z') x -= 'a'-'A';
+            if (y >= 'a' && y <= 'z') y -= 'a'-'A';
+            if (x != y) break;
+            ++a; ++b;
+        }
+        if (!*b) return 1;
+    }
+    return 0;
+}
 int menu_initial(const char *name)
 {
     unsigned char c = (unsigned char)*name;

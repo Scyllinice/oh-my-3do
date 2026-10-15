@@ -5,12 +5,12 @@ static int space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
 void menu_config_defaults(MenuConfig *config)
 {
-    memset(config, 0, sizeof(*config)); config->usb_covers = 1;
+    memset(config, 0, sizeof(*config)); config->usb_covers = config->remember_position = config->recent_games = 1;
 }
 int menu_config_parse(MenuConfig *config, const char *data, size_t length)
 {
-    static const char *keys[] = {"folder_workaround", "usb_covers", "screen_margin", "large_titles", "theme"};
-    int values[5] = {0, 1, 0, 0, 0};
+    static const char *keys[] = {"folder_workaround", "usb_covers", "screen_margin", "large_titles", "theme", "remember_position", "recent_games"};
+    int values[7] = {0, 1, 0, 0, 0, 1, 1};
     unsigned int seen = 0;
     size_t pos = 0, i;
     menu_config_defaults(config);
@@ -26,14 +26,14 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
         if (start == end || data[start] == '#' || data[start] == ';') continue;
         if (data[start] == '[') {
             if (!((end-start == 15 && !memcmp(data+start,"[compatibility]",15)) ||
-                (end-start == 9 && (!memcmp(data+start,"[artwork]",9) || !memcmp(data+start,"[display]",9))))) return -1;
+                (end-start == 9 && (!memcmp(data+start,"[artwork]",9) || !memcmp(data+start,"[display]",9) || !memcmp(data+start,"[library]",9))))) return -1;
             continue;
         }
         eq = start; while (eq < end && data[eq] != '=') ++eq;
         if (eq == end) return -1;
         key_end = eq; while (key_end > start && space(data[key_end-1])) --key_end;
-        for (i = 0; i < 5; ++i) if (strlen(keys[i]) == key_end-start && !memcmp(data+start,keys[i],key_end-start)) break;
-        if (i == 5 || (seen & (1U << i))) return -1;
+        for (i = 0; i < 7; ++i) if (strlen(keys[i]) == key_end-start && !memcmp(data+start,keys[i],key_end-start)) break;
+        if (i == 7 || (seen & (1U << i))) return -1;
         ++eq; while (eq < end && space(data[eq])) ++eq;
         while (eq < end && data[eq] >= '0' && data[eq] <= '9') {
             if (++digits > 2) return -1;
@@ -46,6 +46,7 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
     }
     config->folder_workaround = values[0]; config->usb_covers = values[1];
     config->screen_margin = values[2]; config->large_titles = values[3]; config->theme = values[4];
+    config->remember_position = values[5]; config->recent_games = values[6];
     return 0;
 }
 

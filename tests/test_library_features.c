@@ -41,6 +41,23 @@ int main(void)
         path[0]='Z'; assert(menu_favorites_edit(&f,path,0) < 0 && f.count == 8);
         menu_favorites_free(&f);
     }
+    {
+        char text[FAVORITES_BYTES], path[32]; size_t j;
+        assert(menu_name_matches("Dragon Disc 10.ISO","disc 1"));
+        assert(!menu_name_matches("D (Disc 2).iso","disc 1") && menu_name_matches("anything",""));
+        assert(!menu_favorites_parse(&f,"First.iso\nSecond.iso\nThird.iso\n",strlen("First.iso\nSecond.iso\nThird.iso\n")));
+        assert(!menu_favorites_move(&f,0,2) && !strcmp(f.paths[2],"First.iso"));
+        assert(!menu_favorites_move(&f,2,0) && !strcmp(f.paths[0],"First.iso"));
+        assert(menu_favorites_move(&f,0,3) < 0);
+        assert(!menu_favorites_format(&f,text,sizeof(text)) && !strcmp(text,"First.iso\nSecond.iso\nThird.iso\n"));
+        assert(menu_favorites_format(&f,text,3) < 0);
+        menu_favorites_free(&f);
+        for (j=0;j<15;++j) { sprintf(path,"Game %lu.iso",(unsigned long)j); assert(!menu_recent_push(&f,path)); }
+        assert(f.count == 10 && !strcmp(f.paths[0],"Game 14.iso") && !strcmp(f.paths[9],"Game 5.iso"));
+        assert(!menu_recent_push(&f,"GAME 10.ISO") && f.count == 10 && !strcmp(f.paths[0],"GAME 10.ISO"));
+        assert(menu_recent_push(&f,"../bad.iso") < 0 && f.count == 10);
+        menu_favorites_free(&f);
+    }
     listing.entries=entries; listing.count=4;
     assert(menu_disc_group(&listing,&d1,out,16) == 3 && out[0] == &d1 && out[1] == &d2 && out[2] == &d3);
     assert(!menu_disc_group(&listing,&d2,out,16));

@@ -20,4 +20,7 @@ int library_visit(Ode *ode, const ArtRouteStep *route, unsigned int depth,
 int library_open(Ode *ode, const ArtRouteStep *route, unsigned int depth,
                   const OdeListing *current, int workaround, const char *path,
                   LibraryLocation *location);
+int library_open_directory(Ode *ode, const ArtRouteStep *route, unsigned int depth,
+                  const OdeListing *current, int workaround, const char *path,
+                  LibraryLocation *location);
 #endif

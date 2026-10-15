@@ -289,6 +289,10 @@ int main(void)
     {
         LibraryLocation *location=(LibraryLocation *)malloc(sizeof(*location));
         if (!location) abort();
+        failed += check(!library_open_directory(&ode,route,2,&snapshot,1,"/Storage/Alpha/Child",location) &&
+                        location->depth == 2 && !strcmp(currentImage.curPath,"0:\\Alpha\\Child"),
+                        "remembered-folder-restores-repeated-IDs");
+        ode_listing_free(&location->listing);
         failed += check(!library_open(&ode,route,2,&snapshot,1,"/Storage/Alpha/Disc 1.iso",location) &&
                         location->depth == 1 && location->selected == 2 && !strcmp(currentImage.curPath,"0:\\Alpha"),
                         "favorite-opens-parent-and-selects-file");
