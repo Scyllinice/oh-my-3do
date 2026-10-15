@@ -12,13 +12,19 @@ int menu_path_compare(const char *a, const char *b)
     return (int)fold((unsigned char)*a) - (int)fold((unsigned char)*b);
 }
 
-size_t menu_title_length(const char *name, int directory)
+const char *menu_image_format(const char *name, int directory)
 {
     size_t length = strlen(name);
-    if (!directory && length > 4 &&
-        (!menu_path_compare(name + length - 4, ".iso") || !menu_path_compare(name + length - 4, ".cue")))
-        return length - 4;
-    return length;
+    if (!directory && length > 4) {
+        if (!menu_path_compare(name + length - 4, ".iso")) return "ISO";
+        if (!menu_path_compare(name + length - 4, ".cue")) return "CUE";
+    }
+    return NULL;
+}
+
+size_t menu_title_length(const char *name, int directory)
+{
+    return strlen(name) - (menu_image_format(name, directory) ? 4 : 0);
 }
 
 size_t menu_scroll_offset(size_t length, size_t visible, unsigned long elapsed)
@@ -74,6 +80,8 @@ int menu_support_entry(const char *name, int directory, int root)
     static const char *files[] = {"boot.iso", "menu-demo.iso", "ohmy3do.ini", "favorites.txt",
         "library.3di", "boot.iso.sha256", "menu-demo.iso.sha256", "last-position.txt", "recent.txt", "diagnostics.txt"};
     size_t i;
+    size_t length = strlen(name);
+    if (!directory && length >= 4 && !menu_path_compare(name + length - 4, ".bin")) return 1;
     if (!root) return 0;
     if (directory) return !menu_path_compare(name, "covers") || !menu_path_compare(name, "saves") || !menu_path_compare(name,"previews") || !menu_path_compare(name,"music");
     for (i = 0; i < sizeof(files) / sizeof(files[0]); ++i)

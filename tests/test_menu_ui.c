@@ -20,6 +20,11 @@ int main(void)
     assert(menu_title_length("Game.iso.bak", 0) == 12);
     assert(menu_title_length(".iso", 0) == 4);
     assert(menu_title_length("Games/Disc 1.iso", 0) == 12);
+    assert(!strcmp(menu_image_format("Games/Disc 1.ISO",0),"ISO"));
+    assert(!strcmp(menu_image_format("Games/Disc 1.cUe",0),"CUE"));
+    assert(!menu_image_format("Folder.cue",1));
+    assert(!menu_image_format("Game.iso.bak",0));
+    assert(!menu_image_format(".cue",0));
     assert(menu_scroll_offset(32, 32, 100000UL) == 0);
     assert(menu_scroll_offset(34, 32, 0) == 0);
     assert(menu_scroll_offset(34, 32, 1199) == 0);
@@ -54,6 +59,12 @@ int main(void)
     assert(!menu_support_entry("boot.iso", 0, 0));
     assert(!menu_support_entry("saves.iso", 0, 1));
     assert(!menu_support_entry("covers", 0, 1));
+    assert(menu_support_entry("Game (Track 1).BIN",0,0));
+    assert(menu_support_entry("Game.bin",0,1));
+    assert(!menu_support_entry("Game.bin",1,0));
+    assert(!menu_support_entry("Game.bin.bak",0,0));
+    assert(!menu_support_entry("Game.cue",0,0));
+    assert(!menu_support_entry("Game.iso",0,0));
     puts("menu_ui: display titles, scroll timing, breadcrumbs and exact cover paths passed");
     return 0;
 }

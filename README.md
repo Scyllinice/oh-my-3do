@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.12.0**.
+restore, plus optional menu music. The current version is **0.12.1**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -92,8 +92,11 @@ rounded selection cards and controller button badges. The Tools screen has two
 columns of four cards; the arrows move between them. Cover images and video
 previews share the larger artwork panel.
 
-The browser hides `.iso` and `.cue` extensions for display only. Full filenames
-and original TOC IDs are retained. Long selected names scroll after a pause;
+Game lists hide `.iso` and `.cue` extensions from titles and show an ISO or CUE
+label beside each entry. Both formats remain selectable, including when they
+share a title. For BIN/CUE games, select the CUE; it describes the tracks and
+references the companion data files. BIN files are hidden throughout the browser.
+Full filenames and original TOC IDs are retained. Long selected names scroll after a pause;
 folder changes reset the animation. Parent navigation restores selection. The
 previous listing remains visible while a folder loads. A read failure hides the
 listing and prevents selection until the connection recovers. The whole

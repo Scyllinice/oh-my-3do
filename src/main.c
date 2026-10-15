@@ -30,7 +30,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.12.0"
+#define MENU_VERSION "0.12.1"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -365,6 +365,28 @@ static void rounded(Menu *menu,int x,int y,int w,int h,Color color)
     rectangle(menu,x+1,y+1,w-2,h-2,color);
     rectangle(menu,x,y+3,w,h-6,color);
 }
+static void game_label(Menu *menu,int x,int y,int room,const char *name,int directory,
+                       int style,Color ink,Color background,int selected)
+{
+    const char *kind=menu_image_format(name,directory);
+    int scale=320-2*menu->config.screen_margin;
+    char title[65];
+    size_t length=menu_title_length(name,directory), visible, offset=0;
+    if (kind) {
+        int badge_width=(ui_font_width(kind,UI_FONT_SMALL)*320+scale-1)/scale;
+        int badge_y=y+(ui_font_height(style)-ui_font_height(UI_FONT_SMALL))/2;
+        label_on(menu,x+room-badge_width,badge_y,kind,ink,UI_FONT_SMALL,background);
+        room-=badge_width+8;
+    }
+    room=room*scale/320;
+    visible=ui_font_fit(name,length,room,style);
+    if (visible>64) visible=64;
+    if (selected) offset=menu_scroll_offset(length,visible,now_ms(menu)-menu->selection_since);
+    visible=ui_font_fit(name+offset,length-offset,room,style);
+    if (visible>64) visible=64;
+    memcpy(title,name+offset,visible); title[visible]=0;
+    label_on(menu,x,y,title,ink,style,background);
+}
 static void button(Menu *menu,int x,int y,const char *key,const char *action,Color color)
 {
     int width=(ui_font_width(key,UI_FONT_SMALL)+8)*320/(320-2*menu->config.screen_margin);
@@ -542,8 +564,6 @@ static void draw(Menu *menu)
             int style=menu->config.large_titles ? UI_FONT_LARGE : UI_FONT_NORMAL;
             int title_x=left+23, room=width-34;
             Color ink=i==selected && !menu->alphabet_active ? MakeRGB15(1,2,4) : (i==selected ? TEXT : MUTED);
-            char title[65];
-            size_t length, visible, offset=0;
             if (menu->review) { name=menu->playlist.paths[i]; if (!strncmp(name,"/Storage/",9)) name+=9; directory=0; }
             else if (menu->listing.has_parent && !i) { name="Back to parent folder"; directory=1; }
             else { const MenuEntry *entry=browser_entry(menu,i-(menu->listing.has_parent ? 1 : 0)); name=entry->name; directory=entry->is_directory; }
@@ -557,14 +577,8 @@ static void draw(Menu *menu)
                 rounded(menu,left+10,y+5,7,7,ink);
                 rectangle(menu,left+13,y+8,1,1,i==selected ? ACCENT : PANEL);
             }
-            room=room*(320-2*menu->config.screen_margin)/320;
-            length=menu_title_length(name,directory);
-            visible=ui_font_fit(name,length,room,style);
-            if (i==selected) offset=menu_scroll_offset(length,visible,now-menu->selection_since);
-            visible=ui_font_fit(name+offset,length-offset,room,style);
-            if (visible>64) visible=64;
-            memcpy(title,name+offset,visible); title[visible]=0;
-            label_on(menu,title_x,y+(menu->config.large_titles ? 2 : 3),title,ink,style,i==selected ? (menu->alphabet_active ? SELECT : ACCENT) : PANEL);
+            game_label(menu,title_x,y+(menu->config.large_titles ? 2 : 3),room,name,directory,
+                style,ink,i==selected ? (menu->alphabet_active ? SELECT : ACCENT) : PANEL,i==selected);
         }
         if (!total) {
             label(menu,left+12,94,menu->review ? "No discs queued" : "Nothing here yet",TEXT,UI_FONT_NORMAL);
@@ -1887,12 +1901,9 @@ static void draw_tools(Menu *menu)
                 tool_line(menu, (int)(i - start), line + 6, i == menu->tool_selected ? TEXT : MUTED);
             } else if (menu->tools == TOOL_GROUP || menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
                 const char *name = menu->tools == TOOL_GROUP ? menu->group.paths[i] : (menu->tools == TOOL_RECENT ? menu->recent.paths[i] : menu->favorites.paths[i]);
-                char label[35];
-                size_t length = strlen(name), offset = i == menu->tool_selected ? menu_scroll_offset(length,34,now_ms(menu)-menu->selection_since) : 0;
-                if (!strncmp(name,"/Storage/",9)) { name += 9; length -= 9; offset = i == menu->tool_selected ? menu_scroll_offset(length,34,now_ms(menu)-menu->selection_since) : 0; }
-                length -= offset; if (length > 34) length = 34;
-                memcpy(label,name+offset,length); label[length] = 0;
-                tool_line(menu,(int)(i-start),label,i == menu->tool_selected ? TEXT : MUTED);
+                if (!strncmp(name,"/Storage/",9)) name+=9;
+                game_label(menu,22,82+(int)(i-start)*12,276,name,0,UI_FONT_SMALL,
+                    i==menu->tool_selected ? TEXT : MUTED,i==menu->tool_selected ? LINE : PANEL,i==menu->tool_selected);
             } else {
                 const SaveEntry *e = &archive->entries[i];
                 size_t n = strlen(e->name);
@@ -1946,7 +1957,8 @@ static void draw_tools(Menu *menu)
             const char *name=strrchr(path,'/')+1;
             int y=99+(int)(i-start)*13;
             if (i==menu->tool_selected) rectangle(menu,16,y-1,287,13,LINE);
-            label_on(menu,22,y,name,i==menu->tool_selected ? TEXT : MUTED,UI_FONT_SMALL,i==menu->tool_selected ? LINE : PANEL);
+            game_label(menu,22,y,276,name,0,UI_FONT_SMALL,i==menu->tool_selected ? TEXT : MUTED,
+                i==menu->tool_selected ? LINE : PANEL,i==menu->tool_selected);
         }
         if (!count) label(menu,22,112,"No games matched. Start to edit.",TEXT,UI_FONT_SMALL);
         else {

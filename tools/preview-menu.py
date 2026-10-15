@@ -410,16 +410,19 @@ int main(int argc, char **argv) {
         {
             const MenuEntry hidden={123,0,"boot.iso"};
             const MenuEntry game={456,0,"Game.iso"};
+            const MenuEntry cue={457,0,"Game.cue"};
+            const MenuEntry bin={458,0,"Game.BIN"};
             const MenuEntry volume={0x01000000UL,1,"covers"};
-            const MenuEntry *entries[2]={&hidden,&game};
+            const MenuEntry *entries[4]={&hidden,&game,&cue,&bin};
             OdeListing original=menu.listing;
-            menu.listing.entries=entries; menu.listing.count=2; menu.listing.has_parent=0;
+            menu.listing.entries=entries; menu.listing.count=4; menu.listing.has_parent=0;
             menu.depth=0;
-            if (row_count(&menu) != 1 || browser_entry(&menu,0) != &game || menu.listing.count != 2) abort();
+            if (row_count(&menu) != 2 || browser_entry(&menu,0) != &game || browser_entry(&menu,1) != &cue ||
+                menu.listing.count != 4 || browser_entry(&menu,0)->toc_id != 456 || browser_entry(&menu,1)->toc_id != 457) abort();
             menu.depth=1; menu.path_ids[0]=9;
-            if (row_count(&menu) != 2 || browser_entry(&menu,0) != &hidden) abort();
+            if (row_count(&menu) != 3 || browser_entry(&menu,0) != &hidden) abort();
             menu.path_ids[0]=0x01000000UL;
-            if (row_count(&menu) != 1) abort();
+            if (row_count(&menu) != 2) abort();
             if (hidden_entry(&menu, &volume)) abort();
             menu.listing=original;
         }
@@ -721,8 +724,22 @@ int main(int argc, char **argv) {
         menu.tools=TOOL_RESULTS; strcpy(menu.find_query,"doom"); menu.catalog.valid=1;
         menu.catalog.paths=(char **)calloc(2,sizeof(char *));
         menu.catalog.paths[0]="/Storage/Games/US/Doom.iso";
-        menu.catalog.paths[1]="/Storage/Games/Japan/Doom.iso"; menu.catalog.count=2;
+        menu.catalog.paths[1]="/Storage/Games/Japan/Doom.cue"; menu.catalog.count=2;
         menu.search_count=2; menu.search_matches[0]=0; menu.search_matches[1]=1;
+    }
+    if (argc>1 && (!strcmp(argv[1],"formats") || !strcmp(argv[1],"formats-large"))) {
+        size_t i;
+        for (i=0;i<menu.listing.count;++i) {
+            MenuEntry *entry=(MenuEntry *)menu.listing.entries[i];
+            if (!entry->is_directory && i%2) {
+                char *name=(char *)entry->name;
+                size_t n=strlen(name);
+                memcpy(name+n-4,".cue",5);
+            }
+        }
+        if (!strcmp(argv[1],"formats-large")) {
+            menu.config.large_titles=1; menu.config.screen_margin=12;
+        }
     }
     if (argc > 1 && !strcmp(argv[1],"find")) { menu.tools=TOOL_FIND; strcpy(menu.find_query,"ROAD"); menu.find_key=17; }
     if (argc > 1 && !strcmp(argv[1],"filtered")) strcpy(menu.filter,"disc 1");
@@ -799,8 +816,10 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
+            if mode in ("formats","formats-large","results"):
+                assert "L ISO" in commands and "L CUE" in commands
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)
             if mode == "diagnostics-checked":

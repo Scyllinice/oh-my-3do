@@ -10,6 +10,7 @@ extern const MenuCover menu_covers[];
 extern const size_t menu_cover_count;
 
 size_t menu_title_length(const char *name, int directory);
+const char *menu_image_format(const char *name, int directory);
 size_t menu_scroll_offset(size_t length, size_t visible, unsigned long elapsed);
 void menu_breadcrumb(char *out, const char *parent, const char *leaf,
                      unsigned int depth);
