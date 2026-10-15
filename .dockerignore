@@ -9,8 +9,6 @@
 !src/**
 !tests/
 !tests/**
-!runtime/
-!runtime/**
 !tools/
 !tools/prepare-runtime.py
 

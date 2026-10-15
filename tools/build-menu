@@ -24,11 +24,9 @@ fi
 
 # Keep the upstream build rules and ARM ABI settings. This application owns
 # privileged XBUS IORequests, so its signed executable must request privilege.
-libraries=()
-for library in exampleslib filesystem graphics input lib3do operamath string swi; do
-    libraries+=("$TDO_DEVKIT_PATH/lib/3do/$library.lib")
-done
-libraries+=("$TDO_DEVKIT_PATH/lib/community/libc.lib")
+# Read the original SDK library list for the audit; do not override its link.
+read -r -a libraries <<< "$(make --no-print-directory -s -C "$stage" \
+    --eval='oh3do-print-libs:;@echo $(LIBS)' oh3do-print-libs)"
 python3 - "$stage/runtime-audit.json" "$TDO_DEVKIT_PATH/lib/3do/cstartup.o" "${libraries[@]}" <<'PYLIBS'
 import hashlib, json, sys
 from pathlib import Path
@@ -39,9 +37,14 @@ audit["link_inputs"] = [{"path": name, "sha256": hashlib.sha256(Path(name).read_
 path.write_text(json.dumps(audit, indent=2) + "\n")
 PYLIBS
 make -C "$stage" NAME="$name" STACKSIZE=32768 \
-    "LIBS=${libraries[*]}" "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
+    "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
 modbin --name="Oh My 3DO" --pri=150 --flags=2 --stack=32768 --sign=3do \
     "$stage/takeme/LaunchMe" "$stage/takeme/LaunchMe"
+
+# Restore the retail-signature handling used before runtime trimming.
+for module in System/Devices/ns.privdevice System/Folios/debugger.privfolio System/Programs/what; do
+    modbin --sign=3do "$stage/takeme/$module" "$stage/takeme/$module"
+done
 
 mkdir -p "$project_dir/iso/saves"
 if [[ ! -e "$project_dir/iso/favorites.txt" ]]; then
@@ -52,6 +55,27 @@ mkdir -p "$project_dir/iso" "$project_dir/build/console-$mode"
 3dt pack "$stage/takeme" -o "$stage/$name.iso"
 3dt verify "$stage/$name.iso"
 3dt unpack "$stage/$name.iso" -o "$stage/unpacked" > "$stage/unpack.log"
+# Check the complete packed runtime, rather than only the menu and artwork.
+python3 - "$stage/takeme" "$stage/unpacked" <<'PYFILES'
+from pathlib import Path
+import sys
+source, unpacked = map(Path, sys.argv[1:])
+count = 0
+for path in source.rglob("*"):
+    if not path.is_file():
+        continue
+    name = path.relative_to(source)
+    if name.as_posix() == "System/Kernel/boot_code":
+        # 3dt patches/signs the boot module; its result is checked by 3dt verify.
+        continue
+    expected, actual = path.read_bytes(), (unpacked / name).read_bytes()
+    if name.as_posix() == "BannerScreen":
+        actual = actual[:len(expected)]  # packing appends the retail signature
+    if actual != expected:
+        raise SystemExit(f"Packed file differs from staged payload: {name}")
+    count += 1
+print(f"Verified all {count} packed payloads against the staging directory")
+PYFILES
 cmp "$stage/takeme/LaunchMe" "$stage/unpacked/LaunchMe"
 cmp "$project_dir/assets/logo-menu.cel" "$stage/unpacked/logo.cel"
 # BannerScreen receives a retail signature trailer during packing. Compare
@@ -77,9 +101,6 @@ sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
     "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
     "$project_dir/tools/export-covers.py" \
     "$project_dir/tools/prepare-runtime.py" \
-    "$project_dir/runtime/sdk-files.txt" \
-    "$project_dir/runtime/AppStartup" \
-    "$project_dir/runtime/System/Scripts/startopera" \
     "$project_dir/assets/logo-menu.cel" \
     "$project_dir/assets/loading.banner" \
     "$project_dir/ohmy3do.ini" \
