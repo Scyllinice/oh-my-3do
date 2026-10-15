@@ -1,0 +1,117 @@
+#include "library_features.h"
+#include "menu_ui.h"
+#include <stdlib.h>
+#include <string.h>
+
+int menu_relative_path(const char *path)
+{
+    const char *p = path, *part = path;
+    if (!*path || *path == '/' || strlen(path) >= FAVORITE_PATH) return 0;
+    for (;; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (c && (c < 32 || c == 127 || c == '\\' || c == ':')) return 0;
+        if (!c || c == '/') {
+            size_t n = (size_t)(p - part);
+            if (!n || (n == 1 && *part == '.') || (n == 2 && !memcmp(part,"..",2))) return 0;
+            if (!c) return 1;
+            part = p + 1;
+        }
+    }
+}
+void menu_favorites_free(MenuFavorites *f)
+{
+    free(f->storage); memset(f, 0, sizeof(*f));
+}
+int menu_favorites_parse(MenuFavorites *f, const char *data, size_t size)
+{
+    MenuFavorites next;
+    size_t pos = 0;
+    memset(&next, 0, sizeof(next));
+    if (size >= FAVORITES_BYTES || memchr(data, 0, size)) return -1;
+    next.storage = (char *)malloc(size + 1);
+    if (!next.storage) return -1;
+    memcpy(next.storage, data, size); next.storage[size] = 0;
+    if (size >= 3 && (unsigned char)data[0] == 0xef && (unsigned char)data[1] == 0xbb && (unsigned char)data[2] == 0xbf) pos = 3;
+    while (pos < size) {
+        size_t start = pos, end, i;
+        while (pos < size && next.storage[pos] != '\n') ++pos;
+        end = pos; if (pos < size) ++pos;
+        while (start < end && (next.storage[start] == ' ' || next.storage[start] == '\t' || next.storage[start] == '\r')) ++start;
+        while (end > start && (next.storage[end-1] == ' ' || next.storage[end-1] == '\t' || next.storage[end-1] == '\r')) --end;
+        next.storage[end] = 0;
+        if (start == end || next.storage[start] == '#' || next.storage[start] == ';') continue;
+        if (next.count == FAVORITES_MAX || !menu_relative_path(next.storage + start)) goto bad;
+        for (i = 0; i < next.count; ++i)
+            if (!menu_path_compare(next.paths[i], next.storage + start)) goto bad;
+        next.paths[next.count++] = next.storage + start;
+    }
+    menu_favorites_free(f); *f = next; return 0;
+bad:
+    menu_favorites_free(&next); return -1;
+}
+int menu_initial(const char *name)
+{
+    unsigned char c = (unsigned char)*name;
+    if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+    return c >= 'A' && c <= 'Z' ? c - 'A' + 1 : 0;
+}
+static unsigned char lower(unsigned char c)
+{
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c + 'a' - 'A') : c;
+}
+static int separator(char c)
+{
+    return !c || c == ' ' || c == '_' || c == '-' || c == '(' || c == ')' || c == '[' || c == ']' || c == '.';
+}
+static int disc_key(const char *name, char *key)
+{
+    size_t n = strlen(name), i, number_start = 0, number_end = 0;
+    int disc = 0, markers = 0;
+    if (n >= ODE_MAX_NAME || n < 5 || (menu_path_compare(name + n - 4, ".iso") && menu_path_compare(name + n - 4, ".cue"))) return 0;
+    n -= 4;
+    for (i = 0; i < n; ++i) {
+        size_t token = 0, j;
+        int value = 0;
+        if (i && !separator(name[i-1])) continue;
+        if (i + 4 <= n && lower(name[i]) == 'd' && lower(name[i+1]) == 'i' && lower(name[i+2]) == 's' && (lower(name[i+3]) == 'c' || lower(name[i+3]) == 'k')) token = 4;
+        else if (i + 2 <= n && lower(name[i]) == 'c' && lower(name[i+1]) == 'd') token = 2;
+        if (!token) continue;
+        j = i + token;
+        while (j < n && (name[j] == ' ' || name[j] == '_' || name[j] == '-')) ++j;
+        if (j == n || name[j] < '0' || name[j] > '9') continue;
+        number_start = j;
+        while (j < n && name[j] >= '0' && name[j] <= '9') {
+            if (value > ODE_MAX_DISCS) return 0;
+            value = value * 10 + name[j++] - '0';
+        }
+        if ((j < n && !separator(name[j])) || value < 1 || value > ODE_MAX_DISCS || ++markers > 1) return 0;
+        disc = value; number_end = j;
+    }
+    if (markers != 1) return 0;
+    memcpy(key, name, number_start);
+    memcpy(key + number_start, name + number_end, n - number_end);
+    key[number_start + n - number_end] = 0;
+    return disc;
+}
+size_t menu_disc_group(const OdeListing *listing, const MenuEntry *selected,
+                        const MenuEntry **out, size_t capacity)
+{
+    char key[ODE_MAX_NAME], other[ODE_MAX_NAME];
+    const MenuEntry *discs[ODE_MAX_DISCS];
+    size_t i, count = 0, highest = 0;
+    if (selected->is_directory || disc_key(selected->name, key) != 1) return 0;
+    memset(discs, 0, sizeof(discs));
+    for (i = 0; i < listing->count; ++i) {
+        const MenuEntry *entry = listing->entries[i];
+        int number;
+        if (entry->is_directory) continue;
+        number = disc_key(entry->name, other);
+        if (!number || menu_path_compare(key, other)) continue;
+        if (discs[number - 1]) return 0;
+        discs[number - 1] = entry; ++count;
+        if ((size_t)number > highest) highest = (size_t)number;
+    }
+    if (count < 2 || count != highest || count > capacity) return 0;
+    for (i = 0; i < count; ++i) out[i] = discs[i];
+    return count;
+}

@@ -1,0 +1,5 @@
+# Oh My 3DO favorites: one game-image path relative to this USB volume per line.
+# Copy as favorites.txt beside boot.iso. Forward slashes; keep the extension.
+# Paths below are examples; remove the leading # only for games you have.
+# Games/Road Rash.iso
+# Games/D/D (Disc 1).iso

@@ -1,0 +1,20 @@
+# Keep the build context small; the SDK is downloaded inside the image.
+**
+!Dockerfile
+!Makefile
+!docker/
+!docker/**
+!src/
+!src/**
+!tests/
+!tests/**
+
+# Re-apply exclusions after the allowlist so generated test files stay out.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.o
+**/*.obj
+**/*.log
+**/*.tmp
+**/.env*

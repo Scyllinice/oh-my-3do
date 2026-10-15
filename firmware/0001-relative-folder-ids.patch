@@ -1,0 +1,15 @@
+diff --git a/src/interfaces/MSC.c b/src/interfaces/MSC.c
+--- a/src/interfaces/MSC.c
++++ b/src/interfaces/MSC.c
+@@ -1045,7 +1045,10 @@ void setTocLevel(int index) {
+     LOG_SATA("New current_toc_level %d\n", current_toc_level);
+     return;
+   }
+-  if (current_toc != index) {
++  // Nonzero entry IDs are relative to the current directory. A child may
++  // reuse the ID of the folder we just entered, so equality is not a no-op.
++  // Keep the equality guard only for the zero-entry device/root selection.
++  if (current_toc != index || getTocEntry(index) != 0) {
+     //need to change the current TOC level
+     //Get required Toc Entry
+     if (((getTocEntry(index)) == 0) && (current_toc_level == 0)){

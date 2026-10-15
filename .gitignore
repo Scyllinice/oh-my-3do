@@ -1,0 +1,42 @@
+# Generated images, signed executables, previews, audits and host tests
+/build/
+/iso/
+/third_party/
+
+# Personal artwork and game/save data (project demo art under assets is tracked)
+/artwork/
+/assets/covers/*.cel
+/assets/covers/index.json
+*.iso
+*.cue
+*.bin
+*.srm
+*.3ds
+*.3dc
+*.3di
+
+# Python, compiler and editor output
+__pycache__/
+*.py[cod]
+*.o
+*.obj
+*.a
+*.d
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local agent/application state and credentials
+.agents/
+.codex/
+.aws/
+.tools/
+.env
+.env.*
+!.env.example

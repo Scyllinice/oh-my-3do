@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+mode=${1:-menu}
+case "$mode" in
+    menu) name=boot; extra_flags= ;;
+    demo) name=menu-demo; extra_flags=-DMENU_DEMO=1 ;;
+    *) echo 'Usage: tools/build-menu [menu|demo]' >&2; exit 2 ;;
+esac
+: "${TDO_DEVKIT_PATH:?Run this through tools/dev-container}"
+
+stage=$(mktemp -d /tmp/oh-my-3do-menu.XXXXXX)
+trap 'rm -rf "$stage"' EXIT
+sh "$TDO_DEVKIT_PATH/bin/buildtools/linux/bootstrap-3do-project" "$stage"
+cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$stage/src/"
+cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
+cp "$project_dir/assets/loading.banner" "$stage/takeme/BannerScreen"
+python3 "$project_dir/tools/build-covers.py" "$stage" "$mode"
+if [[ "$mode" == menu ]]; then
+    python3 "$project_dir/tools/export-covers.py"
+fi
+
+# Keep the upstream build rules and ARM ABI settings. This application owns
+# privileged XBUS IORequests, so its signed executable must request privilege.
+make -C "$stage" NAME="$name" STACKSIZE=32768 \
+    "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
+modbin --name="Oh My 3DO" --pri=150 --flags=2 --stack=32768 --sign=3do \
+    "$stage/takeme/LaunchMe" "$stage/takeme/LaunchMe"
+
+# The sample filesystem includes development-only signatures on these optional
+# modules. Re-sign them for retail validation without changing their flags.
+for module in System/Devices/ns.privdevice System/Folios/debugger.privfolio System/Programs/what; do
+    if [[ -f "$stage/takeme/$module" ]]; then
+        modbin --sign=3do "$stage/takeme/$module" "$stage/takeme/$module"
+    fi
+done
+
+mkdir -p "$project_dir/iso/saves"
+if [[ ! -e "$project_dir/iso/favorites.txt" ]]; then
+    cp "$project_dir/favorites.example.txt" "$project_dir/iso/favorites.txt"
+fi
+cp "$project_dir/assets/saves-README.txt" "$project_dir/iso/saves/README.txt"
+mkdir -p "$project_dir/iso" "$project_dir/build/console-$mode"
+3dt pack "$stage/takeme" -o "$stage/$name.iso"
+3dt verify "$stage/$name.iso"
+3dt unpack "$stage/$name.iso" -o "$stage/unpacked" > "$stage/unpack.log"
+cmp "$stage/takeme/LaunchMe" "$stage/unpacked/LaunchMe"
+cmp "$project_dir/assets/logo-menu.cel" "$stage/unpacked/logo.cel"
+# BannerScreen receives a retail signature trailer during packing. Compare
+# its complete source payload, then let 3dt verify check the signed image.
+cmp -n "$(wc -c < "$project_dir/assets/loading.banner")" \
+    "$project_dir/assets/loading.banner" "$stage/unpacked/BannerScreen"
+if [[ -d "$stage/takeme/covers" ]]; then
+    diff -r "$stage/takeme/covers" "$stage/unpacked/covers"
+fi
+python3 "$project_dir/tools/verify-aif.py" "$stage/unpacked/LaunchMe"
+cp "$stage/$name.iso" "$project_dir/iso/$name.iso"
+# Keep a user's edited output config when rebuilding an image.
+if [[ ! -e "$project_dir/iso/ohmy3do.ini" ]]; then
+    cp "$project_dir/ohmy3do.ini" "$project_dir/iso/ohmy3do.ini"
+fi
+cp "$stage/takeme/LaunchMe" "$project_dir/build/console-$mode/LaunchMe"
+cp "$stage/src/cover_catalog.c" "$project_dir/build/console-$mode/cover_catalog.c"
+cp /opt/3do-devkit.revision "$project_dir/build/console-$mode/devkit.revision"
+sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
+    "$project_dir/tools/build-menu" "$project_dir/tools/verify-aif.py" \
+    "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
+    "$project_dir/tools/export-covers.py" \
+    "$project_dir/assets/logo-menu.cel" \
+    "$project_dir/assets/loading.banner" \
+    "$project_dir/ohmy3do.ini" \
+    > "$project_dir/build/console-$mode/source.sha256"
+sha256sum "$project_dir/build/console-$mode/cover_catalog.c" \
+    >> "$project_dir/build/console-$mode/source.sha256"
+if [[ -d "$stage/takeme/covers" ]]; then
+    (cd "$stage/takeme" && sha256sum covers/*) \
+        > "$project_dir/build/console-$mode/covers.sha256"
+else
+    rm -f "$project_dir/build/console-$mode/covers.sha256"
+fi
+(cd "$project_dir/iso" && sha256sum "$name.iso" > "$name.iso.sha256")
+cat "$project_dir/iso/$name.iso.sha256"
+echo "Built: $project_dir/iso/$name.iso"
