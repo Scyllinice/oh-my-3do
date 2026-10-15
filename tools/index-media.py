@@ -47,7 +47,7 @@ def index(root):
         relative = path.relative_to(root)
         if len(relative.parts) == 1 and path.name.lower() in ("boot.iso", "menu-demo.iso"):
             continue
-        if relative.parts[0].lower() in ("covers", "previews", "saves"):
+        if relative.parts[0].lower() in ("covers", "previews", "saves", "music"):
             continue
         game = relative.as_posix()
         if any(ord(c) < 32 or ord(c) == 127 or c in "\\:" for c in game) or len(game.encode()) > 8192:

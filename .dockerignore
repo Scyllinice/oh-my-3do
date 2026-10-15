@@ -17,6 +17,7 @@
 !tools/prepare-preview.py
 !tools/resize-covers.py
 !tools/generate-menu-music.py
+!tools/prepare-music.py
 !assets/
 !assets/menu-music.aiff
 

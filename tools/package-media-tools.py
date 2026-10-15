@@ -11,6 +11,7 @@ output.parent.mkdir(parents=True,exist_ok=True)
 files={'index-media.py':'tools/index-media.py',
        'prepare-preview.py':'tools/prepare-preview.py',
        'resize-covers.py':'tools/resize-covers.py',
+       'prepare-music.py':'tools/prepare-music.py',
        'README.txt':'assets/media-tools-README.txt','LICENSE':'LICENSE'}
 # Original moving test pattern lets the first console test skip FFmpeg setup.
 pixels=bytearray()

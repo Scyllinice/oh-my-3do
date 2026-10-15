@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.9.0**.
+restore, plus optional menu music. The current version is **0.10.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -101,7 +101,7 @@ show six.
 
 At a USB root, support entries are hidden: `boot.iso`, `menu-demo.iso`, their
 `.sha256` files, `ohmy3do.ini`, `favorites.txt`, `last-position.txt`,
-`recent.txt`, `diagnostics.txt`, and the `covers`/`previews`/`saves` folders.
+`recent.txt`, `diagnostics.txt`, and the `covers`/`previews`/`music`/`saves` folders.
 Identically named entries inside game folders remain visible. Volume selectors
 are never hidden. The compatibility workaround retains access to hidden entries
 when needed.
@@ -467,34 +467,59 @@ and offline demo covers stay embedded in the ISO.
 
 ## Menu music
 
-An original 20-second smooth-jazz-style loop is included in `boot.iso` and the
-menu demo. It uses synthesized electric piano, bass, soft percussion, and a mellow
-lead. No external recordings or sample libraries are used. A WAV listening copy
-is available with the release.
+Music can be replaced from USB without rebuilding the ISO. Put the prepared
+track at `music/menu.3dm` on the USB drive. The menu loads and verifies the whole
+track before playback, then the 3DO DSP decodes it directly from RAM. Music
+performs no USB reads while playing, so cover loading does not compete with an
+audio stream. This adds a one-time load when music starts.
 
-Music is enabled by default, including with older INIs. In **Tools → Appearance
-& settings**, change **Menu music** to turn it on or off immediately. Press **C**
-to save the choice across boots. Discard unsaved changes restores the saved music
-setting too. On a PC, set `menu_music=0` under `[audio]` in the USB INI to disable it.
-Holding X at startup also skips music.
-
-The loop loads once from the ISO into about 431 KiB of RAM and plays through the
-3DO audio DSP, without repeated file reads or menu-loop audio servicing. Audio
-resources are released when disabled and before either a single game or a disc
-queue is launched. Missing audio or an allocation/DSP failure leaves the menu
-usable and silent; toggle music off and on to retry. The diagnostics export
-includes `menu_music` and `music_result` (0 off, 1 playing, -1 unavailable).
-
-The sample is embedded to keep playback independent of USB file commands.
-To change the music, replace `assets/menu-music.aiff` with uncompressed signed
-8-bit mono AIFF at 22,050 Hz, with 4–524,288 frames and a frame count divisible
-by four, then rebuild. The full sample becomes the sustain loop. Large samples
-leave less RAM available for covers and video previews; the supplied loop uses
-441,000 frames. Regenerate the original sample and an optional listening copy:
+Prepare a track with the Docker image, which includes FFmpeg and the pinned
+[3at native audio encoder](https://github.com/trapexit/3at):
 
 ```sh
-python3 tools/generate-menu-music.py --wav iso/menu-jazz-sample.wav
+./tools/dev-container build
+./tools/dev-container music artwork/music.mp3 --preview iso/music-preview.wav
 ```
+
+Copy `iso/music/` to the USB root, then cold boot. The optional WAV is a decoded
+listening copy of the converted track. It does not need to be copied to USB.
+Neither an artwork index nor another ISO rebuild is needed for future tracks.
+Install version 0.10.0 or newer once to enable USB music loading.
+
+The portable `media-tools.zip` includes `prepare-music.py`. With Python 3.9+,
+FFmpeg and 3at installed on PATH, Windows can use:
+
+```sh
+py prepare-music.py "music.mp3" "M:/music/menu.3dm" --preview "music-preview.wav"
+```
+
+The default is mono ADP4 at 11,025 Hz, with a 768 KiB compressed-data cap. That
+fits about **2 minutes 22 seconds**, including a complete 1:49 track. This is a
+lossy conversion with less high-frequency detail than the source. `--rate 22050`
+keeps more detail but fits about **1 minute 11 seconds**. Oversized tracks are
+rejected rather than silently shortened. The converter preserves the source,
+pads to DMA alignment, applies tiny endpoint fades, and adds a checksum and end
+marker to protect against firmware EOF errors.
+
+Music is enabled by default. **Tools → Appearance & settings → Menu music**
+changes playback immediately; press **C** to save. Turning it off releases audio
+RAM. Turning it back on reloads the file from the selected USB volume; folder
+navigation uses the same restoration and compatibility checks as USB artwork.
+The settings row shows whether the active music is from USB or bundled. Holding
+X at startup skips music. On a PC, `menu_music=0` under `[audio]` disables it.
+
+An original synthesized 20-second loop remains bundled for the demo and as a
+fallback when USB music is missing or invalid. No external recordings are in
+that loop. A cancelled load stays silent, and an uncertain USB transport blocks
+browsing without attempting fallback disc reads. Audio resources are released
+before any game mount. Allocation or DSP failures leave the menu usable and
+silent; toggle music off/on to retry. Larger tracks leave less RAM for other
+optional media. Console playback still needs hardware testing.
+
+The diagnostics export includes `music_source` (0 none, 1 bundled, 2 USB) and
+`usb_music_result` (0 not attempted, 1 loaded, -1 unavailable/invalid, -2 transport
+or folder failure, -3 cancelled), alongside the music setting and playback result.
+The prepared file layout is described in [docs/media-format.md](docs/media-format.md).
 
 ## Diagnostics and compatibility limits
 
@@ -537,7 +562,7 @@ Image formats visible to the browser depend on the installed firmware.
 
 ## Testing and repository setup
 
-Portable host tests:
+Portable host tests (music conversion tests need FFmpeg and 3at on PATH):
 
 ```sh
 make test

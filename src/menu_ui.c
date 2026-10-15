@@ -75,7 +75,7 @@ int menu_support_entry(const char *name, int directory, int root)
         "boot.iso.sha256", "menu-demo.iso.sha256", "last-position.txt", "recent.txt", "diagnostics.txt"};
     size_t i;
     if (!root) return 0;
-    if (directory) return !menu_path_compare(name, "covers") || !menu_path_compare(name, "saves") || !menu_path_compare(name,"previews");
+    if (directory) return !menu_path_compare(name, "covers") || !menu_path_compare(name, "saves") || !menu_path_compare(name,"previews") || !menu_path_compare(name,"music");
     for (i = 0; i < sizeof(files) / sizeof(files[0]); ++i)
         if (!menu_path_compare(name, files[i])) return 1;
     return 0;

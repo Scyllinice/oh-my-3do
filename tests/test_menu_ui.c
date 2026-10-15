@@ -47,6 +47,8 @@ int main(void)
     assert(menu_support_entry("BOOT.ISO", 0, 1));
     assert(menu_support_entry("Covers", 1, 1));
     assert(menu_support_entry("saves", 1, 1));
+    assert(menu_support_entry("Music", 1, 1));
+    assert(!menu_support_entry("music", 1, 0));
     assert(menu_support_entry("ohmy3do.ini", 0, 1));
     assert(!menu_support_entry("covers", 1, 0));
     assert(!menu_support_entry("boot.iso", 0, 0));

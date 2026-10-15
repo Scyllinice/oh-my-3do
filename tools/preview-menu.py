@@ -29,13 +29,24 @@ STUBS = r'''
 #include "menu_position.h"
 #include "ui_font.h"
 #include "menu_music.h"
-int menu_music_set(MenuMusic *m,int enabled) { m->status=enabled ? 1 : 0; return 0; }
-void menu_music_close(MenuMusic *m) { m->status=0; }
+#include "usb_music.h"
+int menu_music_set(MenuMusic *m,int enabled) { m->status=enabled ? 1 : 0; m->source=enabled ? (m->data ? 2 : 1) : 0; return 0; }
+void menu_music_close(MenuMusic *m) { m->status=0; m->source=0; m->data=0; }
+unsigned char *menu_music_buffer(MenuMusic *m,unsigned long frames,unsigned long rate) { static unsigned char data[786432]; m->data=data; m->frames=frames; m->rate=rate; return data; }
 #define UI_PREVIEW_TEXT(s) printf("L %s\n",s)
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+static int preview_music_result=-1, preview_music_calls;
+int usb_music_load(Ode *ode,OdeReadBuffer reader,UsbMusicAlloc allocate,void *context,UsbMusicCancel cancel,void *cancel_context) {
+    UsbMusicSpec spec={11025,1207640,603820};
+    (void)reader; ++preview_music_calls;
+    if (cancel && cancel(cancel_context)) return -1;
+    if (preview_music_result==-2) ode->navigation_failed=1;
+    if (!preview_music_result && allocate(context,&spec)) return 0;
+    return -1;
+}
 #define abort() do { fprintf(stderr,"Preview assertion failed at line %d\n",__LINE__); exit(1); } while (0)
 typedef unsigned long u32;
 typedef unsigned char u8;
@@ -399,7 +410,7 @@ int main(int argc, char **argv) {
         tools_input(&menu,ControlUp); if (menu.tool_selected != 11) abort();
         tools_input(&menu,ControlA);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
-        menu.config_result=0; menu.ready=1; menu.demo=0;
+        menu.config_result=0; menu.ready=1; menu.demo=1;
         menu.saved_config=menu.config;
         menu.tool_selected=8; tools_input(&menu,ControlA);
         if (menu.config.menu_music || menu.music.status || !config_dirty(&menu)) abort();
@@ -566,6 +577,25 @@ int main(int argc, char **argv) {
             menu.selected=0; menu.ready=1; jump_letter(&menu,4);
             if (menu.selected != 0) abort();
             menu.listing=original;
+        }
+        {
+            Menu custom_music;
+            memset(&custom_music,0,sizeof(custom_music)); custom_music.ready=1; custom_music.config.menu_music=1;
+            strcpy(custom_music.ode.identity,"LOCODE");
+            preview_music_result=0; preview_buttons=ControlA;
+            sync_music(&custom_music);
+            if (custom_music.music.source!=2 || custom_music.usb_music_result!=1 || !preview_music_calls) abort();
+            { int calls=preview_music_calls; sync_music(&custom_music); if (preview_music_calls!=calls) abort(); }
+            menu_music_close(&custom_music.music); preview_music_result=-1;
+            sync_music(&custom_music);
+            if (custom_music.music.source!=1 || custom_music.usb_music_result!=-1) abort();
+            menu_music_close(&custom_music.music); preview_music_result=-2;
+            sync_music(&custom_music);
+            if (custom_music.music.status || custom_music.ready || custom_music.usb_music_result!=-2) abort();
+            preview_music_result=-1; preview_buttons=0;
+            custom_music.demo=1; custom_music.ready=1;
+            sync_music(&custom_music);
+            if (custom_music.music.status) abort();
         }
         {
             Menu launching;

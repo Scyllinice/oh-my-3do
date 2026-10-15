@@ -11,9 +11,13 @@ typedef struct TagArg { unsigned long ta_Tag; void *ta_Arg; } TagArg;
 #define AF_TAG_SUSTAINBEGIN 6
 #define AF_TAG_SUSTAINEND 7
 #define AF_TAG_AMPLITUDE 8
+#define AF_TAG_ADDRESS 9
+#define AF_TAG_COMPRESSIONRATIO 10
+#define AF_TAG_RATE 11
 long OpenAudioFolio(void);
 long CloseAudioFolio(void);
 long LoadSample(char *path);
+long CreateSample(TagArg *tags);
 long UnloadSample(long sample);
 long LoadInstrument(char *name, int flags, int priority);
 long UnloadInstrument(long item);

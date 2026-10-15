@@ -15,6 +15,7 @@
 *.3dc
 *.3di
 *.3dv
+*.3dm
 *.mp4
 *.mov
 *.mkv
@@ -51,3 +52,9 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Personal music and Windows download metadata
+*.mp3
+*.wav
+*.aifc
+*:Zone.Identifier

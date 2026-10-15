@@ -46,6 +46,16 @@ USER root
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends imagemagick ffmpeg python3-pil \
     && rm -rf /var/lib/apt/lists/*
+# Native 3DO encoder is a host tool; it is never copied into the console ISO.
+ARG AUDIO_TOOL_REF=4b47aadfaba31b27519d4a84d2ef9bdfeb61d229
+RUN git init /opt/3at \
+    && git -C /opt/3at remote add origin https://github.com/trapexit/3at.git \
+    && git -C /opt/3at fetch --depth=1 origin "$AUDIO_TOOL_REF" \
+    && git -C /opt/3at checkout --detach FETCH_HEAD \
+    && make -C /opt/3at NDEBUG=1 -j2 \
+    && install -m755 /opt/3at/build/3at /usr/local/bin/3at \
+    && mkdir -p /usr/local/share/doc/3at \
+    && cp /opt/3at/LICENSE /opt/3at/license.txt /usr/local/share/doc/3at/
 USER developer
 
 # Also compile our actual sorting component with Norcroft, using SDK ABI flags,
@@ -54,7 +64,7 @@ COPY --chown=developer:developer Makefile /tmp/project-check/Makefile
 COPY --chown=developer:developer src/ /tmp/project-check/src/
 COPY --chown=developer:developer vendor/ /tmp/project-check/vendor/
 COPY --chown=developer:developer tests/ /tmp/project-check/tests/
-COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py tools/resize-covers.py tools/generate-menu-music.py /tmp/project-check/tools/
+COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py tools/resize-covers.py tools/generate-menu-music.py tools/prepare-music.py /tmp/project-check/tools/
 COPY --chown=developer:developer assets/menu-music.aiff /tmp/project-check/assets/menu-music.aiff
 COPY --chown=developer:developer ohmy3do.ini /tmp/project-check/ohmy3do.ini
 RUN make -C /tmp/project-check test test-sdk test-cover-resize \
