@@ -104,7 +104,7 @@ sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
     "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
     "$project_dir/tools/export-covers.py" \
     "$project_dir/tools/prepare-runtime.py" \
-    "$project_dir"/vendor/pngle/* \
+    "$project_dir"/vendor/pngle/* "$project_dir"/vendor/fonts/* \
     "$project_dir/assets/logo-menu.cel" \
     "$project_dir/assets/loading.banner" \
     "$project_dir/ohmy3do.ini" \

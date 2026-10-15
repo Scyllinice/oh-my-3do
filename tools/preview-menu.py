@@ -27,6 +27,8 @@ STUBS = r'''
 #include "library_navigation.h"
 #include "menu_settings.h"
 #include "menu_position.h"
+#include "ui_font.h"
+#define UI_PREVIEW_TEXT(s) printf("L %s\n",s)
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -36,7 +38,7 @@ typedef unsigned long u32;
 typedef unsigned char u8;
 typedef int Item;
 typedef unsigned int Color;
-typedef struct { int tag; long ccb_XPos, ccb_YPos; unsigned long ccb_Flags; void *ccb_SourcePtr; long ccb_HDX,ccb_HDY,ccb_VDX,ccb_VDY; } CCB;
+typedef struct { int tag; long ccb_XPos, ccb_YPos; unsigned long ccb_Flags; void *ccb_SourcePtr; long ccb_HDX,ccb_HDY,ccb_VDX,ccb_VDY; void *ccb_PLUTPtr; unsigned long ccb_PRE0,ccb_PRE1; int ccb_Width,ccb_Height; } CCB;
 typedef struct { CCB *font_CCB; } Font;
 static CCB preview_font;
 static Font preview_font_state={&preview_font};
@@ -127,7 +129,18 @@ static CCB *LoadCel(char *file, unsigned long flags) {
 }
 static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
     static unsigned char pixels[USB_ART_PIXELS];
-    (void)w; (void)h; (void)bpp; (void)flags; (void)data;
+    (void)flags; (void)data;
+    if (bpp==1) {
+        static CCB fonts[128];
+        static unsigned char bitmaps[128][UI_FONT_STRIDE*UI_FONT_HEIGHT];
+        static unsigned short palettes[128][32];
+        static int count;
+        CCB *cel;
+        if (count>=128) abort();
+        cel=&fonts[count]; cel->tag=3; cel->ccb_SourcePtr=bitmaps[count];
+        cel->ccb_PLUTPtr=palettes[count++]; cel->ccb_HDX=1<<20; cel->ccb_VDY=1<<16;
+        cel->ccb_Width=w; cel->ccb_Height=h; return cel;
+    }
     preview_loaded.ccb_SourcePtr=pixels;
     ++preview_cel_calls;
     return preview_cel_fail ? NULL : &preview_loaded;
@@ -143,6 +156,13 @@ static int GetVBLTime(Item item, u32 *hi, u32 *frame) {
 static void DrawCels(Item item, CCB *cel) {
     double sx=cel->ccb_HDX ? cel->ccb_HDX/1048576.0 : 1.0;
     double sy=cel->ccb_VDY ? cel->ccb_VDY/65536.0 : 1.0;
+    if (cel->tag==3) {
+        int i;
+        printf("B %.6f %.6f %.6f %.6f %u %d %d ",cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy,
+            ((unsigned short *)cel->ccb_PLUTPtr)[1],cel->ccb_Width,cel->ccb_Height);
+        for (i=0;i<UI_FONT_STRIDE*cel->ccb_Height;++i) printf("%02x",((unsigned char *)cel->ccb_SourcePtr)[i]);
+        printf("\n"); return;
+    }
     (void)item; printf("I %d %.6f %.6f %.6f %.6f\n",cel->tag,cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy);
 }
 static void DisplayScreen(Item item, int flag) { (void)item; (void)flag; }
@@ -297,9 +317,11 @@ int main(int argc, char **argv) {
         /* Tools wraps across eight entries; viewing Help/Diagnostics is read-only. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlUp);
-        if (menu.tool_selected != 7) abort();
+        if (menu.tool_selected != 3) abort();
         tools_input(&menu, ControlDown);
         if (menu.tool_selected != 0) abort();
+        tools_input(&menu, ControlRight); if (menu.tool_selected != 4) abort();
+        tools_input(&menu, ControlLeft); if (menu.tool_selected != 0) abort();
         menu.tool_selected=4; tools_input(&menu, ControlA);
         if (menu.tools != TOOL_HELP || menu.usb_tested) abort();
         /* Actual tools/controller code: entering/cancelling never writes. */
@@ -641,7 +663,7 @@ def main():
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
-                        str(ROOT / "src/menu_ui.c"),
+                        str(ROOT / "src/menu_ui.c"), str(ROOT / "src/ui_font.c"),
                         str(ROOT / "src/usb_art.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_usb.c"),
                         str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
@@ -658,7 +680,18 @@ def main():
             svg = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="240" '
                    'viewBox="0 0 320 240" shape-rendering="crispEdges">']
             for command in commands:
-                if command.startswith("I "):
+                if command.startswith("L "):
+                    continue
+                if command.startswith("B "):
+                    _, x, y, sx, sy, c, width, height, data = command.split()
+                    x,y,sx,sy=map(float,(x,y,sx,sy))
+                    data=bytes.fromhex(data)
+                    for row in range(int(height)):
+                        for col in range(int(width)):
+                            if data[row*36+col//8] & (128 >> (col%8)):
+                                assert 0 <= x+col*sx < 320 and 0 <= y+row*sy < 240
+                                svg.append(f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" height="{sy}" fill="{color(c)}"/>')
+                elif command.startswith("I "):
                     _, tag, x, y, sx, sy = command.split()
                     x,y,sx,sy=map(float,(x,y,sx,sy))
                     source_art = ROOT / ("assets/demo-cover.png" if tag == "2" else "assets/logo-menu.png")
