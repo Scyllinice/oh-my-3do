@@ -24,7 +24,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.5.2"
+#define MENU_VERSION "0.6.0"
 #define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -37,7 +37,6 @@
 #define TOOL_GROUP 9
 #define TOOL_FAVORITES 10
 #define TOOL_CONFIG 11
-#define TOOL_JUMP 12
 #define TOOL_BACKUP_DETAILS 13
 #define TOOL_RECENT 14
 #define TOOL_FIND 15
@@ -46,8 +45,10 @@
 #define TEXT (menu->config.theme == 1 ? MakeRGB15(31,31,31) : MakeRGB15(29,29,26))
 #define MUTED (menu->config.theme == 1 ? MakeRGB15(27,27,27) : MakeRGB15(17,20,23))
 #define ACCENT (menu->config.theme ? MakeRGB15(31,25,10) : MakeRGB15(7,26,22))
-#define PANEL MakeRGB15(2, 4, 7)
-#define LINE MakeRGB15(5, 9, 12)
+#define PANEL (menu->config.theme == 1 ? MakeRGB15(1,1,1) : (menu->config.theme == 2 ? MakeRGB15(4,3,8) : MakeRGB15(2,4,7)))
+#define LINE (menu->config.theme == 1 ? MakeRGB15(12,12,12) : (menu->config.theme == 2 ? MakeRGB15(11,7,15) : MakeRGB15(5,9,12)))
+#define SELECT (menu->config.theme == 1 ? MakeRGB15(7,7,7) : (menu->config.theme == 2 ? MakeRGB15(10,6,13) : MakeRGB15(4,10,13)))
+#define DIM (menu->config.theme == 1 ? MakeRGB15(13,13,13) : MakeRGB15(9,11,14))
 #define AMBER MakeRGB15(30, 22, 9)
 
 typedef struct Menu {
@@ -79,6 +80,7 @@ typedef struct Menu {
     int backup_slot_valid;
     int details_new;
     int jump_letter;
+    int alphabet_active;
     char favorites_prefix[ODE_MAX_NAME + 10];
     int favorites_valid;
     MenuConfig config;
@@ -141,6 +143,7 @@ static int apply_queue(Menu *menu);
 static u32 browser_shortcuts(Menu *menu, u32 buttons, u32 pressed, u32 released);
 static void open_favorites(Menu *menu);
 static void jump_letter(Menu *menu, int letter);
+static int alphabet_input(Menu *menu, u32 pressed);
 static void draw_cel(Menu *menu, CCB *cel);
 static int save_root_operation(Menu *menu, int action, const char *path, SaveArchive *archive);
 static void load_position(Menu *menu);
@@ -179,6 +182,7 @@ static void selection_changed(Menu *menu)
 {
     menu->selection_since = now_ms(menu);
     menu->position_dirty = 1;
+    menu->alphabet_active = 0;
     if (menu->cover) UnloadCel(menu->cover);
     menu->cover = NULL;
     menu->cover_attempted = 0;
@@ -294,9 +298,50 @@ static size_t row_count(const Menu *menu)
 
 static void folder_icon(Menu *menu, int x, int y, Color color)
 {
-    rectangle(menu, x, y, 4, 1, color);
-    rectangle(menu, x, y + 2, 8, 5, color);
-    rectangle(menu, x + 1, y + 3, 6, 3, PANEL);
+    rectangle(menu, x + 1, y, 4, 2, color);
+    rectangle(menu, x, y + 2, 9, 5, color);
+    rectangle(menu, x + 1, y + 3, 7, 3, PANEL);
+}
+
+/* One pass over visible entries; no allocation or ODE commands while drawing. */
+static void alphabet_available(const Menu *menu, unsigned char *available)
+{
+    size_t i;
+    memset(available,0,27);
+    for (i = 0; i < menu->listing.count; ++i) {
+        const MenuEntry *entry = menu->listing.entries[i];
+        if (!hidden_entry(menu,entry) && menu_name_matches(entry->name,menu->filter))
+            available[menu_initial(entry->name)] = 1;
+    }
+}
+static void draw_alphabet(Menu *menu)
+{
+    unsigned char available[27];
+    int i, current = menu->jump_letter;
+    alphabet_available(menu,available);
+    if (!menu->alphabet_active) {
+        const MenuEntry *entry = NULL;
+        if (!(menu->listing.has_parent && !menu->selected))
+            entry = browser_entry(menu,menu->selected-(menu->listing.has_parent ? 1 : 0));
+        current = entry ? menu_initial(entry->name) : -1;
+    }
+    rectangle(menu,12,194,296,15,menu->alphabet_active ? ACCENT : LINE);
+    rectangle(menu,13,195,294,13,PANEL);
+    for (i = 0; i < 27; ++i) {
+        char letter[2];
+        Color ink = available[i] ? MUTED : DIM;
+        letter[0] = i ? (char)('A'+i-1) : '#'; letter[1] = 0;
+        if (i == current) {
+            rectangle(menu,24+i*10,195,10,12,menu->alphabet_active ? ACCENT : SELECT);
+            ink = menu->alphabet_active ? BG : TEXT;
+        }
+        if (i) text(menu,25+i*10,197,letter,ink);
+        else {
+            /* The SDK's built-in font has no # glyph. */
+            rectangle(menu,27,198,1,7,ink); rectangle(menu,30,198,1,7,ink);
+            rectangle(menu,25,200,8,1,ink); rectangle(menu,25,203,8,1,ink);
+        }
+    }
 }
 
 static void draw(Menu *menu)
@@ -321,10 +366,16 @@ static void draw(Menu *menu)
     else text(menu, 16, 28, "OH MY 3DO", TEXT);
     text(menu, 192, 17, menu->demo ? "DEMO MODE" :
          (menu->review ? "DISC QUEUE" : "GAME LIBRARY"), MUTED);
-    format(line, "%2lu / 16 DISCS", (unsigned long)menu->playlist.count);
-    text(menu, 192, 35, line, menu->playlist.count ? AMBER : ACCENT);
-    if (menu->config.folder_workaround) text(menu,192,48,config_dirty(menu) ? "COMPAT ON *" : "COMPAT ON",AMBER);
-    else if (config_dirty(menu)) text(menu,192,48,"SETTINGS *",AMBER);
+    if (menu->review) format(line,"%2lu / 16 DISCS",(unsigned long)menu->playlist.count);
+    else format(line,"%lu / %lu",(unsigned long)(total ? selected+1 : 0),(unsigned long)total);
+    text(menu,192,35,line,ACCENT);
+    format(line,"Q:%lu",(unsigned long)menu->playlist.count);
+    text(menu,192,48,line,menu->playlist.count ? AMBER : MUTED);
+    if (menu->config.folder_workaround) text(menu,244,48,config_dirty(menu) ? "COMPAT*" : "COMPAT",AMBER);
+    else if (config_dirty(menu)) text(menu,244,48,"EDITED*",AMBER);
+    rectangle(menu,12,57,296,1,LINE);
+    rectangle(menu,12,57,32,1,ACCENT);
+    rectangle(menu,11,59,298,134,LINE);
     rectangle(menu, 12, 60, 296, 132, PANEL);
     rectangle(menu, 12, 60, 2, 15, ACCENT);
     text(menu, 21, 64, menu->review ? "PLAY ORDER / FIRST TO LAST" :
@@ -354,8 +405,8 @@ static void draw(Menu *menu)
                 directory = entry->is_directory;
             }
             if (i == selected) {
-                rectangle(menu, 16, y - 1, artwork ? 208 : 287, menu->config.large_titles ? 14 : 10, MakeRGB15(4, 10, 13));
-                rectangle(menu, 16, y - 1, 1, 10, ACCENT);
+                rectangle(menu, 16, y - 1, artwork ? 208 : 287, menu->config.large_titles ? 14 : 10, menu->alphabet_active ? LINE : SELECT);
+                rectangle(menu, 16, y - 1, 2, menu->config.large_titles ? 14 : 10, menu->alphabet_active ? MUTED : ACCENT);
             }
             if (menu->review) {
                 /* Leave room for a full machine-word value as well as the
@@ -367,8 +418,9 @@ static void draw(Menu *menu)
                 menu->large_drawing = 0;
             } else if (directory) folder_icon(menu, 23, y + 1, ACCENT);
             else {
-                rectangle(menu, 25, y + 2, 4, 4, MUTED);
-                rectangle(menu, 26, y + 3, 2, 2, PANEL);
+                rectangle(menu,24,y+1,7,6,i == selected ? ACCENT : MUTED);
+                rectangle(menu,23,y+2,9,4,i == selected ? ACCENT : MUTED);
+                rectangle(menu,27,y+3,1,2,PANEL);
             }
             /* Leave room for icons and the safe area at the right edge. */
             {
@@ -390,17 +442,24 @@ static void draw(Menu *menu)
             text(menu, 24, 109, menu->review ? "Your disc queue is empty." : (*menu->filter ? "No matching names." : "This folder is empty."), TEXT);
             text(menu, 24, 131, menu->review ? "B:Browse   C:Add a disc" : "B:Return to parent folder", MUTED);
         }
-        format(line, "%lu / %lu",
-                (unsigned long)(total ? selected + 1 : 0),
-                (unsigned long)total);
-        text(menu, 16, 196, line, MUTED);
-        format(line, "P%lu/%lu", (unsigned long)(total ? selected / rows + 1 : 1),
-                (unsigned long)(total ? (total + rows - 1) / rows : 1));
-        text(menu, 304 - (int)strlen(line) * 8, 196, line, MUTED);
+        if (menu->review) {
+            format(line,"%lu / %lu",(unsigned long)(total ? selected+1 : 0),(unsigned long)total);
+            text(menu,16,196,line,MUTED);
+            format(line,"P%lu/%lu",(unsigned long)(total ? selected/rows+1 : 1),
+                   (unsigned long)(total ? (total+rows-1)/rows : 1));
+            text(menu,304-(int)strlen(line)*8,196,line,MUTED);
+        }
+        if (total) {
+            int width = (int)(292 * (selected/rows+1) / ((total+rows-1)/rows));
+            rectangle(menu,14,190,width,2,ACCENT);
+        }
     }
     if (artwork) {
-        rectangle(menu, 232, 82, 72, 88, LINE);
-        rectangle(menu, 234, 84, 68, 84, BG);
+        rectangle(menu,234,84,72,88,BG);
+        rectangle(menu,232,82,72,88,LINE);
+        rectangle(menu,234,84,68,84,BG);
+        rectangle(menu,232,82,18,1,ACCENT);
+        rectangle(menu,303,153,1,17,ACCENT);
         if (menu->cover) draw_cel(menu, menu->cover);
         else {
             folder_icon(menu, 264, 109, MUTED);
@@ -408,12 +467,14 @@ static void draw(Menu *menu)
         }
         text(menu, 244, 178, "COVER", MUTED);
     }
-    rectangle(menu, 16, 208, 288, 1, LINE);
+    if (!menu->review) draw_alphabet(menu);
+    rectangle(menu, 16, 210, 288, 1, LINE);
     if (menu->loading) {
         if (menu->read_count) format(line, "Reading directory... %lu", (unsigned long)menu->read_count);
         else strcpy(line, "Reading directory...");
         message = line;
     }
+    if (menu->alphabet_active && !menu->notice_active) message = "Left/Right:Letter A:Jump B:Cancel";
     text(menu, 16, 212, message ? message :
          (menu->demo ? "Demo only. C: Connect to ODE" :
           (menu->review ? "A:Play C:Move X:Remove B:Back" : "A:Open C:Add disc Start:Queue")),
@@ -421,7 +482,7 @@ static void draw(Menu *menu)
     if (!menu->ready && menu->bus.last_error < 0) {
         format(line, "XBUS error: %08lx", (unsigned long)menu->bus.last_error);
         text(menu, 16, 224, line, MUTED);
-    } else text(menu, 16, 224, menu->review ? "C+X:Clear all / same game discs" : (*menu->filter ? "B:Back X:Clear find L+R:Tools" : "B:Back X:Refresh L+R:Tools"), MUTED);
+    } else text(menu, 16, 224, menu->review ? "C+X:Clear all / same game discs" : (*menu->filter ? "B:Back X:Clear find L+R:Tools" : "C+Up:Alphabet  L+R:Tools"), MUTED);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
@@ -869,13 +930,59 @@ static void jump_letter(Menu *menu, int letter)
     }
     menu->message = "No entries for that letter.";
 }
+static void focus_alphabet(Menu *menu)
+{
+    const MenuEntry *entry = NULL;
+    if (!(menu->listing.has_parent && !menu->selected))
+        entry = browser_entry(menu,menu->selected-(menu->listing.has_parent ? 1 : 0));
+    menu->jump_letter = entry ? menu_initial(entry->name) : 1;
+    menu->alphabet_active = 1; menu->c_pending = 0;
+    menu->notice_active = 0; menu->message = NULL;
+}
+
+/* The alphabet is a browser focus target, never a tool or a queued disc. */
+static int alphabet_input(Menu *menu, u32 pressed)
+{
+    size_t count;
+    if (menu->review || menu->tools || !menu->ready || menu->loading || menu->ode.navigation_failed) {
+        menu->alphabet_active = 0;
+        return 0;
+    }
+    count = row_count(menu);
+    if (!menu->alphabet_active) {
+        if (!count || !(((pressed & ControlUp) && !menu->selected) ||
+                       ((pressed & ControlDown) && menu->selected+1 == count))) return 0;
+        focus_alphabet(menu);
+        return 1;
+    }
+    menu->c_pending = 0;
+    if (pressed & ControlLeft) menu->jump_letter = (menu->jump_letter+26)%27;
+    else if (pressed & ControlRight) menu->jump_letter = (menu->jump_letter+1)%27;
+    else if (pressed & ControlB) menu->alphabet_active = 0;
+    else if (pressed & ControlDown) { menu->selected = 0; selection_changed(menu); }
+    else if (pressed & ControlA) {
+        unsigned char available[27];
+        alphabet_available(menu,available);
+        if (available[menu->jump_letter]) {
+            menu->alphabet_active = 0;
+            jump_letter(menu,menu->jump_letter);
+        } else notify(menu,"No entries for that letter.");
+    }
+    return 1;
+}
+
 /* Defer a plain C press until release. Holding C for letter navigation must
  * never also add the selected game to the queue. */
 static u32 browser_shortcuts(Menu *menu, u32 buttons, u32 pressed, u32 released)
 {
+    if (menu->alphabet_active) { menu->c_pending = 0; return 0; }
     if (menu->review || menu->demo || !menu->ready) { menu->c_pending = 0; return pressed; }
     if (pressed & (ControlA | ControlB | ControlX | ControlStart)) menu->c_pending = 0;
     if (pressed & ControlC) { menu->c_pending = 1; pressed &= ~ControlC; }
+    if ((buttons & ControlC) && (pressed & ControlUp)) {
+        focus_alphabet(menu);
+        return 0;
+    }
     if ((buttons & ControlC) && (pressed & (ControlLeft | ControlRight))) {
         const MenuEntry *entry = NULL;
         int letter = 0, direction = (pressed & ControlRight) ? 1 : -1, attempt;
@@ -1334,7 +1441,6 @@ static void draw_tools(Menu *menu)
     if (menu->tools == TOOL_RECENT) title = "RECENT LAUNCH SELECTIONS";
     if (menu->tools == TOOL_FIND) title = "FIND IN THIS FOLDER";
     if (menu->tools == TOOL_FAVORITES && menu->favorites_move) title = "MOVE FAVORITE";
-    if (menu->tools == TOOL_JUMP) title = "JUMP TO LETTER";
     if (menu->tools == TOOL_BACKUP_DETAILS) title = menu->details_new ? "NEW BACKUP CONTENTS" : "EXISTING SLOT CONTENTS";
     menu->screen.sc_curScreen ^= 1;
     rectangle(menu, 0, 0, 320, 240, BG);
@@ -1345,10 +1451,10 @@ static void draw_tools(Menu *menu)
     text(menu, 22, 64, title, TEXT);
     rectangle(menu, 20, 77, 280, 1, LINE);
     if (menu->tools == TOOL_HOME) {
-        static const char *items[] = {"Internal saves / back up", "USB backups / restore", "Favorites", "Jump to letter", "Configuration", "Help / controls", "Diagnostics", "Recent games", "Find by name"};
+        static const char *items[] = {"Internal saves / back up", "USB backups / restore", "Favorites", "Configuration", "Help / controls", "Diagnostics", "Recent games", "Find by name"};
         for (i = 0; i < sizeof(items) / sizeof(items[0]); ++i) {
             if (i == menu->tool_selected) rectangle(menu, 16, 82 + i * 12, 287, 11, LINE);
-            text(menu,24,84+i*12,i == 4 && config_dirty(menu) ? "Configuration *" : items[i],i == menu->tool_selected ? TEXT : MUTED);
+            text(menu,24,84+i*12,i == 3 && config_dirty(menu) ? "Configuration *" : items[i],i == menu->tool_selected ? TEXT : MUTED);
         }
     } else if (menu->tools == TOOL_SAVES || menu->tools == TOOL_ARCHIVE || menu->tools == TOOL_SLOTS || menu->tools == TOOL_BACKUP_DETAILS || menu->tools == TOOL_GROUP || menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
         SaveArchive *archive = menu->tools == TOOL_SAVES ? &menu->nvram : (menu->tools == TOOL_BACKUP_DETAILS && menu->details_new ? &menu->pending : &menu->backup);
@@ -1412,21 +1518,16 @@ static void draw_tools(Menu *menu)
             text(menu,27+(i%10)*27,113+(i/10)*17,key,TEXT);
         }
         text(menu,24,189,"Start:Apply X:Erase C:Clear",MUTED);
-    } else if (menu->tools == TOOL_JUMP) {
-        char letter[2]; letter[0] = menu->jump_letter ? (char)('A'+menu->jump_letter-1) : '#'; letter[1] = 0;
-        tool_line(menu,1,"Left/Right: Choose # or A-Z",TEXT);
-        format(line,"Jump to: %s",letter); tool_line(menu,4,line,ACCENT);
-        tool_line(menu,7,"A:Jump   B:Cancel",TEXT);
     } else if (menu->tools == TOOL_HELP) {
         static const char *help[] = {
             "A: Open folder / launch game", "B: Parent folder / cancel", "Up/Down: Select (hold to repeat)",
             "Left/Right or L/R: Page", "C: Add selected disc to queue", "Start: Review queued discs",
-            "X: Refresh current folder", "L+R together: Open tools", "Hold X at boot: Skip USB extras", "Saves: A backs up one, C all"
+            "X: Refresh current folder", "L+R together: Open tools", "Hold X at boot: Skip USB extras", "C+Up or list ends: Alphabet"
         };
         static const char *more[] = {
             "Queue: X removes one disc", "Queue: C toggles move mode", "Move mode: Up/Down reorders",
             "Hold C, press X: Clear queue", "Hold C + Left/Right: Letter", "Disc 1: Offer matching disc set",
-            "Favorites: A opens game folder", "Favorites: C adds, X removes", "Config: C saves, X discards", "Non-display changes need reboot"
+            "Favorites: A opens game folder", "Favorites: C adds, X removes", "Config: C saves, X discards", "ABC: Left/Right A:Jump B:Cancel"
         };
         for (i = 0; i < 10; ++i) tool_line(menu,(int)i,menu->tool_selected ? more[i] : help[i],i < 8 ? TEXT : MUTED);
     } else if (menu->tools == TOOL_DIAG) {
@@ -1491,7 +1592,6 @@ static void draw_tools(Menu *menu)
         else if (menu->tools == TOOL_FAVORITES) controls = menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel" : "A:Open C:Add X:Remove B:Back";
         else if (menu->tools == TOOL_FIND) controls = "Arrows:Choose A:Key B:Cancel";
         else if (menu->tools == TOOL_CONFIG) controls = "Left/Right:Change C:Save B:Back";
-        else if (menu->tools == TOOL_JUMP) controls = "Left/Right:Letter A:Jump B:Back";
         else if (menu->tools == TOOL_BACKUP_DETAILS) controls = "A:Continue C:Old/New B:Back";
         else if (menu->tools == TOOL_SAVES) controls = "A:Back up one C:All X:Refresh";
         else if (menu->tools == TOOL_ARCHIVE) controls = "A:Restore selected B:Back";
@@ -1638,7 +1738,7 @@ static void tools_input(Menu *menu, u32 pressed)
         else { menu->tools = TOOL_HOME; menu->tool_selected = 0; save_archive_free(&menu->pending); }
         return;
     }
-    if (page == TOOL_HOME) count = 9;
+    if (page == TOOL_HOME) count = 8;
     if (page == TOOL_SAVES) count = menu->nvram.count;
     if (page == TOOL_ARCHIVE) count = menu->backup.count;
     if (page == TOOL_SLOTS) count = menu->backup_mode ? 8 : 10;
@@ -1653,12 +1753,6 @@ static void tools_input(Menu *menu, u32 pressed)
     }
     if (page == TOOL_HELP) {
         if (pressed & (ControlLeft | ControlRight)) menu->tool_selected = !menu->tool_selected;
-        return;
-    }
-    if (page == TOOL_JUMP) {
-        if (pressed & ControlLeft) menu->jump_letter = (menu->jump_letter + 26) % 27;
-        if (pressed & ControlRight) menu->jump_letter = (menu->jump_letter + 1) % 27;
-        if (pressed & ControlA) { menu->tools = 0; jump_letter(menu,menu->jump_letter); }
         return;
     }
     if (page == TOOL_CONFIG && (pressed & ControlX)) { discard_config(menu); return; }
@@ -1708,11 +1802,10 @@ static void tools_input(Menu *menu, u32 pressed)
         if (!selected) { menu->tools = TOOL_SAVES; scan_nvram(menu); }
         else if (selected == 1) { menu->tools = TOOL_SLOTS; menu->backup_mode = 0; }
         else if (selected == 2) { menu->tools = TOOL_FAVORITES; open_favorites(menu); }
-        else if (selected == 3) { menu->tools = TOOL_JUMP; menu->jump_letter = 1; }
-        else if (selected == 4) menu->tools = TOOL_CONFIG;
-        else if (selected == 5) menu->tools = TOOL_HELP;
-        else if (selected == 6) menu->tools = TOOL_DIAG;
-        else if (selected == 7) { menu->tools = TOOL_RECENT; open_recent(menu); }
+        else if (selected == 3) menu->tools = TOOL_CONFIG;
+        else if (selected == 4) menu->tools = TOOL_HELP;
+        else if (selected == 5) menu->tools = TOOL_DIAG;
+        else if (selected == 6) { menu->tools = TOOL_RECENT; open_recent(menu); }
         else { menu->tools = TOOL_FIND; strcpy(menu->find_query,menu->filter); menu->find_key = 0; }
     } else if (page == TOOL_SLOTS) {
         char path[40];
@@ -1824,7 +1917,7 @@ int main(int argc, char **argv)
                 (ControlLeftShift | ControlRightShift) &&
                 (pressed & (ControlLeftShift | ControlRightShift))) {
             if (menu.favorites_move) cancel_favorites_move(&menu);
-            menu.tools = TOOL_HOME; menu.tool_selected = 0; menu.tool_message = NULL; menu.c_pending = 0;
+            menu.tools = TOOL_HOME; menu.tool_selected = 0; menu.tool_message = NULL; menu.c_pending = 0; menu.alphabet_active = 0;
             pressed = 0;
         }
         if (menu.tools) {
@@ -1836,6 +1929,9 @@ int main(int argc, char **argv)
             draw(&menu);
             WaitVBL(menu.vbl, 1);
             continue;
+        }
+        if (alphabet_input(&menu,pressed)) {
+            draw(&menu); WaitVBL(menu.vbl,1); continue;
         }
         pressed = browser_shortcuts(&menu,buttons,pressed,released);
         total = row_count(&menu);

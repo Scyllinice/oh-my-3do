@@ -248,13 +248,13 @@ int main(int argc, char **argv) {
         preview_now+=350;
         update_cover(&menu);
         if (preview_cel_calls != 2 || !menu.cover_attempted) abort();
-        /* Tools wraps across nine entries; viewing Help/Diagnostics is read-only. */
+        /* Tools wraps across eight entries; viewing Help/Diagnostics is read-only. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlUp);
-        if (menu.tool_selected != 8) abort();
+        if (menu.tool_selected != 7) abort();
         tools_input(&menu, ControlDown);
         if (menu.tool_selected != 0) abort();
-        menu.tool_selected=5; tools_input(&menu, ControlA);
+        menu.tool_selected=4; tools_input(&menu, ControlA);
         if (menu.tools != TOOL_HELP || menu.usb_tested) abort();
         /* Actual tools/controller code: entering/cancelling never writes. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
         if (menu.tools != TOOL_ARCHIVE || preview_nvram_writes) abort();
         tools_input(&menu, ControlA); tools_input(&menu, ControlA);
         if (preview_nvram_writes || menu.restore_result != -1) abort(); /* demo USB blocked */
-        menu.ode.navigation_failed=1; menu.tools=TOOL_HOME; menu.tool_selected=6;
+        menu.ode.navigation_failed=1; menu.tools=TOOL_HOME; menu.tool_selected=5;
         tools_input(&menu, ControlA); draw(&menu);
         if (menu.tools != TOOL_DIAG || preview_nvram_writes) abort();
         tools_input(&menu, ControlRight); draw(&menu); tools_input(&menu, ControlRight); draw(&menu);
@@ -317,7 +317,7 @@ int main(int argc, char **argv) {
         if (menu.config.screen_margin || menu.config.large_titles || menu.config.theme) abort();
         if (menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlB);
-        menu.tool_selected=4; tools_input(&menu,ControlA);
+        menu.tool_selected=3; tools_input(&menu,ControlA);
         if (menu.tools != TOOL_CONFIG || menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlUp); if (menu.tool_selected != 9) abort();
         tools_input(&menu,ControlA);
@@ -413,6 +413,49 @@ int main(int argc, char **argv) {
         }
         preview_write_fail=0;
         preview_text_enabled=0; menu.config_result=2; menu.demo=1; menu.tools=0;
+        /* Actual alphabet focus/input: cancel is local, confirm only selects. */
+        menu.tools=menu.review=0; menu.ready=1; menu.selected=0;
+        menu.c_pending=1;
+        if (!alphabet_input(&menu,ControlUp) || !menu.alphabet_active || menu.c_pending) abort();
+        alphabet_input(&menu,ControlLeft); alphabet_input(&menu,ControlRight);
+        menu.jump_letter=0; alphabet_input(&menu,ControlLeft);
+        if (menu.jump_letter != 26) abort();
+        alphabet_input(&menu,ControlRight);
+        if (menu.jump_letter) abort();
+        {
+            size_t selected=menu.selected;
+            unsigned long commands=menu.bus.commands;
+            unsigned char available[27];
+            alphabet_available(&menu,available);
+            if (!available[4] || available[26]) abort();
+            menu.jump_letter=26; alphabet_input(&menu,ControlA);
+            if (!menu.alphabet_active || menu.selected != selected) abort();
+            alphabet_input(&menu,ControlC|ControlStart|ControlX);
+            if (!menu.alphabet_active || menu.c_pending || menu.bus.commands != commands) abort();
+            alphabet_input(&menu,ControlB);
+            if (menu.alphabet_active || menu.selected != selected) abort();
+            alphabet_input(&menu,ControlUp); menu.jump_letter=4;
+            alphabet_input(&menu,ControlA);
+            if (menu.alphabet_active || menu_initial(browser_entry(&menu,menu.selected)->name) != 4 || menu.bus.commands != commands) abort();
+        }
+        menu.selected=row_count(&menu)-1;
+        if (!alphabet_input(&menu,ControlDown) || !menu.alphabet_active) abort();
+        alphabet_input(&menu,ControlDown);
+        if (menu.alphabet_active || menu.selected) abort();
+        strcpy(menu.filter,"Road");
+        {
+            unsigned char available[27]; alphabet_available(&menu,available);
+            if (!available[18] || available[4]) abort();
+        }
+        menu.filter[0]=0; menu.review=1; menu.alphabet_active=1;
+        if (alphabet_input(&menu,ControlUp) || menu.alphabet_active) abort();
+        menu.review=0; menu.ready=0;
+        if (alphabet_input(&menu,ControlUp) || menu.alphabet_active) abort();
+        menu.ready=1;
+        menu.demo=0; menu.selected=2; menu.c_pending=1;
+        if (browser_shortcuts(&menu,ControlC|ControlUp,ControlUp,0) || !menu.alphabet_active || menu.c_pending) abort();
+        if (browser_shortcuts(&menu,0,0,ControlC) || menu.c_pending) abort();
+        alphabet_input(&menu,ControlB);
         /* Holding C for a letter jump never queues an image. */
         menu.tools=0; menu.review=menu.demo=0; menu.ready=1; menu.playlist.synchronized=1;
         if (browser_shortcuts(&menu,ControlC,ControlC,0) & ControlC) abort();
@@ -493,6 +536,14 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1],"recent")) {
         menu.tools=TOOL_RECENT; menu_favorites_parse(&menu.recent,"Games/D (Disc 1).iso\nRoad Rash.iso\n",strlen("Games/D (Disc 1).iso\nRoad Rash.iso\n"));
     }
+    if (argc > 1 && !strcmp(argv[1],"alphabet")) {
+        menu.selected=0; alphabet_input(&menu,ControlUp); menu.jump_letter=4;
+    }
+    if (argc > 1 && !strcmp(argv[1],"violet")) menu.config.theme=2;
+    if (argc > 1 && !strcmp(argv[1],"alphabet-large")) {
+        menu.config.large_titles=1; menu.config.screen_margin=12;
+        menu.selected=0; alphabet_input(&menu,ControlUp); menu.jump_letter=18;
+    }
     if (argc > 1 && !strcmp(argv[1],"large")) menu.config.large_titles=1;
     if (argc > 1 && !strcmp(argv[1],"margin")) menu.config.screen_margin=12;
     if (argc > 1 && !strcmp(argv[1],"contrast")) menu.config.theme=1;
@@ -551,8 +602,8 @@ def main():
                         str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
-        print("Menu view/input: browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent"):
+        print("Menu view/input: alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)
