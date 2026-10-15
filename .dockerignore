@@ -9,6 +9,10 @@
 !src/**
 !tests/
 !tests/**
+!runtime/
+!runtime/**
+!tools/
+!tools/prepare-runtime.py
 
 # Re-apply exclusions after the allowlist so generated test files stay out.
 **/__pycache__/

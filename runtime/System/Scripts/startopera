@@ -1,7 +1,15 @@
-# Oh My 3DO runtime startup. Keep the SDK filesystem check and controller broker.
-alias c $boot/System/Programs
+# Keep the SDK alias setup, filesystem check and controller broker.
+alias aiff $audio/aiff
+alias dsp $audio/dsp
+alias languages $drivers/Languages
+alias tuners $drivers/Tuners
+alias programs $boot/System/Programs
+alias fonts {/rom2/System/Graphics/Fonts|$boot/System/Graphics/Fonts}
+alias c $programs
+alias s $scripts
+alias app $boot
 fg
-$boot/System/Programs/fscheck
+$c/fscheck
 bg
-$boot/System/Tasks/eventbroker@
+$tasks/eventbroker@
 $boot/AppStartup%

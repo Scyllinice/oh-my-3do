@@ -53,6 +53,8 @@ USER developer
 COPY --chown=developer:developer Makefile /tmp/project-check/Makefile
 COPY --chown=developer:developer src/ /tmp/project-check/src/
 COPY --chown=developer:developer tests/ /tmp/project-check/tests/
+COPY --chown=developer:developer runtime/ /tmp/project-check/runtime/
+COPY --chown=developer:developer tools/prepare-runtime.py /tmp/project-check/tools/prepare-runtime.py
 COPY --chown=developer:developer ohmy3do.ini /tmp/project-check/ohmy3do.ini
 RUN make -C /tmp/project-check test test-sdk \
     && armcc -I/opt/3do-devkit/include/3do \

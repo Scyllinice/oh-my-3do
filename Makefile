@@ -63,6 +63,7 @@ build/test_bus_diagnostics: src/ode_bus.c src/ode_bus.h tests/test_bus_diagnosti
 test-sdk:
 	python3 tests/test_format_abi.py
 	python3 tests/test_stack_usage.py
+	python3 tests/test_runtime.py
 
 build/test_library_features: src/library_features.c src/library_features.h src/ode.c src/ode.h src/menu_ui.c tests/test_library_features.c
 	mkdir -p build

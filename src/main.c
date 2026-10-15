@@ -24,7 +24,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.5.0"
+#define MENU_VERSION "0.5.1"
 #define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2

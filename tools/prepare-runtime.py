@@ -36,14 +36,14 @@ def prepare(stage, audit):
         target = stage / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "runtime" / name, target)
-    # Do not leave empty SDK audio/FMV/artwork directories in the image either.
+    # Remove empty directories left by omitted examples and optional services.
     for path in sorted(stage.rglob("*"), key=lambda p: len(p.parts), reverse=True):
         if path.is_dir() and not any(path.iterdir()):
             path.rmdir()
     audit.write_text(json.dumps({"sdk_components": inventory, "removed_files": removed,
                                 "project_startup_scripts": ["AppStartup", "System/Scripts/startopera"]},
                                indent=2) + "\n")
-    print(f"Runtime: retained {len(paths)} SDK executables; replaced startup scripts; removed {len(removed)} template files")
+    print(f"Runtime: retained {len(paths)} SDK runtime files; replaced startup scripts; removed {len(removed)} template files")
 
 
 if __name__ == "__main__":
