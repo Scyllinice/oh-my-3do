@@ -21,7 +21,7 @@ test: build/test_ui_font build/test_usb_media build/test_menu_position build/tes
 	./build/test_ui_font
 	./build/test_usb_art
 
-test-covers: build/test_usb_art
+test-covers: test-cover-resize build/test_usb_art
 	python3 tests/test_cover_tools.py
 
 test-firmware:
@@ -89,3 +89,7 @@ test-media: build/test_usb_media
 build/test_ui_font: src/ui_font.c src/ui_font.h src/ui_font_data.h tests/test_ui_font.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/ui_font.c tests/test_ui_font.c $(LDFLAGS) -o $@
+
+.PHONY: test-cover-resize
+test-cover-resize: build/test_usb_media
+	python3 tests/test_resize_covers.py

@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Check cover preparation and feed its output through the real menu PNG decoder."""
+import importlib.util
+from pathlib import Path
+import struct
+import subprocess
+import tempfile
+from PIL import Image
+ROOT = Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location('resize_covers', ROOT/'tools/resize-covers.py')
+resize = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(resize)
+
+
+def rejects(*args, **kwargs):
+    try:
+        resize.plan(*args, **kwargs)
+    except ValueError:
+        return
+    raise AssertionError('Expected rejected conversion plan')
+
+
+with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
+    root = Path(temporary)
+    source, output = root/'originals', root/'covers'
+    source.mkdir()
+    Image.new('RGB', (160, 80), (255, 0, 0)).save(source/'Wide.bmp')
+    Image.new('RGBA', (40, 100), (0, 255, 0, 128)).save(source/'Alpha.png')
+    exif = Image.Exif(); exif[274] = 6
+    Image.new('RGB', (160, 80), (0, 0, 255)).save(source/'Rotate.jpg', exif=exif)
+    Image.new('RGB', (80, 100), 'yellow').save(source/'Photo.tiff')
+    Image.new('RGB', (64, 80), 'magenta').save(source/'Still.gif', save_all=True,
+                                            append_images=[Image.new('RGB', (64, 80), 'cyan')])
+    before = {p: p.read_bytes() for p in source.iterdir()}
+    subprocess.run(['python3', str(ROOT/'tools/resize-covers.py'), str(source), str(output)], check=True)
+    assert set(p.name for p in output.iterdir()) == {'Wide.png','Alpha.png','Rotate.png','Photo.png','Still.png'}
+    assert all(p.read_bytes() == data for p, data in before.items())
+    for path in output.iterdir():
+        with Image.open(path) as image:
+            assert image.format == 'PNG' and image.mode == 'RGB' and image.size == (64, 80)
+            assert path.stat().st_size < 512*1024
+            expected = root/'pixels.bin'
+            expected.write_bytes(b''.join(struct.pack('>H',((r>>3)<<10)|((g>>3)<<5)|(b>>3))
+                                          for r,g,b in image.getdata()))
+            subprocess.run([str(ROOT/'build/test_usb_media'), 'png', str(path), str(expected)], check=True)
+    with Image.open(output/'Wide.png') as image:
+        assert image.getpixel((32, 0)) == (8,16,33)
+        assert image.getpixel((32, 24)) == (255,0,0)
+        assert image.getpixel((32, 55)) == (255,0,0)
+        assert image.getpixel((32, 56)) == (8,16,33)
+    with Image.open(output/'Alpha.png') as image:
+        assert image.getpixel((0, 40)) == (8,16,33)
+        assert image.getpixel((32, 40)) == (4,136,16)
+    with Image.open(output/'Rotate.png') as image:
+        assert image.getpixel((0, 40)) == (8,16,33)  # Portrait after EXIF rotation.
+        assert image.getpixel((32, 0))[2] > 240
+    with Image.open(output/'Still.png') as image:
+        assert image.getpixel((32, 40)) == (255,0,255)
+    rejects(source, output)
+    rejects(source/'Alpha.png', source/'Alpha.png', overwrite=True)
+    rejects(source, source/'resized')
+    rejects(source, output/'file.png')
+    Image.new('RGB',(2,2)).save(source/'Wide.png')
+    rejects(source, root/'new-covers')
+    assert not (root/'new-covers').exists()
+    (source/'Wide.png').unlink()
+    nested=source/'nested';nested.mkdir()
+    Image.new('RGB',(8,8)).save(nested/'Another.png')
+    assert len(resize.plan(source, root/'new-covers')) == 5
+    assert len(resize.plan(source, root/'new-covers', recursive=True)) == 6
+    assert len(resize.plan(source, output, overwrite=True)) == 5
+    rejects(source/'Wide.bmp', output/'WIDE.png', overwrite=True)
+    rejects(source/'Wide.bmp', root/'wrong.jpg')
+    renamed=root/'custom'/'Game Title.png'
+    subprocess.run(['python3', str(ROOT/'tools/resize-covers.py'), str(source/'Wide.bmp'), str(renamed)], check=True)
+    assert renamed.exists()
+    usb=root/'usb';(usb/'Games').mkdir(parents=True)
+    (usb/'Games'/'Game.iso').touch()
+    subprocess.run(['python3', str(ROOT/'tools/resize-covers.py'), str(source/'Wide.bmp'), str(usb/'covers'/'Game.png')], check=True)
+    subprocess.run(['python3', str(ROOT/'tools/index-media.py'), str(usb)], check=True)
+    subprocess.run([str(ROOT/'build/test_usb_media'), 'index', str(usb/'covers'/'index.3di')], check=True)
+print('Cover resizer: formats, aspect ratio, alpha, EXIF, batch names, source protection and actual C decoding passed')

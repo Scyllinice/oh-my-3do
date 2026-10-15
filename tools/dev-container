@@ -16,6 +16,7 @@ case "$action" in
     menu) command_args=(bash /workspace/tools/build-menu menu "$@") ;;
     demo) command_args=(bash /workspace/tools/build-menu demo "$@") ;;
     cover) command_args=(python3 /workspace/tools/prepare-cover.py "$@") ;;
+    resize-covers) command_args=(python3 /workspace/tools/resize-covers.py "$@") ;;
     preview) command_args=(python3 /workspace/tools/prepare-preview.py "$@") ;;
     media-index) command_args=(python3 /workspace/tools/index-media.py "$@") ;;
     covers) command_args=(python3 /workspace/tools/export-covers.py "$@") ;;
@@ -29,7 +30,7 @@ case "$action" in
         command_args=("$@")
         ;;
     *)
-        echo 'Usage: tools/dev-container {build|test|menu|demo|cover GAME IMAGE|covers|preview VIDEO OUTPUT|media-index USBROOT|smoke|shell|run COMMAND ...}' >&2
+        echo 'Usage: tools/dev-container {build|test|menu|demo|cover GAME IMAGE|covers|resize-covers INPUT OUTPUT|preview VIDEO OUTPUT|media-index USBROOT|smoke|shell|run COMMAND ...}' >&2
         exit 2
         ;;
 esac

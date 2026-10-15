@@ -1,7 +1,34 @@
 Oh My 3DO media tools
 
-PNG covers need Python 3 only. Video conversion also needs FFmpeg on PATH.
+Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
+Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
 The tools do not rebuild boot.iso or download artwork/video.
+
+PREPARE COVERS
+
+Install the image library once (Windows):
+  py -m pip install Pillow
+
+Resize one image and give it the game's basename:
+  py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
+
+Or convert a whole folder, keeping each image's basename:
+  py resize-covers.py "Downloads/artwork" "E:/covers"
+
+The output is a 64x80 RGB PNG. Images are fitted without cropping, with dark
+padding, transparency composited, and EXIF orientation corrected. JPEG, PNG,
+WebP, BMP, TIFF and GIF inputs are supported when available in Pillow. Animated
+inputs use the first frame. Originals are never replaced. Existing output files
+require --overwrite; --recursive includes subfolders and produces a flat output.
+Duplicate output basenames are rejected before conversion. Use a separate output
+folder, and name each cover to match its game's .iso/.cue basename.
+
+On Linux/macOS, use python3 instead of py (Pillow can also be installed through
+the OS package manager). The project Docker image includes Pillow:
+  ./tools/dev-container resize-covers artwork iso/covers
+
+Then run index-media.py against the USB root as shown below. No ISO update is
+needed to use the prepared covers.
 
 PNG COVERS
 
@@ -37,7 +64,7 @@ Default: 24 frames at 6 fps (four seconds, 240 KiB). Optional:
   py prepare-preview.py input.mp4 "E:/previews/Road Rash.3dv" --start 10 --frames 12 --fps 6
 
 Limits: 1-32 frames, 1-12 fps. There is no audio or direct MP4 playback.
-Enable Video previews in Tools > Configuration, save, then cold boot.
+Enable Video previews in Tools > Appearance & settings, save, then cold boot.
 Keep the existing INI and folder-workaround setting. Alternatively add
 video_previews=1 under [artwork] in the USB ohmy3do.ini.
 

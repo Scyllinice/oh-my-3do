@@ -336,6 +336,36 @@ Transparency is blended against the artwork background. PNGs can be up to
 loading time. RGB, RGBA, grayscale, indexed, 1/2/4/8/16-bit and interlaced PNGs
 are supported where valid for their color type. JPEGs still need conversion.
 
+To resize or convert artwork, use `resize-covers.py` from the release's
+`media-tools.zip`. It needs Python 3.9+ and Pillow. On Windows:
+
+```sh
+py -m pip install Pillow
+py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
+# Or process a folder, preserving image basenames:
+py resize-covers.py "Downloads/artwork" "E:/covers"
+py index-media.py E:/
+```
+
+The tool creates 64×80 RGB PNGs, matching the cover texture used by the menu.
+It preserves aspect ratio with dark padding, applies EXIF rotation, and blends
+transparency against the artwork background. JPEG, PNG, WebP, BMP, TIFF, and GIF
+are supported through Pillow; animated inputs use the first frame. Originals
+stay intact. Existing covers require `--overwrite`; `--recursive` includes
+subfolders in a flat output folder. Duplicate output names are rejected before
+conversion. Keep output outside the input folder and match game basenames.
+
+On Linux/macOS, replace `py` with `python3`. From a source checkout, the tool is
+in `tools/`. Docker includes its dependencies after rebuilding the image:
+
+```sh
+./tools/dev-container build
+./tools/dev-container resize-covers artwork iso/covers
+```
+
+Copy the prepared covers to USB and regenerate its media index. Existing valid
+PNGs can still be copied directly; resizing is optional.
+
 The filename matches the game's basename, ignoring ASCII case. For example:
 
 ```text
