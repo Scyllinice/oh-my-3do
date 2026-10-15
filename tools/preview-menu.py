@@ -144,7 +144,7 @@ static CCB *LoadCel(char *file, unsigned long flags) {
 static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
     static unsigned char pixels[USB_ART_PIXELS];
     (void)flags; (void)data;
-    if (bpp==1) {
+    if (bpp==4) {
         static CCB fonts[128];
         static unsigned char bitmaps[128][UI_FONT_STRIDE*UI_FONT_HEIGHT];
         static unsigned short palettes[128][32];
@@ -172,8 +172,9 @@ static void DrawCels(Item item, CCB *cel) {
     double sy=cel->ccb_VDY ? cel->ccb_VDY/65536.0 : 1.0;
     if (cel->tag==3) {
         int i;
-        printf("B %.6f %.6f %.6f %.6f %u %d %d ",cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy,
-            ((unsigned short *)cel->ccb_PLUTPtr)[1],cel->ccb_Width,cel->ccb_Height);
+        printf("B %.6f %.6f %.6f %.6f ",cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy);
+        for (i=0;i<16;++i) printf("%s%u",i ? "," : "",((unsigned short *)cel->ccb_PLUTPtr)[i]);
+        printf(" %d %d ",cel->ccb_Width,cel->ccb_Height);
         for (i=0;i<UI_FONT_STRIDE*cel->ccb_Height;++i) printf("%02x",((unsigned char *)cel->ccb_SourcePtr)[i]);
         printf("\n"); return;
     }
@@ -676,6 +677,8 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && !strcmp(argv[1],"large")) menu.config.large_titles=1;
     if (argc > 1 && !strcmp(argv[1],"margin")) menu.config.screen_margin=12;
+    if (argc > 1 && !strcmp(argv[1],"tools-margin")) { menu.tools=TOOL_HOME; menu.config.screen_margin=12; }
+    if (argc > 1 && !strcmp(argv[1],"settings-margin")) { menu.tools=TOOL_CONFIG; menu.config.screen_margin=12; }
     if (argc > 1 && !strcmp(argv[1],"contrast")) menu.config.theme=1;
     if (argc > 1 && !strcmp(argv[1],"favorites")) {
         menu.tools=TOOL_FAVORITES;
@@ -733,7 +736,7 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)
@@ -748,11 +751,14 @@ def main():
                     _, x, y, sx, sy, c, width, height, data = command.split()
                     x,y,sx,sy=map(float,(x,y,sx,sy))
                     data=bytes.fromhex(data)
+                    palette=c.split(",")
+                    assert sx == sy == 1 and x.is_integer() and y.is_integer()
                     for row in range(int(height)):
                         for col in range(int(width)):
-                            if data[row*36+col//8] & (128 >> (col%8)):
+                            coverage=(data[row*144+col//2] >> (0 if col%2 else 4)) & 15
+                            if coverage:
                                 assert 0 <= x+col*sx < 320 and 0 <= y+row*sy < 240
-                                svg.append(f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" height="{sy}" fill="{color(c)}"/>')
+                                svg.append(f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" height="{sy}" fill="{color(palette[coverage])}"/>')
                 elif command.startswith("I "):
                     _, tag, x, y, sx, sy = command.split()
                     x,y,sx,sy=map(float,(x,y,sx,sy))

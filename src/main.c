@@ -28,7 +28,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.10.0"
+#define MENU_VERSION "0.10.1"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -47,7 +47,7 @@
 #define MAX_DEPTH 32
 #define BG (menu->config.theme == 1 ? MakeRGB15(0,0,0) : MakeRGB15(1,2,4))
 #define TEXT (menu->config.theme == 1 ? MakeRGB15(31,31,31) : MakeRGB15(29,29,26))
-#define MUTED (menu->config.theme == 1 ? MakeRGB15(27,27,27) : MakeRGB15(17,20,23))
+#define MUTED (menu->config.theme == 1 ? MakeRGB15(27,27,27) : MakeRGB15(25,27,29))
 #define ACCENT (menu->config.theme ? MakeRGB15(31,25,10) : MakeRGB15(7,26,22))
 #define PANEL (menu->config.theme == 1 ? MakeRGB15(1,1,1) : (menu->config.theme == 2 ? MakeRGB15(4,3,8) : MakeRGB15(2,4,7)))
 #define LINE (menu->config.theme == 1 ? MakeRGB15(12,12,12) : (menu->config.theme == 2 ? MakeRGB15(11,7,15) : MakeRGB15(5,9,12)))
@@ -58,7 +58,8 @@
 #define UI_TEXT_CACHE 64
 typedef struct UiText {
     CCB *cel;
-    int style, width;
+    int style, width, palette_valid;
+    Color ink, background;
     char value[97];
 } UiText;
 
@@ -70,6 +71,8 @@ typedef struct Menu {
     UiText text_cache[UI_TEXT_CACHE];
     unsigned int text_cursor;
     int text_style, text_failed;
+    int text_background_set;
+    Color text_background;
     Ode ode;
     OdeBus bus;
     OdeListing listing;
@@ -277,7 +280,15 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
     char safe[97];
     size_t i;
     int style=menu->large_drawing ? UI_FONT_LARGE : menu->text_style;
-    int max_width=308-x;
+    int margin=menu->config.screen_margin;
+    int px=margin+x*(320-2*margin)/320;
+    int py=margin+y*(240-2*margin)/240;
+    int max_width=(308-x)*(320-2*margin)/320;
+    Color background=BG;
+    if (menu->text_background_set) background=menu->text_background;
+    else if (y<52) background=menu->config.theme == 1 ? MakeRGB15(1,1,1) :
+        (menu->config.theme == 2 ? MakeRGB15(4,3,9-(y/24)/3) : MakeRGB15(2,4,9-(y/24)/2));
+    else if (y<186) background=PANEL;
     if (max_width>UI_FONT_WIDTH) max_width=UI_FONT_WIDTH;
     if (max_width<=0 || !*string) return;
     for (i=0;i<96 && string[i];++i) {
@@ -289,7 +300,7 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
 #endif
     cached=&menu->text_cache[menu->text_cursor<UI_TEXT_CACHE ? menu->text_cursor++ : UI_TEXT_CACHE-1];
     if (!cached->cel && !menu->text_failed) {
-        cached->cel=CreateCel(UI_FONT_WIDTH,UI_FONT_HEIGHT,1,0,NULL);
+        cached->cel=CreateCel(UI_FONT_WIDTH,UI_FONT_HEIGHT,4,0,NULL);
         if (!cached->cel) menu->text_failed=1;
         else memset(cached->cel->ccb_PLUTPtr,0,64);
     }
@@ -302,17 +313,23 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
         }
         width=ui_font_width(safe,style); if (width>max_width) width=max_width;
         if (!width) return;
-        ((unsigned short *)cel->ccb_PLUTPtr)[1]=(unsigned short)color;
+        if (!cached->palette_valid || cached->ink!=color || cached->background!=background) {
+            ui_font_palette((unsigned short *)cel->ccb_PLUTPtr,color,background);
+            cached->ink=color; cached->background=background; cached->palette_valid=1;
+        }
         cel->ccb_PRE0=(cel->ccb_PRE0 & ~0x0000ffc0UL)|((ui_font_height(style)-1)<<6);
         cel->ccb_PRE1=(cel->ccb_PRE1 & ~0x000007ffUL)|(width-1);
         cel->ccb_Width=width; cel->ccb_Height=ui_font_height(style);
-        cel->ccb_XPos=x<<16; cel->ccb_YPos=y<<16;
-        draw_cel(menu,cel);
+        /* Keep text at native size and integer pixels, including with overscan margins. */
+        cel->ccb_XPos=px<<16; cel->ccb_YPos=py<<16;
+        cel->ccb_HDX=1<<20; cel->ccb_HDY=0; cel->ccb_VDX=0; cel->ccb_VDY=1<<16;
+        cel->ccb_Flags |= CCB_LAST;
+        DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],cel);
     } else {
         GrafCon gc;
         char fallback[37];
         for (i=0;i<36 && i<(size_t)(max_width/8) && safe[i];++i) fallback[i]=safe[i];
-        fallback[i]=0; SetFGPen(&gc,color); MoveTo(&gc,x,y);
+        fallback[i]=0; SetFGPen(&gc,color); MoveTo(&gc,px,py);
         DrawText8(&gc,menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],(const u8 *)fallback);
     }
 }
@@ -320,6 +337,14 @@ static void label(Menu *menu,int x,int y,const char *value,Color color,int style
 {
     int previous=menu->text_style;
     menu->text_style=style; text(menu,x,y,value,color); menu->text_style=previous;
+}
+static void label_on(Menu *menu,int x,int y,const char *value,Color ink,int style,Color background)
+{
+    int previous=menu->text_background_set;
+    Color old=menu->text_background;
+    menu->text_background_set=1; menu->text_background=background;
+    label(menu,x,y,value,ink,style);
+    menu->text_background_set=previous; menu->text_background=old;
 }
 static void rounded(Menu *menu,int x,int y,int w,int h,Color color)
 {
@@ -329,10 +354,10 @@ static void rounded(Menu *menu,int x,int y,int w,int h,Color color)
 }
 static void button(Menu *menu,int x,int y,const char *key,const char *action,Color color)
 {
-    int width=ui_font_width(key,UI_FONT_SMALL)+8;
+    int width=(ui_font_width(key,UI_FONT_SMALL)+8)*320/(320-2*menu->config.screen_margin);
     if (width<15) width=15;
     rounded(menu,x,y,width,14,color);
-    label(menu,x+4,y+1,key,MakeRGB15(1,2,4),UI_FONT_SMALL);
+    label_on(menu,x+4,y+1,key,MakeRGB15(1,2,4),UI_FONT_SMALL,color);
     label(menu,x+width+4,y+1,action,TEXT,UI_FONT_SMALL);
 }
 static void backdrop(Menu *menu)
@@ -399,6 +424,7 @@ static void draw_alphabet(Menu *menu)
 {
     unsigned char available[27];
     int i, current=menu->jump_letter;
+    int scale=320-2*menu->config.screen_margin, x, total=0;
     alphabet_available(menu,available);
     if (!menu->alphabet_active) {
         const MenuEntry *entry=NULL;
@@ -406,16 +432,25 @@ static void draw_alphabet(Menu *menu)
             entry=browser_entry(menu,menu->selected-(menu->listing.has_parent ? 1 : 0));
         current=entry ? menu_initial(entry->name) : -1;
     }
+    for (i=0;i<27;++i) {
+        char letter[2]; letter[0]=i ? (char)('A'+i-1) : '#'; letter[1]=0;
+        total+=(ui_font_width(letter,UI_FONT_SMALL)*320+scale-1)/scale+2;
+    }
+    x=14+(292-total)/2;
     if (menu->alphabet_active) rounded(menu,14,189,292,17,PANEL);
     for (i=0;i<27;++i) {
         char letter[2];
+        int cell;
         Color ink=available[i] ? MUTED : DIM;
         letter[0]=i ? (char)('A'+i-1) : '#'; letter[1]=0;
+        cell=(ui_font_width(letter,UI_FONT_SMALL)*320+scale-1)/scale+2;
         if (i==current) {
-            rounded(menu,24+i*10,190,10,14,menu->alphabet_active ? ACCENT : SELECT);
+            rounded(menu,x-1,190,cell,14,menu->alphabet_active ? ACCENT : SELECT);
             ink=menu->alphabet_active ? MakeRGB15(1,2,4) : TEXT;
         }
-        label(menu,26+i*10,191,letter,ink,UI_FONT_SMALL);
+        label_on(menu,x,191,letter,ink,UI_FONT_SMALL,
+            i==current ? (menu->alphabet_active ? ACCENT : SELECT) : (menu->alphabet_active ? PANEL : BG));
+        x+=cell;
     }
 }
 static void brand(Menu *menu,const char *title)
@@ -473,11 +508,11 @@ static void draw(Menu *menu)
     if (*menu->filter && !menu->review) format(line,"Search: %s",menu->filter);
     else if (menu->review) strcpy(line,"Play order / first to last");
     else strcpy(line,menu->depth ? menu->breadcrumb : "All games");
-    line[ui_font_fit(line,strlen(line),130,UI_FONT_SMALL)]=0;
+    line[ui_font_fit(line,strlen(line),130*(320-2*menu->config.screen_margin)/320,UI_FONT_SMALL)]=0;
     label(menu,118,32,line,MUTED,UI_FONT_SMALL);
-    rounded(menu,262,9,44,21,menu->playlist.count ? ACCENT : LINE);
+    rounded(menu,246,9,60,21,menu->playlist.count ? ACCENT : LINE);
     format(line,"%lu discs",(unsigned long)menu->playlist.count);
-    label(menu,268,14,line,menu->playlist.count ? MakeRGB15(1,2,4) : MUTED,UI_FONT_SMALL);
+    label_on(menu,252,14,line,menu->playlist.count ? MakeRGB15(1,2,4) : MUTED,UI_FONT_SMALL,menu->playlist.count ? ACCENT : LINE);
     rounded(menu,left,54,width,132,BG);
     rounded(menu,left,52,width,132,PANEL);
     if (menu->view_valid || menu->review) {
@@ -495,20 +530,21 @@ static void draw(Menu *menu)
             if (i==selected) rounded(menu,left+3,y,width-6,row_height-1,menu->alphabet_active ? SELECT : ACCENT);
             if (menu->review) {
                 format(line,"%lu",(unsigned long)i+1);
-                label(menu,left+9,y+3,line,ink,UI_FONT_SMALL);
+                label_on(menu,left+9,y+3,line,ink,UI_FONT_SMALL,i==selected ? (menu->alphabet_active ? SELECT : ACCENT) : PANEL);
                 title_x=left+28; room=width-40;
             } else if (directory) folder_icon(menu,left+9,y+5,ink);
             else {
                 rounded(menu,left+10,y+5,7,7,ink);
                 rectangle(menu,left+13,y+8,1,1,i==selected ? ACCENT : PANEL);
             }
+            room=room*(320-2*menu->config.screen_margin)/320;
             length=menu_title_length(name,directory);
             visible=ui_font_fit(name,length,room,style);
             if (i==selected) offset=menu_scroll_offset(length,visible,now-menu->selection_since);
             visible=ui_font_fit(name+offset,length-offset,room,style);
             if (visible>64) visible=64;
             memcpy(title,name+offset,visible); title[visible]=0;
-            label(menu,title_x,y+(menu->config.large_titles ? 2 : 3),title,ink,style);
+            label_on(menu,title_x,y+(menu->config.large_titles ? 2 : 3),title,ink,style,i==selected ? (menu->alphabet_active ? SELECT : ACCENT) : PANEL);
         }
         if (!total) {
             label(menu,left+12,94,menu->review ? "No discs queued" : "Nothing here yet",TEXT,UI_FONT_NORMAL);
@@ -545,8 +581,8 @@ static void draw(Menu *menu)
     }
     if (!menu->ready && menu->bus.last_error<0) { format(line,"Connection error: %08lx",(unsigned long)menu->bus.last_error); label(menu,16,229,line,MUTED,UI_FONT_SMALL); }
     else {
-        label(menu,16,229,menu->review ? "C + X  Clear queue" : "C + Up  Alphabet",MUTED,UI_FONT_SMALL);
-        label(menu,118,229,"L + R  Tools",MUTED,UI_FONT_SMALL);
+        label(menu,16,229,menu->review ? "C + X  Clear queue" : "C + Up  Letters",MUTED,UI_FONT_SMALL);
+        label(menu,145,229,"L + R  Tools",MUTED,UI_FONT_SMALL);
         if (menu->config.folder_workaround || config_dirty(menu))
             label(menu,244,229,config_dirty(menu) ? "Unsaved" : "Compat on",AMBER,UI_FONT_SMALL);
     }
@@ -1628,7 +1664,7 @@ static void find_input(Menu *menu, u32 pressed)
 }
 static void tool_line(Menu *menu, int row, const char *line, Color color)
 {
-    text(menu, 22, 82 + row * 11, line, color);
+    text(menu, 22, 82 + row * 12, line, color);
 }
 static void slot_path(char *path, unsigned int slot)
 {
@@ -1654,27 +1690,28 @@ static void draw_tools(Menu *menu)
     if (menu->tools == TOOL_FIND) title = "Find a game";
     if (menu->tools == TOOL_FAVORITES && menu->favorites_move) title = "Move favorite";
     if (menu->tools == TOOL_BACKUP_DETAILS) title = menu->details_new ? "New backup contents" : "Existing slot contents";
-    menu->text_cursor=0; menu->text_style=UI_FONT_NORMAL;
+    menu->text_cursor=0; menu->text_style=UI_FONT_SMALL;
     menu->screen.sc_curScreen ^= 1;
     backdrop(menu); brand(menu,"Tools");
     label(menu,118,32,"Make it yours",MUTED,UI_FONT_SMALL);
     rounded(menu,12,58,296,148,PANEL);
-    text(menu, 22, 64, title, TEXT);
+    label(menu,22,64,title,TEXT,UI_FONT_NORMAL);
     rectangle(menu, 20, 77, 280, 1, LINE);
     if (menu->tools == TOOL_HOME) {
-        static const char *items[]={"Save manager","USB backups","Favorites","Appearance & settings","Help & controls","Diagnostics","Recent games","Find a game"};
+        static const char *items[]={"Save manager","USB backups","Favorites","Settings","Help & controls","Diagnostics","Recent games","Find a game"};
         for (i=0;i<8;++i) {
             int x=18+(i/4)*144, y=84+(i%4)*28;
             int active=i==menu->tool_selected;
             rounded(menu,x,y,138,24,active ? ACCENT : SELECT);
-            label(menu,x+9,y+6,i==3 && config_dirty(menu) ? "Settings *" : items[i],active ? MakeRGB15(1,2,4) : TEXT,UI_FONT_NORMAL);
+            label_on(menu,x+9,y+5,i==3 && config_dirty(menu) ? "Settings *" : items[i],active ? MakeRGB15(1,2,4) : TEXT,UI_FONT_NORMAL,active ? ACCENT : SELECT);
         }
     } else if (menu->tools == TOOL_SAVES || menu->tools == TOOL_ARCHIVE || menu->tools == TOOL_SLOTS || menu->tools == TOOL_BACKUP_DETAILS || menu->tools == TOOL_GROUP || menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
         SaveArchive *archive = menu->tools == TOOL_SAVES ? &menu->nvram : (menu->tools == TOOL_BACKUP_DETAILS && menu->details_new ? &menu->pending : &menu->backup);
         count = menu->tools == TOOL_SLOTS ? (menu->backup_mode ? 8 : 10) : (menu->tools == TOOL_GROUP ? menu->group.count : (menu->tools == TOOL_FAVORITES ? menu->favorites.count : (menu->tools == TOOL_RECENT ? menu->recent.count : archive->count)));
-        start = menu->tool_selected / 9 * 9;
-        for (i = start; i < count && i < start + 9; ++i) {
-            if (i == menu->tool_selected) rectangle(menu, 16, 81 + (i - start) * 11, 287, 10, LINE);
+        start = menu->tool_selected / 8 * 8;
+        for (i = start; i < count && i < start + 8; ++i) {
+            menu->text_background_set=1; menu->text_background=i==menu->tool_selected ? LINE : PANEL;
+            if (i == menu->tool_selected) rectangle(menu, 16, 81 + (i - start) * 12, 287, 12, LINE);
             if (menu->tools == TOOL_SLOTS) {
                 slot_path(line, (unsigned int)i);
                 tool_line(menu, (int)(i - start), line + 6, i == menu->tool_selected ? TEXT : MUTED);
@@ -1693,9 +1730,10 @@ static void draw_tools(Menu *menu)
                 memcpy(line, e->name, n); line[n] = 0;
                 tool_line(menu, (int)(i - start), line, i == menu->tool_selected ? TEXT : MUTED);
                 format(line, "%5lu", (unsigned long)e->size);
-                text(menu, 260, 82 + (i - start) * 11, line, MUTED);
+                text(menu, 260, 82 + (i - start) * 12, line, MUTED);
             }
         }
+        menu->text_background_set=0;
         if (!count) tool_line(menu,2,(menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) ? "No games listed." :
              (menu->tools == TOOL_BACKUP_DETAILS && !menu->backup_slot_valid ? "Empty or invalid backup slot." : "No saves to display."),MUTED);
         if (menu->tools == TOOL_SAVES) {
@@ -1706,8 +1744,8 @@ static void draw_tools(Menu *menu)
             text(menu, 22, 188, line, MUTED);
         }
     } else if (menu->tools == TOOL_CONFIG) {
-        start=menu->tool_selected/10*10;
-        for (i = start; i < 12 && i < start+10; ++i) {
+        start=menu->tool_selected/9*9;
+        for (i = start; i < 12 && i < start+9; ++i) {
             if (!i) format(line,"Screen margin: %d",menu->config.screen_margin);
             else if (i == 1) format(line,"Large game titles: %s",menu->config.large_titles ? "ON" : "OFF");
             else if (i == 2) format(line,"Theme: %s",menu->config.theme == 1 ? "High contrast" : (menu->config.theme == 2 ? "Amber" : "Teal"));
@@ -1723,10 +1761,10 @@ static void draw_tools(Menu *menu)
             else if (i == 10) strcpy(line,"Discard unsaved changes");
             else if (i == 11) strcpy(line,"Save changes to USB");
             else format(line,"Video previews: %s",menu->settings_video_previews ? "ON" : "OFF");
-            if (i == menu->tool_selected) rectangle(menu,16,81+(i-start)*11,287,11,LINE);
-            text(menu,24,82+(i-start)*11,line,i == menu->tool_selected ? TEXT : MUTED);
+            if (i == menu->tool_selected) rectangle(menu,16,81+(i-start)*12,287,12,LINE);
+            label_on(menu,24,82+(i-start)*12,line,i == menu->tool_selected ? TEXT : MUTED,UI_FONT_SMALL,i==menu->tool_selected ? LINE : PANEL);
         }
-        label(menu,24,195,"Music + display apply now. C saves.",MUTED,UI_FONT_SMALL);
+        label(menu,24,194,"Music + display apply now. C saves.",MUTED,UI_FONT_SMALL);
         label(menu,270,64,start ? "2 / 2" : "1 / 2",MUTED,UI_FONT_SMALL);
     } else if (menu->tools == TOOL_FIND) {
         format(line,"Find: %s_",menu->find_query); tool_line(menu,0,line,TEXT);

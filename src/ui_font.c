@@ -4,7 +4,7 @@
 static int glyph(unsigned char c) { return c>=32 && c<=126 ? c-32 : '?'-32; }
 int ui_font_height(int style)
 {
-    static const int heights[4]={12,10,15,19};
+    static const int heights[4]={15,12,17,19};
     return heights[style>=0 && style<4 ? style : 0];
 }
 int ui_font_width(const char *text,int style)
@@ -35,11 +35,30 @@ int ui_font_render(unsigned char *out,const char *text,int style,int max_width)
         int c=glyph((unsigned char)*text++), row, col, advance=ui_advances[style][c];
         if (x+advance>max_width) break;
         for (row=0;row<ui_font_height(style);++row) {
-            unsigned int bits=ui_glyphs[style][c][row];
-            for (col=0;col<16 && x+col<max_width;++col)
-                if (bits&(0x8000U>>col)) out[row*UI_FONT_STRIDE+(x+col)/8] |= (unsigned char)(0x80U>>((x+col)&7));
+            for (col=0;col<16 && x+col<max_width;++col) {
+                unsigned int packed=ui_glyphs[style][c][row*8+col/2];
+                unsigned int coverage=(col&1) ? packed&15U : packed>>4;
+                int dx=x+col;
+                if (coverage) {
+                    unsigned char *pixel=out+row*UI_FONT_STRIDE+dx/2;
+                    unsigned int old=(dx&1) ? *pixel&15U : *pixel>>4;
+                    if (coverage>old) *pixel=(unsigned char)((dx&1) ? ((*pixel&0xf0U)|coverage) : ((*pixel&15U)|(coverage<<4)));
+                }
+            }
         }
         x+=advance;
     }
     return x;
+}
+
+void ui_font_palette(unsigned short *out,unsigned int ink,unsigned int background)
+{
+    int i;
+    memset(out,0,32*sizeof(*out));
+    for (i=1;i<16;++i) {
+        unsigned int r=(((ink>>10)&31U)*i+((background>>10)&31U)*(15-i)+7)/15;
+        unsigned int g=(((ink>>5)&31U)*i+((background>>5)&31U)*(15-i)+7)/15;
+        unsigned int b=((ink&31U)*i+(background&31U)*(15-i)+7)/15;
+        out[i]=(unsigned short)((r<<10)|(g<<5)|b);
+    }
 }

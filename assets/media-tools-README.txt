@@ -89,7 +89,7 @@ Default: 24 frames at 6 fps (four seconds, 240 KiB). Optional:
   py prepare-preview.py input.mp4 "E:/previews/Road Rash.3dv" --start 10 --frames 12 --fps 6
 
 Limits: 1-32 frames, 1-12 fps. There is no audio or direct MP4 playback.
-Enable Video previews in Tools > Appearance & settings, save, then cold boot.
+Enable Video previews in Tools > Settings, save, then cold boot.
 Keep the existing INI and folder-workaround setting. Alternatively add
 video_previews=1 under [artwork] in the USB ohmy3do.ini.
 

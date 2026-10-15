@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.10.0**.
+restore, plus optional menu music. The current version is **0.10.1**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -229,7 +229,7 @@ while an uncertain transport or failed folder restoration blocks it.
 
 ## Display preferences and configuration
 
-Tools → Appearance & settings exposes every INI setting: additional screen
+Tools → Settings exposes every INI setting: additional screen
 margins (0–12 pixels), larger game/queue titles, teal/high-contrast/amber
 themes, the folder compatibility workaround, USB covers, video previews,
 remembered position, recent games, and menu music. Left/Right or A changes the selected
@@ -245,8 +245,10 @@ identifies changes that have not been saved. **X** or **Discard unsaved
 changes** restores the last successfully saved values, including the display
 preview.
 
-The margin scales the menu into an inset area; larger titles use a 12-pixel font
-and six list rows. Controls, help and system tools retain their compact font.
+The margin moves the menu into an inset area while keeping text at native pixel
+size. Antialiased text uses brighter colors and larger glyphs for TV readability.
+Game titles use a 12-pixel font, or 14 pixels and six list rows with large titles
+enabled. Controls and system tools use a bold 10-pixel font.
 Restore display defaults resets only the display settings.
 
 The save writes a canonical INI containing the selected compatibility, artwork
@@ -432,7 +434,7 @@ python3 tools/prepare-preview.py input.mp4 '/path/to/USB/previews/Road Rash.3dv'
 python3 tools/index-media.py /path/to/USB
 ```
 
-Enable **Video previews** in Tools → Appearance & settings, save, and cold boot
+Enable **Video previews** in Tools → Settings, save, and cold boot
 (or add `video_previews=1` under `[artwork]` in the USB INI). Old INIs keep
 previews disabled. `usb_covers` controls static covers independently.
 
@@ -501,7 +503,7 @@ rejected rather than silently shortened. The converter preserves the source,
 pads to DMA alignment, applies tiny endpoint fades, and adds a checksum and end
 marker to protect against firmware EOF errors.
 
-Music is enabled by default. **Tools → Appearance & settings → Menu music**
+Music is enabled by default. **Tools → Settings → Menu music**
 changes playback immediately; press **C** to save. Turning it off releases audio
 RAM. Turning it back on reloads the file from the selected USB volume; folder
 navigation uses the same restoration and compatibility checks as USB artwork.
