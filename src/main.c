@@ -23,7 +23,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.4.0"
+#define MENU_VERSION "0.4.1"
 #define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -35,7 +35,7 @@
 #define TOOL_CONFIRM_RESTORE 8
 #define TOOL_GROUP 9
 #define TOOL_FAVORITES 10
-#define TOOL_DISPLAY 11
+#define TOOL_CONFIG 11
 #define TOOL_JUMP 12
 #define TOOL_BACKUP_DETAILS 13
 #define MAX_DEPTH 32
@@ -65,7 +65,11 @@ typedef struct Menu {
     int details_new;
     int jump_letter;
     char favorites_prefix[ODE_MAX_NAME + 10];
+    int favorites_valid;
     MenuConfig config;
+    /* Stage navigation/artwork changes until reboot, including while saving. */
+    int settings_folder_workaround;
+    int settings_usb_covers;
     UsbArtIndex usb_art;
     CCB *logo;
     CCB *cover;
@@ -630,6 +634,8 @@ static void connect_ode(Menu *menu)
     else config_result = menu_config_load(&menu->ode, ode_bus_read_buffer, &menu->config);
     menu->config_result = config_result;
     menu->skip_usb_art = config_result != 0 || !menu->config.usb_covers;
+    menu->settings_folder_workaround = menu->config.folder_workaround;
+    menu->settings_usb_covers = menu->config.usb_covers;
     if (menu->bus.timed_out) {
         menu->message = "Config I/O failed. Restart console.";
         return;
@@ -840,6 +846,7 @@ static int favorites_read(void *context)
     int result = -1;
     if (data && !usb_file_text(&menu->ode,ode_bus_read_buffer,"favorites.txt",data,FAVORITES_BYTES,&length))
         result = menu_favorites_parse(&menu->favorites,data,length);
+    menu->favorites_valid = result == 0;
     free(data); return result;
 }
 static void open_favorites(Menu *menu)
@@ -847,6 +854,7 @@ static void open_favorites(Menu *menu)
     ArtRouteStep route[MAX_DEPTH];
     int result;
     menu_favorites_free(&menu->favorites);
+    menu->favorites_valid = 0;
     strcpy(menu->favorites_prefix,"/Storage/");
     if (menu->depth && !(menu->path_ids[0] & 0xffffffUL)) {
         strcat(menu->favorites_prefix,menu->path[0]); strcat(menu->favorites_prefix,"/");
@@ -867,7 +875,83 @@ static void open_favorites(Menu *menu)
     menu->tool_selected = 0;
     if (result == -2 || menu->bus.timed_out || menu->ode.navigation_failed) {
         menu->ready = menu->view_valid = 0; menu->tool_message = "USB I/O failed. Restart console.";
-    } else menu->tool_message = result ? "Invalid favorites.txt on USB." : (menu->favorites.count ? NULL : "Edit favorites.txt on your PC.");
+    } else menu->tool_message = result ? "Invalid favorites.txt on USB." : (menu->favorites.count ? NULL : "C adds the selected browser game.");
+}
+typedef struct FavoritesEdit {
+    Menu *menu;
+    const char *path;
+    int remove;
+} FavoritesEdit;
+static int favorites_edit_at_root(void *context)
+{
+    FavoritesEdit *edit = (FavoritesEdit *)context;
+    char *data;
+    size_t i, used = 0;
+    int result;
+    /* Re-read before every edit: never overwrite a malformed/unreadable list. */
+    if (favorites_read(edit->menu) < 0) return -1;
+    result = menu_favorites_edit(&edit->menu->favorites,edit->path,edit->remove);
+    if (result) return result;
+    data = (char *)malloc(FAVORITES_BYTES);
+    if (!data) return -1;
+    for (i = 0; i < edit->menu->favorites.count; ++i) {
+        size_t n = strlen(edit->menu->favorites.paths[i]);
+        memcpy(data+used,edit->menu->favorites.paths[i],n); used += n; data[used++] = '\n';
+    }
+    data[used] = 0;
+    result = usb_file_text_write(&edit->menu->ode,ode_bus_read_buffer,"favorites.txt",data);
+    free(data);
+    if (result < 0) edit->menu->favorites_valid = 0;
+    return result;
+}
+static void edit_favorites(Menu *menu, int remove)
+{
+    ArtRouteStep route[MAX_DEPTH];
+    FavoritesEdit edit;
+    char path[FAVORITE_PATH];
+    size_t used = 0;
+    unsigned int i, first = menu->depth && !(menu->path_ids[0] & 0xffffffUL) ? 1 : 0;
+    int result;
+    if (menu->demo || !menu->ready || menu->ode.navigation_failed || menu->bus.timed_out ||
+        menu->config_result == 2 || strcmp(menu->ode.identity,"LOCODE")) {
+        menu->tool_message = "USB favorites unavailable."; return;
+    }
+    if (remove) {
+        if (!menu->favorites_valid || menu->tool_selected >= menu->favorites.count) {
+            menu->tool_message = "Select a favorite to remove."; return;
+        }
+        strcpy(path,menu->favorites.paths[menu->tool_selected]);
+    } else {
+        const MenuEntry *entry;
+        if (menu->listing.has_parent && !menu->selected) goto select_game;
+        if (!row_count(menu)) goto select_game;
+        entry = browser_entry(menu,menu->selected-(menu->listing.has_parent ? 1 : 0));
+        if (!entry || entry->is_directory) goto select_game;
+        for (i = first; i < menu->depth; ++i) {
+            size_t n = strlen(menu->path[i]);
+            if (used + n + 1 >= sizeof(path)) goto too_long;
+            memcpy(path+used,menu->path[i],n); used += n; path[used++] = '/';
+        }
+        if (used + strlen(entry->name) >= sizeof(path)) goto too_long;
+        strcpy(path+used,entry->name);
+    }
+    current_route(menu,route);
+    edit.menu = menu; edit.path = path; edit.remove = remove;
+    menu->tool_message = "Saving / verifying favorites..."; draw(menu);
+    result = art_at_root(&menu->ode,route,menu->depth,&menu->listing,
+                         menu->config.folder_workaround,favorites_edit_at_root,&edit);
+    if (result == -2 || menu->bus.timed_out || menu->ode.navigation_failed) {
+        menu->ready = menu->view_valid = 0; menu->tool_message = "USB I/O failed. Restart console.";
+    } else if (result < 0) menu->tool_message = "Favorites not saved. Check USB file.";
+    else if (result == 1) menu->tool_message = remove ? "Favorite already removed." : "Game is already a favorite.";
+    else menu->tool_message = remove ? "Favorite removed and saved." : "Favorite added and saved.";
+    if (menu->tool_selected >= menu->favorites.count)
+        menu->tool_selected = menu->favorites.count ? menu->favorites.count-1 : 0;
+    return;
+select_game:
+    menu->tool_message = "Select a game in the browser first."; return;
+too_long:
+    menu->tool_message = "Favorite path is too long.";
 }
 static void open_favorite(Menu *menu)
 {
@@ -876,7 +960,7 @@ static void open_favorite(Menu *menu)
     char path[FAVORITE_PATH + ODE_MAX_NAME + 10];
     size_t i;
     int result;
-    if (menu->tool_selected >= menu->favorites.count || menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready) return;
+    if (!menu->favorites_valid || menu->tool_selected >= menu->favorites.count || menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready) return;
     location = (LibraryLocation *)malloc(sizeof(*location));
     if (!location) { menu->tool_message = "Not enough memory."; return; }
     strcpy(path,menu->favorites_prefix); strcat(path,menu->favorites.paths[menu->tool_selected]);
@@ -898,18 +982,20 @@ static void open_favorite(Menu *menu)
     }
     free(location);
 }
-static void save_display(Menu *menu)
+static void save_config(Menu *menu)
 {
     if (menu->config_result != 0) { menu->tool_message = "Load a valid INI before saving."; return; }
-    if (!save_root_operation(menu,3,MENU_CONFIG_NAME,NULL)) menu->tool_message = "Display settings saved to USB.";
+    if (!save_root_operation(menu,3,MENU_CONFIG_NAME,NULL)) menu->tool_message = "Saved. USB/compat: after reboot.";
 }
-static void change_display(Menu *menu, int direction)
+static void change_config(Menu *menu, int direction)
 {
-    menu->tool_message = "Preview changed. C:Save to USB";
-    if (menu->tool_selected == 4) { save_display(menu); return; }
+    menu->tool_message = "Changed. C:Save to USB";
+    if (menu->tool_selected == 6) { save_config(menu); return; }
     if (!menu->tool_selected) menu->config.screen_margin = (menu->config.screen_margin + direction + 13) % 13;
     else if (menu->tool_selected == 1) menu->config.large_titles = !menu->config.large_titles;
     else if (menu->tool_selected == 2) menu->config.theme = (menu->config.theme + direction + 3) % 3;
+    else if (menu->tool_selected == 3) menu->settings_folder_workaround = !menu->settings_folder_workaround;
+    else if (menu->tool_selected == 4) menu->settings_usb_covers = !menu->settings_usb_covers;
     else { menu->config.screen_margin = menu->config.large_titles = menu->config.theme = 0; }
     selection_changed(menu);
 }
@@ -937,7 +1023,7 @@ static void draw_tools(Menu *menu)
     if (menu->tools == TOOL_CONFIRM_BACKUP || menu->tools == TOOL_CONFIRM_RESTORE) title = "CONFIRM ACTION";
     if (menu->tools == TOOL_GROUP) title = "MATCHING DISC SET";
     if (menu->tools == TOOL_FAVORITES) title = "USB FAVORITES";
-    if (menu->tools == TOOL_DISPLAY) title = "DISPLAY SETTINGS";
+    if (menu->tools == TOOL_CONFIG) title = "CONFIGURATION";
     if (menu->tools == TOOL_JUMP) title = "JUMP TO LETTER";
     if (menu->tools == TOOL_BACKUP_DETAILS) title = menu->details_new ? "NEW BACKUP CONTENTS" : "EXISTING SLOT CONTENTS";
     menu->screen.sc_curScreen ^= 1;
@@ -949,7 +1035,7 @@ static void draw_tools(Menu *menu)
     text(menu, 22, 64, title, TEXT);
     rectangle(menu, 20, 77, 280, 1, LINE);
     if (menu->tools == TOOL_HOME) {
-        static const char *items[] = {"Internal saves / back up", "USB backups / restore", "Favorites", "Jump to letter", "Display settings", "Help / controls", "Diagnostics"};
+        static const char *items[] = {"Internal saves / back up", "USB backups / restore", "Favorites", "Jump to letter", "Configuration", "Help / controls", "Diagnostics"};
         for (i = 0; i < sizeof(items) / sizeof(items[0]); ++i) {
             if (i == menu->tool_selected) rectangle(menu, 16, 82 + i * 16, 287, 12, LINE);
             text(menu, 24, 84 + i * 16, items[i], i == menu->tool_selected ? TEXT : MUTED);
@@ -990,17 +1076,19 @@ static void draw_tools(Menu *menu)
             format(line, "%lu / %lu", (unsigned long)(count ? menu->tool_selected + 1 : 0), (unsigned long)count);
             text(menu, 22, 188, line, MUTED);
         }
-    } else if (menu->tools == TOOL_DISPLAY) {
-        for (i = 0; i < 5; ++i) {
+    } else if (menu->tools == TOOL_CONFIG) {
+        for (i = 0; i < 7; ++i) {
             if (!i) format(line,"Screen margin: %d",menu->config.screen_margin);
             else if (i == 1) format(line,"Large game titles: %s",menu->config.large_titles ? "ON" : "OFF");
             else if (i == 2) format(line,"Theme: %s",menu->config.theme == 1 ? "High contrast" : (menu->config.theme == 2 ? "Amber" : "Teal"));
-            else if (i == 3) strcpy(line,"Restore display defaults");
+            else if (i == 3) format(line,"Folder workaround: %s",menu->settings_folder_workaround ? "ON" : "OFF");
+            else if (i == 4) format(line,"USB covers: %s",menu->settings_usb_covers ? "ON" : "OFF");
+            else if (i == 5) strcpy(line,"Restore display defaults");
             else strcpy(line,"Save changes to USB");
-            if (i == menu->tool_selected) rectangle(menu,16,82+i*18,287,13,LINE);
-            text(menu,24,84+i*18,line,i == menu->tool_selected ? TEXT : MUTED);
+            if (i == menu->tool_selected) rectangle(menu,16,82+i*15,287,13,LINE);
+            text(menu,24,84+i*15,line,i == menu->tool_selected ? TEXT : MUTED);
         }
-        tool_line(menu,9,"C saves to ohmy3do.ini on USB.",MUTED);
+        text(menu,24,191,"USB/compat changes need reboot.",MUTED);
     } else if (menu->tools == TOOL_JUMP) {
         char letter[2]; letter[0] = menu->jump_letter ? (char)('A'+menu->jump_letter-1) : '#'; letter[1] = 0;
         tool_line(menu,1,"Left/Right: Choose # or A-Z",TEXT);
@@ -1015,7 +1103,7 @@ static void draw_tools(Menu *menu)
         static const char *more[] = {
             "Queue: X removes one disc", "Queue: C toggles move mode", "Move mode: Up/Down reorders",
             "Hold C, press X: Clear queue", "Hold C + Left/Right: Letter", "Disc 1: Offer matching disc set",
-            "Favorites: A opens game folder", "Favorites: X reloads USB file", "Display: C saves changes to USB", "Display keeps compatibility setup"
+            "Favorites: A opens game folder", "Favorites: C adds, X removes", "Config: C saves changes to USB", "USB/compat changes need reboot"
         };
         for (i = 0; i < 10; ++i) tool_line(menu,(int)i,menu->tool_selected ? more[i] : help[i],i < 8 ? TEXT : MUTED);
     } else if (menu->tools == TOOL_DIAG) {
@@ -1077,8 +1165,8 @@ static void draw_tools(Menu *menu)
     {
         const char *controls = "A:Select B:Back";
         if (menu->tools == TOOL_GROUP) controls = "A:Queue set X:Only this B:Cancel";
-        else if (menu->tools == TOOL_FAVORITES) controls = "A:Open folder X:Reload B:Back";
-        else if (menu->tools == TOOL_DISPLAY) controls = "Left/Right:Change C:Save B:Back";
+        else if (menu->tools == TOOL_FAVORITES) controls = "A:Open C:Add X:Remove B:Back";
+        else if (menu->tools == TOOL_CONFIG) controls = "Left/Right:Change C:Save B:Back";
         else if (menu->tools == TOOL_JUMP) controls = "Left/Right:Letter A:Jump B:Back";
         else if (menu->tools == TOOL_BACKUP_DETAILS) controls = "A:Continue C:Old/New B:Back";
         else if (menu->tools == TOOL_SAVES) controls = "A:Back up one C:All X:Refresh";
@@ -1087,13 +1175,14 @@ static void draw_tools(Menu *menu)
         else if (menu->tools == TOOL_HELP || menu->tools == TOOL_DIAG) controls = "B:Back";
         text(menu,16,212,menu->tool_message ? menu->tool_message : controls,menu->tool_message ? AMBER : ACCENT);
     }
-    text(menu, 16, 224, (menu->tools == TOOL_DIAG || menu->tools == TOOL_HELP) ? "Left/Right: More pages" : "L+R:Tools   Up/Down:Select", MUTED);
+    text(menu, 16, 224, menu->tools == TOOL_FAVORITES ? "Start:Reload   Up/Down:Select" :
+         ((menu->tools == TOOL_DIAG || menu->tools == TOOL_HELP) ? "Left/Right: More pages" : "L+R:Tools   Up/Down:Select"), MUTED);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
 typedef struct SaveRootOperation {
     Menu *menu;
-    int action; /* 0 load, 1 save, 2 disposable write test */
+    int action; /* 0 load, 1 save, 2 disposable write test, 3 settings */
     const char *path;
     SaveArchive *archive;
 } SaveRootOperation;
@@ -1115,7 +1204,12 @@ static int save_root_callback(void *context)
     op->menu->read_count = 0;
     ode->progress = save_progress;
     ode->progress_context = op->menu;
-    if (op->action == 3) result = menu_settings_save(ode,ode_bus_read_buffer,&op->menu->config);
+    if (op->action == 3) {
+        MenuConfig settings = op->menu->config;
+        settings.folder_workaround = op->menu->settings_folder_workaround;
+        settings.usb_covers = op->menu->settings_usb_covers;
+        result = menu_settings_save(ode,ode_bus_read_buffer,&settings);
+    }
     else if (op->action == 2) result = save_usb_test(ode, ode_bus_read_buffer);
     else if (op->action == 1) result = save_usb_store(ode, ode_bus_read_buffer, op->path, op->archive);
     else result = save_usb_load(ode, ode_bus_read_buffer, op->path, op->archive);
@@ -1210,7 +1304,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if (page == TOOL_SAVES) count = menu->nvram.count;
     if (page == TOOL_ARCHIVE) count = menu->backup.count;
     if (page == TOOL_SLOTS) count = menu->backup_mode ? 8 : 10;
-    if (page == TOOL_DISPLAY) count = 5;
+    if (page == TOOL_CONFIG) count = 7;
     if (page == TOOL_GROUP) count = menu->group.count;
     if (page == TOOL_FAVORITES) count = menu->favorites.count;
     if (page == TOOL_BACKUP_DETAILS) count = menu->details_new ? menu->pending.count : menu->backup.count;
@@ -1228,11 +1322,14 @@ static void tools_input(Menu *menu, u32 pressed)
         if (pressed & ControlA) { menu->tools = 0; jump_letter(menu,menu->jump_letter); }
         return;
     }
-    if (page == TOOL_DISPLAY && (pressed & ControlC)) { save_display(menu); return; }
-    if (page == TOOL_DISPLAY && (pressed & (ControlA | ControlLeft | ControlRight))) {
-        change_display(menu,(pressed & ControlLeft) ? -1 : 1); return;
+    if (page == TOOL_CONFIG && (pressed & ControlC)) { save_config(menu); return; }
+    if (page == TOOL_CONFIG && (pressed & (ControlA | ControlLeft | ControlRight))) {
+        change_config(menu,(pressed & ControlLeft) ? -1 : 1); return;
     }
-    if (page == TOOL_FAVORITES && (pressed & ControlX)) { open_favorites(menu); return; }
+    if (page == TOOL_FAVORITES && (pressed & ControlStart)) { open_favorites(menu); return; }
+    if (page == TOOL_FAVORITES && (pressed & (ControlC | ControlX))) {
+        edit_favorites(menu,(pressed & ControlX) != 0); return;
+    }
     if (page == TOOL_BACKUP_DETAILS && (pressed & ControlC)) { menu->details_new = !menu->details_new; menu->tool_selected = 0; return; }
     if (page == TOOL_GROUP && (pressed & ControlX)) {
         ode_playlist_dispose(&menu->group); menu->tools = 0; menu->skip_group = 1; activate(menu); return;
@@ -1270,7 +1367,7 @@ static void tools_input(Menu *menu, u32 pressed)
         else if (selected == 1) { menu->tools = TOOL_SLOTS; menu->backup_mode = 0; }
         else if (selected == 2) { menu->tools = TOOL_FAVORITES; open_favorites(menu); }
         else if (selected == 3) { menu->tools = TOOL_JUMP; menu->jump_letter = 1; }
-        else if (selected == 4) menu->tools = TOOL_DISPLAY;
+        else if (selected == 4) menu->tools = TOOL_CONFIG;
         else if (selected == 5) menu->tools = TOOL_HELP;
         else menu->tools = TOOL_DIAG;
     } else if (page == TOOL_SLOTS) {
@@ -1318,6 +1415,7 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
     menu_config_defaults(&menu.config);
+    menu.settings_usb_covers = menu.config.usb_covers;
     menu.config_result = 3;
     menu.bus.device = menu.bus.request = menu.bus.timer = -1;
     menu.ode.transfer = ode_bus_transfer;

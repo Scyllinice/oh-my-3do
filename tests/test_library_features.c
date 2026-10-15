@@ -16,7 +16,31 @@ int main(void)
     assert(menu_favorites_parse(&f,"../bad.iso",10) < 0 && f.count == 2);
     assert(menu_favorites_parse(&f,"Game.iso\ngame.ISO",17) < 0);
     assert(!menu_relative_path("/absolute.iso") && !menu_relative_path("a//b") && !menu_relative_path("a\\b"));
+    assert(!menu_favorites_edit(&f,"Games/New.iso",0) && f.count == 3);
+    assert(menu_favorites_edit(&f,"games/NEW.ISO",0) == 1 && f.count == 3);
+    assert(!menu_favorites_edit(&f,"games/d (disc 1).ISO",1) && f.count == 2);
+    assert(!strcmp(f.paths[0],"Road Rash.iso") && !strcmp(f.paths[1],"Games/New.iso"));
+    assert(menu_favorites_edit(&f,"Missing.iso",1) == 1 && f.count == 2);
+    assert(menu_favorites_edit(&f,"#Bad.iso",0) < 0 && f.count == 2);
+    assert(menu_favorites_edit(&f," leading.iso",0) < 0 && f.count == 2);
+    assert(menu_favorites_edit(&f,"trailing.iso ",0) < 0 && f.count == 2);
+    assert(!menu_favorites_edit(&f,"Road Rash.iso",1));
+    assert(!menu_favorites_edit(&f,"Games/New.iso",1) && !f.count);
+    assert(!menu_favorites_edit(&f,"First.iso",0) && f.count == 1);
     menu_favorites_free(&f);
+    {
+        char path[FAVORITE_PATH]; size_t j;
+        for (j=0;j<FAVORITES_MAX;++j) {
+            sprintf(path,"Game %lu.iso",(unsigned long)j);
+            assert(!menu_favorites_edit(&f,path,0));
+        }
+        assert(menu_favorites_edit(&f,"Overflow.iso",0) < 0 && f.count == FAVORITES_MAX);
+        menu_favorites_free(&f);
+        memset(path,'a',1000); path[1000]=0;
+        for (j=0;j<8;++j) { path[0]=(char)('A'+j); assert(!menu_favorites_edit(&f,path,0)); }
+        path[0]='Z'; assert(menu_favorites_edit(&f,path,0) < 0 && f.count == 8);
+        menu_favorites_free(&f);
+    }
     listing.entries=entries; listing.count=4;
     assert(menu_disc_group(&listing,&d1,out,16) == 3 && out[0] == &d1 && out[1] == &d2 && out[2] == &d3);
     assert(!menu_disc_group(&listing,&d2,out,16));

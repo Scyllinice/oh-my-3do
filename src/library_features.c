@@ -49,6 +49,32 @@ int menu_favorites_parse(MenuFavorites *f, const char *data, size_t size)
 bad:
     menu_favorites_free(&next); return -1;
 }
+int menu_favorites_edit(MenuFavorites *f, const char *path, int remove)
+{
+    char *data;
+    size_t i, found = f->count, used = 0;
+    int result;
+    if (!menu_relative_path(path) || *path == '#' || *path == ';' ||
+        *path == ' ' || *path == '\t' || path[strlen(path)-1] == ' ') return -1;
+    for (i = 0; i < f->count; ++i)
+        if (!menu_path_compare(f->paths[i],path)) { found = i; break; }
+    if (remove ? found == f->count : found != f->count) return 1;
+    if (!remove && f->count == FAVORITES_MAX) return -1;
+    data = (char *)malloc(FAVORITES_BYTES);
+    if (!data) return -1;
+    for (i = 0; i <= f->count; ++i) {
+        const char *entry;
+        size_t n;
+        if (i == f->count) { if (remove) break; entry = path; }
+        else { if (remove && i == found) continue; entry = f->paths[i]; }
+        n = strlen(entry);
+        if (used + n + 1 >= FAVORITES_BYTES) { free(data); return -1; }
+        memcpy(data+used,entry,n); used += n; data[used++] = '\n';
+    }
+    data[used] = 0;
+    result = menu_favorites_parse(f,data,used);
+    free(data); return result;
+}
 int menu_initial(const char *name)
 {
     unsigned char c = (unsigned char)*name;

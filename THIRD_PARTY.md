@@ -22,3 +22,7 @@ relicense the 3DO SDK, Portfolio OS, firmware, games, or third-party artwork.
 Signed ISO outputs contain SDK runtime components. Consult the dependency terms
 when redistributing compiled images; this source license does not grant rights
 to dependency components.
+
+The ISO uses the explicit runtime selection in `runtime/sdk-files.txt`, rather
+than the complete SDK sample filesystem. The build records the retained files
+and linked libraries and their hashes in `runtime-audit.json`.

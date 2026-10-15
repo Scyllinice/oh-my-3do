@@ -1,0 +1,7 @@
+# Oh My 3DO runtime startup. Keep the SDK filesystem check and controller broker.
+alias c $boot/System/Programs
+fg
+$boot/System/Programs/fscheck
+bg
+$boot/System/Tasks/eventbroker@
+$boot/AppStartup%

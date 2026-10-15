@@ -1,0 +1,11 @@
+# Boot/kernel, display/math runtime, startup shell/controller service, NVRAM check.
+System/Kernel/boot_code
+System/Kernel/os_code
+System/Kernel/misc_code
+System/Folios/graphics.privfolio
+System/Folios/operamath.privfolio
+System/Tasks/shell
+System/Tasks/eventbroker
+System/Programs/fscheck
+System/Programs/lmadm
+System/Programs/format

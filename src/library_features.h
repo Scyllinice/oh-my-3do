@@ -11,6 +11,8 @@ typedef struct MenuFavorites {
 } MenuFavorites;
 void menu_favorites_free(MenuFavorites *favorites);
 int menu_favorites_parse(MenuFavorites *favorites, const char *data, size_t size);
+/* Canonical edit; preserves list on failure. 1 = already present/missing. */
+int menu_favorites_edit(MenuFavorites *favorites, const char *path, int remove);
 int menu_relative_path(const char *path);
 /* Strict same-folder sets, contiguous disc numbers from 1; duplicates/gaps
  * reject the suggestion. Matching never launches or changes a playlist. */

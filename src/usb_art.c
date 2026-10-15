@@ -274,3 +274,16 @@ done:
     if (usb_file_close(ode) < 0) result = -1;
     return result;
 }
+
+int usb_file_text_write(Ode *ode, OdeReadBuffer reader, const char *name, const char *text)
+{
+    size_t size = strlen(text) + 1;
+    int result;
+    if (usb_file_open(ode,name) < 0) return -1;
+    result = usb_file_write(ode,(const unsigned char *)text,size);
+    if (usb_file_close(ode) < 0) result = -1;
+    if (result < 0 || usb_file_open(ode,name) < 0) return -1;
+    result = usb_file_verify(ode,reader,(const unsigned char *)text,size);
+    if (usb_file_close(ode) < 0) result = -1;
+    return result;
+}

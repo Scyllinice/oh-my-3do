@@ -265,15 +265,28 @@ int main(int argc, char **argv) {
             if (hidden_entry(&menu, &volume)) abort();
             menu.listing=original;
         }
-        /* Display controls preview, then save explicitly; bypass never writes. */
-        menu.tools=TOOL_DISPLAY; menu.tool_selected=0; menu.config.screen_margin=0;
+        /* All INI controls; navigation stays active until reboot, bypass never writes. */
+        menu.tools=TOOL_CONFIG; menu.tool_selected=0; menu.config.screen_margin=0;
         tools_input(&menu,ControlLeft); if (menu.config.screen_margin != 12) abort();
         menu.tool_selected=1; tools_input(&menu,ControlA); if (!menu.config.large_titles) abort();
         menu.tool_selected=2; tools_input(&menu,ControlRight); if (menu.config.theme != 1) abort();
+        menu.settings_folder_workaround=menu.config.folder_workaround=1;
+        menu.settings_usb_covers=menu.config.usb_covers=0;
+        menu.tool_selected=3; tools_input(&menu,ControlA);
+        menu.tool_selected=4; tools_input(&menu,ControlRight);
+        if (menu.settings_folder_workaround || !menu.settings_usb_covers ||
+            !menu.config.folder_workaround || menu.config.usb_covers) abort();
         menu.config_result=2; tools_input(&menu,ControlC);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
-        menu.tool_selected=3; tools_input(&menu,ControlA);
+        menu.tool_selected=5; tools_input(&menu,ControlA);
         if (menu.config.screen_margin || menu.config.large_titles || menu.config.theme) abort();
+        if (menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
+        tools_input(&menu,ControlB);
+        menu.tool_selected=4; tools_input(&menu,ControlA);
+        if (menu.tools != TOOL_CONFIG || menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
+        tools_input(&menu,ControlUp); if (menu.tool_selected != 6) abort();
+        tools_input(&menu,ControlA);
+        if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
         /* Holding C for a letter jump never queues an image. */
         menu.tools=0; menu.review=menu.demo=0; menu.ready=1; menu.playlist.synchronized=1;
         if (browser_shortcuts(&menu,ControlC,ControlC,0) & ControlC) abort();
@@ -344,7 +357,10 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "restore")) {
         preview_nvram_fixture(&menu.backup); menu.tools=TOOL_CONFIRM_RESTORE;
     }
-    if (argc > 1 && !strcmp(argv[1],"display")) menu.tools=TOOL_DISPLAY;
+    if (argc > 1 && !strcmp(argv[1],"display")) {
+        menu.tools=TOOL_CONFIG; menu.settings_usb_covers=menu.config.usb_covers;
+        menu.settings_folder_workaround=menu.config.folder_workaround;
+    }
     if (argc > 1 && !strcmp(argv[1],"large")) menu.config.large_titles=1;
     if (argc > 1 && !strcmp(argv[1],"margin")) menu.config.screen_margin=12;
     if (argc > 1 && !strcmp(argv[1],"contrast")) menu.config.theme=1;

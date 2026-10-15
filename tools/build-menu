@@ -13,6 +13,7 @@ esac
 stage=$(mktemp -d /tmp/oh-my-3do-menu.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
 sh "$TDO_DEVKIT_PATH/bin/buildtools/linux/bootstrap-3do-project" "$stage"
+python3 "$project_dir/tools/prepare-runtime.py" "$stage/takeme" "$stage/runtime-audit.json"
 cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$stage/src/"
 cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
 cp "$project_dir/assets/loading.banner" "$stage/takeme/BannerScreen"
@@ -23,18 +24,24 @@ fi
 
 # Keep the upstream build rules and ARM ABI settings. This application owns
 # privileged XBUS IORequests, so its signed executable must request privilege.
+libraries=()
+for library in exampleslib filesystem graphics input lib3do operamath string swi; do
+    libraries+=("$TDO_DEVKIT_PATH/lib/3do/$library.lib")
+done
+libraries+=("$TDO_DEVKIT_PATH/lib/community/libc.lib")
+python3 - "$stage/runtime-audit.json" "$TDO_DEVKIT_PATH/lib/3do/cstartup.o" "${libraries[@]}" <<'PYLIBS'
+import hashlib, json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+audit = json.loads(path.read_text())
+audit["link_inputs"] = [{"path": name, "sha256": hashlib.sha256(Path(name).read_bytes()).hexdigest(),
+                         "redistribution_permission": "unresolved"} for name in sys.argv[2:]]
+path.write_text(json.dumps(audit, indent=2) + "\n")
+PYLIBS
 make -C "$stage" NAME="$name" STACKSIZE=32768 \
-    "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
+    "LIBS=${libraries[*]}" "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
 modbin --name="Oh My 3DO" --pri=150 --flags=2 --stack=32768 --sign=3do \
     "$stage/takeme/LaunchMe" "$stage/takeme/LaunchMe"
-
-# The sample filesystem includes development-only signatures on these optional
-# modules. Re-sign them for retail validation without changing their flags.
-for module in System/Devices/ns.privdevice System/Folios/debugger.privfolio System/Programs/what; do
-    if [[ -f "$stage/takeme/$module" ]]; then
-        modbin --sign=3do "$stage/takeme/$module" "$stage/takeme/$module"
-    fi
-done
 
 mkdir -p "$project_dir/iso/saves"
 if [[ ! -e "$project_dir/iso/favorites.txt" ]]; then
@@ -62,11 +69,17 @@ if [[ ! -e "$project_dir/iso/ohmy3do.ini" ]]; then
 fi
 cp "$stage/takeme/LaunchMe" "$project_dir/build/console-$mode/LaunchMe"
 cp "$stage/src/cover_catalog.c" "$project_dir/build/console-$mode/cover_catalog.c"
+cp "$stage/runtime-audit.json" "$project_dir/build/console-$mode/runtime-audit.json"
+find "$stage/unpacked" -type f -printf '%P\n' | sort > "$project_dir/build/console-$mode/disc-files.txt"
 cp /opt/3do-devkit.revision "$project_dir/build/console-$mode/devkit.revision"
 sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
     "$project_dir/tools/build-menu" "$project_dir/tools/verify-aif.py" \
     "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
     "$project_dir/tools/export-covers.py" \
+    "$project_dir/tools/prepare-runtime.py" \
+    "$project_dir/runtime/sdk-files.txt" \
+    "$project_dir/runtime/AppStartup" \
+    "$project_dir/runtime/System/Scripts/startopera" \
     "$project_dir/assets/logo-menu.cel" \
     "$project_dir/assets/loading.banner" \
     "$project_dir/ohmy3do.ini" \

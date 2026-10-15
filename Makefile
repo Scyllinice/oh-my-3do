@@ -6,6 +6,7 @@ test: build/test_library_navigation build/test_library_features build/test_bus_d
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
 	python3 tests/test_queue_workflow.py
+	python3 tests/test_favorites_workflow.py
 	./build/test_library_navigation
 	./build/test_library_features
 	./build/test_bus_diagnostics
