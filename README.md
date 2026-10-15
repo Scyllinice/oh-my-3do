@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore, plus optional menu music. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-version is **0.13.1**.
+version is **0.13.2**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -447,6 +447,25 @@ and variant codes survive filename shortening. CUE companions receive the same
 variant label and updated references. Opaque codes identify individual dumps;
 they do not establish which differently coded discs belong to the same edition.
 Such discs stay in the common game folder and can be queued manually.
+
+When the filename has no region, clearly named parent folders such as `US`,
+`USA`, `1 US`, or `Japan` narrow filename candidates. A region in the filename
+takes precedence. Conflicting folder hints do not choose a region, and a known
+catalog serial that conflicts with the inferred region remains ambiguous.
+Folder hints still produce unverified filename matches requiring review.
+
+Bracketed product/hub codes are matched against catalog serials within the
+same title and disc number. An exact, unique serial match can identify a release
+without reading the whole image, but does not verify its contents. If a code is
+absent from the DAT, the organizer can make a **game-level** match when title,
+region, and shared game metadata agree. It preserves the code in the filename
+and marks the exact edition unresolved, without assigning a Redump revision.
+For example, `Dragon's Lair [DH 65003].iso` and
+`Dragon's Lair [DH 65003-2].iso` under `1 US` remain separate as
+`Dragon's Lair (USA) [DH 65003].iso` and
+`Dragon's Lair (USA) [DH 65003-2].iso`. Their matching code-specific covers are
+preferred. The database records `variant`, `catalog_name`, and
+`edition_unresolved`; unresolved game-level entries have no catalog edition name.
 
 CUE sets move together. Companion files receive names derived from the disc
 and track number, and their CUE `FILE` references are updated. Comments, track

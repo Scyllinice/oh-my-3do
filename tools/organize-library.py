@@ -122,11 +122,42 @@ def without_disc(name):
     return DISC_SUFFIX.sub('', DISC.sub('', name)).strip()
 
 
+def folder_regions(source):
+    hints = set()
+    for part in PurePosixPath(source).parts[:-1]:
+        token = re.sub(r'^\d+[\s._-]+', '', part).strip().casefold()
+        if len(token) > 1 and token in REGIONS:
+            hints.add(REGIONS[token])
+    return hints
+
+
+def product_codes(name):
+    return [tag.strip() for tag in re.findall(r'\[([^]]+)\]', name)
+            if not tag.casefold().startswith('variant ') and len(tag.strip()) >= 4
+            and re.fullmatch(r'[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*', tag.strip())
+            and re.search(r'[A-Za-z]', tag) and re.search(r'\d', tag)]
+
+
+def serial_key(serial):
+    return re.sub(r'[^a-z0-9]', '', serial.casefold())
+
+
+def catalog_serials(game):
+    result = set()
+    for serial in [game.get('serial', '')] + [r.get('serial', '') for r in game['roms']]:
+        for part in re.split(r'[,;/]', serial):
+            if part.strip():
+                result.add(serial_key(part))
+    return result
+
+
 def disc_stem(name, maximum=110):
     number = disc_of(name)
     base = without_disc(name)
-    variant = re.search(r'\s*(\[Variant [0-9A-F]{8}\])$', base)
-    suffix = (' ' + variant[1]) if variant else ''
+    variant = re.search(r'\s*((?:\[[^][]+\]\s*)+)$', base)
+    if variant and len(variant[1].encode()) > maximum - 20:
+        variant = None
+    suffix = (' ' + variant[1].strip()) if variant else ''
     if variant:
         base = base[:variant.start()].strip()
     suffix += f' (Disc {number})' if number is not None else ''
@@ -276,16 +307,47 @@ def identify(unit, games, stats, override=None, quick=False):
         return exact[0], 'filename', 'Exact catalog filename; dump checksum not verified', []
     title = identification_title(name)
     candidates = [g for g in games if identification_title(g['name']) == title and disc_of(g['name']) == disc_of(name)]
+    title_candidates = candidates
     regions = region_of(name)
+    hint = ''
+    if not regions:
+        folders = folder_regions(unit['source'])
+        if len(folders) == 1:
+            regions = folders
+            hint = ' using folder region ' + next(iter(folders))
     if regions:
         candidates = [g for g in candidates if regions <= region_of(g['name'])]
+    codes = product_codes(name)
+    if codes:
+        known_serials = [g for g in title_candidates if {serial_key(code) for code in codes} <= catalog_serials(g)]
+        serial_matches = [g for g in candidates if {serial_key(code) for code in codes} <= catalog_serials(g)]
+        if known_serials and not serial_matches:
+            return None, 'ambiguous', 'Catalog serial conflicts with the filename/folder region; explicit override needed', sorted({g['_release_name'] for g in known_serials})
+        serial_names = {g['_release_name'] for g in serial_matches}
+        if len(serial_names) == 1:
+            return serial_matches[0], 'filename', 'Exact title/disc/catalog serial match' + hint + '; dump checksum not verified', []
     candidates = list({g['_release_name'].casefold(): g for g in candidates}.values())
     # Do not silently choose a revision, prototype, demo or alternate language.
-    if len(candidates) == 1:
+    if len(candidates) == 1 and not codes:
         tags = lambda s: {x.casefold() for x in re.findall(r'\(([^)]*)\)', s)
                           if re.search(r'\b(rev|beta|proto|demo|sample|unl|alt)\b', x, re.I)}
         if tags(name) == tags(candidates[0]['_release_name']):
-            return candidates[0], 'filename', 'Unique title/region/disc match; dump checksum not verified', []
+            return candidates[0], 'filename', 'Unique title/region/disc match' + hint + '; dump checksum not verified', []
+    if codes and candidates and len(regions) == 1:
+        # A filename code absent from Redump can still identify a game-level
+        # entry. Preserve it without assigning an unsupported Redump edition.
+        metadata = {json.dumps(g.get('metadata', {}), sort_keys=True) for g in candidates}
+        if len(metadata) == 1 and candidates[0].get('metadata'):
+            row = dict(candidates[0])
+            title = row['metadata'].get('title') or re.split(r'[\[(]', without_disc(name), maxsplit=1)[0].strip()
+            region = next(iter(regions))
+            base = f'{title} ({region})'
+            label = base + ' ' + ' '.join('[' + code + ']' for code in codes)
+            number = disc_of(name)
+            row.update(name=base + (f' (Disc {number})' if number is not None else ''), region=region,
+                       _release_name=label + (f' (Disc {number})' if number is not None else ''),
+                       _variant='; '.join(codes), _edition_unresolved=True, roms=[])
+            return row, 'filename', 'Game-level title/region match' + hint + '; source code preserved; exact edition unresolved; dump checksum not verified', []
     if candidates:
         return None, 'ambiguous', 'More than one release or variant; explicit override needed', [g['_release_name'] for g in candidates][:20]
     suggestions = difflib.get_close_matches(title, {identification_title(g['name']) for g in games}, n=3, cutoff=.65)
@@ -338,11 +400,14 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False):
         # Opaque dump codes do not imply an edition shared by other discs.
         # Keep them in filenames; retain the common game folder.
         group = re.sub(r'\s*\[Variant [0-9A-F]{8}\]', '', without_disc(canonical)).strip()
+        if game.get('_edition_unresolved'):
+            group = without_disc(game['name'])
         directory = PurePosixPath('Games') / safe_name(region) / safe_name(group)
         main = str(directory / (disc_stem(canonical) + Path(unit['source']).suffix.lower()))
         row.update(status='ready' if confidence in ('checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
-                   catalog_name=game['name'], variant=game['_variant'],
+                   catalog_name=None if game.get('_edition_unresolved') else game['name'], variant=game['_variant'],
+                   edition_unresolved=bool(game.get('_edition_unresolved')),
                    metadata=game.get('metadata', {}), group=group,
                    cover=existing_asset(associations['covers'], unit['source']),
                    preview=existing_asset(associations['previews'], unit['source']))
@@ -607,7 +672,8 @@ def prepare_covers(rows, cache, offline=False):
         if row.get('cover'):
             continue
         canonical, group = row['canonical'], row['group']
-        exact = [n for n in names if Path(n).stem.casefold() == canonical.casefold()]
+        artwork_key = lambda value: re.sub(r'\s+(?=\[)', '', value).casefold()
+        exact = [n for n in names if artwork_key(Path(n).stem) == artwork_key(canonical)]
         if not exact and row.get('catalog_name'):
             exact = [n for n in names if Path(n).stem.casefold() == row['catalog_name'].casefold()]
         if not exact:
@@ -647,6 +713,7 @@ def write_database(root, tx, plan, selected):
         records.pop(row['source'], None)
         records[path] = dict(path=path, title=row.get('canonical'), region=row.get('region'),
             catalog_name=row.get('catalog_name'), variant=row.get('variant'),
+            edition_unresolved=row.get('edition_unresolved',False),
             disc=row.get('disc'), identification=row.get('confidence', 'unmatched'),
             status='organized' if row in selected else row['status'], metadata=row.get('metadata', {}),
             cover=row.get('cover'), cover_source=row.get('cover_source'), suggestions=row.get('suggestions', []))
@@ -657,12 +724,12 @@ def write_database(root, tx, plan, selected):
     with tempfile.TemporaryDirectory(prefix='oh3do-db-') as directory:
         path = Path(directory) / 'library.sqlite'
         with sqlite3.connect(path) as db:
-            db.execute('CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT)')
+            db.execute('CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, edition_unresolved INTEGER)')
             db.execute('CREATE TABLE sources (url TEXT, sha256 TEXT)')
             db.executemany('INSERT INTO sources VALUES (?, ?)', [(s['url'], s.get('sha256')) for s in plan['sources']])
             for record in records:
                 meta = record['metadata']
-                db.execute('INSERT INTO games VALUES (?,?,?,?,?,?,?,?,?,?,?)', (record['path'], record['title'], record['region'], record['disc'], meta.get('genre'), meta.get('publisher'), meta.get('year'), meta.get('developer'), record['identification'], record['cover'], meta.get('source')))
+                db.execute('INSERT INTO games VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (record['path'], record['title'], record['region'], record['disc'], meta.get('genre'), meta.get('publisher'), meta.get('year'), meta.get('developer'), record['identification'], record['cover'], meta.get('source'), record.get('variant'), record.get('catalog_name'), int(record.get('edition_unresolved',False))))
         tx.write('.ohmy3do/library.sqlite', path.read_bytes())
 
 

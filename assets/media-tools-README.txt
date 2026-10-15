@@ -36,6 +36,16 @@ to that disc. Disc numbers and variant codes survive shortened filenames. Codes
 identify individual dumps, not a guaranteed multi-disc edition; differently
 coded discs stay in the common game folder and can be queued manually.
 
+If the filename has no region, explicit parent folders such as 1 US, USA or
+Japan narrow filename candidates. Filename regions take precedence; conflicting
+folder hints do not choose a region. These matches remain unverified.
+Bracketed product/hub codes are checked against catalog serials. If the code is
+unknown but title, region and shared game metadata agree, a game-level match can
+preserve it without assigning an unsupported Redump edition. For example, the
+DH 65003 and DH 65003-2 Dragon's Lair files keep separate filenames and matching
+code-specific covers. The preview reports "exact edition unresolved" and the
+database records that flag explicitly. Regenerate the scan plan after updating.
+
 Resolve a match with a PC-side overrides.json object, for example:
   {"Unsorted/game.iso": "Doom (USA, Japan)"}
 Then scan again with --overrides overrides.json. --dat can select a local

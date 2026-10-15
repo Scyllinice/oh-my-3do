@@ -246,6 +246,74 @@ class OrganizerTest(unittest.TestCase):
         self.assertEqual(row['confidence'],'ambiguous')
         self.assertEqual(len(row['suggestions']),2)
 
+    def test_numbered_region_folder_resolves_d_and_daedalus_disc_sets(self):
+        for title,other,discs in [('D','Germany',2),('Daedalus Encounter, The','Korea',4)]:
+            for disc in range(1,discs+1):
+                self.put(f'1 Games/1 US/A - F/{title}/{title} - Disc {disc}.iso',b'converted ISO')
+                self.catalog['games'].append(game(f'{title} (USA, Europe) (Disc {disc})',[b'raw US']))
+                self.catalog['games'].append(game(f'{title} ({other}) (Disc {disc})',[b'raw other'],other))
+        rows=self.scan(quick=True)['entries']
+        self.assertEqual(len(rows),6)
+        self.assertTrue(all(r['status']=='review' and '(USA, Europe)' in r['canonical'] for r in rows))
+        self.assertTrue(all('folder region USA' in r['reason'] for r in rows))
+        self.assertFalse(organizer.folder_regions('US Games/Game.iso'))
+        self.assertEqual(organizer.folder_regions('1 Games/1 US/A - F/Game.iso'),{'USA'})
+        self.assertEqual(organizer.folder_regions('US/JP/Game.iso'),{'USA','Japan'})
+
+    def test_unknown_hub_codes_keep_distinct_names_without_claiming_redump_edition(self):
+        title="Dragon's Lair"
+        self.catalog['games']=[game(title+' (Japan)',[b'jp'],'Japan'),game(title+' (USA) (Rev 1)',[b'rev1']),game(title+' (USA, Korea)',[b'base'])]
+        for code in ('DH 65003','DH 65003-2'):
+            self.put(f'1 Games/1 US/A - F/{title}/{title} [{code}].iso',code.encode())
+        before=snapshot(self.root)
+        plan=self.scan(quick=True)
+        self.assertTrue(all(r['status']=='review' and r['edition_unresolved'] for r in plan['entries']))
+        self.assertTrue(all(r['catalog_name'] is None for r in plan['entries']))
+        self.assertEqual(len({r['target'] for r in plan['entries']}),2)
+        for row in plan['entries']:
+            self.assertIn(row['variant'],row['target'])
+            self.assertNotIn('Rev 1',row['target'])
+            self.assertNotIn('RE1',row['target'])
+            self.assertIn('exact edition unresolved',row['reason'])
+        tx=self.apply(plan,names=True)
+        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+            self.assertEqual(db.execute('select count(*) from games where edition_unresolved=1 and catalog_name is null').fetchone()[0],2)
+        rescanned=self.scan(quick=True)
+        self.assertTrue(all(r['source']==r['target'] for r in rescanned['entries']))
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_exact_catalog_serial_matches_and_conflicting_region_stays_ambiguous(self):
+        usa=game('Example (USA)',[b'USA']);usa['serial']='DH 65003'
+        japan=game('Example (Japan)',[b'JP'],'Japan');japan['serial']='FZ-SJ0153'
+        self.catalog['games']=[usa,japan]
+        self.put('Example [dh-65003].iso',b'converted')
+        row=self.scan(quick=True)['entries'][0]
+        self.assertEqual(row['status'],'review');self.assertEqual(row['canonical'],'Example (USA)')
+        self.assertIn('serial match',row['reason'])
+        self.put('1 US/Example [FZ SJ0153].iso',b'converted')
+        row=next(r for r in self.scan(quick=True)['entries'] if r['source'].startswith('1 US'))
+        self.assertEqual(row['confidence'],'ambiguous')
+        self.assertIn('conflicts',row['reason'])
+
+    def test_unknown_code_survives_even_with_only_one_regional_candidate(self):
+        self.catalog['games']=[game('Example (USA)',[b'raw'])]
+        self.put('1 US/Example [AB 1234].iso',b'converted')
+        row=self.scan(quick=True)['entries'][0]
+        self.assertEqual(row['status'],'review')
+        self.assertTrue(row['edition_unresolved'])
+        self.assertIn('[AB 1234]',row['target'])
+        stem=organizer.disc_stem('A long title '*15+' (USA) [DH 65003-2] (Disc 1)',95)
+        self.assertIn('[DH 65003-2]',stem)
+        self.assertTrue(stem.endswith('(Disc 1)'))
+        self.assertLessEqual(len(stem.encode()),95)
+
+    def test_explicit_filename_region_precedes_folder_region(self):
+        self.catalog['games']=[game('Example (USA) (Disc 1)',[b'US']),game('Example (Japan) (Disc 1)',[b'JP'],'Japan')]
+        self.put('1 US/Example (Japan) - Disc 1.iso',b'converted')
+        row=self.scan(quick=True)['entries'][0]
+        self.assertEqual(row['status'],'review')
+        self.assertEqual(row['canonical'],'Example (Japan) (Disc 1)')
+
     def test_broken_shared_and_traversing_cues_stay_put(self):
         self.put('missing.cue',b'FILE "absent.bin" BINARY\n')
         self.put('escape.cue',b'FILE "../outside.bin" BINARY\n')
