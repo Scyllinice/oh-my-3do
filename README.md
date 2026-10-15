@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore. The current version is **0.8.0**.
+restore, plus optional menu music. The current version is **0.9.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -232,11 +232,12 @@ while an uncertain transport or failed folder restoration blocks it.
 Tools → Appearance & settings exposes every INI setting: additional screen
 margins (0–12 pixels), larger game/queue titles, teal/high-contrast/amber
 themes, the folder compatibility workaround, USB covers, video previews,
-remembered position, and recent games. Left/Right or A changes the selected
-value. Display values preview immediately. Save the remaining options and cold
-boot to apply them.
+remembered position, recent games, and menu music. Left/Right or A changes the selected
+value. Music and display changes take effect immediately. Save the remaining
+options and cold boot to apply them. The settings list spans two pages; keep
+pressing Down to reach the remaining actions, or press C to save from either page.
 
-**C** or **Save changes to USB** writes all eight settings, closes/reopens the
+**C** or **Save changes to USB** writes all nine settings, closes/reopens the
 file and verifies every byte. B returns without writing; unsaved display
 previews remain active for this boot, and edited values remain on the settings
 screen. Only a successful save persists after reboot. The unsaved marker
@@ -262,13 +263,21 @@ You can also edit `ohmy3do.ini` on a PC:
 [compatibility]
 folder_workaround=1
 
-[artwork] usb_covers=1 video_previews=0
+[artwork]
+usb_covers=1
+video_previews=0
 
-[display] screen_margin=0 large_titles=0 theme=0
+[display]
+screen_margin=0
+large_titles=0
+theme=0
 
 [library]
 remember_position=1
 recent_games=1
+
+[audio]
+menu_music=1
 ```
 
 `folder_workaround=0` is normal navigation; `1` enables the workaround for
@@ -456,6 +465,37 @@ blocks browsing. Cold boot or refresh at the USB root reloads both indices.
 Holding X at startup bypasses USB media access. The project logo/loading screen
 and offline demo covers stay embedded in the ISO.
 
+## Menu music
+
+An original 20-second smooth-jazz-style loop is included in `boot.iso` and the
+menu demo. It uses synthesized electric piano, bass, soft percussion, and a mellow
+lead. No external recordings or sample libraries are used. A WAV listening copy
+is available with the release.
+
+Music is enabled by default, including with older INIs. In **Tools → Appearance
+& settings**, change **Menu music** to turn it on or off immediately. Press **C**
+to save the choice across boots. Discard unsaved changes restores the saved music
+setting too. On a PC, set `menu_music=0` under `[audio]` in the USB INI to disable it.
+Holding X at startup also skips music.
+
+The loop loads once from the ISO into about 431 KiB of RAM and plays through the
+3DO audio DSP, without repeated file reads or menu-loop audio servicing. Audio
+resources are released when disabled and before either a single game or a disc
+queue is launched. Missing audio or an allocation/DSP failure leaves the menu
+usable and silent; toggle music off and on to retry. The diagnostics export
+includes `menu_music` and `music_result` (0 off, 1 playing, -1 unavailable).
+
+The sample is embedded to keep playback independent of USB file commands.
+To change the music, replace `assets/menu-music.aiff` with uncompressed signed
+8-bit mono AIFF at 22,050 Hz, with 4–524,288 frames and a frame count divisible
+by four, then rebuild. The full sample becomes the sustain loop. Large samples
+leave less RAM available for covers and video previews; the supplied loop uses
+441,000 frames. Regenerate the original sample and an optional listening copy:
+
+```sh
+python3 tools/generate-menu-music.py --wav iso/menu-jazz-sample.wav
+```
+
 ## Diagnostics and compatibility limits
 
 L+R → Diagnostics has three pages (Left/Right): reported identity/revision and
@@ -491,7 +531,7 @@ exchange requires console restart rather than blind retries.
 
 Other limits: 2,048 entries per directory, 32 navigation levels, ASCII natural
 sorting/case folding, and `?` display for unsupported characters. Queue paths
-are bounded. No in-game overlay, automatic return-to-menu, sound, NVRAM
+are bounded. No in-game overlay, automatic return-to-menu, NVRAM
 formatting, defragmentation, save deletion or Unicode collation is provided.
 Image formats visible to the browser depend on the installed firmware.
 

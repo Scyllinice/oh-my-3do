@@ -17,6 +17,7 @@ python3 "$project_dir/tools/prepare-runtime.py" "$stage/takeme" "$stage/runtime-
 cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$stage/src/"
 cp -r "$project_dir/vendor" "$stage/vendor"
 cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
+cp "$project_dir/assets/menu-music.aiff" "$stage/takeme/menu-music.aiff"
 cp "$project_dir/assets/loading.banner" "$stage/takeme/BannerScreen"
 cp "$project_dir/THIRD_PARTY.md" "$stage/takeme/ThirdParty.txt"
 cp "$project_dir/LICENSE" "$stage/takeme/License.txt"
@@ -107,6 +108,7 @@ sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
     "$project_dir"/vendor/pngle/* "$project_dir"/vendor/fonts/* \
     "$project_dir/assets/logo-menu.cel" \
     "$project_dir/assets/loading.banner" \
+    "$project_dir/assets/menu-music.aiff" \
     "$project_dir/ohmy3do.ini" \
     "$project_dir/THIRD_PARTY.md" "$project_dir/LICENSE" \
     > "$project_dir/build/console-$mode/source.sha256"

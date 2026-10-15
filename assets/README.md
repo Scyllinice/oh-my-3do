@@ -95,3 +95,21 @@ magick assets/loading-menu.png -thumbnail 64x80 -background '#081021' \
   --ccb-last set --ccb-bgnd set -o /workspace/assets/demo-cover.cel \
   /workspace/assets/demo-cover.png
 ```
+
+## Menu music
+
+`menu-music.aiff` is an original synthesized 20-second, eight-bar loop at 96 BPM.
+It combines electric-piano-style FM chords, synthesized bass and lead, and
+procedural noise percussion. It contains no external samples, recordings, or
+quoted melody. The composition, generator, and audio are distributed under the
+project's MIT license.
+
+`tools/generate-menu-music.py` renders the checked-in 22,050 Hz, signed 8-bit mono
+AIFF deterministically, using only Python's standard library. Circular rendering
+retains instrument/reverb tails at the loop boundary. The optional WAV listening
+copy contains the same quantized audio in 16-bit PCM form. Normal ISO builds use
+the saved AIFF and do not regenerate it.
+
+```sh
+python3 tools/generate-menu-music.py --wav iso/menu-jazz-sample.wav
+```

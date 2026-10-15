@@ -28,6 +28,9 @@ STUBS = r'''
 #include "menu_settings.h"
 #include "menu_position.h"
 #include "ui_font.h"
+#include "menu_music.h"
+int menu_music_set(MenuMusic *m,int enabled) { m->status=enabled ? 1 : 0; return 0; }
+void menu_music_close(MenuMusic *m) { m->status=0; }
 #define UI_PREVIEW_TEXT(s) printf("L %s\n",s)
 #include <stdio.h>
 #include <stdarg.h>
@@ -175,6 +178,12 @@ const size_t menu_cover_count=2;
 '''
 
 NVRAM_STUBS = r'''
+static int preview_mounts;
+static int preview_mount(void *context,const unsigned char *packet,unsigned char *reply,size_t capacity,size_t *length) {
+    Menu *menu=(Menu *)context;
+    if (packet[0]!=0xc5 || menu->music.status || capacity<2) abort();
+    ++preview_mounts; reply[0]=0xc5; reply[1]=0; *length=2; return 0;
+}
 static void activate(Menu *menu) { (void)menu; }
 static int preview_nvram_reads, preview_nvram_writes, preview_nvram_fail;
 static int preview_nvram_fixture(SaveArchive *a) {
@@ -381,15 +390,24 @@ int main(int argc, char **argv) {
             !menu.config.folder_workaround || menu.config.usb_covers) abort();
         menu.config_result=2; tools_input(&menu,ControlC);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
-        menu.tool_selected=8; tools_input(&menu,ControlA);
+        menu.tool_selected=9; tools_input(&menu,ControlA);
         if (menu.config.screen_margin || menu.config.large_titles || menu.config.theme) abort();
         if (menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlB);
         menu.tool_selected=3; tools_input(&menu,ControlA);
         if (menu.tools != TOOL_CONFIG || menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
-        tools_input(&menu,ControlUp); if (menu.tool_selected != 10) abort();
+        tools_input(&menu,ControlUp); if (menu.tool_selected != 11) abort();
         tools_input(&menu,ControlA);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
+        menu.config_result=0; menu.ready=1; menu.demo=0;
+        menu.saved_config=menu.config;
+        menu.tool_selected=8; tools_input(&menu,ControlA);
+        if (menu.config.menu_music || menu.music.status || !config_dirty(&menu)) abort();
+        tools_input(&menu,ControlX);
+        if (!menu.config.menu_music || menu.music.status!=1 || config_dirty(&menu)) abort();
+        menu.config_result=2; sync_music(&menu); if (menu.music.status) abort();
+        menu.config_result=0; sync_music(&menu); if (menu.music.status!=1) abort();
+        menu.demo=1;
         /* Unsaved marker tracks all settings; discard restores the saved snapshot. */
         menu.saved_config=menu.config;
         menu.settings_folder_workaround=menu.config.folder_workaround;
@@ -549,6 +567,19 @@ int main(int argc, char **argv) {
             if (menu.selected != 0) abort();
             menu.listing=original;
         }
+        {
+            Menu launching;
+            memset(&launching,0,sizeof(launching));
+            launching.ready=1; launching.music.status=1; launching.playlist.synchronized=1;
+            launching.ode.transfer=preview_mount; launching.ode.context=&launching;
+            start_queue(&launching);
+            if (launching.music.status!=1 || preview_mounts || launching.launching) abort();
+            if (ode_playlist_append_local(&launching.ode,&launching.playlist,"/Storage/Game.iso")) abort();
+            launching.playlist.dirty=0;
+            start_queue(&launching);
+            if (launching.music.status || preview_mounts!=1 || !launching.launching) abort();
+            ode_playlist_dispose(&launching.playlist);
+        }
         save_archive_free(&menu.nvram); save_archive_free(&menu.pending); save_archive_free(&menu.backup);
         ode_listing_free(&menu.listing);
         return 0;
@@ -598,6 +629,7 @@ int main(int argc, char **argv) {
         menu.tools=TOOL_CONFIG; menu.settings_usb_covers=menu.config.usb_covers;
         menu.settings_folder_workaround=menu.config.folder_workaround;
     }
+    if (argc > 1 && !strcmp(argv[1],"display-save")) { menu.tools=TOOL_CONFIG; menu.tool_selected=11; }
     if (argc > 1 && !strcmp(argv[1],"find")) { menu.tools=TOOL_FIND; strcpy(menu.find_query,"ROAD"); menu.find_key=17; }
     if (argc > 1 && !strcmp(argv[1],"filtered")) strcpy(menu.filter,"disc 1");
     if (argc > 1 && !strcmp(argv[1],"unsaved")) { menu.tools=TOOL_CONFIG; menu.settings_recent_games=0; }
@@ -671,7 +703,7 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)

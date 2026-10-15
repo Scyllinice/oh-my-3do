@@ -54,7 +54,8 @@ COPY --chown=developer:developer Makefile /tmp/project-check/Makefile
 COPY --chown=developer:developer src/ /tmp/project-check/src/
 COPY --chown=developer:developer vendor/ /tmp/project-check/vendor/
 COPY --chown=developer:developer tests/ /tmp/project-check/tests/
-COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py tools/resize-covers.py /tmp/project-check/tools/
+COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py tools/resize-covers.py tools/generate-menu-music.py /tmp/project-check/tools/
+COPY --chown=developer:developer assets/menu-music.aiff /tmp/project-check/assets/menu-music.aiff
 COPY --chown=developer:developer ohmy3do.ini /tmp/project-check/ohmy3do.ini
 RUN make -C /tmp/project-check test test-sdk test-cover-resize \
     && armcc -I/opt/3do-devkit/include/3do \

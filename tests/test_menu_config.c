@@ -122,7 +122,10 @@ static void display_config(void)
     assert(c.folder_workaround && c.screen_margin == 12 && c.large_titles && c.theme == 2 && c.usb_covers);
     assert(menu_config_parse(&c,"screen_margin=13",16) < 0 && !c.folder_workaround && !c.screen_margin);
     assert(menu_config_parse(&c,"theme=3",7) < 0);
-    assert(c.remember_position && c.recent_games && !c.video_previews);
+    assert(c.remember_position && c.recent_games && !c.video_previews && c.menu_music);
+    assert(!menu_config_parse(&c,"[audio]\nmenu_music=0\n",strlen("[audio]\nmenu_music=0\n")) && !c.menu_music);
+    assert(menu_config_parse(&c,"menu_music=2",strlen("menu_music=2")) < 0);
+    assert(menu_config_parse(&c,"menu_music=0\nmenu_music=1",strlen("menu_music=0\nmenu_music=1")) < 0);
     assert(!menu_config_parse(&c,"[artwork]\nvideo_previews=1\n",strlen("[artwork]\nvideo_previews=1\n")) && c.video_previews);
     assert(menu_config_parse(&c,"video_previews=2",strlen("video_previews=2")) < 0);
     {
