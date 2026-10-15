@@ -13,8 +13,9 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
     int values[9] = {0, 1, 0, 0, 0, 1, 1, 0, 1};
     unsigned int seen = 0;
     size_t pos = 0, i;
+    int ended = 0;
     menu_config_defaults(config);
-    if (length >= MENU_CONFIG_BYTES) return -1;
+    if (length > MENU_CONFIG_BYTES) return -1;
     if (length >= 3 && (unsigned char)data[0] == 0xef && (unsigned char)data[1] == 0xbb && (unsigned char)data[2] == 0xbf) pos = 3;
     while (pos < length) {
         size_t start = pos, end, eq, key_end;
@@ -23,6 +24,12 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
         end = pos; if (pos < length) ++pos;
         while (start < end && space(data[start])) ++start;
         while (end > start && space(data[end-1])) --end;
+        if (end-start == sizeof(MENU_CONFIG_END)-1 && !memcmp(data+start,MENU_CONFIG_END,sizeof(MENU_CONFIG_END)-1)) {
+            /* Generated files have all keys before this marker. Stop here so
+             * printable padding or an older on-disk tail cannot add settings. */
+            if (seen != 0x1ffU) return -1;
+            ended = 1; break;
+        }
         if (start == end || data[start] == '#' || data[start] == ';') continue;
         if (data[start] == '[') {
             if (!((end-start == 7 && !memcmp(data+start,"[audio]",7)) ||
@@ -45,6 +52,8 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
         if (eq < end && data[eq] != '#' && data[eq] != ';') return -1;
         values[i] = value; seen |= 1U << i;
     }
+    /* An unmarked full buffer may be a truncated longer PC-edited file. */
+    if (length == MENU_CONFIG_BYTES && !ended) return -1;
     config->folder_workaround = values[0]; config->usb_covers = values[1];
     config->screen_margin = values[2]; config->large_titles = values[3]; config->theme = values[4];
     config->remember_position = values[5]; config->recent_games = values[6];

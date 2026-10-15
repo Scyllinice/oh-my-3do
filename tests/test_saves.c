@@ -133,13 +133,27 @@ int main(void)
         char text[8192]; size_t length;
         menu_config_defaults(&config); config.folder_workaround=1; config.usb_covers=0;
         config.screen_margin=12; config.large_titles=1; config.theme=2;
-        setup(&f,&ode); assert(!menu_settings_save(&ode,reader,&config));
+        setup(&f,&ode);
+        strcpy((char *)f.file,"folder_workaround=1\n"); f.size=MENU_CONFIG_BYTES;
+        assert(!menu_config_load(&ode,reader,&parsed) && parsed.folder_workaround);
+        assert(!menu_settings_save(&ode,reader,&config));
         assert(f.size == MENU_CONFIG_BYTES);
-        assert(!menu_config_parse(&parsed,(char *)f.file,strlen((char *)f.file)));
+        for (i=0;i<MENU_CONFIG_BYTES;++i) assert((f.file[i]>=32 && f.file[i]<=126) || f.file[i]=='\r' || f.file[i]=='\n');
+        assert(!memchr(f.file,0,MENU_CONFIG_BYTES));
+        assert(!menu_config_load(&ode,reader,&parsed));
+        assert(parsed.folder_workaround && parsed.screen_margin==12);
+        assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
         assert(parsed.folder_workaround == 1 && !parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2);
+        /* Rewrite a shorter single-digit margin over the existing 512-byte
+         * file, then load through the actual startup USB reader. */
+        config.screen_margin=8;
+        assert(!menu_settings_save(&ode,reader,&config));
+        assert(f.size==MENU_CONFIG_BYTES && !memchr(f.file,0,MENU_CONFIG_BYTES));
+        assert(!menu_config_load(&ode,reader,&parsed) && parsed.screen_margin==8);
+        config.screen_margin=12;
         config.folder_workaround=0; config.usb_covers=1; config.remember_position=0; config.recent_games=0; config.video_previews=1; config.menu_music=0;
         setup(&f,&ode); assert(!menu_settings_save(&ode,reader,&config));
-        assert(!menu_config_parse(&parsed,(char *)f.file,strlen((char *)f.file)));
+        assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
         assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2 && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.menu_music);
         setup(&f,&ode); f.short_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
         setup(&f,&ode); f.no_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);

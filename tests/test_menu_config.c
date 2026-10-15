@@ -114,6 +114,36 @@ static void parser(void)
     }
 }
 
+static void readable_files(void)
+{
+    static const char settings[]="folder_workaround=1\r\nusb_covers=1\r\nvideo_previews=0\r\nscreen_margin=8\r\nlarge_titles=0\r\ntheme=0\r\nremember_position=1\r\nrecent_games=1\r\nmenu_music=0\r\n";
+    char data[MENU_CONFIG_BYTES+1];
+    size_t used=sizeof(settings)-1;
+    MenuConfig c;
+    Fake fake; Ode ode;
+    memset(data,' ',MENU_CONFIG_BYTES); data[MENU_CONFIG_BYTES]=0;
+    memcpy(data,settings,used); memcpy(data+used,MENU_CONFIG_END "\r\n",sizeof(MENU_CONFIG_END)+1);
+    assert(!menu_config_parse(&c,data,MENU_CONFIG_BYTES));
+    assert(c.folder_workaround && c.screen_margin==8 && !c.menu_music);
+    /* Exact-size printable files go through the real startup USB loader. */
+    setup(&fake,&ode); fake.file=data;
+    assert(!menu_config_load(&ode,read_buffer,&c) && c.screen_margin==8 && !c.menu_music);
+    /* Text after the boundary cannot overwrite settings above it. */
+    memcpy(data+used+sizeof(MENU_CONFIG_END)+1,"folder_workaround=0\r\n",21);
+    assert(!menu_config_parse(&c,data,MENU_CONFIG_BYTES) && c.folder_workaround);
+    /* PC edits may remove the blank tail entirely. */
+    assert(!menu_config_parse(&c,data,used+sizeof(MENU_CONFIG_END)+1));
+    memset(data+used,' ',MENU_CONFIG_BYTES-used);
+    assert(menu_config_parse(&c,data,MENU_CONFIG_BYTES)<0); /* full buffer without a boundary */
+    memcpy(data+used,MENU_CONFIG_END,sizeof(MENU_CONFIG_END)-2);
+    assert(menu_config_parse(&c,data,MENU_CONFIG_BYTES)<0); /* cut-off boundary */
+    assert(menu_config_parse(&c,MENU_CONFIG_END "\r\n",sizeof(MENU_CONFIG_END)+1)<0); /* incomplete generated settings */
+    memcpy(data+used,MENU_CONFIG_END "\r\n",sizeof(MENU_CONFIG_END)+1);
+    data[1]=0; assert(menu_config_parse(&c,data,MENU_CONFIG_BYTES)<0);
+    assert(menu_config_parse(&c,data,MENU_CONFIG_BYTES+1)<0);
+    puts("Readable INI: full-size USB load, end boundary, old-tail isolation and truncated/invalid files passed");
+}
+
 static void display_config(void)
 {
     MenuConfig c;
@@ -158,6 +188,7 @@ int main(void)
     parser();
     default_template();
     display_config();
+    readable_files();
     setup(&fake, &ode);
     assert(menu_config_load(&ode, read_buffer, &config) == 0);
     assert(config.folder_workaround && fake.closed == 1);

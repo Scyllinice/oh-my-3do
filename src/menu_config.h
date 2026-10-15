@@ -5,6 +5,7 @@
 
 #define MENU_CONFIG_BYTES 512
 #define MENU_CONFIG_NAME "ohmy3do.ini"
+#define MENU_CONFIG_END "; End of Oh My 3DO settings."
 typedef struct MenuConfig {
     int folder_workaround;
     int usb_covers;

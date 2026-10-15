@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.11.1**.
+restore, plus optional menu music. The current version is **0.11.2**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -263,13 +263,16 @@ Game titles use a 12-pixel font, or 14 pixels and six list rows with large title
 enabled. Controls and system tools use a bold 10-pixel font.
 Restore display defaults resets only the display settings.
 
-The save writes a canonical INI containing the selected compatibility, artwork
-and display values and replaces comments/formatting. It requires a successfully
+The save writes a canonical INI containing all nine settings and replaces
+comments/formatting. It requires a successfully
 loaded config. Startup bypass, an invalid config, unsupported identity or a
 failed transport prevents saving. The firmware cannot truncate files, so the
-menu writes a fixed 512-byte, NUL-padded file. The config loader stops at that
-terminator and ignores any older tail beyond it. Do not interpret a failed save
-as persistent.
+menu writes a fixed 512-byte plain-text file with Windows line endings, an
+explicit `; End of Oh My 3DO settings.` comment, and space padding. It contains
+no NUL bytes. Edit the values above the end comment; text below it is ignored.
+Existing NUL-padded INIs still load and become readable text on the next save.
+Older menu versions need the trailing space padding removed on a PC before
+loading this new format. Do not interpret a failed save as persistent.
 
 You can also edit `ohmy3do.ini` on a PC:
 
@@ -301,7 +304,8 @@ the workaround is enabled. `usb_covers` and `video_previews` are 0/1; previews
 default off. Margin is 0–12; large titles is 0/1; theme is 0 teal, 1 high
 contrast, 2 amber. The two library settings are 0/1. Old configs containing only
 the earlier keys remain valid and use display defaults. Unknown/duplicate
-settings or invalid values reject the config. PC text must stay below 512 bytes;
+settings or invalid values reject the config. PC text must stay below 512 bytes unless it retains all nine settings and the
+end comment within the first 512 bytes;
 CRLF, LF, UTF-8 BOM and `#`/`;` comments are accepted.
 
 The workaround first selects a safe existing file with the directory command to
