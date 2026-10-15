@@ -9,7 +9,7 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. The current version is **0.11.0**.
+restore, plus optional menu music. The current version is **0.11.1**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -355,15 +355,27 @@ Game media belongs in `/covers` and `/previews` on USB, outside `boot.iso`. PNG
 covers can be copied directly: no image conversion or ISO rebuild is needed. The
 menu decodes them into the cover area and preserves their aspect ratio.
 Transparency is blended against the artwork background. PNGs can be up to
-1024×1024 pixels and 512 KiB; smaller files, around 128–256 pixels tall, reduce
-loading time. RGB, RGBA, grayscale, indexed, 1/2/4/8/16-bit and interlaced PNGs
+1024×1024 pixels and 512 KiB. For faster loading, prepare opaque 64×80 RGB
+PNGs with the tool below; these avoid resizing and alpha blending on the console.
+RGB, RGBA, grayscale, indexed, 1/2/4/8/16-bit and interlaced PNGs
 are supported where valid for their color type. JPEGs still need conversion.
+
+The menu keeps six decoded covers in RAM (up to 60 KiB of pixel data). Returning
+to a cached cover skips USB access, PNG decoding, and the normal selection wait.
+Cache entries are separated by USB volume. Press **X** in the browser to refresh
+after replacing cover files; reconnecting clears the cache as well. Cache
+allocation is optional, so a memory shortage does not prevent a cover loading.
+First-time loads still need the firmware's USB file access and a verified return
+to the game folder. LOCODE restores check ancestor folder records directly where
+safe, retaining full enumeration for compatibility detours and final verification.
 
 To resize or convert artwork, use `resize-covers.py` from the release's
 `media-tools.zip`. It needs Python 3.9+ and Pillow. On Windows:
 
 ```sh
 py -m pip install Pillow
+# Check existing artwork without changing it:
+py resize-covers.py "E:/covers" --check
 py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
 # Or process a folder, preserving image basenames:
 py resize-covers.py "Downloads/artwork" "E:/covers"
@@ -387,7 +399,12 @@ in `tools/`. Docker includes its dependencies after rebuilding the image:
 ```
 
 Copy the prepared covers to USB and regenerate its media index. Existing valid
-PNGs can still be copied directly; resizing is optional.
+PNGs can still be copied directly; resizing is optional. `--check` reports each
+image's dimensions, mode, and size, and exits with status 1 if preparation is
+recommended. `index-media.py` also warns about PNGs larger than 64×80 without
+changing the artwork. Prepare replacements in a separate folder, then copy the
+prepared PNGs into `covers/` and regenerate the index. Diagnostic exports include
+the last cover load's milliseconds, ODE command count, and cache-hit flag.
 
 The filename matches the game's basename, ignoring ASCII case. For example:
 

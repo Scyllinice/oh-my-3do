@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Check cover preparation and feed its output through the real menu PNG decoder."""
+import contextlib
+import io
 import importlib.util
 from pathlib import Path
 import struct
@@ -32,9 +34,13 @@ with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
     Image.new('RGB', (64, 80), 'magenta').save(source/'Still.gif', save_all=True,
                                             append_images=[Image.new('RGB', (64, 80), 'cyan')])
     before = {p: p.read_bytes() for p in source.iterdir()}
+    audit=subprocess.run(['python3',str(ROOT/'tools/resize-covers.py'),str(source),'--check'],capture_output=True,text=True)
+    assert audit.returncode==1 and '160x80' in audit.stdout and 'No files changed' in audit.stdout
     subprocess.run(['python3', str(ROOT/'tools/resize-covers.py'), str(source), str(output)], check=True)
     assert set(p.name for p in output.iterdir()) == {'Wide.png','Alpha.png','Rotate.png','Photo.png','Still.png'}
     assert all(p.read_bytes() == data for p, data in before.items())
+    audit=subprocess.run(['python3',str(ROOT/'tools/resize-covers.py'),str(output),'--check'],capture_output=True,text=True)
+    assert audit.returncode==0 and '0 need preparation' in audit.stdout
     for path in output.iterdir():
         with Image.open(path) as image:
             assert image.format == 'PNG' and image.mode == 'RGB' and image.size == (64, 80)
@@ -56,6 +62,15 @@ with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
         assert image.getpixel((32, 0))[2] > 240
     with Image.open(output/'Still.png') as image:
         assert image.getpixel((32, 40)) == (255,0,255)
+    # Indexing reports oversized PNGs without rewriting artwork.
+    index_spec=importlib.util.spec_from_file_location('index_media',ROOT/'tools/index-media.py')
+    indexer=importlib.util.module_from_spec(index_spec); index_spec.loader.exec_module(indexer)
+    usb=root/'audit-usb'; (usb/'covers').mkdir(parents=True); (usb/'Large.iso').write_bytes(b'')
+    large=usb/'covers/Large.png'; Image.new('RGB',(256,320),'red').save(large)
+    original=large.read_bytes(); messages=io.StringIO()
+    with contextlib.redirect_stdout(messages): indexer.index(usb)
+    assert '256x320' in messages.getvalue() and 'resize-covers.py' in messages.getvalue()
+    assert large.read_bytes()==original
     rejects(source, output)
     rejects(source/'Alpha.png', source/'Alpha.png', overwrite=True)
     rejects(source, source/'resized')

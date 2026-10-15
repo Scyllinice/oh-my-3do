@@ -19,6 +19,7 @@ STUBS = r'''
 #include "menu_config.h"
 #include "menu_ui.h"
 #include "usb_art.h"
+#include "cover_cache.h"
 #include "usb_media.h"
 #include "art_navigation.h"
 #include "save_usb.h"
@@ -105,6 +106,13 @@ static int preview_text_write(Ode *ode, OdeReadBuffer reader, const char *name, 
 #define ControlX 128
 #define ControlStart 256
 
+static int preview_png_loads, preview_png_fail;
+static int preview_png_load(Ode *ode,OdeReadBuffer reader,const char *file,unsigned char *pixels,MediaCancel cancel,void *context) {
+    (void)ode; (void)reader; (void)file;
+    ++preview_png_loads;
+    if (preview_png_fail || (cancel && cancel(context))) return -1;
+    memset(pixels,preview_png_loads,USB_ART_PIXELS); return 0;
+}
 static unsigned long preview_buttons;
 typedef struct { unsigned long cped_ButtonBits; } ControlPadEventData;
 static int GetControlPad(int a, int b, ControlPadEventData *pad) { (void)a; (void)b; pad->cped_ButtonBits=preview_buttons; return 0; }
@@ -304,6 +312,28 @@ int main(int argc, char **argv) {
         preview_now+=350;
         update_cover(&menu);
         if (preview_cel_calls != 2 || !menu.cover_attempted) abort();
+        /* Real cover scheduling/cache path; replace only the file decoder. */
+        menu.demo=0; menu.ready=menu.view_valid=menu.covers_enabled=1;
+        menu.config_result=0; strcpy(menu.ode.identity,"LOCODE");
+        menu.usb_art.entries=(MenuCover *)malloc(2*sizeof(MenuCover)); menu.usb_art.count=2;
+        menu.usb_art.entries[0].path="Alone in the Dark.iso"; menu.usb_art.entries[0].file="Dark.png";
+        menu.usb_art.entries[1].path="Disc 1.iso"; menu.usb_art.entries[1].file="Disc.png";
+        menu.selected=2; preview_cel_fail=0;
+        selection_changed(&menu); preview_now+=350; update_cover(&menu);
+        if (!menu.cover || preview_png_loads!=1 || menu.cover_cached) abort();
+        menu.selected=3; selection_changed(&menu); preview_now+=349; update_cover(&menu);
+        if (menu.cover || preview_png_loads!=1) abort();
+        ++preview_now; update_cover(&menu); if (!menu.cover || preview_png_loads!=2) abort();
+        menu.selected=2; selection_changed(&menu); update_cover(&menu);
+        if (!menu.cover || preview_png_loads!=2 || !menu.cover_cached || menu.cover_commands ||
+            ((unsigned char *)menu.cover->ccb_SourcePtr)[0]!=1) abort();
+        cover_cache_clear(&menu.cover_cache); selection_changed(&menu); preview_png_fail=1;
+        preview_now+=350; update_cover(&menu);
+        if (menu.cover || cover_cache_contains(&menu.cover_cache,0,"Dark.png")) abort();
+        preview_png_fail=0; preview_buttons=ControlB; selection_changed(&menu);
+        preview_now+=350; update_cover(&menu);
+        if (menu.cover || cover_cache_contains(&menu.cover_cache,0,"Dark.png")) abort();
+        preview_buttons=0; usb_art_index_free(&menu.usb_art);
         /* RAM playback uses the real loader scheduling, draw and cleanup code. */
         menu.demo=0; menu.selected=2; menu.ready=1; menu.covers_enabled=1;
         menu.config_result=0; strcpy(menu.ode.identity,"LOCODE");
@@ -747,12 +777,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        loading + '\n#undef ode_read_directory\n#define usb_preview_load preview_video_load\n' + covers + '\n#undef usb_preview_load\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        loading + '\n#undef ode_read_directory\n#define usb_preview_load preview_video_load\n#define usb_png_pixels preview_png_load\n' + covers + '\n#undef usb_preview_load\n#undef usb_png_pixels\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
                         str(ROOT / "src/menu_ui.c"), str(ROOT / "src/ui_font.c"),
-                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
+                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_usb.c"),
                         str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
                         str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),

@@ -13,6 +13,7 @@ stubs=r'''
 #include "menu_config.h"
 #include "menu_position.h"
 #include "usb_art.h"
+#include "cover_cache.h"
 #include "menu_music.h"
 #include <assert.h>
 #include <stdio.h>
@@ -23,7 +24,7 @@ typedef struct { unsigned int cped_ButtonBits; } ControlPadEventData;
 typedef struct Menu {
     Ode ode; OdeListing listing; OdePlaylist playlist; MenuMusic music;
     MenuConfig config,saved_config; MenuPosition last_position; MenuFavorites recent;
-    LibraryCatalog catalog; UsbArtIndex usb_art,usb_previews;
+    CoverCache cover_cache; LibraryCatalog catalog; UsbArtIndex usb_art,usb_previews;
     struct { int request,timed_out; } bus;
     int booting,review,demo,ready,view_valid,selected,depth,notice_active;
     int usb_music_result,usb_tested,backup_result,restore_result,position_result;
@@ -39,6 +40,7 @@ void library_catalog_free(LibraryCatalog *p) { memset(p,0,sizeof(*p)); }
 void menu_favorites_free(MenuFavorites *p) { memset(p,0,sizeof(*p)); }
 void usb_art_index_free(UsbArtIndex *p) { memset(p,0,sizeof(*p)); }
 void ode_listing_free(OdeListing *p) { memset(p,0,sizeof(*p)); }
+void cover_cache_clear(CoverCache *p) { (void)p; }
 static void selection_changed(Menu *m) { (void)m; }
 static void update_breadcrumb(Menu *m) { (void)m; }
 static void draw(Menu *m) {

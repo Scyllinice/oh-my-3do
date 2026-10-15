@@ -53,6 +53,9 @@ int ode_change_directory(Ode *ode, unsigned long id);
 int ode_enter_directory(Ode *ode, const OdeListing *listing,
                         const MenuEntry *entry, int workaround);
 int ode_read_directory(Ode *ode, OdeListing *listing);
+/* Read only the target directory record at its existing TOC cursor.
+ * 1 = ID/name/type verified, 0 = use full enumeration, -1 = I/O failure. */
+int ode_probe_directory(Ode *ode,unsigned long id,const char *name);
 int ode_launch(Ode *ode, const MenuEntry *entry);
 void ode_playlist_init(OdePlaylist *playlist);
 void ode_playlist_dispose(OdePlaylist *playlist);

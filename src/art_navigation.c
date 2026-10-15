@@ -19,6 +19,18 @@ int art_at_root(Ode *ode, const ArtRouteStep *route, unsigned int depth,
     for (i = first; i < depth; ++i) {
         const MenuEntry *entry = NULL;
         size_t j;
+        /* A short, freshly checked record is sufficient when no collision
+         * detour is needed. Unknown firmware and equal local IDs keep the
+         * complete listing path used by the compatibility workaround. */
+        if (!strcmp(ode->identity,"LOCODE") && (!workaround ||
+            (ode->navigation_known && ode->navigation_key!=(route[i].id&0xffffffUL)))) {
+            int matched=ode_probe_directory(ode,route[i].id,route[i].name);
+            if (matched<0) goto failed;
+            if (matched) {
+                if (ode_change_directory(ode,route[i].id)<0) goto failed;
+                continue;
+            }
+        }
         if (ode_read_directory(ode, &listing) < 0) goto failed;
         for (j = 0; j < listing.count; ++j)
             if (listing.entries[j]->toc_id == route[i].id && listing.entries[j]->is_directory &&

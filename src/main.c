@@ -6,6 +6,7 @@
 #include "menu_music.h"
 #include "usb_music.h"
 #include "usb_art.h"
+#include "cover_cache.h"
 #include "usb_media.h"
 #include "art_navigation.h"
 #include "save_usb.h"
@@ -28,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.11.0"
+#define MENU_VERSION "0.11.1"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -117,6 +118,9 @@ typedef struct Menu {
     int settings_remember_position;
     int settings_recent_games;
     int settings_video_previews;
+    CoverCache cover_cache;
+    unsigned long cover_load_ms, cover_commands;
+    int cover_cached;
     UsbArtIndex usb_art;
     UsbArtIndex usb_previews;
     UsbPreview preview;
@@ -768,14 +772,15 @@ static void update_cover(Menu *menu)
     char path[9218];
     const char *lookup;
     if (menu->tools || !menu->covers_enabled || menu->review || !menu->ready || menu->loading ||
-        menu->cover_attempted || now_ms(menu) - menu->selection_since < 350UL) return;
-    menu->cover_attempted = 1;
+        menu->cover_attempted || menu->bus.timed_out || menu->ode.navigation_failed) return;
     if (!row_count(menu) || (menu->listing.has_parent && !menu->selected)) return;
     entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
     if (entry->is_directory || directory_path(menu, path, 8193) < 0) return;
     strcat(path, "/");
     strcat(path, entry->name);
     if (menu->demo) {
+        if (now_ms(menu)-menu->selection_since<350UL) return;
+        menu->cover_attempted=1;
         file = menu_cover_lookup(path);
         if (!file) return;
         menu->cover = LoadCel((char *)file, MEMTYPE_CEL);
@@ -786,17 +791,31 @@ static void update_cover(Menu *menu)
         const char *message;
         unsigned int i;
         int result;
-        unsigned long started;
+        unsigned long started, commands, volume;
         lookup = path + 9; /* remove /Storage/ */
         if (menu->depth && !(menu->path_ids[0] & 0xffffffUL))
             lookup += strlen(menu->path[0]) + 1; /* device labels are not USB path components */
         file = menu_cover_find(menu->usb_art.entries, menu->usb_art.count, lookup);
-        if (!file) return;
+        if (!file) { menu->cover_attempted=1; return; }
+        volume=entry->toc_id&0xff000000UL;
+        if (!cover_cache_contains(&menu->cover_cache,volume,file) && now_ms(menu)-menu->selection_since<350UL) return;
+        menu->cover_attempted=1;
         cover = CreateCel(64, 80, 16, CREATECEL_UNCODED, NULL);
+        if (!cover && menu->cover_cache.clock) {
+            cover_cache_clear(&menu->cover_cache);
+            cover=CreateCel(64,80,16,CREATECEL_UNCODED,NULL);
+            if (cover && now_ms(menu)-menu->selection_since<350UL) {
+                UnloadCel(cover); menu->cover_attempted=0; return;
+            }
+        }
         if (!cover) return;
         for (i = 0; i < menu->depth; ++i) {
             route[i].id = menu->path_ids[i];
             route[i].name = menu->path[i];
+        }
+        if (cover_cache_get(&menu->cover_cache,volume,file,(unsigned char *)cover->ccb_SourcePtr)) {
+            menu->cover_cached=1; menu->cover_load_ms=menu->cover_commands=0;
+            menu->cover=cover; goto positioned;
         }
         read.menu = menu;
         read.filename = file;
@@ -804,14 +823,20 @@ static void update_cover(Menu *menu)
         message = menu->message;
         menu->message = "Loading cover...";
         draw(menu);
-        started = now_ms(menu);
+        started = now_ms(menu); commands=menu->bus.commands;
+        menu->cover_cached=0;
         menu->media_cancelled = 0;
         result = art_at_root(&menu->ode,route,menu->depth,&menu->listing,
                              menu->config.folder_workaround,read_usb_cover,&read);
-        menu->selection_since += now_ms(menu) - started;
+        menu->cover_load_ms=now_ms(menu)-started;
+        menu->cover_commands=menu->bus.commands-commands;
+        menu->selection_since += menu->cover_load_ms;
         menu->message = message;
         if (result < 0 || menu->media_cancelled) UnloadCel(cover);
-        else menu->cover = cover;
+        else {
+            menu->cover = cover;
+            cover_cache_put(&menu->cover_cache,volume,file,(const unsigned char *)cover->ccb_SourcePtr);
+        }
         if (result == -2 || menu->bus.timed_out) {
             menu->ode.navigation_failed = 1;
             menu->ready = menu->view_valid = 0;
@@ -819,6 +844,7 @@ static void update_cover(Menu *menu)
             return;
         }
     }
+positioned:
     if (menu->cover) {
         menu->cover->ccb_XPos = 236 << 16;
         menu->cover->ccb_YPos = 86 << 16;
@@ -956,6 +982,7 @@ static void connect_ode(Menu *menu)
     memset(menu->ode.identity_reply, 0, sizeof(menu->ode.identity_reply));
     menu_config_defaults(&menu->config);
     usb_art_index_free(&menu->usb_art);
+    cover_cache_clear(&menu->cover_cache);
     menu->covers_enabled = 0;
     menu->skip_usb_art = 0;
     menu->ode.navigation_known = 0;
@@ -1454,6 +1481,7 @@ static void export_diagnostics(Menu *menu)
     format(line,"timeout=%d\nnavigation_blocked=%d\nconfig_result=%d\n",snapshot.timed_out,menu->ode.navigation_failed,menu->config_result); strcat(data,line);
     format(line,"folder_workaround=%d\nusb_covers=%d\nscreen_margin=%d\nlarge_titles=%d\ntheme=%d\n",menu->config.folder_workaround,menu->config.usb_covers,menu->config.screen_margin,menu->config.large_titles,menu->config.theme); strcat(data,line);
     format(line,"menu_music=%d\nmusic_result=%d\nmusic_source=%d\nusb_music_result=%d\n",menu->config.menu_music,menu->music.status,menu->music.source,menu->usb_music_result); strcat(data,line);
+    format(line,"cover_load_ms=%lu\ncover_commands=%lu\ncover_cached=%d\n",menu->cover_load_ms,menu->cover_commands,menu->cover_cached); strcat(data,line);
     format(line,"remember_position=%d\nrecent_games=%d\nvideo_previews=%d\nunsaved_settings=%d\n",menu->config.remember_position,menu->config.recent_games,menu->config.video_previews,config_dirty(menu)); strcat(data,line);
     format(line,"queue_count=%lu\nqueue_synchronized=%d\nqueue_dirty=%d\n",(unsigned long)menu->playlist.count,menu->playlist.synchronized,menu->playlist.dirty); strcat(data,line);
     format(line,"usb_write_check=%d\nbackup_result=%d\nrestore_result=%d\nnvram_error=%08lx\n",menu->usb_tested,menu->backup_result,menu->restore_result,(unsigned long)menu->nvram_info.last_error & 0xffffffffUL); strcat(data,line);
@@ -1945,7 +1973,7 @@ static void draw_tools(Menu *menu)
             format(line, "Navigation blocked: %s", menu->ode.navigation_failed ? "YES" : "no"); tool_line(menu, 5, line, MUTED);
             format(line, "Last fault: cmd %02x status %02x", menu->bus.failed_command, menu->bus.failed_status); tool_line(menu, 6, line, MUTED);
             format(line, "Fault error: %08lx", (unsigned long)menu->bus.failure_error & 0xffffffffUL); tool_line(menu, 7, line, MUTED);
-            format(line,"Position:%d Recent:%d",menu->position_result,menu->recent_result); tool_line(menu,8,line,MUTED);
+            format(line,"Cover: %lums / %lu cmds%s",menu->cover_load_ms,menu->cover_commands,menu->cover_cached ? " RAM" : ""); tool_line(menu,8,line,MUTED);
             format(line,"Diagnostic export: %d",menu->diagnostics_result); tool_line(menu,9,line,MUTED);
         }
     } else if (menu->tools == TOOL_CONFIRM_BACKUP) {
@@ -2395,6 +2423,7 @@ int main(int argc, char **argv)
             else if (!menu.ready) show_demo(&menu);
             else queue_selected_disc(&menu);
         } else if (pressed & ControlX) {
+            cover_cache_clear(&menu.cover_cache);
             if (*menu.filter) { menu.filter[0] = 0; menu.selected = 0; menu.message = NULL; selection_changed(&menu); }
             else if (menu.demo) show_demo(&menu);
             else if (menu.ode.identity[0]) load_directory(&menu, menu.selected);

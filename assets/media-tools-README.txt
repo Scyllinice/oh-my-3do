@@ -9,6 +9,11 @@ PREPARE COVERS
 Install the image library once (Windows):
   py -m pip install Pillow
 
+Audit existing covers without changing files:
+  py resize-covers.py "E:/covers" --check
+This reports dimensions, mode and size. Exit status 1 means some images would
+benefit from preparation; 0 means every image is already 64x80 RGB PNG.
+
 Resize one image and give it the game's basename:
   py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
 
@@ -36,7 +41,9 @@ Copy unmodified PNGs into the USB covers folder, using the game's basename:
   USB/Games/Road Rash.iso
   USB/covers/Road Rash.png
 
-PNGs: up to 1024x1024 pixels and 512 KiB. Smaller files load faster.
+PNGs: up to 1024x1024 pixels and 512 KiB. Prepared 64x80 RGB PNGs avoid
+console-side resizing and alpha blending. The indexer warns about larger PNGs
+without changing them. The menu caches six decoded covers for repeat visits.
 Regenerate the index after adding, removing or renaming games/media.
 
 Windows example (change E:/ to the USB drive):

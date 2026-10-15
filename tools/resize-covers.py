@@ -82,14 +82,49 @@ def convert(source, target):
             temporary.unlink(missing_ok=True)
 
 
+def check(source, recursive=False):
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise ValueError('Install Pillow first: python -m pip install Pillow') from error
+    if source.is_symlink():
+        raise ValueError('Input must not be a symlink')
+    if source.is_file():
+        paths = [source]
+    elif source.is_dir():
+        paths = sorted(p for p in (source.rglob('*') if recursive else source.iterdir())
+                       if p.is_file() and not p.is_symlink() and p.suffix.lower() in EXTENSIONS)
+    else:
+        raise ValueError(f'Input does not exist: {source}')
+    if not paths:
+        raise ValueError('No supported images found')
+    needs_resize = 0
+    for path in paths:
+        with Image.open(path) as image:
+            ready = image.format == 'PNG' and image.size == SIZE and image.mode == 'RGB' and not image.info.get('interlace')
+            if not ready:
+                needs_resize += 1
+            print(f'{path}: {image.width}x{image.height} {image.mode}, {path.stat().st_size:,} bytes - '
+                  + ('ready' if ready else 'prepare as 64x80 RGB PNG'))
+    print(f'{len(paths)} image(s) checked; {needs_resize} need preparation. No files changed.')
+    return needs_resize
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='Image or folder of images')
-    parser.add_argument('output', type=Path, help='Output .png file or covers folder')
+    parser.add_argument('output', nargs='?', type=Path, help='Output .png file or covers folder')
     parser.add_argument('--recursive', action='store_true', help='Include subfolders; output is flat')
     parser.add_argument('--overwrite', action='store_true', help='Replace existing output covers (never inputs)')
+    parser.add_argument('--check', action='store_true', help='Report dimensions and format without changing files')
     args = parser.parse_args()
     try:
+        if args.check:
+            if args.output is not None:
+                parser.error('--check takes only the input image or folder')
+            return 1 if check(args.source, args.recursive) else 0
+        if args.output is None:
+            parser.error('An output file or folder is required unless --check is used')
         jobs = plan(args.source, args.output, args.recursive, args.overwrite)
         for source, target in jobs:
             convert(source, target)
@@ -100,4 +135,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

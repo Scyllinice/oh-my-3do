@@ -29,7 +29,7 @@ static int current_toc_level;
 static int current_toc_offset;
 static int device_count = 1;
 static int hidden_files;
-static int calls;
+static int calls, toc_calls;
 static int changed_child;
 static unsigned char toc_cache[2048];
 
@@ -106,6 +106,7 @@ static int transfer(void *context, const unsigned char *packet,
         ((unsigned long)packet[2] << 16) | ((unsigned long)packet[3] << 8) | packet[4];
     (void)context;
     if (packet[0] == 0xc1) {
+        ++toc_calls;
         unsigned int offset=(unsigned int)packet[5]*256+packet[6];
         if (!offset) populate_toc(id);
         if (offset > 2032 || capacity < 18) abort();
@@ -259,6 +260,16 @@ int main(void)
     failed += check(art_at_root(&ode,route,2,&snapshot,1,root_read,NULL) == 0 &&
                     !strcmp(currentImage.curPath,"0:\\Alpha\\Child") && !ode.navigation_failed,
                     "USB-cover-root-roundtrip-repeated-IDs");
+    {
+        int slow, fast;
+        root_read_mode=0; toc_calls=0;
+        failed += check(!art_at_root(&ode,route,2,&snapshot,1,root_read,NULL),"legacy-art-restore"); slow=toc_calls;
+        strcpy(ode.identity,"LOCODE"); toc_calls=0;
+        failed += check(!art_at_root(&ode,route,2,&snapshot,1,root_read,NULL) &&
+                        !strcmp(currentImage.curPath,"0:\\Alpha\\Child") && !ode.navigation_failed,
+                        "fast-art-restore-keeps-folder-workaround"); fast=toc_calls;
+        failed += check(fast<slow,"fast-art-restore-reduces-TOC-reads");
+    }
     root_read_mode=1;
     failed += check(art_at_root(&ode,route,2,&snapshot,1,root_read,NULL) == -1 &&
                     !strcmp(currentImage.curPath,"0:\\Alpha\\Child") && !ode.navigation_failed,

@@ -53,7 +53,7 @@ typedef struct PngCanvas {
     unsigned char *pixels;
     unsigned short xb[1025], yb[1025];
     unsigned int width, height, left, top;
-    int complete;
+    int complete, native;
     unsigned int rendered;
     MediaCancel cancel;
     void *context;
@@ -63,6 +63,7 @@ static void png_init(pngle_t *png, uint32_t w, uint32_t h)
 {
     PngCanvas *canvas = (PngCanvas *)pngle_get_user_data(png);
     unsigned int i;
+    canvas->native=w==64 && h==80;
     canvas->width = 64; canvas->height = (unsigned int)(h*64/w);
     if (canvas->height > 80) { canvas->height = 80; canvas->width = (unsigned int)(w*80/h); }
     if (!canvas->width) canvas->width = 1;
@@ -77,8 +78,18 @@ static void png_draw(pngle_t *png, uint32_t x, uint32_t y, uint32_t w, uint32_t 
     unsigned int dx, dy, color, r, g, b, a = rgba[3];
     if (!(++c->rendered & 4095U) && c->cancel && c->cancel(c->context)) { pngle_abort(png); return; }
     if (x+w > 1024 || y+h > 1024 || c->xb[x] == c->xb[x+w] || c->yb[y] == c->yb[y+h]) return;
-    r=(rgba[0]*a+8*(255-a)+127)/255; g=(rgba[1]*a+16*(255-a)+127)/255; b=(rgba[2]*a+33*(255-a)+127)/255;
-    color=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
+    if (a==255) color=((rgba[0]>>3)<<10)|((rgba[1]>>3)<<5)|(rgba[2]>>3);
+    else {
+        r=(rgba[0]*a+8*(255-a)+127)/255; g=(rgba[1]*a+16*(255-a)+127)/255; b=(rgba[2]*a+33*(255-a)+127)/255;
+        color=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
+    }
+    if (c->native && w==1 && h==1) {
+        unsigned int pos;
+        if (x>=64 || y>=80) return;
+        pos=(y*64+x)*2;
+        c->pixels[pos]=(unsigned char)(color>>8); c->pixels[pos+1]=(unsigned char)color;
+        return;
+    }
     for (dy=c->yb[y];dy<c->yb[y+h];++dy) for (dx=c->xb[x];dx<c->xb[x+w];++dx) {
         unsigned int pos=((dy+c->top)*64+dx+c->left)*2;
         c->pixels[pos]=(unsigned char)(color>>8); c->pixels[pos+1]=(unsigned char)color;

@@ -374,8 +374,28 @@ static void playlist_failures(void)
     ode_playlist_dispose(&playlist);
 }
 
+static void directory_probes(void)
+{
+    FakeOde fake; Ode ode; OdeListing listing;
+    int before;
+    setup(&fake,&ode,&listing); fake.total=100; fake.parent=1;
+    assert(ode_probe_directory(&ode,0x01000005UL,"Game 96 with a long descriptive filename.iso")==1);
+    assert(!fake.changed_id && !fake.queued && !fake.launched && fake.calls<10);
+    assert(ode_probe_directory(&ode,0x01000005UL,"Renamed.iso")==0);
+    assert(ode_probe_directory(&ode,0x02000005UL,"Game 96 with a long descriptive filename.iso")==0);
+    assert(ode_probe_directory(&ode,0x01000002UL,"Game 99 with a long descriptive filename.iso")==0);
+    before=fake.calls; assert(!ode_probe_directory(&ode,0x01000000UL,"Volume") && fake.calls==before);
+    /* A first record may be '..'; do not mistake it for the requested folder. */
+    fake.devices=1;
+    assert(!ode_probe_directory(&ode,0x01000001UL,"USB 0")); fake.devices=0;
+    fake.failed=1;
+    assert(ode_probe_directory(&ode,0x01000005UL,"Game 96 with a long descriptive filename.iso")==-1);
+    puts("Directory probes: bounded ID/name/type verification, parent entries, volume mismatch and I/O failure passed");
+}
+
 int main(void)
 {
+    directory_probes();
     directory_and_launch();
     edge_cases();
     multi_disc_playlist();

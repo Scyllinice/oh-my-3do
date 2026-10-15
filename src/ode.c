@@ -149,6 +149,38 @@ static int next_word(TocReader *reader, unsigned long *value)
     return 0;
 }
 
+int ode_probe_directory(Ode *ode,unsigned long id,const char *name)
+{
+    TocReader reader;
+    unsigned long local=id&0xffffffUL;
+    size_t expected=strlen(name)+1;
+    int record;
+    if (!local || local==0xffffffUL || expected>ODE_MAX_NAME) return 0;
+    memset(&reader,0,sizeof(reader)); reader.ode=ode; reader.index=local-1;
+    for (record=0;record<2;++record) {
+        unsigned long flags, found, length;
+        size_t i;
+        if (next_word(&reader,&flags)<0) return -1;
+        if (flags==0xffffffffUL) return 0;
+        if (flags!=2) return 0;
+        if (next_word(&reader,&found)<0 || next_word(&reader,&length)<0) return -1;
+        if (length>ODE_TOC_BYTES-reader.position) return 0;
+        if ((found&0xffffffUL)==0xffffffUL && length==3) {
+            static const unsigned char parent[3]={'.','.',0};
+            for (i=0;i<3;++i) { unsigned char c; if (next_byte(&reader,&c)<0) return -1; if (c!=parent[i]) return 0; }
+            continue;
+        }
+        if (found!=id || length!=expected) return 0;
+        for (i=0;i<expected;++i) {
+            unsigned char c;
+            if (next_byte(&reader,&c)<0) return -1;
+            if (c!=(unsigned char)name[i]) return 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* FCare's firmware fills a cache on GET_TOC(offset=0). Read that cache via
  * 16-byte status chunks until its sentinel. The low 24 bits of the last real
  * ID are the next filesystem seek index; the high byte selects the medium.

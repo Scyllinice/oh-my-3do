@@ -55,6 +55,7 @@ def index(root):
         games.append((fold(game), game, fold(path.stem)))
     if len({key for key, _, _ in games}) != len(games):
         raise ValueError("Game paths collide when ignoring ASCII case")
+    oversized = []
     outputs = []
     for folder, suffix in (("covers", ".png"), ("previews", ".3dv")):
         directory = root/folder
@@ -70,6 +71,13 @@ def index(root):
             name = path.name
             if len(name.encode()) > 96 or name.startswith(".") or any(ord(c) < 32 or ord(c) == 127 or c in "\\:|" for c in name):
                 raise ValueError(f"Unsupported media basename: {name}")
+            if suffix == '.png':
+                with path.open('rb') as stream:
+                    header = stream.read(24)
+                if len(header) == 24 and header[:8] == b'\x89PNG\r\n\x1a\n' and header[12:16] == b'IHDR':
+                    w, h = struct.unpack_from('>II', header, 16)
+                    if w > 64 or h > 80:
+                        oversized.append((name,w,h))
             key = fold(path.stem)
             if key in assets:
                 raise ValueError(f"Media filenames collide: {name}")
@@ -90,6 +98,11 @@ def index(root):
             raise ValueError(f"{folder} index exceeds 2048 entries or 128 KiB")
         data = b"OM3DIDX1"+struct.pack(">IIII",len(rows),len(payload),binascii.crc32(payload),0)+payload
         outputs.append((directory, data, len(rows)))
+    if oversized:
+        print(f'{len(oversized)} PNG cover(s) exceed 64x80 and need more console decoding work:')
+        for name,w,h in oversized[:5]:
+            print(f'  {name}: {w}x{h}')
+        print('Use resize-covers.py with a separate output folder for 64x80 PNGs; originals were not changed.')
     # Validate both indices before replacing either. Media files stay untouched.
     for directory, data, count in outputs:
         temporary = directory/"index.3di.tmp"
