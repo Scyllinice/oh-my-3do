@@ -11,6 +11,8 @@ import subprocess
 def convert(source, target, fps=6, frames=24, start=0):
     if not source.is_file() or not 1 <= fps <= 12 or not 1 <= frames <= 32 or not 0 <= start <= 86400:
         raise ValueError("Use an existing input, 1-12 fps, 1-32 frames and start 0-86400 seconds")
+    if source.resolve() == target.resolve() or target.suffix.lower() != ".3dv":
+        raise ValueError("Choose a different output file ending in .3dv")
     executable = shutil.which("ffmpeg")
     if not executable:
         raise ValueError("ffmpeg is required; rebuild the development container")

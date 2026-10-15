@@ -107,6 +107,12 @@ def main():
         except ValueError: pass
         else: raise AssertionError('Corrupt existing index was overwritten')
         assert (usb/'covers/index.3di').read_bytes()==damaged
+        source=usb/'covers/Unmatched.png'
+        for output in (source,folder/'wrong.mp4'):
+            try: converter.convert(source,output)
+            except ValueError: pass
+            else: raise AssertionError('Invalid preview output path was accepted')
+        assert source.read_bytes() == before
         if shutil.which('ffmpeg'):
             clip=folder/'source.mkv'
             subprocess.run(['ffmpeg','-v','error','-nostdin','-f','lavfi','-i','color=c=red:s=64x80:r=6:d=1','-c:v','ffv1',str(clip)],check=True)
