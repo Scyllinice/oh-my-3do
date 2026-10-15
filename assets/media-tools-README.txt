@@ -26,6 +26,16 @@ size to the DAT. Checksum/manual matches can be applied without accepting name
 matches. Converted ISOs often differ from raw Redump hashes. Filename matches
 are unverified; ambiguous or fuzzy suggestions never move automatically.
 
+Variant labels (Alt, Rev, Beta, etc.) are retained even when the DAT places them
+only in track filenames. Distinct dumps with the same name get stable filenames
+such as Game (USA) [Variant 1A2B3C4D].iso. Identical copies still collide and stay
+in place. A quick scan cannot choose between unnamed variants without a code or
+explicit override. Generate a new scan plan after updating the organizer.
+Trailing - Disc 1, Disk 02 and CD3 suffixes are recognized and restrict matching
+to that disc. Disc numbers and variant codes survive shortened filenames. Codes
+identify individual dumps, not a guaranteed multi-disc edition; differently
+coded discs stay in the common game folder and can be queued manually.
+
 Resolve a match with a PC-side overrides.json object, for example:
   {"Unsorted/game.iso": "Doom (USA, Japan)"}
 Then scan again with --overrides overrides.json. --dat can select a local

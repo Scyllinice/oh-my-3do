@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore, plus optional menu music. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-version is **0.13.0**.
+version is **0.13.1**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -431,6 +431,22 @@ then rescan:
 ```powershell
 py organize-library.py scan M:/ --quick --overrides overrides.json --plan library-plan.json
 ```
+
+Release labels such as `(Alt)`, `(Rev 1)`, and `(Beta)` are retained, including
+labels present only in the DAT's track filenames. If distinct dumps still share
+a release name, filenames gain a stable eight-character code such as
+`Game (USA) [Variant 1A2B3C4D].iso`. The code comes from the catalog's data-file
+checksums, not scan order. Identical copies and serial-only catalog duplicates
+do not get separate variant codes. Filename-only scans leave unnamed variants
+ambiguous unless the filename or an explicit override identifies the code.
+Rescan to generate a new plan after updating the organizer.
+
+Disc suffixes such as `- Disc 1`, `Disk 02`, and `CD3` are recognized as well as
+`(Disc 1)`. Candidates are restricted to the matching disc number. Disc numbers
+and variant codes survive filename shortening. CUE companions receive the same
+variant label and updated references. Opaque codes identify individual dumps;
+they do not establish which differently coded discs belong to the same edition.
+Such discs stay in the common game folder and can be queued manually.
 
 CUE sets move together. Companion files receive names derived from the disc
 and track number, and their CUE `FILE` references are updated. Comments, track

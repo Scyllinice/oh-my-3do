@@ -170,14 +170,81 @@ class OrganizerTest(unittest.TestCase):
         plan=self.scan()
         self.assertEqual(plan['entries'][0]['status'],'ready')
         self.assertTrue(plan['entries'][0]['target'].endswith('(Disc 2).iso'))
+        self.assertIn('[Variant ',plan['entries'][0]['target'])
         self.assertLessEqual(len(Path(plan['entries'][0]['target']).stem.encode()),110)
-        plan=self.scan(quick=True,overrides={'unknown.iso':title})
+        variant_name=plan['entries'][0]['canonical']
+        plan=self.scan(quick=True,overrides={'unknown.iso':variant_name})
         self.assertEqual(plan['entries'][0]['status'],'ready')
         self.put(title[:80]+'.iso',b'does not matter')
         self.catalog['games']=[game('Example (USA)',[b'one']),game('Example (USA)',[b'two'])]
         self.put('Example (USA).iso',b'converted')
         row=next(r for r in self.scan(quick=True)['entries'] if r['source']=='Example (USA).iso')
+        self.assertEqual(row['confidence'],'ambiguous')
+
+    def test_unnamed_variants_have_stable_distinct_codes_and_undo(self):
+        self.catalog['games']=[game('Example (USA)',[b'one']),game('Example (USA)',[b'two'])]
+        self.put('one.iso',b'one');self.put('two.iso',b'two')
+        before=snapshot(self.root)
+        plan=self.scan()
+        self.assertTrue(all(r['status']=='ready' for r in plan['entries']))
+        self.assertEqual(len({r['target'] for r in plan['entries']}),2)
+        self.assertTrue(all('[Variant ' in r['target'] for r in plan['entries']))
+        targets={r['source']:r['target'] for r in plan['entries']}
+        self.catalog['games'].reverse()
+        self.assertEqual(targets,{r['source']:r['target'] for r in self.scan()['entries']})
+        tx=self.apply(plan)
+        rescanned=self.scan(quick=True)
+        self.assertTrue(all(r['status']=='review' and r['source']==r['target'] for r in rescanned['entries']))
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_rom_alt_label_kept_in_iso_and_cue_track_names(self):
+        standard=game('Example (USA)',[b'normal'])
+        alternate=game('Example (USA)',[b'alternate'])
+        standard['roms'][0]['name']='Example (USA).bin'
+        alternate['roms'][0]['name']='Example (USA) (Alt).bin'
+        self.catalog['games']=[standard,alternate]
+        self.put('normal.iso',b'normal')
+        self.put('alt.cue',b'FILE "track.bin" BINARY\n')
+        self.put('track.bin',b'alternate')
+        before=snapshot(self.root)
+        plan=self.scan()
+        self.assertTrue(all(r['status']=='ready' for r in plan['entries']))
+        row=next(r for r in plan['entries'] if r['source']=='alt.cue')
+        self.assertTrue(row['target'].endswith('Example (USA) (Alt).cue'))
+        self.assertNotIn('[Variant ',row['target'])
+        tx=self.apply(plan)
+        self.assertIn(b'FILE "Example (USA) (Alt).bin"',(self.root/row['target']).read_bytes())
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_serial_only_catalog_duplicates_do_not_get_variant_codes(self):
+        first=game('Example (USA)',[b'same bytes'])
+        second=copy.deepcopy(first);second['serial']='another printing'
+        self.catalog['games']=[first,second]
+        self.put('copy1.iso',b'same bytes');self.put('copy2.iso',b'same bytes')
+        rows=self.scan()['entries']
+        self.assertTrue(all(r['status']=='blocked' for r in rows))
+        self.assertTrue(all('[Variant ' not in r['target'] for r in rows))
+
+    def test_dragon_lore_trailing_disc_number_matches_only_that_disc(self):
+        source='1 Games/1 US/A - F/Dragon Lore - The Legend Begins/Dragon Lore - The Legend Begins - Disc 1.iso'
+        self.put(source,b'converted ISO')
+        self.catalog['games']=[game(f'Dragon Lore - The Legend Begins (USA, Germany) (Disc {disc})',[f'data {disc}'.encode()]) for disc in (1,2,3)]
+        row=self.scan(quick=True)['entries'][0]
         self.assertEqual(row['status'],'review')
+        self.assertEqual(row['disc'],1)
+        self.assertEqual(row['canonical'],'Dragon Lore - The Legend Begins (USA, Germany) (Disc 1)')
+        self.assertTrue(row['target'].endswith('(Disc 1).iso'))
+        for suffix in (' - Disc 2',' Disk 02',' CD3','_CD_03',' - Disc 2 of 3'):
+            self.assertIsNotNone(organizer.disc_of('Game'+suffix))
+            self.assertEqual(organizer.identification_title('Game'+suffix),'game')
+        self.assertIsNone(organizer.disc_of('Discworld'))
+
+    def test_region_variants_still_ambiguous_with_trailing_disc(self):
+        self.put('Example - Disc 1.iso',b'unknown')
+        self.catalog['games']=[game('Example (USA) (Disc 1)',[b'USA']),game('Example (Japan) (Disc 1)',[b'JP'],'Japan')]
+        row=self.scan(quick=True)['entries'][0]
+        self.assertEqual(row['confidence'],'ambiguous')
+        self.assertEqual(len(row['suggestions']),2)
 
     def test_broken_shared_and_traversing_cues_stay_put(self):
         self.put('missing.cue',b'FILE "absent.bin" BINARY\n')

@@ -38,6 +38,7 @@ REGIONS = {'us': 'USA', 'usa': 'USA', 'na': 'USA', 'europe': 'Europe', 'eu': 'Eu
            'korea': 'Korea', 'kr': 'Korea', 'germany': 'Germany', 'france': 'France',
            'world': 'World', 'australia': 'Australia', 'canada': 'Canada'}
 DISC = re.compile(r'\(\s*(?:disc|disk|cd)\s*0*(\d+)\s*\)', re.I)
+DISC_SUFFIX = re.compile(r'(?:\s*[-_.]\s*|\s+)(?:disc|disk|cd)[\s_.-]*0*(\d+)(?:\s+of\s+\d+)?$', re.I)
 FILE_LINE = re.compile(r'^([ \t]*FILE[ \t]+)(?:"([^"\r\n]+)"|([^\s]+))([ \t]+\S+[^\r\n]*)(\r?)$', re.I | re.M)
 
 
@@ -109,16 +110,58 @@ def region_of(name):
 
 
 def disc_of(name):
-    match = DISC.search(name)
+    match = DISC.search(name) or DISC_SUFFIX.search(name)
     return int(match[1]) if match else None
+
+
+def identification_title(name):
+    return catalog_tools.title_key(DISC_SUFFIX.sub('', name).strip())
+
+
+def without_disc(name):
+    return DISC_SUFFIX.sub('', DISC.sub('', name)).strip()
 
 
 def disc_stem(name, maximum=110):
     number = disc_of(name)
-    if number is None:
-        return safe_name(name, maximum)
-    suffix = f' (Disc {number})'
-    return safe_name(DISC.sub('', name).strip(), maximum - len(suffix)) + suffix
+    base = without_disc(name)
+    variant = re.search(r'\s*(\[Variant [0-9A-F]{8}\])$', base)
+    suffix = (' ' + variant[1]) if variant else ''
+    if variant:
+        base = base[:variant.start()].strip()
+    suffix += f' (Disc {number})' if number is not None else ''
+    return safe_name(base, maximum - len(suffix)) + suffix
+
+
+def release_records(games):
+    """Recover dump labels the DAT game title omits; disambiguate unnamed dumps.
+
+    Serial-only duplicates with identical data describe the same dump. The
+    fallback code identifies a disc dump, not an inferred multi-disc edition.
+    """
+    result, signatures = [], collections.defaultdict(set)
+    for game in games:
+        row = dict(game)
+        stems = {re.sub(r'\s*\(Track\s+\d+\)\s*$', '', Path(rom['name']).stem, flags=re.I).strip()
+                 for rom in game['roms'] if rom.get('name')}
+        name = next(iter(stems)) if len(stems) == 1 else game['name']
+        if catalog_tools.title_key(name) != catalog_tools.title_key(game['name']) or disc_of(name) != disc_of(game['name']):
+            name = game['name']
+        identity = sorted((str(rom['size']), next((key + ':' + rom[key].lower() for key in ('sha1', 'md5', 'crc')
+                                                 if rom.get(key)), 'unknown')) for rom in game['roms'])
+        row['_dump_signature'] = json.dumps(identity, separators=(',', ':'))
+        row['_release_name'] = name
+        signatures[name.casefold()].add(row['_dump_signature'])
+        result.append(row)
+    for row in result:
+        row['_variant'] = None
+        if len(signatures[row['_release_name'].casefold()]) > 1:
+            code = hashlib.sha1(row['_dump_signature'].encode()).hexdigest()[:8].upper()
+            row['_variant'] = code
+            number = disc_of(row['_release_name'])
+            name = without_disc(row['_release_name'])
+            row['_release_name'] = name + f' [Variant {code}]' + (f' (Disc {number})' if number is not None else '')
+    return result
 
 
 def cue_files(root, relative):
@@ -208,39 +251,45 @@ def scan_units(root):
 
 def identify(unit, games, stats, override=None, quick=False):
     if override:
-        selected = [g for g in games if g['name'] == override]
+        selected = [g for g in games if g['_release_name'] == override]
         if not selected:
-            return None, 'unmatched', 'Override is not an exact catalog name', []
+            selected = [g for g in games if g['name'] == override]
+        if not selected or len({g['_release_name'] for g in selected}) != 1:
+            return None, 'ambiguous', 'Override needs an exact release/variant name', sorted({g['_release_name'] for g in selected})
         return selected[0], 'manual', 'Explicit overrides file', []
     data = [stats[f] for f in unit['files'] if Path(f).suffix.lower() != '.cue']
     matches = []
     if not quick:
         checksums = sorted((f['size'], f['sha1'].lower()) for f in data)
         matches = [g for g in games if sorted((int(r['size']), r.get('sha1', '').lower()) for r in g['roms']) == checksums]
-        if matches and len({g['name'].casefold() for g in matches}) == 1:
+        if matches and len({g['_release_name'].casefold() for g in matches}) == 1:
             return matches[0], 'checksum', 'Complete data-file SHA-1 and size match', []
         if len(matches) > 1:
-            return None, 'ambiguous', 'Checksums identify multiple catalog releases', [g['name'] for g in matches]
+            return None, 'ambiguous', 'Checksums identify multiple catalog releases', [g['_release_name'] for g in matches]
     name = Path(unit['source']).stem
-    exact = [g for g in games if g['name'].casefold() == name.casefold()]
+    exact = [g for g in games if name.casefold() in (g['_release_name'].casefold(), disc_stem(g['_release_name']).casefold())]
+    if not exact:
+        aliases = [g for g in games if g['name'].casefold() == name.casefold()]
+        if len({g['_release_name'].casefold() for g in aliases}) == 1:
+            exact = aliases
     if exact:
         return exact[0], 'filename', 'Exact catalog filename; dump checksum not verified', []
-    title = catalog_tools.title_key(name)
-    candidates = [g for g in games if catalog_tools.title_key(g['name']) == title and disc_of(g['name']) == disc_of(name)]
+    title = identification_title(name)
+    candidates = [g for g in games if identification_title(g['name']) == title and disc_of(g['name']) == disc_of(name)]
     regions = region_of(name)
     if regions:
         candidates = [g for g in candidates if regions <= region_of(g['name'])]
-    candidates = list({g['name'].casefold(): g for g in candidates}.values())
+    candidates = list({g['_release_name'].casefold(): g for g in candidates}.values())
     # Do not silently choose a revision, prototype, demo or alternate language.
     if len(candidates) == 1:
         tags = lambda s: {x.casefold() for x in re.findall(r'\(([^)]*)\)', s)
                           if re.search(r'\b(rev|beta|proto|demo|sample|unl|alt)\b', x, re.I)}
-        if tags(name) == tags(candidates[0]['name']):
+        if tags(name) == tags(candidates[0]['_release_name']):
             return candidates[0], 'filename', 'Unique title/region/disc match; dump checksum not verified', []
     if candidates:
-        return None, 'ambiguous', 'More than one release or variant; explicit override needed', [g['name'] for g in candidates][:20]
-    suggestions = difflib.get_close_matches(title, {catalog_tools.title_key(g['name']) for g in games}, n=3, cutoff=.65)
-    return None, 'unmatched', 'No safe match; file stays in place', [g['name'] for g in games if catalog_tools.title_key(g['name']) in suggestions][:12]
+        return None, 'ambiguous', 'More than one release or variant; explicit override needed', [g['_release_name'] for g in candidates][:20]
+    suggestions = difflib.get_close_matches(title, {identification_title(g['name']) for g in games}, n=3, cutoff=.65)
+    return None, 'unmatched', 'No safe match; file stays in place', [g['_release_name'] for g in games if identification_title(g['name']) in suggestions and (disc_of(name) is None or disc_of(g['name']) == disc_of(name))][:12]
 
 
 def asset_associations(root, folder):
@@ -267,6 +316,7 @@ def existing_asset(associations, source):
 
 def build_plan(root, catalog, quick=False, overrides=None, accept_names=False):
     units = scan_units(root)
+    games = release_records(catalog['games'])
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
     entries = []
     for number, unit in enumerate(units, 1):
@@ -277,19 +327,22 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False):
             entries.append(row)
             continue
         stats = {file: fingerprint(relative_path(root, file), not quick or Path(file).suffix.lower() == '.cue') for file in unit['files']}
-        game, confidence, reason, suggestions = identify(unit, catalog['games'], stats,
+        game, confidence, reason, suggestions = identify(unit, games, stats,
             (overrides or {}).get(unit['source']), quick)
         row.update(confidence=confidence, reason=reason, suggestions=suggestions)
         if game is None:
             entries.append(row)
             continue
-        canonical = game['name']
+        canonical = game['_release_name']
         region = game.get('region') or ', '.join(sorted(region_of(canonical))) or 'Unknown'
-        group = DISC.sub('', canonical).strip()
+        # Opaque dump codes do not imply an edition shared by other discs.
+        # Keep them in filenames; retain the common game folder.
+        group = re.sub(r'\s*\[Variant [0-9A-F]{8}\]', '', without_disc(canonical)).strip()
         directory = PurePosixPath('Games') / safe_name(region) / safe_name(group)
         main = str(directory / (disc_stem(canonical) + Path(unit['source']).suffix.lower()))
         row.update(status='ready' if confidence in ('checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
+                   catalog_name=game['name'], variant=game['_variant'],
                    metadata=game.get('metadata', {}), group=group,
                    cover=existing_asset(associations['covers'], unit['source']),
                    preview=existing_asset(associations['previews'], unit['source']))
@@ -555,6 +608,8 @@ def prepare_covers(rows, cache, offline=False):
             continue
         canonical, group = row['canonical'], row['group']
         exact = [n for n in names if Path(n).stem.casefold() == canonical.casefold()]
+        if not exact and row.get('catalog_name'):
+            exact = [n for n in names if Path(n).stem.casefold() == row['catalog_name'].casefold()]
         if not exact:
             exact = [n for n in names if catalog_tools.title_key(Path(n).stem) == catalog_tools.title_key(group)
                      and row['region'] in region_of(Path(n).stem)]
@@ -591,6 +646,7 @@ def write_database(root, tx, plan, selected):
         path = mapping.get(row['source'], row['source'])
         records.pop(row['source'], None)
         records[path] = dict(path=path, title=row.get('canonical'), region=row.get('region'),
+            catalog_name=row.get('catalog_name'), variant=row.get('variant'),
             disc=row.get('disc'), identification=row.get('confidence', 'unmatched'),
             status='organized' if row in selected else row['status'], metadata=row.get('metadata', {}),
             cover=row.get('cover'), cover_source=row.get('cover_source'), suggestions=row.get('suggestions', []))
