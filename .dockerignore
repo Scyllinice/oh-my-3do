@@ -7,10 +7,14 @@
 !docker/**
 !src/
 !src/**
+!vendor/
+!vendor/**
 !tests/
 !tests/**
 !tools/
 !tools/prepare-runtime.py
+!tools/index-media.py
+!tools/prepare-preview.py
 
 # Re-apply exclusions after the allowlist so generated test files stay out.
 **/__pycache__/

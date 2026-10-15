@@ -44,7 +44,7 @@ RUN devkit-entrypoint devkit-smoke /tmp/devkit-smoke
 # Image preparation is optional at runtime but available in the same container.
 USER root
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends imagemagick \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends imagemagick ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 USER developer
 
@@ -52,8 +52,9 @@ USER developer
 # and run the host tests. Temporary files stay out of the mounted project.
 COPY --chown=developer:developer Makefile /tmp/project-check/Makefile
 COPY --chown=developer:developer src/ /tmp/project-check/src/
+COPY --chown=developer:developer vendor/ /tmp/project-check/vendor/
 COPY --chown=developer:developer tests/ /tmp/project-check/tests/
-COPY --chown=developer:developer tools/prepare-runtime.py /tmp/project-check/tools/prepare-runtime.py
+COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py /tmp/project-check/tools/
 COPY --chown=developer:developer ohmy3do.ini /tmp/project-check/ohmy3do.ini
 RUN make -C /tmp/project-check test test-sdk \
     && armcc -I/opt/3do-devkit/include/3do \

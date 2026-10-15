@@ -3,6 +3,7 @@
 #include "menu_config.h"
 #include "menu_ui.h"
 #include "usb_art.h"
+#include "usb_media.h"
 #include "art_navigation.h"
 #include "save_usb.h"
 #include "nvram_io.h"
@@ -24,7 +25,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.6.0"
+#define MENU_VERSION "0.7.0"
 #define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -90,7 +91,16 @@ typedef struct Menu {
     int settings_usb_covers;
     int settings_remember_position;
     int settings_recent_games;
+    int settings_video_previews;
     UsbArtIndex usb_art;
+    UsbArtIndex usb_previews;
+    UsbPreview preview;
+    CCB *preview_cel;
+    int preview_attempted, media_cancelled;
+    unsigned long preview_since;
+    unsigned int preview_frame;
+    unsigned long preview_load_ms;
+    int preview_result;
     CCB *logo;
     CCB *cover;
     Item vbl;
@@ -135,6 +145,8 @@ typedef struct Menu {
 } Menu;
 
 static void refresh_usb_art(Menu *menu);
+static void stop_preview(Menu *menu);
+static void update_preview(Menu *menu);
 static void draw_tools(Menu *menu);
 static void tools_input(Menu *menu, u32 pressed);
 static int offer_group(Menu *menu, const MenuEntry *entry);
@@ -178,8 +190,16 @@ static unsigned long now_ms(Menu *menu)
     return (unsigned long)GetMSecTime(menu->clock);
 }
 
+static void stop_preview(Menu *menu)
+{
+    if (menu->preview_cel) UnloadCel(menu->preview_cel);
+    menu->preview_cel = NULL;
+    usb_preview_free(&menu->preview);
+}
+
 static void selection_changed(Menu *menu)
 {
+    stop_preview(menu); menu->preview_attempted = 0;
     menu->selection_since = now_ms(menu);
     menu->position_dirty = 1;
     menu->alphabet_active = 0;
@@ -353,7 +373,7 @@ static void draw(Menu *menu)
     size_t start = (selected / rows) * rows;
     size_t i;
     unsigned long now = now_ms(menu);
-    int artwork = menu->covers_enabled && !menu->review && menu->view_valid && total;
+    int artwork = (menu->covers_enabled || menu->config.video_previews) && !menu->review && menu->view_valid && total;
     const char *message = menu->message;
     if (menu->tools) { draw_tools(menu); return; }
     if (menu->notice_active && now - menu->notice_since >= 2500UL)
@@ -460,12 +480,20 @@ static void draw(Menu *menu)
         rectangle(menu,234,84,68,84,BG);
         rectangle(menu,232,82,18,1,ACCENT);
         rectangle(menu,303,153,1,17,ACCENT);
-        if (menu->cover) draw_cel(menu, menu->cover);
+        if (menu->preview_cel && menu->preview.pixels) {
+            unsigned long elapsed = now-menu->preview_since;
+            unsigned int frame = (unsigned int)(((elapsed/1000)*menu->preview.fps+((elapsed%1000)*menu->preview.fps)/1000)%menu->preview.frames);
+            if (frame != menu->preview_frame) {
+                memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.pixels+frame*USB_ART_PIXELS,USB_ART_PIXELS);
+                menu->preview_frame = frame;
+            }
+            draw_cel(menu,menu->preview_cel);
+        } else if (menu->cover) draw_cel(menu, menu->cover);
         else {
             folder_icon(menu, 264, 109, MUTED);
             text(menu, 244, 140, "IMAGE", MUTED);
         }
-        text(menu, 244, 178, "COVER", MUTED);
+        text(menu,244,178,menu->preview_cel ? "VIDEO" : "COVER",MUTED);
     }
     if (!menu->review) draw_alphabet(menu);
     rectangle(menu, 16, 210, 288, 1, LINE);
@@ -530,17 +558,21 @@ static void refresh_usb_art(Menu *menu)
         for (i = 0; i < menu->listing.count; ++i)
             if (!(menu->listing.entries[i]->toc_id & 0xffffffUL)) {
                 usb_art_index_free(&menu->usb_art);
+                usb_art_index_free(&menu->usb_previews);
                 menu->covers_enabled = 0;
                 return; /* virtual device list is not a filesystem root */
             }
     }
     usb_art_index_free(&menu->usb_art);
+    usb_art_index_free(&menu->usb_previews);
     menu->covers_enabled = 0;
-    if (menu->skip_usb_art || strcmp(menu->ode.identity, "LOCODE")) return;
+    if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE")) return;
     message = menu->message;
     menu->message = "Reading cover index...";
     draw(menu);
-    usb_art_index_load(&menu->ode, ode_bus_read_buffer, &menu->usb_art);
+    if (menu->config.usb_covers) usb_art_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_art);
+    if (menu->config.video_previews && !menu->bus.timed_out && !menu->ode.navigation_failed)
+        usb_media_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_previews,"previews");
     menu->message = message;
     menu->covers_enabled = menu->usb_art.count != 0;
     if (menu->bus.timed_out || menu->ode.navigation_failed) {
@@ -571,10 +603,20 @@ typedef struct UsbCoverRead {
     unsigned char *pixels;
 } UsbCoverRead;
 
+static int media_cancel(void *context)
+{
+    Menu *menu = (Menu *)context;
+    ControlPadEventData pad;
+    if (GetControlPad(1,0,&pad) >= 0 && pad.cped_ButtonBits) menu->media_cancelled=1;
+    return menu->media_cancelled;
+}
+
 static int read_usb_cover(void *context)
 {
     UsbCoverRead *read = (UsbCoverRead *)context;
-    return usb_art_pixels(&read->menu->ode, ode_bus_read_buffer, read->filename, read->pixels);
+    if (!menu_path_compare(read->filename+strlen(read->filename)-4,".png"))
+        return usb_png_pixels(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
+    return usb_art_pixels(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels);
 }
 
 static void update_cover(Menu *menu)
@@ -621,11 +663,12 @@ static void update_cover(Menu *menu)
         menu->message = "Loading cover...";
         draw(menu);
         started = now_ms(menu);
-        result = art_at_root(&menu->ode, route, menu->depth, &menu->listing,
-                             menu->config.folder_workaround, read_usb_cover, &read);
+        menu->media_cancelled = 0;
+        result = art_at_root(&menu->ode,route,menu->depth,&menu->listing,
+                             menu->config.folder_workaround,read_usb_cover,&read);
         menu->selection_since += now_ms(menu) - started;
         menu->message = message;
-        if (result < 0) UnloadCel(cover);
+        if (result < 0 || menu->media_cancelled) UnloadCel(cover);
         else menu->cover = cover;
         if (result == -2 || menu->bus.timed_out) {
             menu->ode.navigation_failed = 1;
@@ -638,6 +681,65 @@ static void update_cover(Menu *menu)
         menu->cover->ccb_XPos = 236 << 16;
         menu->cover->ccb_YPos = 86 << 16;
         menu->cover->ccb_Flags |= CCB_LAST | CCB_BGND;
+    }
+}
+
+typedef struct PreviewRead {
+    Menu *menu;
+    const char *file;
+} PreviewRead;
+static int read_usb_preview(void *context)
+{
+    PreviewRead *read = (PreviewRead *)context;
+    return usb_preview_load(&read->menu->ode,ode_bus_read_buffer,read->file,
+                            &read->menu->preview,media_cancel,read->menu);
+}
+static void update_preview(Menu *menu)
+{
+    const MenuEntry *entry;
+    const char *file, *lookup, *message;
+    char *path;
+    ArtRouteStep route[MAX_DEPTH];
+    PreviewRead read;
+    unsigned int i;
+    int result;
+    unsigned long started;
+    if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE") || !menu->config.video_previews || menu->preview_attempted || menu->demo || menu->tools ||
+        menu->review || menu->alphabet_active || !menu->ready || menu->loading || menu->bus.timed_out ||
+        menu->ode.navigation_failed || !menu->usb_previews.count || now_ms(menu)-menu->selection_since < 1200UL) return;
+    menu->preview_attempted = 1;
+    if (!row_count(menu) || (menu->listing.has_parent && !menu->selected)) return;
+    entry = browser_entry(menu,menu->selected-(menu->listing.has_parent ? 1 : 0));
+    if (entry->is_directory) return;
+    path = (char *)malloc(9218);
+    if (!path) return;
+    if (directory_path(menu,path,8193) < 0) { free(path); return; }
+    strcat(path,"/"); strcat(path,entry->name); lookup = path+9;
+    if (menu->depth && !(menu->path_ids[0]&0xffffffUL)) lookup += strlen(menu->path[0])+1;
+    file = menu_cover_find(menu->usb_previews.entries,menu->usb_previews.count,lookup);
+    free(path);
+    if (!file) return;
+    for (i=0;i<menu->depth;++i) { route[i].id=menu->path_ids[i]; route[i].name=menu->path[i]; }
+    read.menu=menu; read.file=file; message=menu->message;
+    menu->message="Loading preview... Press to cancel."; draw(menu);
+    menu->media_cancelled=0; started=now_ms(menu);
+    result=art_at_root(&menu->ode,route,menu->depth,&menu->listing,
+                       menu->config.folder_workaround,read_usb_preview,&read);
+    menu->message=message;
+    menu->preview_load_ms=now_ms(menu)-started; menu->preview_result=result ? -1 : 1;
+    if (!result && menu->media_cancelled) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-1; }
+    if (!result) {
+        menu->preview_cel=CreateCel(64,80,16,CREATECEL_UNCODED,NULL);
+        if (menu->preview_cel) {
+            menu->preview_cel->ccb_XPos=236<<16; menu->preview_cel->ccb_YPos=86<<16;
+            menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;
+            memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.pixels,USB_ART_PIXELS);
+            menu->preview_frame=0; menu->preview_since=now_ms(menu);
+        } else { usb_preview_free(&menu->preview); menu->preview_result=-1; }
+    }
+    if (result == -2 || menu->bus.timed_out || menu->ode.navigation_failed) {
+        stop_preview(menu); menu->ode.navigation_failed=1; menu->ready=menu->view_valid=0;
+        menu->message="Preview I/O failed. Restart console.";
     }
 }
 
@@ -657,6 +759,7 @@ static void show_demo(Menu *menu)
     }
     menu->review = 0;
     usb_art_index_free(&menu->usb_art);
+    usb_art_index_free(&menu->usb_previews);
     menu->covers_enabled = menu_cover_count != 0;
     ode_listing_free(&menu->listing);
     menu->listing.entries = (const MenuEntry **)malloc(9 * sizeof(MenuEntry *));
@@ -699,6 +802,7 @@ static void connect_ode(Menu *menu)
     menu->position_result = menu->recent_result = menu->diagnostics_result = 0;
     memset(&menu->last_position,0,sizeof(menu->last_position));
     menu_favorites_free(&menu->recent); menu->recent_valid = 0;
+    usb_art_index_free(&menu->usb_previews);
     menu->config_result = 3; /* not attempted */
     memset(menu->ode.identity, 0, sizeof(menu->ode.identity));
     memset(menu->ode.revision, 0, sizeof(menu->ode.revision));
@@ -731,6 +835,7 @@ static void connect_ode(Menu *menu)
     menu->settings_usb_covers = menu->config.usb_covers;
     menu->settings_remember_position = menu->config.remember_position;
     menu->settings_recent_games = menu->config.recent_games;
+    menu->settings_video_previews = menu->config.video_previews;
     menu->saved_config = menu->config;
     if (menu->bus.timed_out) {
         menu->message = "Config I/O failed. Restart console.";
@@ -1150,10 +1255,11 @@ static void export_diagnostics(Menu *menu)
     format(line,"\nlast_error=%08lx\nlast_fault_command=%02x\nlast_fault_status=%02x\nfault_error=%08lx\n",(unsigned long)snapshot.last_error & 0xffffffffUL,snapshot.failed_command,snapshot.failed_status,(unsigned long)snapshot.failure_error & 0xffffffffUL); strcat(data,line);
     format(line,"timeout=%d\nnavigation_blocked=%d\nconfig_result=%d\n",snapshot.timed_out,menu->ode.navigation_failed,menu->config_result); strcat(data,line);
     format(line,"folder_workaround=%d\nusb_covers=%d\nscreen_margin=%d\nlarge_titles=%d\ntheme=%d\n",menu->config.folder_workaround,menu->config.usb_covers,menu->config.screen_margin,menu->config.large_titles,menu->config.theme); strcat(data,line);
-    format(line,"remember_position=%d\nrecent_games=%d\nunsaved_settings=%d\n",menu->config.remember_position,menu->config.recent_games,config_dirty(menu)); strcat(data,line);
+    format(line,"remember_position=%d\nrecent_games=%d\nvideo_previews=%d\nunsaved_settings=%d\n",menu->config.remember_position,menu->config.recent_games,menu->config.video_previews,config_dirty(menu)); strcat(data,line);
     format(line,"queue_count=%lu\nqueue_synchronized=%d\nqueue_dirty=%d\n",(unsigned long)menu->playlist.count,menu->playlist.synchronized,menu->playlist.dirty); strcat(data,line);
     format(line,"usb_write_check=%d\nbackup_result=%d\nrestore_result=%d\nnvram_error=%08lx\n",menu->usb_tested,menu->backup_result,menu->restore_result,(unsigned long)menu->nvram_info.last_error & 0xffffffffUL); strcat(data,line);
     format(line,"position_result=%d\nrecent_result=%d\nfolder=%.64s\n",menu->position_result,menu->recent_result,menu->breadcrumb); strcat(data,line);
+    format(line,"preview_result=%d\npreview_load_ms=%lu\n",menu->preview_result,menu->preview_load_ms); strcat(data,line);
     strcat(data,"Identity/revision may be hard-coded; exact firmware build is unknown.\nSnapshot taken before export file I/O.\n");
     /* Fixed report extent replaces previous reports without firmware truncate. */
     i = strlen(data); memset(data+i,'\n',sizeof(data)-1-i); data[sizeof(data)-1] = 0;
@@ -1314,6 +1420,7 @@ static void settings_values(const Menu *menu, MenuConfig *settings)
     settings->usb_covers = menu->settings_usb_covers;
     settings->remember_position = menu->settings_remember_position;
     settings->recent_games = menu->settings_recent_games;
+    settings->video_previews = menu->settings_video_previews;
 }
 static int config_dirty(const Menu *menu)
 {
@@ -1322,7 +1429,7 @@ static int config_dirty(const Menu *menu)
     settings_values(menu,&current);
     return current.folder_workaround != saved->folder_workaround || current.usb_covers != saved->usb_covers ||
         current.screen_margin != saved->screen_margin || current.large_titles != saved->large_titles ||
-        current.theme != saved->theme || current.remember_position != saved->remember_position || current.recent_games != saved->recent_games;
+        current.theme != saved->theme || current.remember_position != saved->remember_position || current.recent_games != saved->recent_games || current.video_previews != saved->video_previews;
 }
 static void discard_config(Menu *menu)
 {
@@ -1332,6 +1439,7 @@ static void discard_config(Menu *menu)
     menu->settings_usb_covers = menu->saved_config.usb_covers;
     menu->settings_remember_position = menu->saved_config.remember_position;
     menu->settings_recent_games = menu->saved_config.recent_games;
+    menu->settings_video_previews = menu->saved_config.video_previews;
     menu->tool_message = "Unsaved settings discarded."; selection_changed(menu);
 }
 static void save_config(Menu *menu)
@@ -1344,15 +1452,16 @@ static void save_config(Menu *menu)
 static void change_config(Menu *menu, int direction)
 {
     menu->tool_message = "Changed. C:Save to USB";
-    if (menu->tool_selected == 9) { save_config(menu); return; }
+    if (menu->tool_selected == 10) { save_config(menu); return; }
+    if (menu->tool_selected == 5) { menu->settings_video_previews = !menu->settings_video_previews; return; }
     if (!menu->tool_selected) menu->config.screen_margin = (menu->config.screen_margin + direction + 13) % 13;
     else if (menu->tool_selected == 1) menu->config.large_titles = !menu->config.large_titles;
     else if (menu->tool_selected == 2) menu->config.theme = (menu->config.theme + direction + 3) % 3;
     else if (menu->tool_selected == 3) menu->settings_folder_workaround = !menu->settings_folder_workaround;
     else if (menu->tool_selected == 4) menu->settings_usb_covers = !menu->settings_usb_covers;
-    else if (menu->tool_selected == 5) menu->settings_remember_position = !menu->settings_remember_position;
-    else if (menu->tool_selected == 6) menu->settings_recent_games = !menu->settings_recent_games;
-    else if (menu->tool_selected == 8) discard_config(menu);
+    else if (menu->tool_selected == 6) menu->settings_remember_position = !menu->settings_remember_position;
+    else if (menu->tool_selected == 7) menu->settings_recent_games = !menu->settings_recent_games;
+    else if (menu->tool_selected == 9) discard_config(menu);
     else { menu->config.screen_margin = menu->config.large_titles = menu->config.theme = 0; }
     selection_changed(menu);
 }
@@ -1493,19 +1602,20 @@ static void draw_tools(Menu *menu)
             text(menu, 22, 188, line, MUTED);
         }
     } else if (menu->tools == TOOL_CONFIG) {
-        for (i = 0; i < 10; ++i) {
+        for (i = 0; i < 11; ++i) {
             if (!i) format(line,"Screen margin: %d",menu->config.screen_margin);
             else if (i == 1) format(line,"Large game titles: %s",menu->config.large_titles ? "ON" : "OFF");
             else if (i == 2) format(line,"Theme: %s",menu->config.theme == 1 ? "High contrast" : (menu->config.theme == 2 ? "Amber" : "Teal"));
             else if (i == 3) format(line,"Folder workaround: %s",menu->settings_folder_workaround ? "ON" : "OFF");
             else if (i == 4) format(line,"USB covers: %s",menu->settings_usb_covers ? "ON" : "OFF");
-            else if (i == 5) format(line,"Remember position: %s",menu->settings_remember_position ? "ON" : "OFF");
-            else if (i == 6) format(line,"Recent games: %s",menu->settings_recent_games ? "ON" : "OFF");
-            else if (i == 7) strcpy(line,"Restore display defaults");
-            else if (i == 8) strcpy(line,"Discard unsaved changes");
-            else strcpy(line,"Save changes to USB");
-            if (i == menu->tool_selected) rectangle(menu,16,81+i*11,287,10,LINE);
-            text(menu,24,82+i*11,line,i == menu->tool_selected ? TEXT : MUTED);
+            else if (i == 6) format(line,"Remember position: %s",menu->settings_remember_position ? "ON" : "OFF");
+            else if (i == 7) format(line,"Recent games: %s",menu->settings_recent_games ? "ON" : "OFF");
+            else if (i == 8) strcpy(line,"Restore display defaults");
+            else if (i == 9) strcpy(line,"Discard unsaved changes");
+            else if (i == 10) strcpy(line,"Save changes to USB");
+            else format(line,"Video previews: %s",menu->settings_video_previews ? "ON" : "OFF");
+            if (i == menu->tool_selected) rectangle(menu,16,81+i*10,287,10,LINE);
+            text(menu,24,82+i*10,line,i == menu->tool_selected ? TEXT : MUTED);
         }
         text(menu,24,194,"Non-display changes need reboot.",MUTED);
     } else if (menu->tools == TOOL_FIND) {
@@ -1742,7 +1852,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if (page == TOOL_SAVES) count = menu->nvram.count;
     if (page == TOOL_ARCHIVE) count = menu->backup.count;
     if (page == TOOL_SLOTS) count = menu->backup_mode ? 8 : 10;
-    if (page == TOOL_CONFIG) count = 10;
+    if (page == TOOL_CONFIG) count = 11;
     if (page == TOOL_GROUP) count = menu->group.count;
     if (page == TOOL_FAVORITES) count = menu->favorites.count;
     if (page == TOOL_RECENT) count = menu->recent.count;
@@ -1855,6 +1965,7 @@ int main(int argc, char **argv)
     menu.settings_usb_covers = menu.config.usb_covers;
     menu.settings_remember_position = menu.config.remember_position;
     menu.settings_recent_games = menu.config.recent_games;
+    menu.settings_video_previews = menu.config.video_previews;
     menu.saved_config = menu.config;
     menu.config_result = 3;
     menu.bus.device = menu.bus.request = menu.bus.timer = -1;
@@ -1913,6 +2024,7 @@ int main(int argc, char **argv)
                 pressed |= buttons & (ControlUp | ControlDown | ControlLeft | ControlRight);
         } else held = 0;
         previous = buttons;
+        if (pressed) { stop_preview(&menu); }
         if ((buttons & (ControlLeftShift | ControlRightShift)) ==
                 (ControlLeftShift | ControlRightShift) &&
                 (pressed & (ControlLeftShift | ControlRightShift))) {
@@ -1991,6 +2103,7 @@ int main(int argc, char **argv)
             (menu.review ? menu.queue_selected : menu.selected)) selection_changed(&menu);
         remember_position(&menu,0);
         update_cover(&menu);
+        update_preview(&menu);
         draw(&menu);
         WaitVBL(menu.vbl, 1);
     }

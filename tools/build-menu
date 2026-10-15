@@ -15,8 +15,11 @@ trap 'rm -rf "$stage"' EXIT
 sh "$TDO_DEVKIT_PATH/bin/buildtools/linux/bootstrap-3do-project" "$stage"
 python3 "$project_dir/tools/prepare-runtime.py" "$stage/takeme" "$stage/runtime-audit.json"
 cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$stage/src/"
+cp -r "$project_dir/vendor" "$stage/vendor"
 cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
 cp "$project_dir/assets/loading.banner" "$stage/takeme/BannerScreen"
+cp "$project_dir/THIRD_PARTY.md" "$stage/takeme/ThirdParty.txt"
+cp "$project_dir/LICENSE" "$stage/takeme/License.txt"
 python3 "$project_dir/tools/build-covers.py" "$stage" "$mode"
 if [[ "$mode" == menu ]]; then
     python3 "$project_dir/tools/export-covers.py"
@@ -101,9 +104,11 @@ sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
     "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
     "$project_dir/tools/export-covers.py" \
     "$project_dir/tools/prepare-runtime.py" \
+    "$project_dir"/vendor/pngle/* \
     "$project_dir/assets/logo-menu.cel" \
     "$project_dir/assets/loading.banner" \
     "$project_dir/ohmy3do.ini" \
+    "$project_dir/THIRD_PARTY.md" "$project_dir/LICENSE" \
     > "$project_dir/build/console-$mode/source.sha256"
 sha256sum "$project_dir/build/console-$mode/cover_catalog.c" \
     >> "$project_dir/build/console-$mode/source.sha256"

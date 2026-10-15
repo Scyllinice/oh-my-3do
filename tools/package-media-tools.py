@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Package the portable Python media tools without SDK or FFmpeg binaries."""
+from pathlib import Path
+import sys
+import binascii
+import struct
+import zipfile
+ROOT=Path(__file__).resolve().parent.parent
+output=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'iso/media-tools.zip'
+output.parent.mkdir(parents=True,exist_ok=True)
+files={'index-media.py':'tools/index-media.py',
+       'prepare-preview.py':'tools/prepare-preview.py',
+       'README.txt':'assets/media-tools-README.txt','LICENSE':'LICENSE'}
+# Original moving test pattern lets the first console test skip FFmpeg setup.
+pixels=bytearray()
+for frame in range(24):
+    for y in range(80):
+        for x in range(64):
+            if (x-frame*3)%64 < 12: color=(7<<10)|(26<<5)|22
+            elif ((x//8)+(y//8))%2: color=(3<<10)|(5<<5)|9
+            else: color=(1<<10)|(2<<5)|4
+            pixels+=struct.pack('>H',color)
+sample=b'OM3DVID1'+struct.pack('>HHIIHH',64,80,len(pixels),binascii.crc32(pixels),24,6)+pixels+b'END3DV01'
+with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+    for name,source in files.items():
+        entry=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0))
+        entry.compress_type=zipfile.ZIP_DEFLATED; entry.external_attr=0o100644<<16
+        archive.writestr(entry,(ROOT/source).read_bytes())
+    entry=zipfile.ZipInfo('demo-preview.3dv',date_time=(1980,1,1,0,0,0))
+    entry.compress_type=zipfile.ZIP_DEFLATED; entry.external_attr=0o100644<<16
+    archive.writestr(entry,sample)
+with zipfile.ZipFile(output) as archive:
+    assert archive.testzip() is None
+    assert set(archive.namelist())==set(files)|{'demo-preview.3dv'}
+    assert archive.read('demo-preview.3dv')==sample
+    for name,source in files.items(): assert archive.read(name)==(ROOT/source).read_bytes()
+print(output)

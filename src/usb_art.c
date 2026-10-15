@@ -11,15 +11,19 @@ static unsigned long word(const unsigned char *p)
 
 unsigned long usb_art_crc32(const unsigned char *data, size_t size)
 {
-    unsigned long crc = 0xffffffffUL;
+    static const unsigned long table[16] = {
+        0x00000000UL, 0x1db71064UL, 0x3b6e20c8UL, 0x26d930acUL,
+        0x76dc4190UL, 0x6b6b51f4UL, 0x4db26158UL, 0x5005713cUL,
+        0xedb88320UL, 0xf00f9344UL, 0xd6d6a3e8UL, 0xcb61b38cUL,
+        0x9b64c2b0UL, 0x86d3d2d4UL, 0xa00ae278UL, 0xbdbdf21cUL
+    };
+    unsigned long crc=0xffffffffUL;
     size_t i;
-    for (i = 0; i < size; ++i) {
-        int bit;
+    for (i=0;i<size;++i) {
         crc ^= data[i];
-        for (bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320UL : 0);
+        crc=(crc>>4)^table[crc&15]; crc=(crc>>4)^table[crc&15];
     }
-    return crc ^ 0xffffffffUL;
+    return crc^0xffffffffUL;
 }
 
 static int exchange(Ode *ode, unsigned char *packet, unsigned char *reply, size_t expected)
@@ -111,12 +115,13 @@ void usb_art_index_free(UsbArtIndex *index)
     memset(index, 0, sizeof(*index));
 }
 
-static int safe_filename(const char *name)
+int usb_media_filename(const char *name)
 {
-    size_t i;
-    if (strlen(name) != 28 || strcmp(name + 24, ".3dc")) return 0;
-    for (i = 0; i < 24; ++i)
-        if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) return 0;
+    size_t i, n = strlen(name);
+    if (n < 5 || n > 96 || name[0] == '.' ||
+        (menu_path_compare(name+n-4,".3dc") && menu_path_compare(name+n-4,".png") && menu_path_compare(name+n-4,".3dv"))) return 0;
+    for (i=0;i<n;++i) if ((unsigned char)name[i] < 32 || (unsigned char)name[i] == 127 ||
+        name[i] == '/' || name[i] == '\\' || name[i] == ':' || name[i] == '|') return 0;
     return 1;
 }
 
@@ -136,15 +141,18 @@ static int safe_path(const char *name)
     return 1;
 }
 
-int usb_art_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index)
+int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder)
 {
     unsigned char header[24];
+    char path[32];
     UsbArtIndex next;
     size_t bytes, count, pos = 0, i;
     int result = -1;
     memset(&next, 0, sizeof(next));
     usb_art_index_free(index);
-    if (usb_file_open(ode, "covers/index.3di") < 0) return -1;
+    if (strcmp(folder,"covers") && strcmp(folder,"previews")) return -1;
+    strcpy(path,folder); strcat(path,"/index.3di");
+    if (usb_file_open(ode,path) < 0) return -1;
     if (usb_file_read(ode, reader, header, sizeof(header), 1) < 0 ||
         memcmp(header, "OM3DIDX1", 8) || word(header + 20)) goto done;
     count = (size_t)word(header + 8);
@@ -162,13 +170,13 @@ int usb_art_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index)
         key = (size_t)next.storage[pos] * 256 + next.storage[pos + 1];
         file = (size_t)next.storage[pos + 2] * 256 + next.storage[pos + 3];
         pos += 4;
-        if (key < 2 || file != 29 || key + file > bytes - pos) goto done;
+        if (key < 2 || (file < 6 || file > 97) || key + file > bytes - pos) goto done;
         if (next.storage[pos + key - 1] || next.storage[pos + key + file - 1] ||
             memchr(next.storage + pos, 0, key - 1) ||
             memchr(next.storage + pos + key, 0, file - 1)) goto done;
         next.entries[i].path = (char *)next.storage + pos;
         next.entries[i].file = (char *)next.storage + pos + key;
-        if (!safe_path(next.entries[i].path) || !safe_filename(next.entries[i].file) ||
+        if (!safe_path(next.entries[i].path) || !usb_media_filename(next.entries[i].file) ||
             (i && menu_path_compare(next.entries[i - 1].path, next.entries[i].path) >= 0)) goto done;
         pos += key + file;
     }
@@ -182,13 +190,18 @@ done:
     return result;
 }
 
+int usb_art_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index)
+{
+    return usb_media_index_load(ode,reader,index,"covers");
+}
+
 int usb_art_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels)
 {
     unsigned char header[24];
-    char name[40];
+    char name[128];
     int result = -1;
-    if (!safe_filename(filename)) return -1;
+    if (!usb_media_filename(filename) || menu_path_compare(filename+strlen(filename)-4,".3dc")) return -1;
     strcpy(name, "covers/");
     strcat(name, filename);
     if (usb_file_open(ode, name) < 0) return -1;

@@ -19,6 +19,7 @@ STUBS = r'''
 #include "menu_config.h"
 #include "menu_ui.h"
 #include "usb_art.h"
+#include "usb_media.h"
 #include "art_navigation.h"
 #include "save_usb.h"
 #include "nvram_io.h"
@@ -87,6 +88,9 @@ static int preview_text_write(Ode *ode, OdeReadBuffer reader, const char *name, 
 #define ControlX 128
 #define ControlStart 256
 
+static unsigned long preview_buttons;
+typedef struct { unsigned long cped_ButtonBits; } ControlPadEventData;
+static int GetControlPad(int a, int b, ControlPadEventData *pad) { (void)a; (void)b; pad->cped_ButtonBits=preview_buttons; return 0; }
 typedef struct { Color color; int x, y; } GrafCon;
 typedef struct { int rect_XLeft, rect_YTop, rect_XRight, rect_YBottom; } Rect;
 #define MakeRGB15(r,g,b) (((r)<<10)|((g)<<5)|(b))
@@ -101,6 +105,16 @@ static void DrawText8(GrafCon *g, Item item, const u8 *s) {
     double sx=preview_font.ccb_HDX ? preview_font.ccb_HDX/1048576.0 : 1.0;
     double sy=preview_font.ccb_VDY ? preview_font.ccb_VDY/65536.0 : 1.0;
     (void)item; printf("T %d %d %u %.6f %.6f %s\n", g->x, g->y, g->color, sx, sy, s);
+}
+static int preview_video_enabled, preview_video_loads;
+static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, UsbPreview *preview, MediaCancel cancel, void *context) {
+    (void)ode; (void)reader; (void)file;
+    ++preview_video_loads;
+    if (!preview_video_enabled || (cancel && cancel(context))) return -1;
+    preview->pixels=(unsigned char *)malloc(2*USB_ART_PIXELS);
+    if (!preview->pixels) return -1;
+    memset(preview->pixels,0x11,USB_ART_PIXELS); memset(preview->pixels+USB_ART_PIXELS,0x22,USB_ART_PIXELS);
+    preview->frames=2; preview->fps=6; return 0;
 }
 static unsigned long preview_now;
 static int preview_unloads;
@@ -248,6 +262,38 @@ int main(int argc, char **argv) {
         preview_now+=350;
         update_cover(&menu);
         if (preview_cel_calls != 2 || !menu.cover_attempted) abort();
+        /* RAM playback uses the real loader scheduling, draw and cleanup code. */
+        menu.demo=0; menu.selected=2; menu.ready=1; menu.covers_enabled=1;
+        menu.config_result=0; strcpy(menu.ode.identity,"LOCODE");
+        menu.usb_previews.entries=(MenuCover *)malloc(sizeof(MenuCover));
+        if (!menu.usb_previews.entries) abort();
+        menu.usb_previews.entries[0].path="Alone in the Dark.iso";
+        menu.usb_previews.entries[0].file="Game.3dv"; menu.usb_previews.count=1;
+        menu.config.video_previews=1; preview_video_enabled=1; preview_cel_fail=0;
+        selection_changed(&menu); preview_now+=1199; update_preview(&menu);
+        if (preview_video_loads || menu.preview_attempted) abort();
+        ++preview_now;
+        menu.tools=TOOL_HOME; update_preview(&menu); menu.tools=0;
+        menu.alphabet_active=1; update_preview(&menu); menu.alphabet_active=0;
+        menu.review=1; update_preview(&menu); menu.review=0;
+        menu.config.video_previews=0; update_preview(&menu);
+        if (preview_video_loads) abort();
+        menu.config.video_previews=1; update_preview(&menu);
+        if (preview_video_loads != 1 || !menu.preview_cel || !menu.preview.pixels) abort();
+        preview_now+=167; draw(&menu);
+        if (menu.preview_frame != 1 || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x22) abort();
+        preview_now+=167; draw(&menu);
+        if (menu.preview_frame || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x11) abort();
+        stop_preview(&menu); update_preview(&menu);
+        if (menu.preview.pixels || menu.preview_cel || preview_video_loads != 1) abort();
+        selection_changed(&menu); preview_now+=1200; preview_buttons=ControlB;
+        update_preview(&menu); preview_buttons=0;
+        if (menu.preview.pixels || menu.preview_cel || !menu.preview_attempted || preview_video_loads != 2) abort();
+        selection_changed(&menu); preview_now+=1200; preview_cel_fail=1;
+        update_preview(&menu); preview_cel_fail=0;
+        if (menu.preview.pixels || menu.preview_cel) abort();
+        usb_art_index_free(&menu.usb_previews); preview_video_enabled=0;
+        menu.config.video_previews=0; menu.demo=1;
         /* Tools wraps across eight entries; viewing Help/Diagnostics is read-only. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlUp);
@@ -313,13 +359,13 @@ int main(int argc, char **argv) {
             !menu.config.folder_workaround || menu.config.usb_covers) abort();
         menu.config_result=2; tools_input(&menu,ControlC);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
-        menu.tool_selected=7; tools_input(&menu,ControlA);
+        menu.tool_selected=8; tools_input(&menu,ControlA);
         if (menu.config.screen_margin || menu.config.large_titles || menu.config.theme) abort();
         if (menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlB);
         menu.tool_selected=3; tools_input(&menu,ControlA);
         if (menu.tools != TOOL_CONFIG || menu.settings_folder_workaround || !menu.settings_usb_covers) abort();
-        tools_input(&menu,ControlUp); if (menu.tool_selected != 9) abort();
+        tools_input(&menu,ControlUp); if (menu.tool_selected != 10) abort();
         tools_input(&menu,ControlA);
         if (strcmp(menu.tool_message,"Load a valid INI before saving.")) abort();
         /* Unsaved marker tracks all settings; discard restores the saved snapshot. */
@@ -591,18 +637,18 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        loading + '\n#undef ode_read_directory\n' + covers + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        loading + '\n#undef ode_read_directory\n#define usb_preview_load preview_video_load\n' + covers + '\n#undef usb_preview_load\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
                         str(ROOT / "src/menu_ui.c"),
-                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/art_navigation.c"),
+                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_usb.c"),
                         str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
                         str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
-        print("Menu view/input: alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
+        print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
         for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode in ("tools", "diagnostics-state"):

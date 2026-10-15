@@ -22,7 +22,7 @@ text = assembly.read_text()
 # Saved registers add at most 64 bytes per function. Prevent activate's frame
 # from overlapping offer_group's existing large buffers on a single call chain.
 limits = {'activate': 512, 'offer_group': 20000, 'remember_position': 512,
-          'record_launch': 512, 'export_diagnostics': 8192}
+          'record_launch': 512, 'export_diagnostics': 8192, 'update_cover': 13000, 'update_preview': 1024}
 summary = []
 for name, limit in limits.items():
     body = text.split('\n' + name + '\n', 1)[1]
@@ -34,3 +34,31 @@ for name, limit in limits.items():
     summary.append(f'{name}: {size} bytes of explicit local stack')
 (out / 'frames.txt').write_text('\n'.join(summary) + '\n')
 print('ARM stack: small launch/persistence frames; disc grouping and diagnostics fit their budgets')
+
+# Bound the combined cover -> streaming PNG/USB/inflate path as well.
+frames = {}
+for source, names in {
+    'main.c': ['update_cover'],
+    'usb_media.c': ['usb_png_pixels', 'usb_preview_load'],
+    'usb_art.c': ['usb_file_read'],
+    'png_decode.c': ['pngle_feed'],
+    'png_inflate.c': ['tinfl_decompress'],
+}.items():
+    target = out / (source + '.s')
+    command = ['armcc', '-I'+str(sdk/'include/3do'), '-I'+str(sdk/'include/community'),
+               '-DOH3DO_SDK=1', '-DNDEBUG=1', '-O2', '-bigend', '-za1', '-zi4',
+               '-fpu', 'none', '-arch', '3', '-apcs', '3/32/nofp/swst/wide/softfp',
+               '-S', str(root/'src'/source), '-o', str(target)]
+    compiled = subprocess.run(command, capture_output=True, text=True)
+    (out/(source+'.log')).write_text(compiled.stdout+compiled.stderr)
+    compiled.check_returncode()
+    for name in names:
+        body = target.read_text().split('\n'+name+'\n',1)[1]
+        prologue = re.split(r'\n\s+BL\s+',body,maxsplit=1)[0]
+        frames[name] = sum(int(n,0) for n in re.findall(r'^\s+SUB\s+sp,sp,#(0x[0-9a-fA-F]+|\d+)\s*$',prologue,re.M))
+        assert frames[name] < 14000, (name,frames[name])
+# Includes both USB and inflate frames, although those calls run separately;
+# reserve another 4 KiB for saved registers and intermediate library calls.
+assert sum(frames.values())+4096 < 32768, frames
+(out/'media-frames.txt').write_text('\n'.join(f'{name}: {size}' for name,size in frames.items())+'\n')
+print('ARM media stack: conservative PNG/USB/inflate frame sum fits 32 KiB')

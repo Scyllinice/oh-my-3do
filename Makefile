@@ -1,8 +1,9 @@
 CC = cc
 CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 
-.PHONY: test test-firmware test-covers test-sdk clean
-test: build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+.PHONY: test test-firmware test-covers test-sdk test-media clean
+test: build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+	python3 tests/test_media_tools.py
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
 	python3 tests/test_queue_workflow.py
@@ -46,7 +47,7 @@ build/test_usb_art: src/usb_art.c src/usb_art.h src/menu_config.h src/ode.h src/
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_usb_art.c $(LDFLAGS) -o $@
 
 clean:
-	rm -f build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+	rm -f build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
 
 build/test_saves: src/save_archive.c src/save_archive.h src/save_usb.c src/save_usb.h src/usb_art.c src/usb_file.h src/menu_ui.c src/menu_ui.h src/cover_catalog.c src/menu_settings.c src/menu_settings.h src/menu_config.c tests/test_saves.c
 	mkdir -p build
@@ -76,3 +77,10 @@ build/test_library_navigation: src/library_navigation.c src/library_navigation.h
 build/test_menu_position: src/menu_position.c src/menu_position.h tests/test_menu_position.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/menu_position.c tests/test_menu_position.c $(LDFLAGS) -o $@
+
+build/test_usb_media: tests/test_usb_media.c src/usb_media.c src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_media.c src/usb_media.c src/usb_art.c src/menu_ui.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
+
+test-media: build/test_usb_media
+	python3 tests/test_media_tools.py

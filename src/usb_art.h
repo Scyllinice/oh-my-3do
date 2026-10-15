@@ -9,6 +9,8 @@ typedef struct UsbArtIndex {
     size_t count;
     unsigned char *storage;
 } UsbArtIndex;
+int usb_media_filename(const char *name);
+int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder);
 void usb_art_index_free(UsbArtIndex *index);
 /* All file operations here require the selected USB volume's root directory. */
 int usb_art_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index);
