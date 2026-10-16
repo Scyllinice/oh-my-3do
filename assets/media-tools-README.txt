@@ -100,6 +100,16 @@ Menu-written text is read up to its first NUL terminator, ignoring stale tails.
 Invalid saved positions reset to the USB root with a warning; undo restores
 the original file. Text changes are prepared before any discs are moved.
 
+Clean up empty directories left after organizing:
+  py organize-library.py clean-empty M:/
+The command above previews changes. To remove the listed empty folders:
+  py organize-library.py clean-empty M:/ --apply
+Only empty directories are removed, deepest first; files are never deleted.
+Folders with unmatched discs, notes or hidden files remain. Support folders,
+hidden folders, Windows system folders, symlinks and junctions are skipped.
+No scan plan, catalog or downloads are needed. Organizer undo still works and
+recreates folders needed for the original files.
+
 To import EmuMovies covers instead of downloading covers, add:
   --cover-dir "D:/EmuMovies/Panasonic_3DO/<front-cover-folder>"
 Replace the placeholder with the actual front-box image folder. Avoid a parent

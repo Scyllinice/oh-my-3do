@@ -5,6 +5,7 @@ import base64
 import collections
 from contextlib import closing
 import difflib
+import errno
 import hashlib
 import html
 import importlib.util
@@ -1113,6 +1114,57 @@ def default_cache():
     return (Path(base) if base else Path.home() / '.cache') / 'oh-my-3do'
 
 
+def directory_link(path):
+    # Windows junctions are reparse points but aren't always reported as
+    # symlinks, especially on Python versions before Path.is_junction().
+    return path.is_symlink() or bool(getattr(path.lstat(), 'st_file_attributes', 0) & 0x400)
+
+
+def cleanup_empty(root, apply=False):
+    """Remove only empty directories, deepest first; never delete files."""
+    if directory_link(root) or not root.is_dir():
+        raise ValueError('USB root must be a real directory, not a link or junction')
+    protected = SKIP | {'system volume information', '$recycle.bin'}
+    candidates = []
+    def visit(directory):
+        empty = True
+        for path in sorted(directory.iterdir()):
+            if directory_link(path) or not path.is_dir():
+                empty = False
+            elif (path.name.casefold() in protected or path.name.startswith('.') or
+                  getattr(path.lstat(), 'st_file_attributes', 0) & 0x6):
+                empty = False
+            elif not visit(path):
+                empty = False
+        if empty and directory != root:
+            candidates.append(directory.relative_to(root).as_posix())
+        return empty
+    visit(root)
+    removed = []
+    for name in candidates:
+        if not apply:
+            print(f'Would remove: {name}')
+            continue
+        path = root / name
+        # Recheck every component in case the drive changed after enumeration.
+        if any(directory_link(p) for p in (path, *path.parents) if p == root or root in p.parents):
+            print(f'Kept link/junction: {name}')
+            continue
+        try:
+            path.rmdir()
+            removed.append(name)
+            print(f'Removed: {name}')
+        except OSError as error:
+            if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+            print(f'Kept folder that is no longer empty: {name}')
+    if apply:
+        print(f'Removed {len(removed)} empty directories. No files deleted.')
+    else:
+        print(f'{len(candidates)} empty directories could be removed. No changes made. Add --apply to remove them.')
+    return removed if apply else candidates
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cache', type=Path, default=default_cache())
@@ -1120,6 +1172,9 @@ def main():
     report_command = commands.add_parser('report', help='rebuild the interactive HTML report from an existing plan without scanning')
     report_command.add_argument('plan', type=Path)
     report_command.add_argument('--output', type=Path, help='HTML output (default: beside the plan)')
+    cleanup = commands.add_parser('clean-empty', help='preview empty directories; add --apply to remove them')
+    cleanup.add_argument('usb_root', type=Path)
+    cleanup.add_argument('--apply', action='store_true', help='remove empty directories; never delete files')
     scan = commands.add_parser('scan', help='read the drive and write a preview plan; USB files stay unchanged')
     scan.add_argument('usb_root', type=Path)
     scan.add_argument('--plan', type=Path, default=Path('library-plan.json'))
@@ -1159,6 +1214,11 @@ def main():
             return
         if args.usb_root.is_symlink() or not args.usb_root.is_dir():
             raise ValueError('USB root must be a real, existing directory')
+        if args.command == 'clean-empty':
+            if directory_link(args.usb_root):
+                raise ValueError('USB root must not be a link or junction')
+            cleanup_empty(args.usb_root.resolve(), args.apply)
+            return
         root = args.usb_root.resolve()
         cache = args.cache.resolve()
         if cache == root or root in cache.parents:

@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -83,6 +84,75 @@ class OrganizerTest(unittest.TestCase):
             ({'status':'unmatched','confidence':'unmatched'},'unidentified'),({'status':'blocked'},'problems'),
             ({'status':'unmatched','reason':'Missing CUE file'},'problems')]
         for row,expected in cases:self.assertEqual(organizer.review_bucket(row),expected)
+
+    def test_empty_cleanup_previews_nested_directories_and_preserves_all_files(self):
+        (self.root/'Old Games/A/Empty Game').mkdir(parents=True)
+        self.put('Old Games/B/Remaining Game/game.iso',b'disc')
+        self.put('Old Games/C/readme.txt',b'notes')
+        self.put('Old Games/D/.hidden',b'hidden file')
+        before=snapshot(self.root)
+        planned=organizer.cleanup_empty(self.root)
+        self.assertEqual(planned,['Old Games/A/Empty Game','Old Games/A'])
+        self.assertTrue((self.root/'Old Games/A/Empty Game').is_dir())
+        self.assertEqual(before,snapshot(self.root))
+        self.assertEqual(organizer.cleanup_empty(self.root,apply=True),planned)
+        self.assertFalse((self.root/'Old Games/A').exists())
+        self.assertEqual(before,snapshot(self.root))
+        self.assertTrue(self.root.is_dir())
+
+    def test_empty_cleanup_preserves_support_hidden_and_link_directories(self):
+        protected=['covers','previews','music','saves','.ohmy3do','SYSTEM','System Volume Information','$RECYCLE.BIN','.private']
+        for name in protected:(self.root/name/'empty-child').mkdir(parents=True)
+        (self.root/'junction/empty-child').mkdir(parents=True)
+        check=organizer.directory_link
+        with mock.patch.object(organizer,'directory_link',side_effect=lambda p:p==self.root/'junction' or check(p)):
+            self.assertEqual(organizer.cleanup_empty(self.root,apply=True),[])
+        for name in protected+['junction']:self.assertTrue((self.root/name/'empty-child').exists())
+
+    def test_empty_cleanup_keeps_folder_if_a_file_arrives_after_preview(self):
+        (self.root/'empty').mkdir()
+        rmdir=Path.rmdir
+        def changed(path):
+            (path/'new.txt').write_bytes(b'arrived during cleanup')
+            return rmdir(path)
+        with mock.patch.object(Path,'rmdir',changed):
+            self.assertEqual(organizer.cleanup_empty(self.root,apply=True),[])
+        self.assertEqual((self.root/'empty/new.txt').read_bytes(),b'arrived during cleanup')
+
+    def test_empty_cleanup_after_organizing_does_not_break_undo(self):
+        self.put('Old Library/A/Example.iso',b'disc');self.catalog['games']=[game('Example (USA)',[b'disc'])]
+        before=snapshot(self.root)
+        tx=self.apply(self.scan())
+        removed=organizer.cleanup_empty(self.root,apply=True)
+        self.assertIn('Old Library',removed)
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_empty_cleanup_cli_does_not_need_catalog_or_plan(self):
+        (self.root/'empty').mkdir()
+        command=[sys.executable,str(ROOT/'tools/organize-library.py'),'clean-empty',str(self.root)]
+        result=subprocess.run(command,check=True,stdout=subprocess.PIPE,text=True)
+        self.assertIn('Would remove: empty',result.stdout)
+        self.assertTrue((self.root/'empty').exists())
+        subprocess.run(command+['--apply'],check=True,stdout=subprocess.PIPE)
+        self.assertFalse((self.root/'empty').exists())
+
+    @unittest.skipUnless(os.name=='nt','Windows junction check')
+    def test_empty_cleanup_skips_real_windows_junction(self):
+        import ctypes
+        outside=Path(self.temp.name)/'outside';(outside/'empty').mkdir(parents=True)
+        link=self.root/'junction'
+        hidden=self.root/'hidden';hidden.mkdir()
+        self.assertTrue(ctypes.windll.kernel32.SetFileAttributesW(str(hidden),0x12))
+        subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(link),str(outside)],cwd=self.temp.name,check=True,stdout=subprocess.PIPE)
+        try:
+            self.assertTrue(organizer.directory_link(link))
+            self.assertEqual(organizer.cleanup_empty(self.root,apply=True),[])
+            self.assertTrue((outside/'empty').is_dir())
+            self.assertTrue(link.exists())
+            self.assertTrue(hidden.is_dir())
+        finally:
+            link.rmdir()
+            ctypes.windll.kernel32.SetFileAttributesW(str(hidden),0x10)
 
     def test_database_connection_closes_before_copy_and_cleanup_on_success_and_failure(self):
         connect=sqlite3.connect

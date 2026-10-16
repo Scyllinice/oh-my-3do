@@ -589,6 +589,20 @@ USB root. The search and artwork indices are rebuilt automatically. Original
 empty game folders are retained. `boot.iso`, INI settings, save backups, and
 music are left in place.
 
+Remove empty folders left after organizing with `clean-empty`. Preview first,
+then add `--apply` to remove them:
+
+```powershell
+py organize-library.py clean-empty M:/
+py organize-library.py clean-empty M:/ --apply
+```
+
+This removes empty folders from the bottom up without deleting files. Folders
+containing unmatched discs, notes, artwork, or hidden files remain. Support
+folders, hidden folders, Windows system folders, symlinks, and junctions are
+skipped. No scan plan or downloads are needed. Organizer undo still works and
+recreates folders needed to restore the moved discs.
+
 Menu-written text ends at its first NUL terminator; old bytes after that point
 are ignored when updating favorites, history, and saved position. An invalid
 saved-position file is reset to the USB root with a warning, and undo restores
