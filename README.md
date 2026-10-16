@@ -524,6 +524,11 @@ reported without blocking other games. `--no-covers` skips downloads. Use
 `--offline` on scan/apply to work from existing caches; `scan --refresh-catalog`
 refreshes the identification and metadata sources.
 
+To import downloaded gameplay clips during apply, add
+`--preview-dir "C:/EmuMovies/3DO"`; see the EmuMovies workflow below. Existing
+previews take precedence. New clips and their index associations are included
+in the same undo journal as the disc moves.
+
 Favorites, recent games, and the selected saved game are updated to the new
 paths. If a saved folder loses its contents, the saved position resets to the
 USB root. The search and artwork indices are rebuilt automatically. Original
@@ -650,7 +655,8 @@ preserved when their game and media files still exist, including older `.3dc`
 covers; a matching PNG basename takes precedence. Games in different folders
 with the same basename share the matching artwork. Each index supports up to
 2,048 associations / 128 KiB. Media basenames must fit 96 UTF-8 bytes. No
-artwork or footage is downloaded automatically.
+footage is downloaded by these tools. The organizer can download covers and
+import clips already saved on the PC.
 
 Video previews are small **silent 64×80 RGB555 loops**, fitted into the artwork
 area. They are converted on the PC; the console does not play MP4/MOV files. The
@@ -675,6 +681,42 @@ python3 tools/index-media.py /path/to/USB
 Enable **Video previews** in Tools → Settings, save, and cold boot
 (or add `video_previews=1` under `[artwork]` in the USB INI). Old INIs keep
 previews disabled. `usb_covers` controls static covers independently.
+
+### Importing EmuMovies clips
+
+Download the **3DO Video Snaps** to a separate PC folder using
+[EmuMovies Sync](https://emumovies.com/faq/4-questions-about-emumovies-sync)
+with a supporting membership, or extract a downloaded 3DO video pack there.
+Keep that folder limited to 3DO clips and keep the original game-based filenames.
+MP4, AVI, MKV, MOV, and WebM files are supported. Subfolders are searched.
+
+Install FFmpeg on the PC and make sure `ffmpeg` is available on PATH. Scan the
+drive, review the HTML plan, then apply it with the clip folder:
+
+```powershell
+py organize-library.py scan M:/ --quick --plan library-plan.json
+py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches --preview-dir "C:/EmuMovies/3DO"
+```
+
+The organizer prefers exact catalog/source names, then a unique normalized
+game-title match. Known region and disc labels must agree. A generic clip
+without a disc label can serve all discs of a game; duplicate clips or uncertain
+matches are reported and skipped. It does not infer the edition of an ISO from
+the clip. Rename or remove duplicate source clips before running a new scan and
+apply if a match needs attention.
+
+The imported preview is a four-second silent loop. Add `--preview-start 5` to
+start five seconds into each source clip. Clips are converted before any USB
+files move, stored under `previews/`, and indexed automatically. Existing
+previews are retained, originals stay on the PC, and conversion failures are
+reported without blocking other games. The JSON database records each imported
+preview's filename and relative source filename. Enable **Video previews** in
+Tools → Settings after importing; no ISO rebuild is needed.
+
+The tool does not log into EmuMovies or store account credentials. Direct API
+integration requires separate developer access from
+[EmuMovies](https://emumovies.com/forums/topic/58984-new-2023-emumovies-api-available-to-developers/).
+Downloaded footage is not included in this repository or its releases.
 
 Covers start loading after 350 ms without a selection change; previews wait 1.2
 seconds. A whole clip is checked and loaded into RAM before playback, so looping

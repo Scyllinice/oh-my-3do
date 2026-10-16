@@ -14,6 +14,7 @@ import re
 import sqlite3
 import struct
 import binascii
+import subprocess
 import sys
 import tempfile
 import time
@@ -771,6 +772,64 @@ def prepare_covers(rows, cache, offline=False):
     return prepared, warnings
 
 
+def prepare_previews(rows, directory, start=0):
+    """Import local, already downloaded clips; ambiguous matches stay untouched."""
+    if not directory.is_dir() or directory.is_symlink():
+        raise ValueError('Preview directory must be a real, existing directory')
+    if not 0 <= start <= 86400:
+        raise ValueError('Preview start must be 0-86400 seconds')
+    directory = directory.resolve()
+    clips = []
+    for folder, dirs, files in os.walk(directory, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not (Path(folder)/d).is_symlink())
+        for name in sorted(files):
+            path = Path(folder)/name
+            if path.suffix.lower() in ('.mp4', '.avi', '.mkv', '.mov', '.webm') and not path.is_symlink() and path.is_file():
+                clips.append(path)
+    converter = module('prepare-preview')
+    prepared, warnings, converted = {}, [], {}
+    # Demo/sampler clips must never become a full game's preview via title_key.
+    def kind(name):
+        match = re.search(r'\b(demo|demonstration|trial|sampler)\b', name, re.I)
+        return match[1].casefold() if match else 'game'
+    for row in rows:
+        if row.get('preview'):
+            continue
+        names = [row['canonical'], row.get('catalog_name'), Path(row['source']).stem]
+        candidates = []
+        for name in filter(None, names):
+            candidates = [p for p in clips if p.stem.casefold() == name.casefold()]
+            if candidates:
+                break
+        if not candidates:
+            candidates = [p for p in clips
+                if identification_title(p.stem) == identification_title(row['canonical'])
+                and kind(p.stem) == kind(row['canonical'])
+                and (not region_of(p.stem) or bool(region_of(p.stem) & region_of(row['canonical'])))
+                and (disc_of(p.stem) is None or disc_of(p.stem) == row.get('disc'))]
+        if len(candidates) != 1:
+            warnings.append(f'{"Ambiguous" if candidates else "No"} preview found: {row["canonical"]}')
+            continue
+        clip = candidates[0]
+        try:
+            if clip not in converted:
+                # Conversion happens on the PC before any USB changes. Include
+                # content and settings in the name so reruns never replace art.
+                key = hashlib.sha256((digest(clip) + f':{start}:6:24:1').encode()).hexdigest()[:16]
+                with tempfile.TemporaryDirectory(prefix='oh3do-preview-') as temp:
+                    target = Path(temp)/'clip.3dv'
+                    converter.convert(clip, target, start=start)
+                    converted[clip] = (key, target.read_bytes())
+            key, content = converted[clip]
+            basename = 'clip-' + key + '.3dv'
+            prepared[basename] = content
+            row['preview'] = basename
+            row['preview_source'] = clip.relative_to(directory).as_posix()
+        except (ValueError, OSError, subprocess.CalledProcessError) as error:
+            warnings.append(f'Preview failed for {row["canonical"]}: {error}')
+    return prepared, warnings
+
+
 def write_database(root, tx, plan, selected):
     previous = relative_path(root, '.ohmy3do/library.json')
     existing = json.loads(previous.read_text(encoding='utf-8')).get('games', []) if previous.exists() else []
@@ -786,7 +845,8 @@ def write_database(root, tx, plan, selected):
             edition_unresolved=row.get('edition_unresolved',False),
             disc=row.get('disc'), identification=row.get('confidence', 'unmatched'),
             status='organized' if row in selected else row['status'], metadata=row.get('metadata', {}),
-            cover=row.get('cover'), cover_source=row.get('cover_source'), suggestions=row.get('suggestions', []))
+            cover=row.get('cover'), cover_source=row.get('cover_source'),
+            preview=row.get('preview'), preview_source=row.get('preview_source'), suggestions=row.get('suggestions', []))
     # Do not retain stale records for discs no longer present.
     records = [r for r in records.values() if relative_path(root, r['path']).is_file()]
     data = dict(schema=1, generated=time.time(), sources=plan['sources'], games=sorted(records, key=lambda r: r['path']))
@@ -803,7 +863,7 @@ def write_database(root, tx, plan, selected):
         tx.write('.ohmy3do/library.sqlite', path.read_bytes())
 
 
-def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False):
+def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False, preview_dir=None, preview_start=0):
     if plan.get('schema') != 2 or plan.get('root') != str(root):
         raise ValueError('Plan version or USB root does not match; scan this drive again')
     rows = [r for r in plan['entries'] if r['status'] == 'ready' or (accept_names and r['status'] == 'review')]
@@ -842,13 +902,21 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
         if path.exists() and (not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
             raise ValueError(f'Invalid support file: {name}')
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
+    # Check the drive again: a preview added after scan also takes precedence.
+    for row in rows:
+        row['preview'] = existing_asset(associations['previews'], row['source'])
+    preview_files, preview_warnings = prepare_previews(rows, preview_dir, preview_start) if preview_dir is not None else ({}, [])
     prepared, warnings = prepare_covers(rows, cache, offline) if covers else ({}, [])
-    for warning in warnings:
+    for warning in warnings + preview_warnings:
         print(warning)
     for name, content in prepared.items():
         path = relative_path(root, 'covers/' + name)
         if path.exists() and path.read_bytes() != content:
             raise ValueError(f'Cover destination is occupied: {path}')
+    for name, content in preview_files.items():
+        path = relative_path(root, 'previews/' + name)
+        if path.exists() and path.read_bytes() != content:
+            raise ValueError(f'Preview destination is occupied: {path}')
     tx = Transaction(root, plan)
     print(f'Undo journal: {tx.path}', flush=True)
     try:
@@ -861,6 +929,8 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
         remap_text(root, tx, mapping)
         for name, content in prepared.items():
             tx.write('covers/' + name, content)
+        for name, content in preview_files.items():
+            tx.write('previews/' + name, content)
         media_outputs = {}
         for folder in ('covers', 'previews'):
             path = relative_path(root, folder)
@@ -940,6 +1010,8 @@ def main():
     apply.add_argument('--plan', type=Path, default=Path('library-plan.json'))
     apply.add_argument('--accept-name-matches', action='store_true', help='also accept the unverified filename matches in this plan')
     apply.add_argument('--no-covers', action='store_true')
+    apply.add_argument('--preview-dir', type=Path, help='import matching clips downloaded with EmuMovies Sync or another source')
+    apply.add_argument('--preview-start', type=float, default=0, help='clip offset in seconds (default: 0); requires --preview-dir')
     apply.add_argument('--offline', action='store_true')
     undo = commands.add_parser('undo', help='restore a transaction; refuses to overwrite later edits')
     undo.add_argument('usb_root', type=Path)
@@ -972,7 +1044,9 @@ def main():
             print(f'Plan: {args.plan.resolve()}\nOpen preview: {report.resolve()}\nCounts: {dict(counts)}\nNo USB files changed. Filename matches need review and --accept-name-matches.')
         elif args.command == 'apply':
             plan = json.loads(args.plan.read_text(encoding='utf-8'))
-            apply_plan(root, plan, cache, not args.no_covers, args.offline, args.accept_name_matches)
+            if args.preview_start and args.preview_dir is None:
+                raise ValueError('--preview-start requires --preview-dir')
+            apply_plan(root, plan, cache, not args.no_covers, args.offline, args.accept_name_matches, args.preview_dir, args.preview_start)
         else:
             tx = Transaction(root, path=args.journal)
             tx.undo()

@@ -201,6 +201,26 @@ Enable Video previews in Tools > Settings, save, then cold boot.
 Keep the existing INI and folder-workaround setting. Alternatively add
 video_previews=1 under [artwork] in the USB ohmy3do.ini.
 
+Bulk import from EmuMovies:
+Download 3DO Video Snaps using EmuMovies Sync with a supporting membership,
+or extract a downloaded 3DO video pack into a PC folder. Keep original game
+filenames and keep that folder limited to 3DO clips. Install FFmpeg on PATH.
+Scan the USB drive, review the HTML plan, then apply with:
+  py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches --preview-dir "C:/EmuMovies/3DO"
+Optionally add --preview-start 5 to skip the first five seconds of each clip.
+MP4/AVI/MKV/MOV/WebM clips in subfolders are supported. Exact names are preferred;
+a unique normalized title match is allowed when known region/disc labels agree.
+Generic clips without a disc label can serve every disc. Ambiguous/missing
+clips and conversion failures are reported and skipped. Existing previews stay.
+Each imported clip becomes a four-second silent loop. The preview index is
+built automatically and new previews are covered by the organizer undo journal.
+Original videos stay on the PC. Enable Video previews in Settings afterward.
+No ISO rebuild is needed. This tool does not log into EmuMovies or store account
+credentials. Direct API integration needs separate developer access:
+  https://emumovies.com/forums/topic/58984-new-2023-emumovies-api-available-to-developers/
+  https://emumovies.com/faq/4-questions-about-emumovies-sync
+Downloaded footage is not bundled with these tools.
+
 A preview waits for the selection to settle, loads completely into RAM and
 loops without USB reads. Pressing a button cancels loading/stops playback.
 Missing/invalid clips leave the cover available. Loading speed depends on

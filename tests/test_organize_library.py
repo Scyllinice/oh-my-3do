@@ -9,6 +9,8 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -54,6 +56,102 @@ class OrganizerTest(unittest.TestCase):
 
     def apply(self, plan, names=False):
         return organizer.apply_plan(self.root,plan,self.cache,covers=False,accept_names=names)
+
+    def preview_fixture(self, title='Example (USA)', discs=1):
+        clips=Path(self.temp.name)/'clips';clips.mkdir()
+        for disc in range(1,discs+1):
+            name=title+(f' (Disc {disc})' if discs>1 else '')
+            data=f'synthetic disc {disc}'.encode()
+            self.put('Unsorted/'+name+'.iso',data)
+            self.catalog['games'].append(game(name,[data]))
+        return clips
+
+    def test_preview_conversion_association_database_and_undo(self):
+        clips=self.preview_fixture(discs=2)
+        source=clips/'Example (USA).mp4';source.write_bytes(b'fake clip')
+        before=snapshot(self.root)
+        converter=organizer.module('prepare-preview')
+        def convert(source,target,**kwargs):
+            self.assertEqual(kwargs,dict(start=5))
+            target.write_bytes(b'converted clip')
+        with mock.patch.object(converter,'convert',side_effect=convert) as conversion, mock.patch.object(organizer,'module',return_value=converter):
+            tx=organizer.apply_plan(self.root,self.scan(),self.cache,covers=False,preview_dir=clips,preview_start=5)
+        conversion.assert_called_once()
+        index=organizer.index_tools.existing_index(self.root/'previews')
+        self.assertEqual(len(index),2)
+        self.assertEqual(len(set(index.values())),1)
+        self.assertEqual((self.root/'previews'/next(iter(index.values()))).read_bytes(),b'converted clip')
+        records=json.loads((self.root/'.ohmy3do/library.json').read_text())['games']
+        self.assertTrue(all(r['preview_source']=='Example (USA).mp4' for r in records))
+        self.assertEqual(source.read_bytes(),b'fake clip')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_preview_ambiguous_region_demo_and_disc_filtering(self):
+        clips=self.preview_fixture(discs=2)
+        for name in ('Example.mp4','Example.avi','Example (Japan).mp4','Example (Demo).mp4'):
+            (clips/name).write_bytes(b'fake')
+        rows=self.scan()['entries']
+        prepared,warnings=organizer.prepare_previews(rows,clips)
+        self.assertFalse(prepared);self.assertEqual(len(warnings),2)
+        self.assertTrue(all('Ambiguous' in w for w in warnings))
+        for path in clips.iterdir():path.unlink()
+        (clips/'Example (USA) (Disc 1).mp4').write_bytes(b'fake')
+        converter=organizer.module('prepare-preview')
+        with mock.patch.object(converter,'convert',side_effect=lambda s,t,**k:t.write_bytes(b'clip')), mock.patch.object(organizer,'module',return_value=converter):
+            prepared,warnings=organizer.prepare_previews(rows,clips)
+        self.assertEqual(len(prepared),1);self.assertEqual(len(warnings),1)
+        self.assertIn('Disc 2',warnings[0])
+
+    def test_preview_existing_added_after_scan_is_preserved(self):
+        clips=self.preview_fixture()
+        plan=self.scan()
+        self.put('previews/Example (USA).3dv',b'personal preview')
+        before=snapshot(self.root)
+        converter=organizer.module('prepare-preview')
+        with mock.patch.object(converter,'convert') as conversion, mock.patch.object(organizer,'module',return_value=converter):
+            tx=organizer.apply_plan(self.root,plan,self.cache,covers=False,preview_dir=clips)
+        conversion.assert_not_called()
+        self.assertEqual(list(organizer.index_tools.existing_index(self.root/'previews').values()),['Example (USA).3dv'])
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_preview_failed_conversion_and_bad_directory(self):
+        clips=self.preview_fixture();(clips/'Example.mp4').write_bytes(b'bad video')
+        converter=organizer.module('prepare-preview')
+        rows=self.scan()['entries']
+        with mock.patch.object(converter,'convert',side_effect=subprocess.CalledProcessError(1,'ffmpeg')), mock.patch.object(organizer,'module',return_value=converter):
+            prepared,warnings=organizer.prepare_previews(rows,clips)
+        self.assertFalse(prepared);self.assertIn('Preview failed',warnings[0]);self.assertIsNone(rows[0]['preview'])
+        before=snapshot(self.root)
+        with self.assertRaises(ValueError):
+            organizer.apply_plan(self.root,self.scan(),self.cache,covers=False,preview_dir=clips/'missing')
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_preview_conversion_rollback_removes_new_files(self):
+        clips=self.preview_fixture();(clips/'Example.mp4').write_bytes(b'fake')
+        before=snapshot(self.root)
+        converter=organizer.module('prepare-preview')
+        with mock.patch.object(converter,'convert',side_effect=lambda s,t,**k:t.write_bytes(b'clip')), mock.patch.object(organizer,'module',return_value=converter), mock.patch.object(organizer,'write_database',side_effect=OSError('test failure')):
+            with self.assertRaises(OSError):
+                organizer.apply_plan(self.root,self.scan(),self.cache,covers=False,preview_dir=clips)
+        self.assertEqual(before,snapshot(self.root))
+
+    @unittest.skipUnless(shutil.which('ffmpeg'),'FFmpeg required for actual clip conversion')
+    def test_preview_real_ffmpeg_import_and_native_player(self):
+        clips=self.preview_fixture()
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=96x80:rate=6',
+            '-t','5','-c:v','mpeg4',str(clips/'Example (USA).mp4')],check=True)
+        before=snapshot(self.root)
+        tx=organizer.apply_plan(self.root,self.scan(),self.cache,covers=False,preview_dir=clips,preview_start=1)
+        index=organizer.index_tools.existing_index(self.root/'previews')
+        clip=self.root/'previews'/next(iter(index.values()))
+        data=clip.read_bytes()
+        self.assertEqual(data[:8],b'OM3DVID1')
+        self.assertEqual(data[-8:],b'END3DV01')
+        self.assertEqual(len(data),24+24*64*80*2+8)
+        player=ROOT/'build/test_usb_media'
+        if player.exists():
+            subprocess.run([str(player),'video',str(clip)],check=True,stdout=subprocess.PIPE)
+        tx.undo();self.assertEqual(before,snapshot(self.root))
 
     def test_iso_checksum_identification_database_history_and_undo(self):
         source='Unsorted/random.iso'
