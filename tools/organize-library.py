@@ -36,10 +36,10 @@ STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di'
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
 CATEGORIES = ('Games', 'Demos', 'Samplers', 'Applications', 'Multimedia', 'Educational')
 REGIONS = {'us': 'USA', 'usa': 'USA', 'na': 'USA', 'europe': 'Europe', 'eu': 'Europe',
-           'pal': 'Europe', 'uk': 'Europe', 'jp': 'Japan', 'japan': 'Japan', 'j': 'Japan',
+           'pal': 'Europe', 'uk': 'Europe', 'gb': 'Europe', 'jp': 'Japan', 'japan': 'Japan', 'j': 'Japan',
            'korea': 'Korea', 'kr': 'Korea', 'germany': 'Germany', 'france': 'France',
            'world': 'World', 'australia': 'Australia', 'canada': 'Canada'}
-DISC = re.compile(r'\(\s*(?:disc|disk|cd)\s*0*(\d+)\s*\)', re.I)
+DISC = re.compile(r'\(\s*(?:disc|disk|cd)\s*0*(\d+)(?:\s+of\s+\d+)?\s*\)', re.I)
 DISC_SUFFIX = re.compile(r'(?:\s*[-_.]\s*|\s+)(?:disc|disk|cd)[\s_.-]*0*(\d+)(?:\s+of\s+\d+)?$', re.I)
 FILE_LINE = re.compile(r'^([ \t]*FILE[ \t]+)(?:"([^"\r\n]+)"|([^\s]+))([ \t]+\S+[^\r\n]*)(\r?)$', re.I | re.M)
 
@@ -105,7 +105,7 @@ def safe_name(name, maximum=110):
 def region_of(name):
     result = set()
     for group in re.findall(r'\(([^)]*)\)', name):
-        for part in group.split(','):
+        for part in re.split(r'[,/-]', group):
             if part.strip().casefold() in REGIONS:
                 result.add(REGIONS[part.strip().casefold()])
     return result
@@ -508,40 +508,87 @@ def json_bytes(value):
     return (json.dumps(value, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
 
 
+def review_bucket(row):
+    if row['status'] in ('ready', 'review'):
+        return 'matched'
+    if row['status'] == 'blocked' or (row['status'] == 'unmatched' and not row.get('confidence')):
+        return 'problems'
+    if row['status'] == 'category-review' or row.get('confidence') == 'ambiguous':
+        return 'decisions'
+    return 'unidentified'
+
+
 def report_html(plan):
     escape = lambda value: html.escape(str(value) if value is not None else '')
+    counts = collections.Counter(review_bucket(r) for r in plan['entries'])
+    tabs = ''.join('<button type="button" data-view="' + key + '">' + label + ' (' + str(counts[key]) + ')</button>'
+                   for key, label in (('decisions', 'Needs a choice'), ('unidentified', 'Unidentified'),
+                                      ('problems', 'File problems'), ('matched', 'Matched')))
     rows = []
     for row in plan['entries']:
         meta = row.get('metadata', {})
-        suggestions = ''.join('<li>' + escape(name) + '</li>' for name in row.get('suggestions', []))
+        suggestions = list(dict.fromkeys(row.get('suggestions', [])))
         notes = escape(row['reason'])
         if row.get('category_reason'):
             notes += '<br><small>' + escape(row['category_reason']) + '</small>'
+        controls = ''
+        if row['status'] == 'category-review':
+            controls = '<label>Category <select class="category"><option value="">Leave in place</option>' + ''.join(
+                '<option>' + escape(c) + '</option>' for c in CATEGORIES) + '</select></label>'
+        elif suggestions and row['status'] == 'unmatched' and row.get('confidence'):
+            controls = '<label>Release <select class="release"><option value="">Leave in place</option>' + ''.join(
+                '<option>' + escape(name) + '</option>' for name in suggestions) + '</select></label>'
         if suggestions:
-            notes += '<details><summary>Catalog suggestions (not selected)</summary><ul>' + suggestions + '</ul></details>'
+            notes += '<details><summary>Catalog suggestions (not selected)</summary><ul>' + ''.join(
+                '<li>' + escape(name) + '</li>' for name in suggestions) + '</ul></details>'
         cells = [escape(row['status']) + '<br><small>' + escape(row.get('confidence', '')) + '</small>',
                  escape(row['source']) + '<br><strong>' + escape(row.get('target') or 'Stays in place') + '</strong>',
-                 escape(row.get('category') or 'Needs classification'),
-                 '<br>'.join(escape(meta.get(field)) for field in ('genre', 'publisher', 'year')), notes]
-        rows.append('<tr class="' + escape(row['status']) + '">' + ''.join('<td>' + cell + '</td>' for cell in cells) + '</tr>')
+                 escape(row.get('category') or ('Needs classification' if row['status'] == 'category-review' else 'Unknown')),
+                 '<br>'.join(escape(meta.get(field)) for field in ('genre', 'publisher', 'year')), notes + controls]
+        rows.append('<tr hidden data-bucket="' + review_bucket(row) + '" data-source="' + escape(row['source']) + '" class="' + escape(row['status']) + '">' + ''.join('<td>' + cell + '</td>' for cell in cells) + '</tr>')
     return ('''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Oh My 3DO — Library preview</title><style>
 body{font:16px system-ui,sans-serif;background:#101b2d;color:#e1e9f3;margin:2rem}h1{color:#3dd9ba}
-input{padding:.7rem;width:min(90%,36rem);margin:1rem 0;font:inherit}table{border-collapse:collapse;width:100%;background:#17283e}
-th,td{padding:.8rem;text-align:left;border-bottom:1px solid #344960;vertical-align:top;overflow-wrap:anywhere}
+input,select,button{padding:.6rem;margin:.3rem;font:inherit;background:#243c55;color:#e1e9f3;border:1px solid #52718d;border-radius:.3rem}
+input{width:min(85%,36rem)}select{max-width:30rem;width:100%;margin:.5rem 0}button{cursor:pointer}button[aria-pressed=true]{border-color:#3dd9ba;color:#3dd9ba}
+table{border-collapse:collapse;width:100%;background:#17283e}th,td{padding:.8rem;text-align:left;border-bottom:1px solid #344960;vertical-align:top;overflow-wrap:anywhere}
 th{background:#243c55}small,summary{color:#bacbdb}.blocked td:first-child,.unmatched td:first-child{color:#ffb6a5}
 .ready td:first-child{color:#59e0bf}.review td:first-child,.category-review td:first-child{color:#ffda85}strong{font-weight:500;color:#9be7d9}
 @media(max-width:700px){body{margin:.6rem}table{font-size:13px}th,td{padding:.4rem}}
 </style><h1>Library preview</h1><p>USB root: ''' + escape(plan['root']) + '''</p>
-<p>No USB files changed during scanning. Ready entries have checksum or manual matches.
-Review entries use filenames and need <code>--accept-name-matches</code>. Other entries stay in place.
-Category-review entries need a category override and a new scan, even when their checksums match.
-Metadata is community supplied; empty fields are unknown. No fuzzy suggestions are applied automatically.</p>
-<input id="filter" type="search" placeholder="Filter by title, category, region, status, genre or publisher" aria-label="Filter library">
-<table><thead><tr><th>Status / match</th><th>Original → proposed path</th><th>Category</th><th>Genre / publisher / year</th><th>Notes</th></tr></thead>
+<p><strong>Matched entries can be accepted as a batch.</strong> Filename matches are unverified,
+but already identify a single game/release or an explicitly marked game-level entry.
+Use <code>--accept-name-matches</code> on apply after checking a sample of their proposed paths.
+Unidentified entries, unresolved choices and file problems stay in place; they do not block the matched batch.</p>
+<p>No USB files changed. Suggestions are never selected automatically. Category choices and release
+choices can be downloaded as JSON files below. Scan again with <code>--quick --overrides overrides.json --categories categories.json</code>
+to build a new plan from those choices. Only include a flag if its file was downloaded.
+Download choices before closing this page; changing this report does not edit the plan or drive.</p>
+<nav aria-label="Review groups">''' + tabs + '''<button type="button" data-view="all">All</button></nav>
+<input id="filter" type="search" placeholder="Filter this group by title, category, region or publisher" aria-label="Filter library">
+<p id="visible" aria-live="polite"></p><button id="export-releases" type="button">Download release choices</button>
+<button id="export-categories" type="button">Download category choices</button><span id="choices" aria-live="polite"></span>
+<noscript><p>Enable JavaScript for filtering and choice downloads.</p><style>tr[hidden]{display:table-row}</style></noscript>
+<table><thead><tr><th>Status / match</th><th>Original → proposed path</th><th>Category</th><th>Genre / publisher / year</th><th>Notes / choice</th></tr></thead>
 <tbody>''' + ''.join(rows) + '''</tbody></table>
-<script>document.getElementById('filter').addEventListener('input',function(){const q=this.value.toLowerCase();
-document.querySelectorAll('tbody tr').forEach(row=>{row.hidden=!row.textContent.toLowerCase().includes(q);});});</script></html>''').encode('utf-8')
+<script>
+let view='decisions';
+const rows=Array.from(document.querySelectorAll('tbody tr'));
+function filter(){const q=document.getElementById('filter').value.toLowerCase();let count=0;
+rows.forEach(row=>{row.hidden=(view!=='all'&&row.dataset.bucket!==view)||!row.textContent.toLowerCase().includes(q);if(!row.hidden)count++;});
+document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));
+document.getElementById('visible').textContent=count+' entries shown. Unresolved entries may be left in place.';}
+function choices(kind){return Object.fromEntries(rows.flatMap(row=>{const select=row.querySelector('select.'+kind);return select&&select.value?[[row.dataset.source,select.value]]:[];}));}
+function update(){document.getElementById('choices').textContent=' '+Object.keys(choices('release')).length+' releases, '+Object.keys(choices('category')).length+' categories selected';}
+function download(kind,name){const blob=new Blob([JSON.stringify(choices(kind),null,2)+String.fromCharCode(10)],{type:'application/json'});
+const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>{view=b.dataset.view;filter();}));
+document.getElementById('filter').addEventListener('input',filter);
+document.querySelectorAll('select').forEach(s=>s.addEventListener('change',update));
+document.getElementById('export-releases').addEventListener('click',()=>download('release','overrides.json'));
+document.getElementById('export-categories').addEventListener('click',()=>download('category','categories.json'));
+filter();update();
+</script></html>''').encode('utf-8')
 
 
 def atomic_write(path, data):
@@ -1040,6 +1087,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cache', type=Path, default=default_cache())
     commands = parser.add_subparsers(dest='command', required=True)
+    report_command = commands.add_parser('report', help='rebuild the interactive HTML report from an existing plan without scanning')
+    report_command.add_argument('plan', type=Path)
+    report_command.add_argument('--output', type=Path, help='HTML output (default: beside the plan)')
     scan = commands.add_parser('scan', help='read the drive and write a preview plan; USB files stay unchanged')
     scan.add_argument('usb_root', type=Path)
     scan.add_argument('--plan', type=Path, default=Path('library-plan.json'))
@@ -1064,6 +1114,19 @@ def main():
     undo.add_argument('journal', help='journal path relative to the USB root, printed by apply')
     args = parser.parse_args()
     try:
+        if args.command == 'report':
+            plan = json.loads(args.plan.read_text(encoding='utf-8'))
+            if plan.get('schema') != 2:
+                raise ValueError('Unsupported plan version; scan again')
+            output = args.output or args.plan.with_suffix('.html')
+            if output.suffix.lower() != '.html':
+                raise ValueError('Report output must end in .html')
+            root = Path(plan['root']).resolve()
+            if output.resolve() == root or root in output.resolve().parents:
+                raise ValueError('Keep the report on the PC, outside the USB root')
+            atomic_write(output, report_html(plan))
+            print(f'Open report: {output.resolve()}\nNo scan or USB changes performed.')
+            return
         if args.usb_root.is_symlink() or not args.usb_root.is_dir():
             raise ValueError('USB root must be a real, existing directory')
         root = args.usb_root.resolve()
@@ -1085,9 +1148,11 @@ def main():
             report = args.plan.with_suffix('.html')
             atomic_write(report, report_html(plan))
             counts = collections.Counter(row['status'] for row in plan['entries'])
+            groups = collections.Counter(review_bucket(row) for row in plan['entries'])
             for row in plan['entries']:
                 print(f'{row["status"].upper():9} {row["source"]}\n          {row.get("target") or row["reason"]}')
             print(f'Plan: {args.plan.resolve()}\nOpen preview: {report.resolve()}\nCounts: {dict(counts)}\nNo USB files changed. Filename matches need review and --accept-name-matches.')
+            print(f'Batch matches: {groups["matched"]}; choices: {groups["decisions"]}; unidentified: {groups["unidentified"]}; file problems: {groups["problems"]}. Unresolved entries stay in place and do not block batch apply.')
         elif args.command == 'apply':
             plan = json.loads(args.plan.read_text(encoding='utf-8'))
             if args.preview_start and args.preview_dir is None:

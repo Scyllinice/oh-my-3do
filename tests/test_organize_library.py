@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
+import sys
 from pathlib import Path
 import sqlite3
 import shutil
@@ -65,6 +67,61 @@ class OrganizerTest(unittest.TestCase):
             self.put('Unsorted/'+name+'.iso',data)
             self.catalog['games'].append(game(name,[data]))
         return clips
+
+    def test_disc_of_total_and_compound_regions_identify_without_fuzzy_matching(self):
+        self.put('Example (1995)(Publisher)(EU-US)(Disc 2 of 3)[!].iso',b'disc')
+        self.catalog['games']=[game('Example (USA, Europe) (Disc 1)',[b'1']),game('Example (USA, Europe) (Disc 2)',[b'2'])]
+        row=self.scan(quick=True)['entries'][0]
+        self.assertEqual(row['canonical'],'Example (USA, Europe) (Disc 2)')
+        self.assertEqual(row['status'],'review')
+        self.assertEqual(organizer.region_of('Example (GB)'),{'Europe'})
+        self.assertEqual(organizer.disc_of('Example (Disk 02 of 03)'),2)
+
+    def test_review_groups_separate_filename_matches_choices_and_file_errors(self):
+        cases=[({'status':'review','confidence':'filename'},'matched'),({'status':'ready'},'matched'),
+            ({'status':'unmatched','confidence':'ambiguous'},'decisions'),({'status':'category-review'},'decisions'),
+            ({'status':'unmatched','confidence':'unmatched'},'unidentified'),({'status':'blocked'},'problems'),
+            ({'status':'unmatched','reason':'Missing CUE file'},'problems')]
+        for row,expected in cases:self.assertEqual(organizer.review_bucket(row),expected)
+
+    def test_interactive_report_rebuild_does_not_scan_or_change_usb(self):
+        self.put('Example.iso',b'disc');self.catalog['games']=[game('Example (USA)',[b'disc'])]
+        plan=self.scan();before=snapshot(self.root)
+        plan_path=Path(self.temp.name)/'plan.json';plan_path.write_bytes(organizer.json_bytes(plan))
+        output=Path(self.temp.name)/'report.html'
+        subprocess.run([sys.executable,str(ROOT/'tools/organize-library.py'),'report',str(plan_path),'--output',str(output)],check=True,stdout=subprocess.PIPE)
+        self.assertIn('Matched (1)',output.read_text())
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_interactive_report_filters_exports_choices_and_escapes_options(self):
+        dangerous='Example </option><script>alert(1)</script> (USA)'
+        plan=dict(root=str(self.root),entries=[
+            dict(source='Example.iso',status='review',confidence='filename',reason='Unique name'),
+            dict(source='Choose.iso',status='unmatched',confidence='ambiguous',reason='Choose a release',suggestions=[dangerous]),
+            dict(source='Category.iso',status='category-review',reason='Choose category')])
+        report=organizer.report_html(plan).decode()
+        self.assertNotIn('</option><script>alert(1)</script>',report)
+        self.assertIn('&lt;script&gt;',report)
+        self.assertIn('Needs a choice (2)',report)
+        if not shutil.which('node'):return
+        script=re.search(r'<script>(.*?)</script>',report,re.S)[1]
+        probe='''const assert=require('node:assert/strict');let downloaded;
+const choice={value:'Example (USA)',addEventListener(){}};
+function row(bucket,source,select){return {dataset:{bucket,source},textContent:source,hidden:true,querySelector(q){return q==='select.release'?select:null;}};}
+const rowsFixture=[row('matched','Example.iso'),row('decisions','Choose.iso',choice)];
+const elements={filter:{value:'',addEventListener(){}},visible:{},choices:{}};
+const buttons=['decisions','matched','all'].map(v=>({dataset:{view:v},setAttribute(){},addEventListener(e,f){this.click=f;}}));
+const releaseButton={addEventListener(e,f){this.click=f;}};
+const document={querySelectorAll(q){return q==='tbody tr'?rowsFixture:q==='[data-view]'?buttons:[];},
+getElementById(id){return id==='export-releases'?releaseButton:id==='export-categories'?{addEventListener(){}}:elements[id];},
+createElement(){return {click(){}};}};
+const URL={createObjectURL(blob){downloaded=blob;return 'blob:test';},revokeObjectURL(){}};
+'''+script+'''
+assert.equal(rowsFixture[0].hidden,true);assert.equal(rowsFixture[1].hidden,false);
+buttons[1].click();assert.equal(rowsFixture[0].hidden,false);assert.equal(rowsFixture[1].hidden,true);
+releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(text),{'Choose.iso':'Example (USA)'}));
+'''
+        subprocess.run(['node','-e',probe],check=True,stdout=subprocess.PIPE)
 
     def cover_image(self, path, color='red'):
         from PIL import Image

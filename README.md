@@ -387,6 +387,29 @@ drive. Scanning leaves USB files unchanged and produces `library-plan.json` and
 a searchable `library-plan.html` preview. The preview shows original/proposed
 paths, identification confidence, category, genre, publisher, year, and unresolved matches.
 
+The report separates **Matched**, **Needs a choice**, **Unidentified**, and
+**File problems**. Filename matches already identify a single release or a
+marked game-level entry, but do not verify the disc contents. Check a sample
+of their proposed paths and accept them together with `--accept-name-matches`.
+Unresolved entries stay in place and do not block that batch.
+
+Choose a release or category from the report's dropdowns, then download the
+choices as `overrides.json` or `categories.json`. Place those files beside the
+tools and scan again with the corresponding flags. Nothing is selected
+automatically, and editing the report does not change the plan or USB drive.
+Download choices before closing the page. New release choices may expose
+category choices on the next scan. File problems need attention separately.
+
+Rebuild the report from an existing plan without rescanning or reading discs:
+
+```powershell
+py organize-library.py report library-plan.json
+```
+
+Names such as `(Disc 1 of 2)` and compound region labels such as `(EU-US)`
+are supported. Different spellings and alternate titles remain suggestions
+unless an exact normalized match exists; fuzzy suggestions are not applied.
+
 The first scan downloads the [Libretro/Redump identification DAT](https://github.com/libretro/libretro-database)
 and the [LaunchBox metadata archive](https://forums.launchbox-app.com/topic/30123-launchbox-games-db-external-scraper/),
 currently about 104 MiB for the latter. Only 3DO records are retained in the

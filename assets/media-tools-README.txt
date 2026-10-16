@@ -19,6 +19,19 @@ are Games, Demos, Samplers, Applications, Multimedia and Educational. The first
 scan downloads a Redump DAT and LaunchBox's metadata archive (about 104 MiB),
 cached on the PC. Subsequent scans use the cache. Metadata fields may be missing.
 
+The report has Matched, Needs a choice, Unidentified and File problems filters.
+Matched filename entries already identify one release or a marked game-level
+entry, but do not verify disc contents. Check a sample of proposed paths, then
+accept the matched batch with --accept-name-matches. Unresolved entries stay
+in place and do not block it. Dropdowns let you choose a release/category;
+download overrides.json/categories.json, then scan with the corresponding flags.
+Nothing is preselected. Download choices before closing the report. Editing the
+report does not edit the plan or drive. New release choices may need category
+choices on a subsequent scan. File problems need separate attention.
+Rebuild a report from an existing plan without rescanning:
+  py organize-library.py report library-plan.json
+Names with (Disc 1 of 2), (EU-US), (EU-JP) and (GB) are recognized.
+
 Catalog title labels, release type and genre determine the category. Full game
 compilations remain Games; FMV gameplay alone does not make a disc multimedia.
 Explicit atlases/almanacs and other reference media go to Multimedia. Uncertain
