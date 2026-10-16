@@ -1239,6 +1239,38 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         with self.assertRaisesRegex(ValueError,'changed after'):tx.undo()
         self.assertEqual(before,snapshot(self.root))
 
+    def test_undo_repeated_writes_restores_existing_and_removes_new_files(self):
+        self.put('index.3di', b'original')
+        before = snapshot(self.root)
+        tx = organizer.Transaction(self.root, {})
+        for name in ('index.3di', 'covers/index.3di'):
+            tx.write(name, b'first pass')
+            tx.write(name, b'second pass')
+        organizer.Transaction(self.root, path=tx.path.relative_to(self.root).as_posix()).undo()
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_undo_repeated_writes_refuses_later_edits_without_partial_restore(self):
+        tx = organizer.Transaction(self.root, {})
+        tx.write('index.3di', b'first pass')
+        tx.write('index.3di', b'second pass')
+        tx.write('other.txt', b'untouched')
+        self.put('index.3di', b'edited later')
+        before = snapshot(self.root)
+        with self.assertRaisesRegex(ValueError, 'changed after'):
+            tx.undo()
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_undo_moved_file_with_repeated_writes_checks_original_bytes(self):
+        self.put('old.cue', b'original cue')
+        before = snapshot(self.root)
+        tx = organizer.Transaction(self.root, {})
+        tx.move(dict(source='old.cue', target='new.cue',
+                     fingerprint=organizer.fingerprint(self.root/'old.cue')))
+        tx.write('new.cue', b'first replacement')
+        tx.write('new.cue', b'second replacement')
+        tx.undo()
+        self.assertEqual(before, snapshot(self.root))
+
     def test_apply_failure_automatically_restores_original_files(self):
         self.put('old.iso',b'payload')
         self.put('favorites.txt',b'old.iso\n')

@@ -825,13 +825,22 @@ class Transaction:
                 raise ValueError('Cannot undo: original directory is occupied by a file: ' + name)
         # Preflight the entire undo before changing anything. Modified files are
         # never overwritten, including covers or favorites edited after apply.
+        restored = {}
         for entry in reversed(self.data['writes']):
             path = relative_path(self.root, entry['path'])
             before = base64.b64decode(entry['before']) if entry['before'] is not None else None
-            current = path.read_bytes() if path.exists() else None
+            if path not in restored:
+                restored[path] = path.read_bytes() if path.exists() else None
+            current = restored[path]
             if current != before and (current is None or hashlib.sha256(current).hexdigest() != entry['after']):
                 raise ValueError(f'Cannot undo: support file changed after organizing: {entry["path"]}')
-        written = {entry['path']: entry for entry in self.data['writes']}
+            # A support index can be regenerated more than once during apply.
+            # Validate each earlier write against the bytes the later undo will
+            # restore, without changing any files during preflight.
+            restored[path] = before
+        written = {}
+        for entry in self.data['writes']:
+            written.setdefault(entry['path'], entry)
         for entry in reversed(self.data['moves']):
             source = relative_path(self.root, entry['source'])
             target = relative_path(self.root, entry['target'])
