@@ -84,6 +84,43 @@ class OrganizerTest(unittest.TestCase):
             ({'status':'unmatched','reason':'Missing CUE file'},'problems')]
         for row,expected in cases:self.assertEqual(organizer.review_bucket(row),expected)
 
+    def test_database_connection_closes_before_copy_and_cleanup_on_success_and_failure(self):
+        connect=sqlite3.connect
+        write=organizer.Transaction.write
+        for fail in (False,True):
+            with self.subTest(database_failure=fail):
+                self.put('old.iso',b'synthetic')
+                self.catalog['games']=[game('Example (USA)',[b'synthetic'])]
+                before=snapshot(self.root)
+                opened=[];paths=[]
+                class TrackedConnection(sqlite3.Connection):
+                    closed=False
+                    def close(self):
+                        super().close();self.closed=True
+                    def executemany(self,*args,**kwargs):
+                        if fail:raise OSError('Synthetic database failure')
+                        return super().executemany(*args,**kwargs)
+                def tracked_connect(path):
+                    db=connect(path,factory=TrackedConnection)
+                    opened.append(db);paths.append(Path(path))
+                    return db
+                def checked_write(tx,name,content):
+                    if name=='.ohmy3do/library.sqlite':
+                        self.assertTrue(opened and all(db.closed for db in opened))
+                    return write(tx,name,content)
+                with mock.patch.object(organizer.sqlite3,'connect',side_effect=tracked_connect), mock.patch.object(organizer.Transaction,'write',checked_write):
+                    if fail:
+                        with self.assertRaisesRegex(OSError,'Synthetic database failure'):self.apply(self.scan())
+                    else:
+                        tx=self.apply(self.scan())
+                        self.assertEqual(tx.data['state'],'complete')
+                        tx.undo()
+                self.assertTrue(opened and all(db.closed for db in opened))
+                self.assertTrue(all(not p.parent.exists() for p in paths))
+                for db in opened:
+                    with self.assertRaises(sqlite3.ProgrammingError):db.execute('SELECT 1')
+                self.assertEqual(before,snapshot(self.root))
+
     def test_interactive_report_rebuild_does_not_scan_or_change_usb(self):
         self.put('Example.iso',b'disc');self.catalog['games']=[game('Example (USA)',[b'disc'])]
         plan=self.scan();before=snapshot(self.root)
@@ -329,7 +366,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertTrue((self.root/'favorites.txt').read_bytes().startswith(b'\xef\xbb\xbf# Favourites\r\n  '))
         self.assertIn(b'/Storage/Games/USA/Example (USA)\nExample (USA).iso',(self.root/'last-position.txt').read_bytes())
         self.assertEqual((self.root/'library.3di').read_bytes()[:8],b'OM3DLIB1')
-        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
             self.assertEqual(db.execute('select path,genre,publisher,year from games').fetchone(),(target,'Adventure','Example Publisher',1995))
         journal=tx.path.relative_to(self.root).as_posix()
         organizer.Transaction(self.root,path=journal).undo()
@@ -392,7 +429,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertEqual({r['category'] for r in plan['entries']},set(organizer.CATEGORIES))
         self.assertTrue(all(r['status']=='ready' for r in plan['entries']))
         tx=self.apply(plan)
-        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
             self.assertEqual({row[0] for row in db.execute('select category from games')},set(organizer.CATEGORIES))
         for row in plan['entries']:self.assertTrue((self.root/row['target']).is_file())
         self.assertTrue(all(r['source']==r['target'] for r in self.scan()['entries']))
@@ -410,7 +447,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         tx=self.apply(plan,names=True)
         self.assertTrue(all((self.root/f'old{i}.iso').exists() for i in range(len(cases))))
         self.assertFalse((self.root/'Games').exists())
-        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
             self.assertEqual(db.execute('select count(*) from games where category_review=1 and category is null').fetchone()[0],len(cases))
         tx.undo()
 
@@ -659,7 +696,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
             self.assertNotIn('RE1',row['target'])
             self.assertIn('exact edition unresolved',row['reason'])
         tx=self.apply(plan,names=True)
-        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+        with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
             self.assertEqual(db.execute('select count(*) from games where edition_unresolved=1 and catalog_name is null').fetchone()[0],2)
         rescanned=self.scan(quick=True)
         self.assertTrue(all(r['source']==r['target'] for r in rescanned['entries']))

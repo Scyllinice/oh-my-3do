@@ -3,6 +3,7 @@
 import argparse
 import base64
 import collections
+from contextlib import closing
 import difflib
 import hashlib
 import html
@@ -956,7 +957,9 @@ def write_database(root, tx, plan, selected):
     tx.write('.ohmy3do/library.json', json_bytes(data))
     with tempfile.TemporaryDirectory(prefix='oh3do-db-') as directory:
         path = Path(directory) / 'library.sqlite'
-        with sqlite3.connect(path) as db:
+        # SQLite's transaction context commits/rolls back, but does not close
+        # the connection. Close it before copying/removing the file on Windows.
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute('CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, edition_unresolved INTEGER, category TEXT, category_review INTEGER, category_reason TEXT)')
             db.execute('CREATE TABLE sources (url TEXT, sha256 TEXT)')
             db.executemany('INSERT INTO sources VALUES (?, ?)', [(s['url'], s.get('sha256')) for s in plan['sources']])
