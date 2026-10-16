@@ -7,6 +7,7 @@ typedef struct Fake {
     unsigned char *file, buffer[2048], *audio;
     size_t size,pos;
     int calls,fail_at,opened,closes,cancel_after,oom;
+    int new_layout;
     UsbMusicSpec spec;
 } Fake;
 static int transfer(void *context,const unsigned char *p,unsigned char *reply,size_t capacity,size_t *length)
@@ -19,7 +20,7 @@ static int transfer(void *context,const unsigned char *p,unsigned char *reply,si
         size_t offset=((size_t)p[1]*256+p[2])*4;
         assert(offset+4<=sizeof(f->buffer));memcpy(f->buffer+offset,p+3,4);
     } else if (p[0]==0xe1) {
-        assert(!strcmp((char *)f->buffer,USB_MUSIC_PATH));f->pos=0;f->opened=1;reply[1]=1;*length=3;
+        assert(!strcmp((char *)f->buffer,f->new_layout ? ".ohmy3do/" USB_MUSIC_PATH : USB_MUSIC_PATH));f->pos=0;f->opened=1;reply[1]=1;*length=3;
     } else if (p[0]==0xe3) {
         size_t n=(size_t)p[1]*256+p[2],actual=n;
         assert(f->opened && n<=2048);
@@ -48,7 +49,7 @@ static int cancel(void *context) { Fake *f=(Fake *)context;return f->cancel_afte
 static void reset(Fake *f,Ode *ode)
 {
     free(f->audio);f->audio=NULL;f->calls=f->opened=f->closes=f->fail_at=f->oom=f->cancel_after=0;f->pos=0;
-    memset(f->buffer,0x73,sizeof(f->buffer));memset(ode,0,sizeof(*ode));strcpy(ode->identity,"LOCODE");ode->transfer=transfer;ode->context=f;
+    f->new_layout=0;memset(f->buffer,0x73,sizeof(f->buffer));memset(ode,0,sizeof(*ode));strcpy(ode->identity,"LOCODE");ode->transfer=transfer;ode->context=f;
 }
 int main(int argc,char **argv)
 {
@@ -58,6 +59,9 @@ int main(int argc,char **argv)
     f.size=(size_t)length;f.file=(unsigned char *)malloc(f.size);assert(f.file);assert(fread(f.file,1,f.size,file)==f.size);fclose(file);original=f.size;
     reset(&f,&ode);assert(!usb_music_load(&ode,reader,allocate,&f,cancel,&f));
     assert(f.closes && !f.opened && !memcmp(f.audio,f.file+24,f.spec.bytes));calls=f.calls;
+    reset(&f,&ode);f.new_layout=1;ode.support_directory=1;
+    assert(!usb_music_load(&ode,reader,allocate,&f,cancel,&f));
+    assert(!memcmp(f.audio,f.file+24,f.spec.bytes));
     if (argc==3) {
         free(f.audio);free(f.file);puts("USB music: complete track validated");return 0;
     }

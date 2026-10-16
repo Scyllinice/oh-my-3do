@@ -27,6 +27,7 @@ typedef struct Ode {
     unsigned long navigation_key;
     int navigation_known;
     int navigation_failed;
+    int support_directory; /* Config selected .ohmy3do/ rather than legacy root. */
 } Ode;
 
 typedef struct OdeListing {

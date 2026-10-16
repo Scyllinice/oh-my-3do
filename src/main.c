@@ -30,7 +30,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.14.6"
+#define MENU_VERSION "0.15.0"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -1007,6 +1007,7 @@ static void connect_ode(Menu *menu)
     menu->skip_usb_art = 0;
     menu->ode.navigation_known = 0;
     menu->ode.navigation_failed = 0;
+    menu->ode.support_directory = 0;
     ode_listing_free(&menu->listing);
     menu->message = "Connecting to ODE...";
     draw(menu);

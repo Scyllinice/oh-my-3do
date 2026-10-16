@@ -3,11 +3,72 @@
 import argparse
 import binascii
 from pathlib import Path
+import re
 import struct
 
 
 def fold(value):
     return value.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+
+
+def support_base(root):
+    directory = root/'.ohmy3do'
+    marker = directory/'ohmy3do.ini'
+    if (directory.is_symlink() or marker.is_symlink() or
+            (directory.exists() and getattr(directory.lstat(),'st_file_attributes',0) & 0x400)):
+        raise ValueError('Support directory/config must not be a symlink')
+    # Firmware OPEN_ALWAYS probes can leave an empty file on a legacy drive.
+    if marker.is_file():
+        with marker.open('rb') as stream:
+            first = stream.read(1)
+        if first not in (b'',b'\0'):
+            return directory
+    return root
+
+
+def redundant_iso_name(text):
+    """Recognize only a plain, single-track MODE1/2048 ISO wrapper."""
+    directives = []
+    name = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or re.match(r'^REM(?:\s|$)', line, re.I):
+            continue
+        match = re.fullmatch(r'FILE\s+"([^"\r\n]+)"\s+BINARY', line, re.I)
+        if match:
+            name = match[1]
+            if (Path(name).suffix.lower() != '.iso' or name in ('.', '..') or
+                    any(ord(c) < 32 or ord(c) == 127 or c in '/\\:' for c in name)):
+                return None
+            directives.append('FILE')
+        elif re.fullmatch(r'TRACK\s+0*1\s+MODE1/2048', line, re.I):
+            directives.append('TRACK')
+        elif re.fullmatch(r'INDEX\s+0*1\s+00:00:00', line, re.I):
+            directives.append('INDEX')
+        elif re.fullmatch(r'CATALOG\s+\d{13}|(?:TITLE|PERFORMER|SONGWRITER)\s+"[^"\r\n]*"', line, re.I):
+            continue
+        else:
+            return None
+    return name if directives == ['FILE', 'TRACK', 'INDEX'] else None
+
+
+def redundant_cue_iso(path):
+    if path.stat().st_size > 256*1024:
+        return None
+    raw = path.read_bytes()
+    if len(raw) > 256*1024:
+        return None
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeError:
+        text = raw.decode('cp1252', errors='replace')
+    name = redundant_iso_name(text)
+    if not name:
+        return None
+    matches = [p for p in path.parent.iterdir() if p.name.casefold() == name.casefold()]
+    if len(matches) != 1 or not matches[0].is_file() or matches[0].is_symlink():
+        return None
+    return matches[0]
 
 
 def existing_index(directory):
@@ -40,6 +101,7 @@ def existing_index(directory):
 def index(root):
     if not root.is_dir():
         raise ValueError("USB root must be an existing directory")
+    support = support_base(root)
     games = []
     for path in root.rglob("*"):
         if path.is_symlink() or not path.is_file() or path.suffix.lower() not in (".iso", ".cue"):
@@ -47,7 +109,10 @@ def index(root):
         relative = path.relative_to(root)
         if len(relative.parts) == 1 and path.name.lower() in ("boot.iso", "menu-demo.iso"):
             continue
-        if relative.parts[0].lower() in ("covers", "previews", "saves", "music"):
+        if (relative.parts[0].lower() in ("covers", "previews", "saves", "music", "$boot", "system") or
+                any(part.startswith('.') for part in relative.parts)):
+            continue
+        if path.suffix.lower() == '.cue' and redundant_cue_iso(path) is not None:
             continue
         game = relative.as_posix()
         if any(ord(c) < 32 or ord(c) == 127 or c in "\\:" for c in game) or len(game.encode()) > 8192:
@@ -65,13 +130,13 @@ def index(root):
     if len(games)>2048 or len(library_payload)+9*len(games)>128*1024:
         raise ValueError('Search index exceeds 2048 games or 128 KiB of paths')
     library_data=b'OM3DLIB1'+struct.pack('>IIII',len(games),len(library_payload),binascii.crc32(library_payload),0)+library_payload+b'END3DL01'
-    library=root/'library.3di'
+    library=support/'library.3di'
     if library.is_symlink() or (library.exists() and not library.is_file()):
         raise ValueError('Search index must be a regular file')
     oversized = []
     outputs = []
     for folder, suffix in (("covers", ".png"), ("previews", ".3dv")):
-        directory = root/folder
+        directory = support/folder
         if not directory.exists():
             continue
         if directory.is_symlink() or not directory.is_dir():
@@ -117,7 +182,7 @@ def index(root):
             print(f'  {name}: {w}x{h}')
         print('Use resize-covers.py with a separate output folder for 84x105 PNGs; originals were not changed.')
     # Validate every index before replacing any existing output.
-    temporary=root/'library.3di.tmp'
+    temporary=support/'library.3di.tmp'
     if temporary.is_symlink(): raise ValueError('Temporary search index must not be a symlink')
     temporary.write_bytes(library_data); temporary.replace(library)
     print(f'Indexed {len(games)} games for Find in {library}')

@@ -83,26 +83,27 @@ static int buffer_word(Ode *ode, unsigned int offset, const unsigned char *data)
     return exchange(ode, packet, reply, 2);
 }
 
-int menu_config_load(Ode *ode, OdeReadBuffer read_buffer, MenuConfig *config)
+static int config_at(Ode *ode, OdeReadBuffer read_buffer, MenuConfig *config,
+                     const char *filename, int *empty)
 {
     unsigned char data[ODE_TOC_BYTES], packet[7], reply[32];
-    static const unsigned char filename[] = MENU_CONFIG_NAME;
     static const unsigned char zero[4] = {0, 0, 0, 0};
-    size_t i, length;
+    size_t i, length, name_length = strlen(filename)+1;
     int result = -1;
     menu_config_defaults(config);
     /* The implementation was checked against FCare's LOCODE commands only.
      * Probing unsupported commands could leave an unknown ODE's FIFO hung. */
     if (strcmp(ode->identity, "LOCODE")) return 1;
     memset(data, 0, sizeof(data));
-    memcpy(data, filename, sizeof(filename));
-    for (i = 0; i < sizeof(filename); i += 4)
+    *empty = 0;
+    memcpy(data, filename, name_length);
+    for (i = 0; i < name_length; i += 4)
         if (buffer_word(ode, (unsigned int)(i / 4), data + i) < 0) return -1;
     memset(packet, 0, sizeof(packet));
     packet[0] = 0xe1;
-    packet[3] = sizeof(filename); /* includes terminator, as FCare requires */
+    packet[3] = (unsigned char)name_length;
     if (exchange(ode, packet, reply, 3) < 0) return -1;
-    if (!reply[1]) { ode->error = "Cannot open USB config"; return -1; }
+    if (!reply[1]) { ode->error = "Cannot open USB config"; return -2; }
     /* FCare reports the requested count even on EOF. Zero the destination
      * before reading so short and missing files cannot expose stale bytes. */
     for (i = 0; i < MENU_CONFIG_BYTES / 4; ++i)
@@ -121,6 +122,7 @@ int menu_config_load(Ode *ode, OdeReadBuffer read_buffer, MenuConfig *config)
         goto close_file;
     }
     for (length = 0; length < MENU_CONFIG_BYTES && data[length]; ++length) {}
+    *empty = !length;
     result = menu_config_parse(config, (const char *)data, length);
     if (result < 0) ode->error = "Invalid USB config; compat OFF";
 close_file:
@@ -128,5 +130,21 @@ close_file:
     packet[0] = 0xe5;
     if (exchange(ode, packet, reply, 2) < 0) result = -1;
     if (result < 0) config->folder_workaround = 0;
+    return result;
+}
+
+int menu_config_load(Ode *ode, OdeReadBuffer read_buffer, MenuConfig *config)
+{
+    int result, empty;
+    ode->support_directory = 0;
+    if (strcmp(ode->identity,"LOCODE")) { menu_config_defaults(config); return 1; }
+    result = config_at(ode,read_buffer,config,".ohmy3do/" MENU_CONFIG_NAME,&empty);
+    if (result == -2 || (!result && empty)) {
+        /* FCare opens missing files with OPEN_ALWAYS. An empty new-path probe
+         * is not a migration marker and must not shadow a legacy INI. */
+        result = config_at(ode,read_buffer,config,MENU_CONFIG_NAME,&empty);
+        if (result == -2) result = -1;
+    } else if (!result) ode->support_directory = 1;
+    if (!result) ode->error = NULL;
     return result;
 }

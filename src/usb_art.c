@@ -52,7 +52,13 @@ static int buffer_word(Ode *ode, unsigned int offset, const unsigned char *p)
 int usb_file_open(Ode *ode, const char *name)
 {
     unsigned char packet[7], reply[32], part[4];
-    size_t length = strlen(name) + 1, i;
+    char located[128];
+    size_t length, i;
+    if (ode->support_directory) {
+        if (strlen(name) + sizeof(".ohmy3do/") > sizeof(located)) return -1;
+        strcpy(located,".ohmy3do/"); strcat(located,name); name=located;
+    }
+    length = strlen(name) + 1;
     if (strcmp(ode->identity, "LOCODE") || length > 128) return -1;
     for (i = 0; i < length; i += 4) {
         size_t n = length - i;

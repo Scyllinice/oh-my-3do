@@ -58,13 +58,13 @@ def convert(source, output, rate=11025, preview=None):
             with wave.open(str(preview),'wb') as stream:
                 stream.setnchannels(1);stream.setsampwidth(2);stream.setframerate(rate);stream.writeframes(preview_data)
     print(f'Created {output}: {frames/rate:.2f} seconds, {rate} Hz mono ADP4, {len(payload)/1024:.1f} KiB RAM')
-    print('Copy to USB music/menu.3dm, then cold boot or toggle music off and on. No media index needed.')
+    print('Copy to USB .ohmy3do/music/menu.3dm, then cold boot or toggle music off and on. No media index needed.')
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source',type=Path)
-    parser.add_argument('output',type=Path,nargs='?',default=ROOT/'iso/music/menu.3dm')
+    parser.add_argument('output',type=Path,nargs='?',default=ROOT/'iso/.ohmy3do/music/menu.3dm')
     parser.add_argument('--rate',type=int,choices=(11025,22050),default=11025)
     parser.add_argument('--preview',type=Path,help='Optional decoded WAV for checking the converted sound')
     args=parser.parse_args()

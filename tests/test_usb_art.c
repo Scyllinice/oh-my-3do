@@ -11,6 +11,7 @@ typedef struct FakeUsb {
     const unsigned char *file;
     size_t size;
     int calls, fail_at, closed, opened, words, reads;
+    int new_layout;
 } FakeUsb;
 
 static void put32(unsigned char *p, unsigned long value)
@@ -36,11 +37,13 @@ static int transfer(void *context, const unsigned char *packet,
         assert(offset+4 <= sizeof(fake->buffer));
         memcpy(fake->buffer+offset,packet+3,4);
     } else if (packet[0] == 0xe1) {
+        const char *name=(const char *)fake->buffer;
         size_t name_length=(size_t)packet[2]*256+packet[3];
         assert(!packet[1] && !packet[4] && !packet[5] && !packet[6]);
         assert(name_length == strlen((char *)fake->buffer)+1);
-        assert(!strncmp((char *)fake->buffer,"covers/",7) || !strcmp((char *)fake->buffer,"recent.txt"));
-        if (!strcmp((char *)fake->buffer,"covers/index.3di")) {
+        if (fake->new_layout) { assert(!strncmp(name,".ohmy3do/",9)); name+=9; }
+        assert(!strncmp(name,"covers/",7) || !strcmp(name,"recent.txt"));
+        if (!strcmp(name,"covers/index.3di")) {
             fake->file=fake->index; fake->size=fake->index_size;
         } else { fake->file=fake->image; fake->size=fake->image_size; }
         fake->position=0;
@@ -156,6 +159,10 @@ int main(int argc, char **argv)
         setup(&fake,&ode); fake.fail_at=i;
         assert(usb_art_index_load(&ode,reader,&index) < 0 && !index.count && !index.entries);
     }
+    setup(&fake,&ode); fake.new_layout=1; ode.support_directory=1;
+    assert(!usb_art_index_load(&ode,reader,&index) && index.count==1);
+    assert(!usb_art_pixels(&ode,reader,index.entries[0].file,pixels));
+    assert(!memcmp(pixels,fake.image+24,sizeof(pixels))); usb_art_index_free(&index);
     setup(&fake,&ode);
     assert(usb_art_pixels(&ode,reader,"aaaaaaaaaaaaaaaaaaaaaaaa.3dc",pixels) == 0);
     assert(!memcmp(pixels,fake.image+24,sizeof(pixels)));

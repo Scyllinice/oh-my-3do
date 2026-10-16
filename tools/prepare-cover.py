@@ -65,7 +65,7 @@ def main():
     export = module_from_spec(spec)
     spec.loader.exec_module(export)
     export.export(ROOT, ROOT / "iso/covers")
-    print(f"Added cover for {game}. Copy iso/covers to the USB root; no ISO rebuild needed.")
+    print(f"Added cover for {game}. Copy iso/covers into USB .ohmy3do/ (or the legacy USB root); no ISO rebuild needed.")
 
 
 if __name__ == "__main__":

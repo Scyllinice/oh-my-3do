@@ -38,7 +38,7 @@ def convert(source, target, fps=6, frames=24, start=0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
-    parser.add_argument("output", type=Path, help="USB previews/Game Title.3dv")
+    parser.add_argument("output", type=Path, help="USB .ohmy3do/previews/Game Title.3dv (or legacy previews/)")
     parser.add_argument("--fps", type=int, default=6)
     parser.add_argument("--frames", type=int, default=24)
     parser.add_argument("--start", type=float, default=0)

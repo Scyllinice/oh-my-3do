@@ -24,14 +24,46 @@ release](https://github.com/Scyllinice/oh-my-3do/releases/latest). Back up the
 existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
-Keep an existing `ohmy3do.ini` to preserve settings. For a fresh setup, copy the
-release's INI beside `boot.iso`. Favorites, covers, previews, and save backups
-are optional; their setup is described below.
+Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
+root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
+covers, previews, and save backups are optional.
 
 The release also includes `menu-demo.iso`, an offline interface demo. Copy it to
 the USB drive as `boot.iso` to preview the layout without sending ODE commands.
 It does not launch games. Stock emulators may run the demo but lack the vendor
 commands needed by the normal browser.
+
+## Support files and migration
+
+Keep `boot.iso` at the USB root. The consolidated layout stores menu-owned files
+under `.ohmy3do/`: `ohmy3do.ini`, favorites, recent history, saved position,
+diagnostics, search index, covers, previews, music, and NVRAM backups. Databases,
+transaction journals, and ignored CUE files also live there. Game paths stay
+relative to the USB volume and are unchanged by support migration.
+
+**Install the v0.15.0 or newer boot.iso before migrating.** Extract the matching
+media-tools ZIP on the PC, then preview and apply:
+
+```powershell
+py organize-library.py migrate-support M:/
+py organize-library.py migrate-support M:/ --apply
+```
+
+The command preserves existing settings, refuses conflicting files, creates the
+support subfolders, and prints an undo journal. It also initializes the layout
+on a fresh USB drive. Old INI bytes are retained in `.ohmy3do/migration-input/`.
+Undo uses the normal organizer `undo` command. Undo the migration before undoing
+an earlier organization transaction. Migration does not change game paths or
+convert media, and it does not rebuild the ISO.
+
+A nonempty `.ohmy3do/ohmy3do.ini` selects the consolidated layout for the menu
+and PC tools. Existing root layouts still work. Empty files created by firmware
+probes do not shadow the legacy INI. Menu file reads and writes use the selected
+layout consistently. Paths below are relative to this support location unless
+shown as full USB paths; generated legacy build exports can be copied into it.
+The startup INI selects the menu's layout for the session; use the same layout
+on each attached USB volume.
+
 
 ## Build
 
@@ -107,7 +139,7 @@ show six.
 
 At a USB root, support entries are hidden: `boot.iso`, `menu-demo.iso`, their
 `.sha256` files, `ohmy3do.ini`, `favorites.txt`, `last-position.txt`,
-`recent.txt`, `diagnostics.txt`, and the `covers`/`previews`/`music`/`saves` folders.
+`recent.txt`, `diagnostics.txt`, `.ohmy3do`, and legacy media/support folders.
 Identically named entries inside game folders remain visible. Volume selectors
 are never hidden. The compatibility workaround retains access to hidden entries
 when needed.
@@ -155,7 +187,7 @@ compatible game data; review the suggestion.
 
 ## Favorites and letter navigation
 
-Put `favorites.txt` beside `boot.iso`, with one path relative to that USB volume
+Put `favorites.txt` in `.ohmy3do/`, with one path relative to that USB volume
 per line. Use forward slashes and include the actual extension. For example:
 
 ```text
@@ -235,8 +267,7 @@ Run the updated `index-media.py` on the PC before using Find:
 py index-media.py M:/
 ```
 
-The same command creates cover/preview associations and `library.3di` at the
-USB root, even when there is no artwork. Find loads this checked file once and
+The same command creates cover/preview associations and `.ohmy3do/library.3di`, even when there is no artwork. Find loads this checked file once and
 keeps it in RAM. It does not recursively scan folders on the console. Matching
 runs once per submitted query; drawing and navigating results use a stored match
 list. The initial index read still requires a USB-root round trip.
@@ -344,7 +375,7 @@ slots are identified as empty or invalid; their contents are not presented as
 valid saves. Confirming replaces the chosen slot and verifies the completed
 archive by closing/reopening and comparing every byte.
 
-Copy `iso/saves/` to the USB root first: the firmware cannot create directories.
+Migration creates `.ohmy3do/saves/`. For manual setup, create it first: the firmware cannot create directories.
 Before the first backup or restore in a session, an automatic check writes two
 patterns to `saves/usb-test.bin` and verifies both. It does not change NVRAM.
 The test file can be deleted on a PC; there is no standalone Tools test option.
@@ -548,7 +579,14 @@ and track number, and their CUE `FILE` references are updated. Comments, track
 directives, line endings, and supported source encodings are preserved. Only
 sibling-file references are supported; CUE paths into other folders need manual
 attention. Case-insensitive file references work on FAT and on a Linux-hosted
-test directory. A CUE and its referenced ISO are treated as one move group.
+test directory. Useful CUEs and their data/audio files remain one move group.
+A CUE containing only one MODE1/2048 ISO track at 00:00:00 is redundant. The
+organizer uses its ISO and archives the CUE under `.ohmy3do/ignored-cues/` on
+apply, with byte-for-byte undo. Existing CUE-based choices, favorites, history,
+position, covers, and previews follow the ISO. BIN/CUE, audio, multiple tracks,
+gaps, extra indexes, unknown directives, and broken/shared sets are retained.
+The standalone indexer also omits verified redundant wrappers. This does not
+merge separate ISO copies or resolve their destination collisions.
 
 Apply downloads available [Libretro box scans](https://github.com/libretro-thumbnails/libretro-thumbnails),
 prepares 84×105 RGB PNGs, and links them to the correct game paths. Existing
@@ -633,7 +671,7 @@ undo. Download caches remain on the PC. On Linux/macOS, replace `py` with
 
 ## PNG covers and video previews
 
-Game media belongs in `/covers` and `/previews` on USB, outside `boot.iso`. PNG
+Game media belongs in `.ohmy3do/covers` and `.ohmy3do/previews` on USB, outside `boot.iso`. PNG
 covers can be copied directly: no image conversion or ISO rebuild is needed. The
 menu decodes them into the cover area and preserves their aspect ratio.
 Transparency is blended against the artwork background. PNGs can be up to
@@ -662,10 +700,10 @@ To resize or convert artwork, use `resize-covers.py` from the release's
 ```sh
 py -m pip install Pillow
 # Check existing artwork without changing it:
-py resize-covers.py "E:/covers" --check
-py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
+py resize-covers.py "E:/.ohmy3do/covers" --check
+py resize-covers.py "Downloads/cover.jpg" "E:/.ohmy3do/covers/Road Rash.png"
 # Or process a folder, preserving image basenames:
-py resize-covers.py "Downloads/artwork" "E:/covers"
+py resize-covers.py "Downloads/artwork" "E:/.ohmy3do/covers"
 py index-media.py E:/
 ```
 
@@ -698,15 +736,20 @@ The filename matches the game's basename, ignoring ASCII case. For example:
 ```text
 USB/
   boot.iso
-  ohmy3do.ini
   Games/
     Road Rash.iso
-  covers/
-    Road Rash.png
-    index.3di
-  previews/
-    Road Rash.3dv
-    index.3di
+  .ohmy3do/
+    ohmy3do.ini
+    favorites.txt
+    library.3di
+    covers/
+      Road Rash.png
+      index.3di
+    previews/
+      Road Rash.3dv
+      index.3di
+    music/
+    saves/
 ```
 
 After copying PNGs, generate the media indices on a PC. Python 3 is enough;
@@ -743,11 +786,11 @@ frames and 1–12 fps. Fewer frames reduce loading time and memory use.
 ./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv' --start 10 --frames 12 --fps 6
 ```
 
-Copy the generated `.3dv` into `/previews` on USB, then run the indexer against
+Copy the generated `.3dv` into `.ohmy3do/previews` on USB, then run the indexer against
 that drive. Alternatively, with FFmpeg installed locally:
 
 ```sh
-python3 tools/prepare-preview.py input.mp4 '/path/to/USB/previews/Road Rash.3dv'
+python3 tools/prepare-preview.py input.mp4 '/path/to/USB/.ohmy3do/previews/Road Rash.3dv'
 python3 tools/index-media.py /path/to/USB
 ```
 
@@ -823,7 +866,7 @@ and offline demo covers stay embedded in the ISO.
 ## Menu music
 
 Music can be replaced from USB without rebuilding the ISO. Put the prepared
-track at `music/menu.3dm` on the USB drive. The menu loads and verifies the whole
+track at `.ohmy3do/music/menu.3dm` on the USB drive. The menu loads and verifies the whole
 track before playback, then the 3DO DSP decodes it directly from RAM. Music
 performs no USB reads while playing, so cover loading does not compete with an
 audio stream. This adds a one-time load when music starts, after the browser has
@@ -838,7 +881,7 @@ Prepare a track with the Docker image, which includes FFmpeg and the pinned
 ./tools/dev-container music artwork/music.mp3 --preview iso/music-preview.wav
 ```
 
-Copy `iso/music/` to the USB root, then cold boot. The optional WAV is a decoded
+Copy the prepared music folder into USB `.ohmy3do/`, then cold boot. The optional WAV is a decoded
 listening copy of the converted track. It does not need to be copied to USB.
 Neither an artwork index nor another ISO rebuild is needed for future tracks.
 Install version 0.10.0 or newer once to enable USB music loading.
@@ -847,7 +890,7 @@ The portable `media-tools.zip` includes `prepare-music.py`. With Python 3.9+,
 FFmpeg and 3at installed on PATH, Windows can use:
 
 ```sh
-py prepare-music.py "music.mp3" "M:/music/menu.3dm" --preview "music-preview.wav"
+py prepare-music.py "music.mp3" "M:/.ohmy3do/music/menu.3dm" --preview "music-preview.wav"
 ```
 
 The default is mono ADP4 at 11,025 Hz, with a 768 KiB compressed-data cap. That
@@ -886,7 +929,7 @@ count, last fault, timeout and navigation state. Viewing diagnostics sends no
 commands and remains available after a transport failure. USB write-check
 results appear only after the automatic check has run.
 
-**C** exports a verified `diagnostics.txt` to the USB root. The report includes
+**C** exports a verified `.ohmy3do/diagnostics.txt`. The report includes
 the raw identity reply, command/reply and retained fault, active settings, queue
 state, save results, and position/history results. It snapshots these values
 before export I/O changes the bus counters. Export is unavailable after a

@@ -6,6 +6,7 @@
 typedef struct Fake {
     unsigned char buffer[2048];
     const char *file;
+    const char *new_file, *current_file;
     int opened, closed, calls, reads;
     int fail_at, open_failure, read_failure, data_failure, close_failure;
 } Fake;
@@ -27,12 +28,13 @@ static int transfer(void *context, const unsigned char *packet,
         memcpy(fake->buffer + offset, packet + 3, 4);
         break;
     case 0xe1:
-        assert(!strcmp((const char *)fake->buffer, MENU_CONFIG_NAME));
-        assert(packet[1] == 0 && packet[2] == 0 && packet[3] == sizeof(MENU_CONFIG_NAME));
+        assert(!strcmp((const char *)fake->buffer, MENU_CONFIG_NAME) || !strcmp((const char *)fake->buffer,".ohmy3do/" MENU_CONFIG_NAME));
+        assert(packet[1] == 0 && packet[2] == 0 && packet[3] == strlen((const char *)fake->buffer)+1);
         assert(!packet[4] && !packet[5] && !packet[6]);
         *length = 3;
-        reply[1] = !fake->open_failure;
-        fake->opened = !fake->open_failure;
+        fake->current_file = fake->buffer[0] == '.' ? fake->new_file : fake->file;
+        reply[1] = !fake->open_failure && fake->current_file != NULL;
+        fake->opened = reply[1];
         break;
     case 0xe3:
         assert(fake->opened);
@@ -41,7 +43,7 @@ static int transfer(void *context, const unsigned char *packet,
          * is not cleared by the firmware; menu_config_load must do that. */
         for (offset = 0; offset < MENU_CONFIG_BYTES; ++offset)
             assert(fake->buffer[offset] == 0);
-        memcpy(fake->buffer, fake->file, strlen(fake->file));
+        memcpy(fake->buffer, fake->current_file, strlen(fake->current_file));
         *length = 4;
         reply[1] = fake->read_failure ? 0 : packet[1];
         reply[2] = packet[2];
@@ -59,7 +61,7 @@ static int transfer(void *context, const unsigned char *packet,
 static int read_buffer(void *context, unsigned char *data, size_t size)
 {
     Fake *fake = (Fake *)context;
-    assert(size == sizeof(fake->buffer) && fake->reads == 1);
+    assert(size == sizeof(fake->buffer) && fake->reads >= 1);
     if (fake->data_failure) return -1;
     memcpy(data, fake->buffer, size);
     return 0;
@@ -191,7 +193,13 @@ int main(void)
     readable_files();
     setup(&fake, &ode);
     assert(menu_config_load(&ode, read_buffer, &config) == 0);
-    assert(config.folder_workaround && fake.closed == 1);
+    assert(config.folder_workaround && fake.closed == 1 && !ode.support_directory);
+    setup(&fake,&ode); fake.new_file="folder_workaround=1\n";
+    assert(!menu_config_load(&ode,read_buffer,&config) && ode.support_directory && fake.reads==1);
+    setup(&fake,&ode); fake.new_file="";
+    assert(!menu_config_load(&ode,read_buffer,&config) && !ode.support_directory && config.folder_workaround && fake.reads==2);
+    setup(&fake,&ode); fake.new_file="invalid";
+    assert(menu_config_load(&ode,read_buffer,&config)<0 && !ode.support_directory && fake.reads==1);
     setup(&fake, &ode);
     fake.file = ""; /* missing files are opened/created empty by FCare */
     assert(menu_config_load(&ode, read_buffer, &config) == 0 && !config.folder_workaround);

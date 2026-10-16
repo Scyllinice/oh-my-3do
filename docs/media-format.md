@@ -4,6 +4,10 @@ All integers below are unsigned big-endian. The menu reads these files using
 LOCODE E1/E3/E7/E5, with E6 buffer setup. It does not seek or write media files.
 Firmware may create an empty missing file even when opening it for a read.
 
+Support paths such as `covers/index.3di` are relative to `.ohmy3do/` in the
+consolidated layout, selected by its nonempty `ohmy3do.ini`. Legacy root layouts
+remain supported. Game-path keys inside indices remain USB-volume-relative.
+
 ## Association index
 
 `covers/index.3di` and `previews/index.3di` share this layout:

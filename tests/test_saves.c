@@ -11,6 +11,7 @@ typedef struct Fake {
     size_t size, test_size, position;
     int is_test, opened, calls, fail_at, short_write, short_read, no_write;
     int forbidden;
+    int new_layout;
 } Fake;
 static int fault(Fake *f) { return ++f->calls == f->fail_at; }
 static int transfer(void *context, const unsigned char *p, unsigned char *r, size_t cap, size_t *len)
@@ -22,8 +23,11 @@ static int transfer(void *context, const unsigned char *p, unsigned char *r, siz
     if (p[0] == 0xe6) {
         off = ((size_t)p[1] * 256 + p[2]) * 4; assert(off + 4 <= 2048); memcpy(f->buffer + off, p + 3, 4);
     } else if (p[0] == 0xe1) {
-        assert(!strncmp((char *)f->buffer, "saves/", 6) || !strcmp((char *)f->buffer,"ohmy3do.ini") || !strcmp((char *)f->buffer,"favorites.txt"));
-        f->is_test = !strcmp((char *)f->buffer, "saves/usb-test.bin");
+        const char *name=(const char *)f->buffer;
+        if (!strcmp(name,".ohmy3do/ohmy3do.ini") && !f->new_layout) { *len=3; r[1]=0; return 0; }
+        if (f->new_layout) { assert(!strncmp(name,".ohmy3do/",9)); name+=9; }
+        assert(!strncmp(name, "saves/", 6) || !strcmp(name,"ohmy3do.ini") || !strcmp(name,"favorites.txt"));
+        f->is_test = !strcmp(name, "saves/usb-test.bin");
         f->position = 0; f->opened = 1; r[1] = 1; *len = 3;
     } else if (p[0] == 0xe4) {
         unsigned char *file = f->is_test ? f->test : f->file;
@@ -106,6 +110,9 @@ int main(void)
     entries[0].size = sizeof(payload);
     assert(!save_archive_build(&one, entries, 1));
     setup(&f, &ode); assert(!save_usb_test(&ode, reader)); assert(!f.forbidden);
+    setup(&f,&ode); f.new_layout=1; ode.support_directory=1;
+    assert(!save_usb_store(&ode,reader,"saves/slot01.3ds",&a));
+    assert(!save_usb_load(&ode,reader,"saves/slot01.3ds",&loaded)); save_archive_free(&loaded);
     setup(&f, &ode); f.no_write = 1; assert(save_usb_test(&ode, reader) < 0);
     setup(&f, &ode); f.short_write = 1; assert(save_usb_test(&ode, reader) < 0);
     setup(&f, &ode); assert(!save_usb_store(&ode, reader, "saves/slot01.3ds", &a)); calls = f.calls;
@@ -153,6 +160,9 @@ int main(void)
         config.screen_margin=12;
         config.folder_workaround=0; config.usb_covers=1; config.remember_position=0; config.recent_games=0; config.video_previews=1; config.menu_music=0;
         setup(&f,&ode); assert(!menu_settings_save(&ode,reader,&config));
+        setup(&f,&ode); f.new_layout=1; ode.support_directory=1;
+        assert(!menu_settings_save(&ode,reader,&config));
+        assert(!menu_config_load(&ode,reader,&parsed) && ode.support_directory && parsed.screen_margin==12);
         assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
         assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2 && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.menu_music);
         setup(&f,&ode); f.short_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);

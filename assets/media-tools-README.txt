@@ -5,6 +5,22 @@ Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
 The tools do not rebuild boot.iso or download games, music or video.
 The optional organizer downloads game metadata and cover artwork.
 
+SUPPORT LAYOUT (v0.15.0+)
+Install the updated boot.iso first. Keep boot.iso at the USB root.
+Preview moving settings, favorites/history/position, diagnostics, indexes,
+covers, previews, music and save backups into .ohmy3do/:
+  py organize-library.py migrate-support M:/
+Apply with an undo journal:
+  py organize-library.py migrate-support M:/ --apply
+This preserves settings, rejects conflicting files and leaves game paths alone.
+It also initializes a fresh drive, including the saves directory. Old INI bytes
+are retained in .ohmy3do/migration-input/. Undo migration before undoing older
+organization transactions. Both layouts remain supported; a nonempty
+.ohmy3do/ohmy3do.ini selects the consolidated layout. Empty firmware probes do
+not select it. Existing game-path keys inside favorites and indexes stay relative
+to the USB volume. Other support paths below are relative to .ohmy3do/ after
+migration; legacy build exports should be copied into that folder.
+
 ORGANIZE A USB LIBRARY
 
 Keep all extracted scripts together on the PC. Python 3.9+ is required; install
@@ -93,7 +109,12 @@ clrmamepro-format DAT; --launchbox selects an existing Metadata.zip.
 CUE companions move and are renamed together; FILE references are updated.
 Only sibling-file references are supported. Shared/missing tracks, ambiguous
 matches, and destination collisions stay in place. No duplicate images are
-deleted. Existing artwork links are preserved; downloaded covers are native
+deleted. Single-track MODE1/2048 ISO CUE wrappers starting at zero are redundant. Their
+ISO is the library entry; apply archives the original CUE in .ohmy3do/ignored-cues/
+with undo support and updates CUE-based favorites and media links to the ISO.
+BIN/CUE, audio/multiple tracks, gaps, extra indexes, unknown directives and
+broken/shared sets remain intact. Separate ISO copies are not merged.
+Existing artwork links are preserved; downloaded covers are native
 84x105 PNGs. Favorites, recent games, saved selection and media/search indices
 are updated. boot.iso, settings, NVRAM backups and music stay in place.
 Menu-written text is read up to its first NUL terminator, ignoring stale tails.
@@ -151,15 +172,15 @@ Install the image library once (Windows):
   py -m pip install Pillow
 
 Audit existing covers without changing files:
-  py resize-covers.py "E:/covers" --check
+  py resize-covers.py "E:/.ohmy3do/covers" --check
 This reports dimensions, mode and size. Exit status 1 means some images would
 benefit from preparation; 0 means every image is already 84x105 RGB PNG.
 
 Resize one image and give it the game's basename:
-  py resize-covers.py "Downloads/cover.jpg" "E:/covers/Road Rash.png"
+  py resize-covers.py "Downloads/cover.jpg" "E:/.ohmy3do/covers/Road Rash.png"
 
 Or convert a whole folder, keeping each image's basename:
-  py resize-covers.py "Downloads/artwork" "E:/covers"
+  py resize-covers.py "Downloads/artwork" "E:/.ohmy3do/covers"
 
 The output is a 84x105 RGB PNG. Images are fitted without cropping, with dark
 padding, transparency composited, and EXIF orientation corrected. JPEG, PNG,
@@ -180,7 +201,7 @@ PNG COVERS
 
 Copy unmodified PNGs into the USB covers folder, using the game's basename:
   USB/Games/Road Rash.iso
-  USB/covers/Road Rash.png
+  USB/.ohmy3do/covers/Road Rash.png
 
 PNGs: up to 1024x1024 pixels and 512 KiB. Prepared 84x105 RGB PNGs avoid
 console-side resizing and alpha blending. The indexer warns about larger PNGs
@@ -212,7 +233,7 @@ Install FFmpeg and the separate 3at native audio encoder, and put both on PATH:
   https://github.com/trapexit/3at
 
 Convert the complete track, optionally making a decoded WAV listening copy:
-  py prepare-music.py "song.mp3" "M:/music/menu.3dm" --preview "listen.wav"
+  py prepare-music.py "song.mp3" "M:/.ohmy3do/music/menu.3dm" --preview "listen.wav"
 
 Use Python 3.9+. Default: 11025 Hz mono ADP4, up to about 2 minutes 22 seconds.
 --rate 22050 allows about 1 minute 11 seconds at higher fidelity. Tracks that
@@ -225,7 +246,7 @@ Audio DSP, memory availability and long-track playback need a console test.
 
 The project Docker image includes both dependencies:
   ./tools/dev-container music artwork/song.mp3 --preview iso/listen.wav
-Copy the resulting iso/music folder to USB. Future tracks require no ISO rebuild.
+Copy the resulting music folder into USB .ohmy3do/. Future tracks require no ISO rebuild.
 
 SILENT VIDEO PREVIEWS
 
@@ -234,11 +255,11 @@ For a first test without FFmpeg, copy the included original moving test pattern
 (e.g. Road Rash.3dv), then run the indexer and enable previews as described below.
 
 Convert a local clip; the output is a small 64x80 RAM-playable animation:
-  py prepare-preview.py input.mp4 "E:/previews/Road Rash.3dv"
+  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
   py index-media.py E:/
 
 Default: 24 frames at 6 fps (four seconds, 240 KiB). Optional:
-  py prepare-preview.py input.mp4 "E:/previews/Road Rash.3dv" --start 10 --frames 12 --fps 6
+  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --frames 12 --fps 6
 
 Limits: 1-32 frames, 1-12 fps. There is no audio or direct MP4 playback.
 Enable Video previews in Tools > Settings, save, then cold boot.

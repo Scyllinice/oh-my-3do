@@ -136,6 +136,72 @@ class OrganizerTest(unittest.TestCase):
         subprocess.run(command+['--apply'],check=True,stdout=subprocess.PIPE)
         self.assertFalse((self.root/'empty').exists())
 
+    def test_support_migration_then_organizing_updates_new_layout_and_both_undo(self):
+        self.put('ohmy3do.ini',b'folder_workaround=1\n')
+        self.put('Old/Example.iso',b'disc');self.catalog['games']=[game('Example (USA)',[b'disc'])]
+        self.put('favorites.txt',b'Old/Example.iso\n');self.put('recent.txt',b'Old/Example.iso\n')
+        self.put('last-position.txt',b'OH3DO_POSITION1\n/Storage/Old\nExample.iso\n')
+        self.put('covers/Example.3dc',b'personal cover');self.put('previews/Example.3dv',b'personal preview')
+        self.put('music/menu.3dm',b'personal music');self.put('saves/slot01.3ds',b'personal save')
+        self.put('boot.iso',b'boot');before=snapshot(self.root)
+        organizer.migrate_support(self.root)
+        self.assertEqual(before,snapshot(self.root))
+        migration=organizer.migrate_support(self.root,apply=True)
+        self.assertEqual(organizer.index_tools.support_base(self.root),self.root/'.ohmy3do')
+        self.assertFalse((self.root/'ohmy3do.ini').exists());self.assertFalse((self.root/'covers').exists())
+        self.assertEqual((self.root/'.ohmy3do/music/menu.3dm').read_bytes(),b'personal music')
+        tx=self.apply(self.scan())
+        self.assertIn(b'Games/USA/Example (USA)/Example (USA).iso',(self.root/'.ohmy3do/favorites.txt').read_bytes())
+        self.assertTrue((self.root/'.ohmy3do/library.3di').exists())
+        self.assertFalse((self.root/'library.3di').exists())
+        self.assertEqual(len(organizer.index_tools.existing_index(self.root/'.ohmy3do/covers')),1)
+        tx.undo();migration.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_support_migration_handles_empty_firmware_probe_and_undo(self):
+        self.put('ohmy3do.ini',b'folder_workaround=1\n')
+        self.put('.ohmy3do/ohmy3do.ini',b'')
+        before=snapshot(self.root)
+        self.assertEqual(organizer.index_tools.support_base(self.root),self.root)
+        tx=organizer.migrate_support(self.root,apply=True)
+        self.assertEqual((self.root/'.ohmy3do/ohmy3do.ini').read_bytes(),b'folder_workaround=1\n')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_support_migration_default_config_and_conflicts(self):
+        (self.root/'saves/nested-empty').mkdir(parents=True)
+        self.put('boot.iso',b'boot');before=snapshot(self.root)
+        tx=organizer.migrate_support(self.root,apply=True)
+        self.assertTrue((self.root/'.ohmy3do/ohmy3do.ini').stat().st_size)
+        self.assertTrue((self.root/'.ohmy3do/saves/nested-empty').is_dir())
+        self.assertIsNone(organizer.migrate_support(self.root,apply=True))
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+        self.assertTrue((self.root/'saves/nested-empty').is_dir())
+        self.put('covers/Game.png',b'old');self.put('.ohmy3do/covers/Game.png',b'new')
+        before=snapshot(self.root)
+        with self.assertRaisesRegex(ValueError,'destination already exists'):organizer.migrate_support(self.root,apply=True)
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_support_migration_failure_rolls_back_without_moving_games(self):
+        self.put('ohmy3do.ini',b'folder_workaround=1\n')
+        self.put('favorites.txt',b'Game.iso\n');self.put('covers/Game.png',b'art')
+        self.put('Game.iso',b'disc');before=snapshot(self.root)
+        move=organizer.Transaction.move;calls=[]
+        def fail(tx,operation):
+            calls.append(operation)
+            if len(calls)==2:raise OSError('Synthetic migration failure')
+            return move(tx,operation)
+        with mock.patch.object(organizer.Transaction,'move',fail):
+            with self.assertRaisesRegex(OSError,'Synthetic migration failure'):organizer.migrate_support(self.root,apply=True)
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_new_layout_media_import_writes_only_inside_support_directory(self):
+        images=self.preview_fixture();self.cover_image(images/'Example.png')
+        self.put('.ohmy3do/ohmy3do.ini',b'folder_workaround=1\n')
+        before=snapshot(self.root)
+        tx=organizer.apply_plan(self.root,self.scan(),self.cache,cover_dir=images)
+        self.assertEqual(len(organizer.index_tools.existing_index(self.root/'.ohmy3do/covers')),1)
+        self.assertFalse((self.root/'covers').exists())
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
     @unittest.skipUnless(os.name=='nt','Windows junction check')
     def test_empty_cleanup_skips_real_windows_junction(self):
         import ctypes
@@ -625,6 +691,71 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
             self.assertEqual(len(refs),1)
         tx.undo()
         self.assertEqual(before,snapshot(self.root))
+
+    def test_redundant_iso_cue_archives_and_remaps_links_with_complete_undo(self):
+        cue='Old/Example (USA).cue';iso='Old/data.iso';data=b'synthetic ISO'
+        raw=b'CATALOG 4984824063921\r\nFILE "data.iso" BINARY\r\n  TRACK 01 MODE1/2048\r\n    INDEX 01 00:00:00\r\n'
+        self.put(cue,raw);self.put(iso,data)
+        self.catalog['games']=[game('Example (USA)',[data])]
+        self.put('favorites.txt',(cue+'\n').encode());self.put('recent.txt',(cue+'\n').encode())
+        self.put('last-position.txt',b'OH3DO_POSITION1\n/Storage/Old\nExample (USA).cue\n\0')
+        self.put('covers/Example (USA).3dc',b'existing cover')
+        self.put('previews/Example (USA).3dv',b'existing preview')
+        before=snapshot(self.root)
+        plan=organizer.build_plan(self.root,self.catalog,quick=True,overrides={cue:'Example (USA)'},categories={cue:'Games'})
+        self.assertEqual(len(plan['entries']),1)
+        row=plan['entries'][0]
+        self.assertEqual(row['source'],iso);self.assertEqual(row['confidence'],'manual')
+        self.assertEqual(row['ignored_cues'],[cue]);self.assertTrue(row['target'].endswith('.iso'))
+        tx=self.apply(plan)
+        archived=[m['target'] for m in row['moves'] if m['source']==cue][0]
+        self.assertTrue(archived.startswith('.ohmy3do/ignored-cues/'))
+        self.assertEqual((self.root/archived).read_bytes(),raw)
+        self.assertFalse((self.root/cue).exists())
+        self.assertEqual((self.root/'favorites.txt').read_bytes(),(row['target']+'\n').encode())
+        self.assertIn(b'Example (USA).iso',(self.root/'last-position.txt').read_bytes())
+        self.assertEqual(list(organizer.index_tools.existing_index(self.root/'covers').values()),['Example (USA).3dc'])
+        self.assertEqual(list(organizer.index_tools.existing_index(self.root/'previews').values()),['Example (USA).3dv'])
+        self.assertEqual([u['source'] for u in organizer.scan_units(self.root)],[row['target']])
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_useful_or_uncertain_cues_are_never_treated_as_redundant(self):
+        prefix='FILE "data.iso" BINARY\n'
+        for tail in ('TRACK 01 AUDIO\nINDEX 01 00:00:00\n',
+                     'TRACK 01 MODE2/2352\nINDEX 01 00:00:00\n',
+                     'TRACK 01 MODE1/2048\nPREGAP 00:02:00\nINDEX 01 00:00:00\n',
+                     'TRACK 01 MODE1/2048\nINDEX 00 00:00:00\nINDEX 01 00:02:00\n',
+                     'TRACK 01 MODE1/2048\nINDEX 01 00:00:01\n',
+                     'TRACK 01 MODE1/2048\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 01:00:00\n',
+                     'TRACK 01 MODE1/2048\nINDEX 01 00:00:00\nFLAGS PRE\n'):
+            self.assertIsNone(organizer.index_tools.redundant_iso_name(prefix+tail))
+        self.assertIsNone(organizer.index_tools.redundant_iso_name('FILE "data.bin" BINARY\nTRACK 01 MODE1/2352\nINDEX 01 00:00:00\n'))
+        self.assertIsNone(organizer.index_tools.redundant_iso_name('FILE "../data.iso" BINARY\nTRACK 01 MODE1/2048\nINDEX 01 00:00:00\n'))
+
+    def test_shared_iso_wrappers_remain_blocked_without_archival(self):
+        for name in ('a.cue','b.cue'):
+            self.put(name,b'FILE "data.iso" BINARY\nTRACK 01 MODE1/2048\nINDEX 01 00:00:00\n')
+        self.put('data.iso',b'synthetic')
+        units=organizer.scan_units(self.root)
+        self.assertEqual({u['source'] for u in units},{'a.cue','b.cue'})
+        self.assertTrue(all(u.get('error') and not u.get('ignored_cues') for u in units))
+
+    def test_redundant_cue_conflicting_choices_fail_before_changes(self):
+        self.put('Example.cue',b'FILE "data.iso" BINARY\nTRACK 01 MODE1/2048\nINDEX 01 00:00:00\n')
+        self.put('data.iso',b'synthetic');self.catalog['games']=[game('Example (USA)',[b'synthetic'])]
+        before=snapshot(self.root)
+        with self.assertRaisesRegex(ValueError,'Conflicting ISO/CUE'):
+            organizer.build_plan(self.root,self.catalog,categories={'Example.cue':'Games','data.iso':'Demos'})
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_media_index_ignores_redundant_wrappers_and_archived_cues(self):
+        self.put('Example.cue',b'FILE "data.iso" BINARY\nTRACK 01 MODE1/2048\nINDEX 01 00:00:00\n')
+        self.put('data.iso',b'synthetic')
+        self.put('.ohmy3do/ignored-cues/old.cue',b'archived original')
+        organizer.index_tools.index(self.root)
+        data=(self.root/'library.3di').read_bytes()
+        self.assertEqual(int.from_bytes(data[8:12],'big'),1)
+        self.assertIn(b'data.iso\0',data);self.assertNotIn(b'Example.cue',data)
 
     def test_whole_track_set_needed_for_hash_match(self):
         for name,data in [('one.bin',b'same first track'),('two.bin',b'actual second track')]:self.put(name,data)

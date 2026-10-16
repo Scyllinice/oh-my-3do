@@ -85,8 +85,8 @@ def relative_path(root, relative):
             if any(name != part for name in matches):
                 raise ValueError(f'Path differs only in case from an existing entry: {relative}')
         path = path / part
-        if path.is_symlink():
-            raise ValueError(f'Symlinks are not supported: {relative}')
+        if path.is_symlink() or (path.exists() and getattr(path.lstat(),'st_file_attributes',0) & 0x400):
+            raise ValueError(f'Symlinks/junctions are not supported: {relative}')
     return path
 
 
@@ -221,6 +221,8 @@ def cue_files(root, relative):
             raise ValueError(f'CUE data filename is missing or ambiguous: {name}')
         ref = str(PurePosixPath(relative).parent / siblings[0])
         target = relative_path(root, ref)
+        if target.parent == root and target.name.casefold() in ('boot.iso','menu-demo.iso'):
+            raise ValueError('CUE references a root menu boot image; keep it separate')
         if not target.is_file():
             raise ValueError(f'CUE data file is missing: {ref}')
         if target.suffix.lower() not in ('.bin', '.iso', '.wav', '.aiff', '.aif'):
@@ -259,6 +261,8 @@ def scan_units(root):
                 refs, text, encoding, raw = cue_files(root, source)
                 unit.update(files=[source] + refs, cue_text=text, cue_encoding=encoding)
                 consumed.update(refs)
+                if len(refs) == 1 and index_tools.redundant_iso_name(text):
+                    unit.update(source=refs[0], name_source=source, files=[refs[0], source], ignored_cues=[source], aliases=[source])
             except (ValueError, OSError) as error:
                 unit['error'] = str(error)
                 # Even a broken CUE may reference an existing ISO. Keep that
@@ -280,6 +284,10 @@ def scan_units(root):
     owners = collections.Counter(file for unit in units for file in unit['files'])
     for unit in units:
         if any(owners[file] > 1 for file in unit['files']):
+            if unit.get('ignored_cues'):
+                cue = unit['ignored_cues'][0]
+                unit.update(source=cue, files=[cue] + [f for f in unit['files'] if f != cue])
+                unit.pop('ignored_cues'); unit.pop('aliases')
             unit['error'] = 'Data files are shared between disc entries; organize this set manually'
     return units
 
@@ -301,7 +309,7 @@ def identify(unit, games, stats, override=None, quick=False):
             return matches[0], 'checksum', 'Complete data-file SHA-1 and size match', []
         if len(matches) > 1:
             return None, 'ambiguous', 'Checksums identify multiple catalog releases', [g['_release_name'] for g in matches]
-    name = Path(unit['source']).stem
+    name = Path(unit.get('name_source', unit['source'])).stem
     exact = [g for g in games if name.casefold() in (g['_release_name'].casefold(), disc_stem(g['_release_name']).casefold())]
     if not exact:
         aliases = [g for g in games if g['name'].casefold() == name.casefold()]
@@ -358,8 +366,14 @@ def identify(unit, games, stats, override=None, quick=False):
     return None, 'unmatched', 'No safe match; file stays in place', [g['_release_name'] for g in games if identification_title(g['name']) in suggestions and (disc_of(name) is None or disc_of(g['name']) == disc_of(name))][:12]
 
 
+def support_path(root, name):
+    if name.startswith('.ohmy3do/'):
+        return name
+    return (index_tools.support_base(root)/name).relative_to(root).as_posix()
+
+
 def asset_associations(root, folder):
-    directory = relative_path(root, folder)
+    directory = relative_path(root, support_path(root, folder))
     if not directory.exists():
         return {}
     previous = index_tools.existing_index(directory)
@@ -371,13 +385,21 @@ def asset_associations(root, folder):
                 raise ValueError(f'Ambiguous media basename: {path}')
             assets[key] = path.name
     previous = {key: name for key, name in previous.items()
-                if relative_path(root, folder + '/' + name).is_file()}
+                if relative_path(root, support_path(root, folder + '/' + name)).is_file()}
     return dict(previous=previous, assets=assets)
 
 
 def existing_asset(associations, source):
     return associations.get('assets', {}).get(index_tools.fold(Path(source).stem),
         associations.get('previous', {}).get(index_tools.fold(source)))
+
+
+def row_asset(associations, row):
+    for source in [row['source']] + row.get('aliases', []):
+        name = existing_asset(associations, source)
+        if name:
+            return name
+    return None
 
 
 def classify(game, override=None):
@@ -421,11 +443,16 @@ def classify(game, override=None):
 
 def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, categories=None):
     units = scan_units(root)
+    def choice(mapping, unit):
+        values = {mapping[key] for key in [unit['source']] + unit.get('aliases', []) if key in mapping}
+        if len(values) > 1:
+            raise ValueError('Conflicting ISO/CUE choices for ' + unit['source'])
+        return next(iter(values), None)
     categories = {} if categories is None else categories
     if not isinstance(categories,dict):
         raise ValueError('Category overrides must be a JSON object mapping relative paths to categories')
     for source, category in categories.items():
-        if source not in {unit['source'] for unit in units}:
+        if source not in {key for unit in units for key in [unit['source']] + unit.get('aliases', [])}:
             raise ValueError(f'Category override does not name a scanned disc entry: {source}')
         if not isinstance(category,str):
             raise ValueError('Category overrides must contain category names')
@@ -442,14 +469,17 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
     entries = []
     for number, unit in enumerate(units, 1):
         print(f'[{number}/{len(units)}] {unit["source"]}', flush=True)
-        row = dict(source=unit['source'], status='unmatched', moves=[], metadata={})
+        row = dict(source=unit['source'], status='unmatched', moves=[], metadata={},
+                   ignored_cues=unit.get('ignored_cues', []), aliases=unit.get('aliases', []))
         if unit.get('error'):
             row['reason'] = unit['error']
             entries.append(row)
             continue
         stats = {file: fingerprint(relative_path(root, file), not quick or Path(file).suffix.lower() == '.cue') for file in unit['files']}
         game, confidence, reason, suggestions = identify(unit, games, stats,
-            (overrides or {}).get(unit['source']), quick)
+            choice(overrides or {},unit), quick)
+        if row['ignored_cues']:
+            reason += '; redundant ISO CUE will be archived if this entry is applied'
         row.update(confidence=confidence, reason=reason, suggestions=suggestions)
         if game is None:
             entries.append(row)
@@ -461,8 +491,8 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         group = re.sub(r'\s*\[Variant [0-9A-F]{8}\]', '', without_disc(canonical)).strip()
         if game.get('_edition_unresolved'):
             group = without_disc(game['name'])
-        override = categories.get(unit['source'])
-        previous = saved.get(unit['source'],{})
+        override = choice(categories,unit)
+        previous = next((saved[k] for k in [unit['source']] + unit.get('aliases', []) if k in saved),{})
         if override is None and previous.get('title') == canonical:
             override = previous['category']
         category, category_reason = classify(game,override)
@@ -472,7 +502,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         directory = PurePosixPath(category) / safe_name(region) / safe_name(group) if category else None
         # An extra disc can share a base game's title but have its own audio or
         # pack-in labels. Keep those source labels instead of renaming it as the game.
-        output_title = Path(unit['source']).stem if category == 'Bonus Discs' else canonical
+        output_title = Path(unit.get('name_source', unit['source'])).stem if category == 'Bonus Discs' else canonical
         main = str(directory / (disc_stem(output_title) + Path(unit['source']).suffix.lower())) if directory else None
         row.update(status='ready' if confidence in ('checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
@@ -480,8 +510,8 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
                    edition_unresolved=bool(game.get('_edition_unresolved')),
                    category=category, category_reason=category_reason, category_review=category is None,
                    metadata=game.get('metadata', {}), group=group,
-                   cover=existing_asset(associations['covers'], unit['source']),
-                   preview=existing_asset(associations['previews'], unit['source']))
+                   cover=row_asset(associations['covers'], row),
+                   preview=row_asset(associations['previews'], row))
         if category is None:
             row.update(status='category-review',reason=reason + '; ' + category_reason)
             entries.append(row)
@@ -489,6 +519,8 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         for track, file in enumerate(unit['files']):
             if file == unit['source']:
                 target = main
+            elif file in unit.get('ignored_cues', []):
+                target = '.ohmy3do/ignored-cues/' + hashlib.sha256(file.encode()).hexdigest()[:24] + '.cue'
             else:
                 # Disc tags keep common track01.bin names from colliding across discs.
                 track_tag = f' (Track {track:02d})' if len(unit['files']) > 2 else ''
@@ -682,6 +714,10 @@ class Transaction:
     def undo(self):
         if self.data['state'] == 'undone':
             raise ValueError('Transaction is already undone')
+        for name in self.data.get('removed_directories', []):
+            path = relative_path(self.root,name)
+            if path.exists() and not path.is_dir():
+                raise ValueError('Cannot undo: original directory is occupied by a file: ' + name)
         # Preflight the entire undo before changing anything. Modified files are
         # never overwritten, including covers or favorites edited after apply.
         for entry in reversed(self.data['writes']):
@@ -729,6 +765,8 @@ class Transaction:
                 os.replace(target, source)
             elif target.exists() and entry['state'] == 'moving' and not target.stat().st_size:
                 target.unlink()
+        for name in self.data.get('removed_directories', []):
+            relative_path(self.root,name).mkdir(parents=True,exist_ok=True)
         for directory in reversed(self.data['directories']):
             try:
                 relative_path(self.root, directory).rmdir()
@@ -743,7 +781,7 @@ def prepare_text_remaps(root, mapping):
     updates = {}
     folded = {index_tools.fold(k): v for k, v in mapping.items()}
     for name in ('favorites.txt', 'recent.txt'):
-        path = relative_path(root, name)
+        path = relative_path(root, support_path(root, name))
         if not path.exists():
             continue
         raw = path.read_bytes()
@@ -760,8 +798,8 @@ def prepare_text_remaps(root, mapping):
         updated = ''.join(lines).encode('utf-8-sig' if raw.startswith(b'\xef\xbb\xbf') else 'utf-8')
         if len(updated) >= 8192:
             raise ValueError(f'Renamed paths exceed the menu limit for {name}')
-        updates[name] = updated
-    position = relative_path(root, 'last-position.txt')
+        updates[support_path(root,name)] = updated
+    position = relative_path(root, support_path(root,'last-position.txt'))
     if position.exists():
         raw = position.read_bytes().split(b'\0', 1)[0]
         try:
@@ -778,15 +816,15 @@ def prepare_text_remaps(root, mapping):
                 raise ValueError('Invalid saved-position path')
         except (UnicodeError, ValueError):
             print('Warning: invalid last-position.txt; resetting the saved menu position to the USB root. Undo restores the original file.')
-            updates['last-position.txt'] = b'OH3DO_POSITION1\n/Storage\n\n'
+            updates[support_path(root,'last-position.txt')] = b'OH3DO_POSITION1\n/Storage\n\n'
             return updates
         folder = lines[1][9:] if lines[1].startswith('/Storage/') else ''
         current = (folder.rstrip('/') + '/' if folder else '') + lines[2]
         target = folded.get(index_tools.fold(current))
         if target:
-            updates['last-position.txt'] = ('OH3DO_POSITION1\n/Storage/' + str(PurePosixPath(target).parent) + '\n' + Path(target).name + '\n').encode()
+            updates[support_path(root,'last-position.txt')] = ('OH3DO_POSITION1\n/Storage/' + str(PurePosixPath(target).parent) + '\n' + Path(target).name + '\n').encode()
         elif any(old.startswith(current.rstrip('/') + '/') or (folder and old.startswith(folder + '/')) for old in mapping):
-            updates['last-position.txt'] = b'OH3DO_POSITION1\n/Storage\n\n'
+            updates[support_path(root,'last-position.txt')] = b'OH3DO_POSITION1\n/Storage\n\n'
     return updates
 
 
@@ -1015,16 +1053,16 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
             cues[row['target']] = FILE_LINE.sub(directive, text).encode(encoding)
     # Preflight support paths too, before creating a transaction or moving discs.
     for name in STATE_FILES:
-        path = relative_path(root, name)
+        path = relative_path(root, support_path(root, name))
         if path.exists() and (not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
             raise ValueError(f'Invalid support file: {name}')
-    mapping = {r['source']: r['target'] for r in rows}
+    mapping = {source:r['target'] for r in rows for source in [r['source']] + r.get('aliases', [])}
     text_updates = prepare_text_remaps(root, mapping)
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
     # Media added after scan also takes precedence over imports and downloads.
     for row in rows:
-        row['cover'] = existing_asset(associations['covers'], row['source'])
-        row['preview'] = existing_asset(associations['previews'], row['source'])
+        row['cover'] = row_asset(associations['covers'], row)
+        row['preview'] = row_asset(associations['previews'], row)
     preview_files, preview_warnings = prepare_previews(rows, preview_dir, preview_start) if preview_dir is not None else ({}, [])
     if cover_dir is not None:
         prepared, warnings = prepare_local_covers(rows, cover_dir)
@@ -1033,11 +1071,11 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
     for warning in warnings + preview_warnings:
         print(warning)
     for name, content in prepared.items():
-        path = relative_path(root, 'covers/' + name)
+        path = relative_path(root, support_path(root, 'covers/' + name))
         if path.exists() and path.read_bytes() != content:
             raise ValueError(f'Cover destination is occupied: {path}')
     for name, content in preview_files.items():
-        path = relative_path(root, 'previews/' + name)
+        path = relative_path(root, support_path(root, 'previews/' + name))
         if path.exists() and path.read_bytes() != content:
             raise ValueError(f'Preview destination is occupied: {path}')
     tx = Transaction(root, plan)
@@ -1051,12 +1089,12 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
         for name, content in text_updates.items():
             tx.write(name, content)
         for name, content in prepared.items():
-            tx.write('covers/' + name, content)
+            tx.write(support_path(root, 'covers/' + name), content)
         for name, content in preview_files.items():
-            tx.write('previews/' + name, content)
+            tx.write(support_path(root, 'previews/' + name), content)
         media_outputs = {}
         for folder in ('covers', 'previews'):
-            path = relative_path(root, folder)
+            path = relative_path(root, support_path(root, folder))
             if not path.exists():
                 continue
             old = associations[folder]
@@ -1064,13 +1102,16 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
             for row in plan['entries']:
                 key = mapping.get(row['source'], row['source'])
                 name = row.get('cover' if folder == 'covers' else 'preview') or existing_asset(old, row['source'])
-                if name and relative_path(root, folder + '/' + name).is_file():
+                if name and relative_path(root, support_path(root, folder + '/' + name)).is_file():
                     output[index_tools.fold(key)] = name
             media_outputs[folder] = media_index(output)
         # Let the existing, tested indexer validate and build search + media indices
         # in a temporary mirror. Only its generated files are committed to USB.
         with tempfile.TemporaryDirectory(prefix='oh3do-index-') as directory:
             mirror = Path(directory)
+            if index_tools.support_base(root) != root:
+                (mirror/'.ohmy3do').mkdir()
+                (mirror/'.ohmy3do/ohmy3do.ini').write_bytes(b'layout marker')
             for unit in scan_units(root):
                 for file in unit['files'][:1]:
                     path = mirror / file
@@ -1078,9 +1119,9 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
                     path.touch()
             # CUE FILE parsing is unnecessary here: index() enumerates paths only.
             for folder in ('covers', 'previews'):
-                usb = root / folder
+                usb = index_tools.support_base(root) / folder
                 if usb.exists():
-                    target = mirror / folder
+                    target = index_tools.support_base(mirror) / folder
                     target.mkdir(exist_ok=True)
                     for file in usb.iterdir():
                         if file.is_file() and not file.is_symlink() and file.suffix.lower() in ('.png', '.3dc', '.3dv', '.3di'):
@@ -1093,8 +1134,9 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
                     (target / 'index.3di').write_bytes(media_outputs[folder])
             index_tools.index(mirror)
             for name in ('library.3di', 'covers/index.3di', 'previews/index.3di'):
-                if (mirror / name).exists():
-                    tx.write(name, (mirror / name).read_bytes())
+                located = support_path(root,name)
+                if (mirror / located).exists():
+                    tx.write(located, (mirror / located).read_bytes())
         write_database(root, tx, plan, rows)
         tx.data['state'] = 'complete'
         tx.save()
@@ -1118,6 +1160,88 @@ def directory_link(path):
     # Windows junctions are reparse points but aren't always reported as
     # symlinks, especially on Python versions before Path.is_junction().
     return path.is_symlink() or bool(getattr(path.lstat(), 'st_file_attributes', 0) & 0x400)
+
+
+def migrate_support(root, apply=False):
+    """Move menu-owned support files into .ohmy3do with a normal undo journal."""
+    names = ('favorites.txt','recent.txt','last-position.txt','diagnostics.txt','library.3di',
+             'covers','previews','music','saves')
+    operations, directories = [], []
+    for name in names:
+        source = relative_path(root,name)
+        if not source.exists():
+            continue
+        if directory_link(source):
+            raise ValueError('Cannot migrate a link/junction: ' + name)
+        files = []
+        if source.is_dir():
+            for folder, dirs, entries in os.walk(source,followlinks=False):
+                directory = Path(folder)
+                directories.append(directory)
+                for entry in dirs + entries:
+                    if directory_link(directory/entry):
+                        raise ValueError('Cannot migrate a link/junction: ' + str(directory/entry))
+                files.extend(directory/entry for entry in entries)
+        else:
+            files = [source]
+        for file in sorted(files):
+            relative = file.relative_to(root).as_posix()
+            target = '.ohmy3do/' + relative
+            if relative_path(root,target).exists():
+                raise ValueError('Migration destination already exists: ' + target)
+            operations.append(dict(source=relative,target=target))
+    old_ini = relative_path(root,'ohmy3do.ini')
+    new_ini = relative_path(root,'.ohmy3do/ohmy3do.ini')
+    if index_tools.support_base(root) != root:
+        if operations or old_ini.exists():
+            raise ValueError('Both layouts contain support files; resolve the duplicates before migrating')
+        print('Support files already use .ohmy3do/. No changes made.')
+        return None
+    config = old_ini.read_bytes() if old_ini.exists() else b''
+    if not config.split(b'\0',1)[0]:
+        templates = (Path(__file__).with_name('ohmy3do.ini'),Path(__file__).resolve().parent.parent/'ohmy3do.ini')
+        template = next((p for p in templates if p.is_file()),None)
+        if template is None:
+            raise ValueError('Default ohmy3do.ini missing from the tools package')
+        config = template.read_bytes()
+    if old_ini.exists():
+        # Keep the legacy file as an undoable move even when an empty firmware
+        # probe already occupies the new INI path. The live config is written last.
+        operations.append(dict(source='ohmy3do.ini',target='.ohmy3do/migration-input/'+uuid.uuid4().hex+'.ini'))
+    for move in operations:
+        print(('Move: ' if apply else 'Would move: ') + move['source'] + ' -> ' + move['target'])
+    print(('Write: ' if apply else 'Would write: ') + '.ohmy3do/ohmy3do.ini')
+    if not apply:
+        print('No changes made. Install the updated boot.iso before migrating; add --apply to move support files.')
+        return None
+    for move in operations:
+        move['fingerprint'] = fingerprint(relative_path(root,move['source']))
+    targets = ['.ohmy3do/'+name for name in ('covers','previews','music','saves')]
+    targets += ['.ohmy3do/'+p.relative_to(root).as_posix() for p in directories]
+    for name in targets:
+        relative_path(root,name)
+    tx = Transaction(root)
+    tx.data['removed_directories'] = [p.relative_to(root).as_posix() for p in directories]
+    tx.save()
+    print(f'Undo journal: {tx.path}',flush=True)
+    try:
+        for name in targets:
+            tx.parents(root/name/'placeholder')
+        for move in operations:
+            tx.move(move)
+        tx.write('.ohmy3do/ohmy3do.ini',config)
+        tx.data['state'] = 'complete'; tx.save()
+    except BaseException:
+        tx.undo()
+        raise
+    for directory in sorted(directories,key=lambda p:len(p.parts),reverse=True):
+        try:
+            directory.rmdir()
+        except OSError as error:
+            if error.errno not in (errno.ENOTEMPTY,errno.EEXIST):
+                print(f'Warning: support files migrated, but old empty folder could not be removed: {directory}: {error}')
+    print('Menu support files now use .ohmy3do/. Game paths are unchanged.')
+    return tx
 
 
 def cleanup_empty(root, apply=False):
@@ -1175,6 +1299,9 @@ def main():
     cleanup = commands.add_parser('clean-empty', help='preview empty directories; add --apply to remove them')
     cleanup.add_argument('usb_root', type=Path)
     cleanup.add_argument('--apply', action='store_true', help='remove empty directories; never delete files')
+    migrate = commands.add_parser('migrate-support',help='preview moving menu support files into .ohmy3do/')
+    migrate.add_argument('usb_root',type=Path)
+    migrate.add_argument('--apply',action='store_true',help='move support files with an undo journal; install the updated ISO first')
     scan = commands.add_parser('scan', help='read the drive and write a preview plan; USB files stay unchanged')
     scan.add_argument('usb_root', type=Path)
     scan.add_argument('--plan', type=Path, default=Path('library-plan.json'))
@@ -1214,10 +1341,10 @@ def main():
             return
         if args.usb_root.is_symlink() or not args.usb_root.is_dir():
             raise ValueError('USB root must be a real, existing directory')
-        if args.command == 'clean-empty':
+        if args.command in ('clean-empty','migrate-support'):
             if directory_link(args.usb_root):
                 raise ValueError('USB root must not be a link or junction')
-            cleanup_empty(args.usb_root.resolve(), args.apply)
+            (cleanup_empty if args.command == 'clean-empty' else migrate_support)(args.usb_root.resolve(), args.apply)
             return
         root = args.usb_root.resolve()
         cache = args.cache.resolve()
