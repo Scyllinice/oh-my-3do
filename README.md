@@ -421,7 +421,7 @@ checksums accompany the generated database. No account or API key is needed.
 Open the HTML preview before applying changes. The layout is
 `<category>/<region>/<title>/<disc image>`, with discs of the same edition in
 one folder. Categories are `Games`, `Demos`, `Samplers`, `Applications`,
-`Multimedia`, and `Educational`. For example:
+`Multimedia`, `Educational`, and `Bonus Discs`. For example:
 
 ```text
 Games/USA/D (USA)/D (USA) (Disc 1).iso
@@ -429,6 +429,7 @@ Games/USA/D (USA)/D (USA) (Disc 2).iso
 Samplers/USA/3DO Interactive Sampler CD 2, The (USA)/...
 Multimedia/USA/20th Century Video Almanac (USA)/...
 Educational/USA/Learning title (USA)/...
+Bonus Discs/Japan/Game title (Japan)/...
 ```
 
 Classification uses catalog title labels, release type, and genre. Explicit demo
@@ -439,6 +440,15 @@ classified as multimedia solely because they contain video.
 Educational software, including educational games, goes to Educational. Clear
 reference titles take precedence over a broad Education genre, and explicit
 demo/sampler labels take precedence over the educational theme.
+
+Bonus discs have their own **Bonus Discs** category. Explicit bonus-disc labels
+and existing folders named `Bonus Discs` (including numbered names such as
+`4 Bonus Discs`) identify extras separately from the base game. A manual
+category choice takes precedence. Bonus-disc filenames retain their source
+labels, such as `[CD-Audio]`, within the menu's filename limits. This also keeps
+their CUE companions separate from the main game's files. An unidentified
+extra still needs a release match before it can move; the folder alone does
+not identify its contents.
 
 Uncertain classifications are marked **category-review** and stay in place,
 even with `--accept-name-matches` or a verified checksum. Examples include mixed
@@ -588,7 +598,7 @@ The USB database lives in `.ohmy3do/library.sqlite`, with a readable
 `.ohmy3do/library.json` export. SQLite's `games` table contains paths, titles,
 regions, disc numbers, genre, publisher, year, developer, match type, and cover
 associations, plus category, classification evidence, and a category-review flag.
-The `games` table includes supported disc images from all six categories.
+The `games` table includes supported disc images from all seven categories.
 These information fields are available for PC tools; the current
 console menu uses the generated search/artwork indices and does not yet display
 genre, publisher, or year.

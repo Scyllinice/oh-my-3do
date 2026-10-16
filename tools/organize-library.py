@@ -35,7 +35,7 @@ index_tools = module('index-media')
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
-CATEGORIES = ('Games', 'Demos', 'Samplers', 'Applications', 'Multimedia', 'Educational')
+CATEGORIES = ('Games', 'Demos', 'Samplers', 'Applications', 'Multimedia', 'Educational', 'Bonus Discs')
 REGIONS = {'us': 'USA', 'usa': 'USA', 'na': 'USA', 'europe': 'Europe', 'eu': 'Europe',
            'pal': 'Europe', 'uk': 'Europe', 'gb': 'Europe', 'jp': 'Japan', 'japan': 'Japan', 'j': 'Japan',
            'korea': 'Korea', 'kr': 'Korea', 'germany': 'Germany', 'france': 'France',
@@ -393,6 +393,8 @@ def classify(game, override=None):
                    'horror','pinball','platform','puzzle','racing','role-playing','shooter',
                    'simulation','sports','strategy','visual novel','quiz','sandbox','party','construction and management simulation'}
     evidence = {}
+    if re.search(r'\bbonus\s+(?:disc|cd)\b',title,re.I) or release in ('bonus disc','bonus cd'):
+        evidence['Bonus Discs'] = 'Catalog title/release type identifies a bonus disc'
     if re.search(r'\b(?:sampler|sample\s+(?:disc|cd))\b', title, re.I) or release == 'sampler':
         evidence['Samplers'] = 'Catalog title/release type identifies a sampler'
     if re.search(r'\((?:demo|demonstration|trial)(?:[^)]*)\)|\b(?:demo|demonstration|trial\s+version)\b',title,re.I) or release in ('demo','demonstration','trial'):
@@ -401,7 +403,7 @@ def classify(game, override=None):
         evidence['Applications'] = 'Catalog title/genre identifies an application'
     if re.search(r'\b(?:atlas|almanac|encyclop(?:e|ae)dia|dictionary|museum|art\s+gallery|documentary|photo\s*(?:cd|shoot)|slide\s*show|interactive\s+(?:book|magazine)|music\s+video|karaoke)\b',title,re.I) or genres & {'multimedia','reference','documentary','encyclopedia','music video','karaoke'}:
         evidence['Multimedia'] = 'Catalog title/genre identifies multimedia/reference content'
-    if (genres & {'education','educational'} or re.search(r'\beducational\b',title,re.I)) and not evidence.keys() & {'Demos','Samplers','Multimedia'}:
+    if (genres & {'education','educational'} or re.search(r'\beducational\b',title,re.I)) and not evidence.keys() & {'Demos','Samplers','Multimedia','Bonus Discs'}:
         evidence['Educational'] = 'Catalog title/genre identifies educational software'
     if 'Multimedia' in evidence and genres & game_genres and not genres & {'education','educational','multimedia','reference','documentary','encyclopedia'}:
         return None, 'Multimedia title/genre conflicts with a game genre; choose a category'
@@ -463,8 +465,14 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         if override is None and previous.get('title') == canonical:
             override = previous['category']
         category, category_reason = classify(game,override)
+        if override is None and any(re.sub(r'^\d+[\s._-]+','',part).casefold() == 'bonus discs'
+                                    for part in PurePosixPath(unit['source']).parts[:-1]):
+            category, category_reason = 'Bonus Discs', 'Source folder identifies a bonus disc'
         directory = PurePosixPath(category) / safe_name(region) / safe_name(group) if category else None
-        main = str(directory / (disc_stem(canonical) + Path(unit['source']).suffix.lower())) if directory else None
+        # An extra disc can share a base game's title but have its own audio or
+        # pack-in labels. Keep those source labels instead of renaming it as the game.
+        output_title = Path(unit['source']).stem if category == 'Bonus Discs' else canonical
+        main = str(directory / (disc_stem(output_title) + Path(unit['source']).suffix.lower())) if directory else None
         row.update(status='ready' if confidence in ('checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
                    catalog_name=None if game.get('_edition_unresolved') else game['name'], variant=game['_variant'],
@@ -483,7 +491,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
             else:
                 # Disc tags keep common track01.bin names from colliding across discs.
                 track_tag = f' (Track {track:02d})' if len(unit['files']) > 2 else ''
-                target = str(directory / (disc_stem(canonical, 95) + track_tag + Path(file).suffix.lower()))
+                target = str(directory / (disc_stem(output_title, 95) + track_tag + Path(file).suffix.lower()))
             row['moves'].append(dict(source=file, target=target, fingerprint=stats[file]))
         if 'cue_text' in unit:
             row['cue_encoding'] = unit['cue_encoding']

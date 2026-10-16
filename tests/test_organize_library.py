@@ -415,11 +415,12 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertFalse((self.root/'.ohmy3do/transactions').exists())
 
 
-    def test_six_categories_move_to_separate_roots_and_undo(self):
+    def test_seven_categories_move_to_separate_roots_and_undo(self):
         cases=[('Example (USA)','Adventure','Games'),('Example (USA) (Demo)','Adventure','Demos'),
                ('Interactive Sampler CD (USA)','Compilation','Samplers'),
                ('Storage Manager (USA)',None,'Applications'),('Video Almanac (USA)',None,'Multimedia'),
-               ('Learning Numbers (USA)','Education; Puzzle','Educational')]
+               ('Learning Numbers (USA)','Education; Puzzle','Educational'),
+               ('Example (USA) (Bonus Disc)','Adventure','Bonus Discs')]
         for i,(title,genre,category) in enumerate(cases):
             data=f'disc {i}'.encode();self.put(f'old{i}.iso',data)
             row=game(title,[data]);row['metadata']['genre']=genre
@@ -433,6 +434,40 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
             self.assertEqual({row[0] for row in db.execute('select category from games')},set(organizer.CATEGORIES))
         for row in plan['entries']:self.assertTrue((self.root/row['target']).is_file())
         self.assertTrue(all(r['source']==r['target'] for r in self.scan()['entries']))
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_bonus_folder_separates_extras_preserves_cue_labels_and_undoes(self):
+        self.catalog['games']=[game('Example (USA)',[b'game'])]
+        self.put('Games/Example (USA).iso',b'game')
+        source='4 Bonus Discs/Example/Example (USA) [CD-Audio].cue'
+        cue=self.put(source,b'FILE "audio.bin" BINARY\r\nTRACK 01 AUDIO\r\n')
+        self.put('4 Bonus Discs/Example/audio.bin',b'extra audio')
+        before=snapshot(self.root)
+        plan=self.scan(quick=True)
+        bonus=next(r for r in plan['entries'] if r['source']==source)
+        self.assertEqual(bonus['category'],'Bonus Discs')
+        self.assertIn('[CD-Audio]',bonus['target'])
+        self.assertTrue(bonus['target'].startswith('Bonus Discs/USA/'))
+        self.assertTrue(all(r['status']=='review' for r in plan['entries']))
+        tx=self.apply(plan,names=True)
+        self.assertIn(b'[CD-Audio].bin',(self.root/bonus['target']).read_bytes())
+        self.assertTrue((self.root/'Games/USA/Example (USA)/Example (USA).iso').exists())
+        with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
+            self.assertEqual({r[0] for r in db.execute('SELECT category FROM games')},{'Games','Bonus Discs'})
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_bonus_manual_override_wins_over_folder_and_persists(self):
+        source='4 Bonus Discs/Example.iso'
+        self.put(source,b'game');self.catalog['games']=[game('Example (USA)',[b'game'])]
+        plan=organizer.build_plan(self.root,self.catalog,categories={source:'Games'})
+        self.assertEqual(plan['entries'][0]['category'],'Games')
+        source='4 Bonus Discs/Example.iso'
+        plan=organizer.build_plan(self.root,self.catalog,categories={source:'bonus discs'})
+        before=snapshot(self.root)
+        tx=self.apply(plan)
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['category'],'Bonus Discs')
+        self.assertEqual(row['category_reason'],'Explicit category override')
         tx.undo();self.assertEqual(before,snapshot(self.root))
 
     def test_uncertain_categories_stay_put_even_with_filename_approval(self):

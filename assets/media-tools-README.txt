@@ -15,7 +15,7 @@ Preview without modifying USB files:
 
 Open library-plan.html to review proposed moves and game information. Discs use
 <category>/<region>/<title>/, with discs of the same edition together. Categories
-are Games, Demos, Samplers, Applications, Multimedia and Educational. The first
+are Games, Demos, Samplers, Applications, Multimedia, Educational and Bonus Discs. The first
 scan downloads a Redump DAT and LaunchBox's metadata archive (about 104 MiB),
 cached on the PC. Subsequent scans use the cache. Metadata fields may be missing.
 
@@ -40,6 +40,10 @@ hashes match or --accept-name-matches is supplied. Educational software and
 educational games go to Educational. Specific reference titles stay Multimedia,
 and explicit demos/samplers keep those categories regardless of educational
 theme. Music/life-simulation labels alone may require a category choice.
+Bonus-disc labels and existing Bonus Discs folders (including 4 Bonus Discs)
+classify extras separately. Manual category choices take precedence. Source
+labels such as [CD-Audio] are retained in bonus filenames within menu limits;
+CUE companions move with them. Unidentified extras still need a release match.
 
 Copy/edit categories.example.json on the PC with current relative disc paths:
   {"Unsorted/3DO Game Guru.iso": "Applications"}
