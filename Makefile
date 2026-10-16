@@ -6,6 +6,8 @@ test: build/test_cover_cache build/test_usb_music build/test_menu_music build/te
 	python3 tools/build-sector-codec.py
 	python3 tests/test_sector_codec.py
 	python3 tests/test_organize_library.py
+	python3 tests/test_library_catalog.py
+	python3 tests/test_prepare_audio_disc.py
 	python3 tests/test_media_tools.py
 	python3 tests/test_music_sample.py
 	python3 tests/test_music_tools.py

@@ -24,6 +24,7 @@ files={'index-media.py':'tools/index-media.py',
        'prepare-preview.py':'tools/prepare-preview.py',
        'resize-covers.py':'tools/resize-covers.py',
        'prepare-music.py':'tools/prepare-music.py',
+       'prepare-audio-disc.py':'tools/prepare-audio-disc.py',
        'README.txt':'assets/media-tools-README.txt','LICENSE':'LICENSE'}
 for name in ('sector-codec-win64.dll','sector-codec.so','sector-codec.dylib'):
     path=args.native_dir/name

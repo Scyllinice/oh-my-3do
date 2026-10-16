@@ -66,6 +66,7 @@ COPY --chown=developer:developer vendor/ /tmp/project-check/vendor/
 COPY --chown=developer:developer tests/ /tmp/project-check/tests/
 COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py tools/resize-covers.py tools/generate-menu-music.py tools/prepare-music.py /tmp/project-check/tools/
 COPY --chown=developer:developer tools/organize-library.py tools/library-catalog.py tools/sector-codec.py tools/sector-codec.c tools/build-sector-codec.py /tmp/project-check/tools/
+COPY --chown=developer:developer tools/prepare-audio-disc.py /tmp/project-check/tools/
 COPY --chown=developer:developer assets/menu-music.aiff /tmp/project-check/assets/menu-music.aiff
 COPY --chown=developer:developer ohmy3do.ini /tmp/project-check/ohmy3do.ini
 RUN make -C /tmp/project-check test test-sdk test-cover-resize \

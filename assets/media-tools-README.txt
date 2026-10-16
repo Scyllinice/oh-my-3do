@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.15.2)
+Oh My 3DO media tools (scanner v0.15.3)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -39,8 +39,32 @@ associations. These checks do not replace checksum verification of valid data.
 Open library-plan.html to review proposed moves and game information. Discs use
 <category>/<region>/<title>/, with discs of the same edition together. Categories
 are Games, Demos, Samplers, Applications, Multimedia, Educational and Bonus Discs. The first
-scan downloads a Redump DAT and LaunchBox's metadata archive (about 104 MiB),
+scan downloads the full Redump 3DO DAT and LaunchBox's metadata archive (about 104 MiB),
 cached on the PC. Subsequent scans use the cache. Metadata fields may be missing.
+
+Online scans upgrade the older limited catalog automatically, reusing LaunchBox
+metadata. Offline scans warn when using a limited cache. --dat accepts XML/Logiqx
+or clrmamepro DAT files, plain or ZIP. CUE metadata records are excluded from
+checksum matching; every actual track remains required for a complete match.
+Redump categories supply the default category; explicit choices take precedence.
+Video maps to Multimedia, Coverdiscs to Samplers, and Add-Ons to Games.
+Full scans report identical data-file checksums without deleting copies or
+comparing CUE track layouts. A single unmatched release label is reported as
+unverified-release instead of misleadingly claiming multiple matching releases.
+
+REGISTER AN UNCATALOGUED DISC
+
+Preview adding an existing disc without moving it or downloading metadata:
+  py organize-library.py register M:/ "Games/USA/Example/Example.iso" --title "Example" --region USA --category Games
+Repeat with --apply to update Find and the library database with an undo journal.
+The disc remains unverified against the catalog. Source hashes are stored so an
+unchanged registration survives future scans. Full scans compare SHA-1; quick
+scans compare size/time only. Changed files need new identification/registration.
+The command accepts valid ISO/CUE entries, preserves covers/previews, and rejects
+empty/archive-disguised data. It does not certify signatures or bootability.
+Use --category "Bonus Discs" for a prepared audio CUE. Ordinary scans leave
+audio-only sets in place and point to prepare-audio-disc.py, avoiding false
+identification as a same-named game.
 
 The report has Matched, Needs a choice, Unidentified and File problems filters.
 Matched filename entries already identify one release or a marked game-level
@@ -333,3 +357,21 @@ FFmpeg downloads (separate software, not bundled):
 https://ffmpeg.org/download.html
 
 These Python tools are covered by the included MIT license.
+
+AUDIO BONUS DISCS
+
+Combine an audio-only WAV/CUE set into a single BIN/CUE pair:
+  py prepare-audio-disc.py "D:/rips/album.cue" "D:/3DO/Bonus Discs/USA/Album (Audio CD)"
+
+Select the resulting CUE in the menu. The output directory must be new.
+Python 3.9+ is sufficient; no FFmpeg or ISO rebuild is needed. Audio must already
+be uncompressed 44.1 kHz, 16-bit stereo with complete CD sectors. One WAV per
+track is supported. Recorded INDEX 00/01 gaps are preserved; unsupported layouts
+are rejected. Audio samples are copied without resampling or compression and
+verified after writing. Original WAVs and CUEs stay in place. audio-disc.json
+records source and output hashes. Reindex Find with index-media.py afterward.
+
+These are audio CDs, not bootable game ISOs. The open-source ODE has audio-track
+support, but playback on each installed firmware needs a hardware test. Unusual
+first-track pregaps may expose firmware limitations. Test a conventional disc
+before a 99-track bonus disc. Conversion does not certify a Redump release.

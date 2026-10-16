@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Runtime data adapters for organize-library.py. No third-party data is bundled."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -10,8 +11,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
-REDUMP = ('https://raw.githubusercontent.com/libretro/libretro-database/master/'
-          'metadat/redump/The%203DO%20Company%20-%203DO.dat')
+REDUMP = 'https://redump.info/datfile/3do/'
+CATALOG_SCHEMA = 3
 LAUNCHBOX = 'https://gamesdb.launchbox-app.com/Metadata.zip'
 ART = 'https://thumbnails.libretro.com/The%203DO%20Company%20-%203DO/Named_Boxarts/'
 AGENT = 'Mozilla/5.0 OhMy3DO-Library/1.0 (https://github.com/Scyllinice/oh-my-3do)'
@@ -53,6 +54,22 @@ def download(url, target, maximum, offline=False):
 
 
 def dat_games(text):
+    if text.lstrip('\ufeff \r\n\t').startswith('<'):
+        root = ET.fromstring(text)
+        if root.tag != 'datafile':
+            raise ValueError('Expected a Logiqx/Redump datafile')
+        result = []
+        for item in root.findall('game') + root.findall('machine'):
+            row = dict(item.attrib)
+            for key in ('description', 'category', 'serial', 'version', 'region'):
+                if item.findtext(key):
+                    row[key] = item.findtext(key).strip()
+            row['roms'] = [dict(rom.attrib) for rom in item.findall('rom')]
+            if row.get('name') and row['roms']:
+                result.append(row)
+        if not result:
+            raise ValueError('No games in identification DAT')
+        return data_roms(result)
     tokens = re.findall(r'"(?:\\.|[^"\\])*"|[()]|[^\s()]+', text)
     pos = 0
 
@@ -87,7 +104,31 @@ def dat_games(text):
             result.append(row)
     if not result:
         raise ValueError('No games in identification DAT')
-    return result
+    return data_roms(result)
+
+
+def data_roms(games):
+    # CUE bytes depend on names/formatting and are not disc sectors. Keep every
+    # actual track; removing audio tracks would turn partial dumps into matches.
+    for game in games:
+        game['roms'] = [r for r in game['roms'] if not r.get('name', '').lower().endswith('.cue')]
+        if not game['roms']:
+            raise ValueError('Catalog entry has no disc data: ' + game['name'])
+    return games
+
+
+def read_dat(path):
+    data = Path(path).read_bytes()
+    if len(data) > 8 * 1024 * 1024:
+        raise ValueError('Identification DAT exceeds 8 MiB')
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            candidates = [i for i in archive.infolist() if not i.is_dir() and i.filename.lower().endswith(('.dat', '.xml'))]
+            if len(candidates) != 1 or candidates[0].file_size > 8 * 1024 * 1024:
+                raise ValueError('DAT ZIP must contain one DAT/XML of at most 8 MiB')
+            # Read directly; never extract archive paths onto disk.
+            data = archive.read(candidates[0])
+    return dat_games(data.decode('utf-8-sig'))
 
 
 def title_key(name):
@@ -165,10 +206,15 @@ def load_catalog(cache, offline=False, refresh=False, dat=None, launchbox=None):
     output = cache / 'catalog.json'
     if not refresh and dat is None and launchbox is None and output.is_file():
         result = json.loads(output.read_text(encoding='utf-8'))
-        if result.get('schema') == 2:
+        if result.get('schema') == CATALOG_SCHEMA and (offline or result.get('complete_catalog')):
+            if not result.get('complete_catalog'):
+                print('Offline/custom catalog may omit releases. Run an online scan to load the full Redump catalog.', flush=True)
+            return result
+        if offline and result.get('schema') == 2:
+            print('Offline legacy catalog: demos and other releases may be missing. Run an online scan to upgrade.', flush=True)
             return result
     local_dat, local_launchbox = dat is not None, launchbox is not None
-    dat = Path(dat) if local_dat else cache / 'redump.dat'
+    dat = Path(dat) if local_dat else cache / 'redump-full.zip'
     launchbox = Path(launchbox) if local_launchbox else cache / 'launchbox.zip'
     if refresh:
         (cache / 'cover-list.html').unlink(missing_ok=True)
@@ -176,15 +222,24 @@ def load_catalog(cache, offline=False, refresh=False, dat=None, launchbox=None):
         for file, local in ((dat, local_dat), (launchbox, local_launchbox)):
             if not local:
                 file.unlink(missing_ok=True)
+    limited = False
     if not dat.exists():
-        download(REDUMP, dat, 8 * 1024 * 1024, offline)
+        if local_dat:
+            raise ValueError('Local DAT does not exist: ' + str(dat))
+        legacy = cache / 'redump.dat'
+        if offline and not local_dat and legacy.is_file():
+            dat = legacy
+            limited = True
+            print('Offline legacy catalog: demos and other releases may be missing. Run an online scan to upgrade.', flush=True)
+        else:
+            download(REDUMP, dat, 8 * 1024 * 1024, offline)
     if not launchbox.exists():
         print('First metadata download is about 104 MiB; later scans use the local cache.', flush=True)
         download(LAUNCHBOX, launchbox, 256 * 1024 * 1024, offline)
-    result = dict(schema=2, fetched=time.time(), sources=[
-        dict(url=REDUMP, sha256=hashlib.sha256(dat.read_bytes()).hexdigest()),
+    result = dict(schema=CATALOG_SCHEMA, complete_catalog=not limited and not local_dat, fetched=time.time(), sources=[
+        dict(url=str(dat) if local_dat or limited else REDUMP, sha256=hashlib.sha256(dat.read_bytes()).hexdigest()),
         dict(url=LAUNCHBOX, sha256=hashlib.sha256(launchbox.read_bytes()).hexdigest()),
-        dict(url=ART)], games=enrich(dat_games(dat.read_text(encoding='utf-8-sig')), launchbox_games(launchbox)))
+        dict(url=ART)], games=enrich(read_dat(dat), launchbox_games(launchbox)))
     temporary = output.with_suffix('.tmp')
     temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(output)

@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.15.2'
+SCANNER_VERSION = '0.15.3'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -309,7 +309,7 @@ def identify(unit, games, stats, override=None, quick=False):
             selected = [g for g in games if g['name'] == override]
         if not selected or len({g['_release_name'] for g in selected}) != 1:
             return None, 'ambiguous', 'Override needs an exact release/variant name', sorted({g['_release_name'] for g in selected})
-        return selected[0], 'manual', 'Explicit overrides file', []
+        return selected[0], 'manual', 'Explicit overrides file; catalog dump checksum not verified', []
     data = [stats[f] for f in unit['files'] if Path(f).suffix.lower() != '.cue']
     matches = []
     if not quick:
@@ -392,6 +392,8 @@ def identify(unit, games, stats, override=None, quick=False):
                        _release_name=label + (f' (Disc {number})' if number is not None else ''),
                        _variant='; '.join(codes), _edition_unresolved=True, roms=[])
             return row, 'filename', 'Game-level title/region match' + hint + '; source code preserved; exact edition unresolved; dump checksum not verified', []
+    if len(candidates) == 1:
+        return None, 'unverified-release', 'Title matches one catalog entry, but its release/variant labels differ; exact edition and checksum remain unverified', [candidates[0]['_release_name']]
     if candidates:
         return None, 'ambiguous', 'More than one release or variant; explicit override needed', [g['_release_name'] for g in candidates][:20]
     suggestions = difflib.get_close_matches(title, {identification_title(g['name']) for g in games}, n=3, cutoff=.65)
@@ -440,6 +442,11 @@ def classify(game, override=None):
         if not isinstance(override,str) or override.casefold() not in choices:
             raise ValueError('Category must be one of: ' + ', '.join(CATEGORIES))
         return choices[override.casefold()], 'Explicit category override'
+    category = game.get('category', '').casefold()
+    categories = {name.casefold(): name for name in CATEGORIES}
+    categories.update(video='Multimedia', audio='Multimedia', coverdiscs='Samplers', **{'add-ons':'Games'})
+    if category in categories:
+        return categories[category], 'Redump category: ' + game['category']
     title = game['_release_name']
     metadata = game.get('metadata', {})
     genres = {s.strip().casefold() for s in re.split(r'[;,]',metadata.get('genre') or '') if s.strip()}
@@ -489,12 +496,14 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         if not isinstance(category,str):
             raise ValueError('Category overrides must contain category names')
         classify({}, category)
-    saved = {}
+    saved, registrations = {}, {}
     database = relative_path(root,'.ohmy3do/library.json')
     if database.exists():
         if not database.is_file() or database.stat().st_size > 16*1024*1024:
             raise ValueError('Invalid existing library.json')
-        saved = {row['path']:row for row in json.loads(database.read_text(encoding='utf-8')).get('games',[])
+        records = json.loads(database.read_text(encoding='utf-8')).get('games',[])
+        registrations = {r['path']:r for r in records if r.get('identification') == 'unverified' and r.get('registration')}
+        saved = {row['path']:row for row in records
                  if row.get('category') in CATEGORIES and row.get('category_reason') == 'Explicit category override'}
     games = release_records(catalog['games'])
     raw_sizes = {int(r['size']) for g in games for r in g['roms']
@@ -509,6 +518,29 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         if unit.get('error'):
             row['reason'] = unit['error']
             if unit.get('invalid_data'): row['status'] = 'blocked'
+            entries.append(row)
+            continue
+        registered = registrations.get(unit['source'])
+        if registered:
+            certificate = registered['registration']
+            same = set(certificate) == set(unit['files'])
+            for name, expected in certificate.items():
+                if not same:
+                    break
+                actual = fingerprint(relative_path(root,name), not quick)
+                same = all(actual.get(k) == expected.get(k) for k in ('size','mtime_ns') + (() if quick else ('sha1',)))
+            if same:
+                row.update(status='registered', confidence='unverified', canonical=registered['title'],
+                           target=unit['source'], region=registered.get('region'), category=registered['category'],
+                           category_reason=registered.get('category_reason'), category_review=False,
+                           registration=certificate, reason='Previously registered disc; catalog identity remains unverified; files unchanged' + (' (size/time only in quick scan)' if quick else ' (SHA-1 checked)'),
+                           metadata=registered.get('metadata',{}), cover=registered.get('cover'), preview=registered.get('preview'))
+                entries.append(row)
+                continue
+        track_modes = re.findall(r'^\s*TRACK\s+\d+\s+(\S+)', unit.get('cue_text', ''), re.I | re.M)
+        if track_modes and all(mode.upper() == 'AUDIO' for mode in track_modes):
+            row.update(confidence='audio-only', reason='Audio-only CD; not a game disc. WAV/CUE sets can be prepared with prepare-audio-disc.py; preserve originals until hardware playback is tested.',
+                       category='Bonus Discs', category_review=False)
             entries.append(row)
             continue
         stats = {}
@@ -539,10 +571,14 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
             reason += '; redundant ISO CUE will be archived if this entry is applied'
         row.update(confidence=confidence, reason=reason, suggestions=suggestions)
         if game is None:
+            if confidence == 'unverified-release' and not quick:
+                row['reason'] += '; no complete disc checksum matched'
             entries.append(row)
             continue
         canonical = game['_release_name']
-        region = game.get('region') or ', '.join(sorted(region_of(canonical))) or 'Unknown'
+        primary = next((REGIONS[tag.split(',')[0].strip().casefold()] for tag in re.findall(r'\(([^)]*)\)', canonical)
+                        if tag.split(',')[0].strip().casefold() in REGIONS), 'Unknown')
+        region = game.get('region') or primary
         # Opaque dump codes do not imply an edition shared by other discs.
         # Keep them in filenames; retain the common game folder.
         group = re.sub(r'\s*\[Variant [0-9A-F]{8}\]', '', without_disc(canonical)).strip()
@@ -599,6 +635,18 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
                     raise ValueError(f'Destination collision: {move["target"]}')
             except ValueError as error:
                 row.update(status='blocked', reason=str(error))
+    if not quick:
+        duplicates = collections.defaultdict(list)
+        for row in entries:
+            data = [m for m in row['moves'] if Path(m['source']).suffix.lower() != '.cue']
+            if data and all(m['fingerprint'].get('sha1') for m in data):
+                key = tuple(sorted((m['fingerprint']['size'], m['fingerprint']['sha1']) for m in data))
+                duplicates[key].append(row)
+        for group in duplicates.values():
+            if len(group) > 1:
+                for row in group:
+                    row['duplicate_sources'] = [other['source'] for other in group if other is not row]
+                    row['reason'] += '; identical data-file checksums also found at: ' + ', '.join(row['duplicate_sources']) + '; CUE layouts are not compared; no duplicate is deleted automatically'
     return dict(schema=2, root=str(root), created=time.time(), quick=quick,
                 sources=catalog['sources'], entries=entries)
 
@@ -608,7 +656,7 @@ def json_bytes(value):
 
 
 def review_bucket(row):
-    if row['status'] in ('ready', 'review'):
+    if row['status'] in ('ready', 'review', 'registered'):
         return 'matched'
     if row['status'] == 'blocked' or (row['status'] == 'unmatched' and not row.get('confidence')):
         return 'problems'
@@ -1055,6 +1103,8 @@ def write_database(root, tx, plan, selected):
             status='organized' if row in selected else row['status'], metadata=row.get('metadata', {}),
             cover=row.get('cover'), cover_source=row.get('cover_source'),
             preview=row.get('preview'), preview_source=row.get('preview_source'), suggestions=row.get('suggestions', []))
+        if row.get('registration'):
+            records[path]['registration'] = row['registration']
     # Do not retain stale records for discs no longer present.
     records = [r for r in records.values() if relative_path(root, r['path']).is_file()]
     data = dict(schema=1, generated=time.time(), sources=plan['sources'], games=sorted(records, key=lambda r: r['path']))
@@ -1073,12 +1123,113 @@ def write_database(root, tx, plan, selected):
         tx.write('.ohmy3do/library.sqlite', path.read_bytes())
 
 
+def write_indexes(root, tx, media_outputs=None):
+    """Build in a PC mirror; journal index writes without altering media files."""
+    if media_outputs is None:
+        media_outputs = {folder: media_index(index_tools.existing_index(index_tools.support_base(root)/folder))
+                         for folder in ('covers', 'previews')}
+    with tempfile.TemporaryDirectory(prefix='oh3do-index-') as directory:
+        mirror = Path(directory)
+        if index_tools.support_base(root) != root:
+            (mirror/'.ohmy3do').mkdir()
+            (mirror/'.ohmy3do/ohmy3do.ini').write_bytes(b'layout marker')
+        for unit in scan_units(root):
+            if unit.get('invalid_data'):
+                continue
+            for file in unit['files'][:1]:
+                path = mirror / file
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.suffix.lower() == '.iso':
+                    # Preserve the validation prefix without copying images.
+                    with relative_path(root,file).open('rb') as stream:
+                        path.write_bytes(stream.read(16))
+                else:
+                    path.touch()
+        # CUE sets were validated by scan_units; no CUE parsing is needed here.
+        for folder in ('covers', 'previews'):
+            usb = index_tools.support_base(root) / folder
+            if usb.exists():
+                target = index_tools.support_base(mirror) / folder
+                target.mkdir(exist_ok=True)
+                for file in usb.iterdir():
+                    if file.is_file() and not file.is_symlink() and file.suffix.lower() in ('.png', '.3dc', '.3dv', '.3di'):
+                        if file.name == 'index.3di':
+                            continue
+                        # Indexing reads PNG headers and index bytes only.
+                        with file.open('rb') as stream:
+                            content = stream.read(24)
+                        (target / file.name).write_bytes(content)
+                (target / 'index.3di').write_bytes(media_outputs[folder])
+        index_tools.index(mirror)
+        for name in ('library.3di', 'covers/index.3di', 'previews/index.3di'):
+            located = support_path(root,name)
+            if (mirror / located).exists():
+                tx.write(located, (mirror / located).read_bytes())
+
+
+def register_disc(root, source, title, category, region='Unknown', apply=False):
+    """Register an existing uncatalogued disc without moving it or inventing a release."""
+    relative_path(root, source)
+    category, category_reason = classify({}, category)
+    if not title.strip() or len(title.encode('utf-8')) >= 1024 or any(ord(c) < 32 or ord(c) == 127 for c in title):
+        raise ValueError('Use a nonempty title shorter than 1024 UTF-8 bytes, without control characters')
+    if region != 'Unknown':
+        region = REGIONS.get(region.casefold())
+        if not region:
+            raise ValueError('Use a known region name or Unknown')
+    units = [u for u in scan_units(root) if source in [u['source']] + u.get('aliases', [])]
+    if len(units) != 1 or units[0].get('error'):
+        raise ValueError('Choose one existing, valid ISO/CUE disc entry; ' + (units[0].get('error', '') if units else 'entry not found'))
+    unit = units[0]
+    if Path(unit['source']).suffix.lower() == '.iso':
+        path = relative_path(root, unit['source'])
+        with path.open('rb') as stream:
+            header = stream.read(7)
+        if path.stat().st_size % 2048 or header != b'\x01ZZZZZ\x01':
+            raise ValueError('ISO must have a 3DO volume header and whole 2048-byte sectors')
+    previous = root/'.ohmy3do/library.json'
+    database = json.loads(previous.read_text(encoding='utf-8')) if previous.exists() else {'sources':[], 'games':[]}
+    existing = next((r for r in database['games'] if r['path'] == unit['source']), {})
+    if existing.get('identification') in ('checksum','converted-checksum'):
+        raise ValueError('Disc already has a verified catalog identity; use index-media.py to refresh Find')
+    certificate = {name: fingerprint(relative_path(root,name)) for name in unit['files']}
+    row = dict(source=unit['source'], target=unit['source'], canonical=title.strip(), region=region,
+               category=category, category_reason=category_reason, category_review=False, metadata={},
+               status='registered', confidence='unverified', registration=certificate, moves=[],
+               reason='Explicit registration; catalog identity and bootability are not certified')
+    for folder, key in (('covers','cover'), ('previews','preview')):
+        row[key] = row_asset(asset_associations(root,folder), row)
+    print(f'{"Register" if apply else "Would register"}: {unit["source"]}\nTitle: {title.strip()}\nCategory: {category}\nCatalog identity: unverified; ISO/CUE and data files stay in place.')
+    if not apply:
+        print('No changes made. Add --apply to update the database and Find.')
+        return row
+    tx = Transaction(root)
+    print(f'Undo journal: {tx.path}', flush=True)
+    try:
+        write_indexes(root, tx)
+        for name, expected in certificate.items():
+            if fingerprint(relative_path(root,name)) != expected:
+                raise ValueError('Disc changed during registration: ' + name)
+        write_database(root, tx, dict(entries=[row], sources=database['sources']), [])
+        tx.data['state'] = 'complete'; tx.save()
+    except BaseException:
+        tx.undo()
+        raise
+    print('Registered in the library and Find. No disc files moved or modified.')
+    return row
+
+
 def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False, preview_dir=None, preview_start=0, cover_dir=None):
     if plan.get('schema') != 2 or plan.get('root') != str(root):
         raise ValueError('Plan version or USB root does not match; scan this drive again')
     if cover_dir is not None and not covers:
         raise ValueError('--cover-dir cannot be combined with --no-covers')
     rows = [r for r in plan['entries'] if r['status'] == 'ready' or (accept_names and r['status'] == 'review')]
+    for row in plan['entries']:
+        if row.get('registration'):
+            for name, expected in row['registration'].items():
+                if fingerprint(relative_path(root,name)) != expected:
+                    raise ValueError('Registered disc changed since scan: ' + name)
     destinations, sources, cues = set(), set(), {}
     for row in rows:
         if row.get('category_review') or row.get('category') not in CATEGORIES or not isinstance(row.get('target'),str) or PurePosixPath(row['target']).parts[0] != row['category']:
@@ -1166,45 +1317,7 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
                 if name and relative_path(root, support_path(root, folder + '/' + name)).is_file():
                     output[index_tools.fold(key)] = name
             media_outputs[folder] = media_index(output)
-        # Let the existing, tested indexer validate and build search + media indices
-        # in a temporary mirror. Only its generated files are committed to USB.
-        with tempfile.TemporaryDirectory(prefix='oh3do-index-') as directory:
-            mirror = Path(directory)
-            if index_tools.support_base(root) != root:
-                (mirror/'.ohmy3do').mkdir()
-                (mirror/'.ohmy3do/ohmy3do.ini').write_bytes(b'layout marker')
-            for unit in scan_units(root):
-                if unit.get('invalid_data'):
-                    continue
-                for file in unit['files'][:1]:
-                    path = mirror / file
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    if path.suffix.lower() == '.iso':
-                        # Preserve the validation prefix without copying images.
-                        with relative_path(root,file).open('rb') as stream:
-                            path.write_bytes(stream.read(16))
-                    else:
-                        path.touch()
-            # CUE sets were validated by scan_units; no CUE parsing is needed here.
-            for folder in ('covers', 'previews'):
-                usb = index_tools.support_base(root) / folder
-                if usb.exists():
-                    target = index_tools.support_base(mirror) / folder
-                    target.mkdir(exist_ok=True)
-                    for file in usb.iterdir():
-                        if file.is_file() and not file.is_symlink() and file.suffix.lower() in ('.png', '.3dc', '.3dv', '.3di'):
-                            if file.name == 'index.3di':
-                                continue
-                            # Indexing reads PNG headers and index bytes only.
-                            with file.open('rb') as stream:
-                                content = stream.read(24)
-                            (target / file.name).write_bytes(content)
-                    (target / 'index.3di').write_bytes(media_outputs[folder])
-            index_tools.index(mirror)
-            for name in ('library.3di', 'covers/index.3di', 'previews/index.3di'):
-                located = support_path(root,name)
-                if (mirror / located).exists():
-                    tx.write(located, (mirror / located).read_bytes())
+        write_indexes(root, tx, media_outputs)
         write_database(root, tx, plan, rows)
         tx.data['state'] = 'complete'
         tx.save()
@@ -1365,6 +1478,13 @@ def main():
     report_command = commands.add_parser('report', help='rebuild the interactive HTML report from an existing plan without scanning')
     report_command.add_argument('plan', type=Path)
     report_command.add_argument('--output', type=Path, help='HTML output (default: beside the plan)')
+    register = commands.add_parser('register', help='preview adding an uncatalogued disc to the database and Find; never move disc files')
+    register.add_argument('usb_root', type=Path)
+    register.add_argument('disc', help='volume-relative ISO/CUE path')
+    register.add_argument('--title', required=True)
+    register.add_argument('--category', choices=CATEGORIES, required=True)
+    register.add_argument('--region', default='Unknown')
+    register.add_argument('--apply', action='store_true')
     cleanup = commands.add_parser('clean-empty', help='preview empty directories; add --apply to remove them')
     cleanup.add_argument('usb_root', type=Path)
     cleanup.add_argument('--apply', action='store_true', help='remove empty directories; never delete files')
@@ -1379,7 +1499,7 @@ def main():
     scan.add_argument('--categories', type=Path, help='JSON object mapping relative disc paths to ' + ', '.join(CATEGORIES))
     scan.add_argument('--offline', action='store_true')
     scan.add_argument('--refresh-catalog', action='store_true')
-    scan.add_argument('--dat', type=Path, help='use a local Redump-format DAT')
+    scan.add_argument('--dat', type=Path, help='use a local XML/Logiqx or clrmamepro DAT (plain text or ZIP)')
     scan.add_argument('--launchbox', type=Path, help='use a local LaunchBox Metadata.zip')
     apply = commands.add_parser('apply', help='apply a reviewed plan and build covers, database and menu indices')
     apply.add_argument('usb_root', type=Path)
@@ -1416,6 +1536,11 @@ def main():
             (cleanup_empty if args.command == 'clean-empty' else migrate_support)(args.usb_root.resolve(), args.apply)
             return
         root = args.usb_root.resolve()
+        if directory_link(root):
+            raise ValueError('USB root must not be a link or junction')
+        if args.command == 'register':
+            register_disc(root,args.disc,args.title,args.category,args.region,args.apply)
+            return
         cache = args.cache.resolve()
         if cache == root or root in cache.parents:
             raise ValueError('Keep the download cache on the PC, outside the USB root')

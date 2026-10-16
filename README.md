@@ -441,7 +441,7 @@ Names such as `(Disc 1 of 2)` and compound region labels such as `(EU-US)`
 are supported. Different spellings and alternate titles remain suggestions
 unless an exact normalized match exists; fuzzy suggestions are not applied.
 
-The first scan downloads the [Libretro/Redump identification DAT](https://github.com/libretro/libretro-database)
+The first scan downloads the [full Redump 3DO identification DAT](https://redump.info/datfile/3do/)
 and the [LaunchBox metadata archive](https://forums.launchbox-app.com/topic/30123-launchbox-games-db-external-scraper/),
 currently about 104 MiB for the latter. Only 3DO records are retained in the
 parsed catalog; subsequent scans use a local PC cache. Metadata can be incomplete
@@ -449,10 +449,22 @@ or inaccurate, and missing fields remain unknown. It describes games rather
 than guaranteeing dates or publishers for each regional pressing. Source URLs and download
 checksums accompany the generated database. No account or API key is needed.
 
+The full catalog includes demos, coverdiscs, multimedia, educational software,
+applications, and audio bonus discs. An online scan automatically upgrades an
+older limited catalog cache while reusing downloaded LaunchBox metadata.
+Offline scans can still use the older cache, with a warning about missing releases.
+`--dat` accepts XML/Logiqx and clrmamepro DATs, either plain text or ZIP.
+CUE records in a DAT are excluded from disc-data comparisons; all BIN tracks,
+including audio tracks, remain part of checksum verification.
+
 Open the HTML preview before applying changes. The layout is
 `<category>/<region>/<title>/<disc image>`, with discs of the same edition in
 one folder. Categories are `Games`, `Demos`, `Samplers`, `Applications`,
-`Multimedia`, `Educational`, and `Bonus Discs`. For example:
+`Multimedia`, `Educational`, and `Bonus Discs`. Redump categories take precedence
+over title/genre heuristics; explicit category choices take precedence over both.
+`Video` maps to Multimedia, `Coverdiscs` to Samplers, and `Add-Ons` to Games.
+Unclassified catalog types still need review. Compound regions use their first
+listed region for the folder while retaining the full release name. For example:
 
 ```text
 Games/USA/D (USA)/D (USA) (Disc 1).iso
@@ -537,6 +549,13 @@ Modified images, nonstandard headers, trimmed sectors, gaps and Mode 2 data
 are not repaired or guessed; unsuccessful reconstruction leaves the existing
 filename/manual identification workflow available.
 
+A single title with different release labels is reported as `unverified-release`,
+with its catalog suggestion, rather than claiming that multiple releases matched.
+A familiar name never certifies a modified, trimmed, or uncatalogued build.
+Full scans also report matching data-file checksums across separate copies.
+CUE layouts are not compared by that duplicate warning; nothing is deleted or
+merged automatically, and destination collisions still require a decision.
+
 To check existing guesses, write a separate plan without `--quick` or
 `--overrides`. Explicit overrides still take precedence over identification
 and are labeled `manual`, even during a full scan:
@@ -614,6 +633,29 @@ For example, `Dragon's Lair [DH 65003].iso` and
 `Dragon's Lair (USA) [DH 65003-2].iso`. Their matching code-specific covers are
 preferred. The database records `variant`, `catalog_name`, and
 `edition_unresolved`; unresolved game-level entries have no catalog edition name.
+
+To add an uncatalogued or alternate build to Find and the database while keeping
+its existing filename and folder, use `register`. It does not download metadata
+or assign a catalog release. Preview first, then repeat with `--apply`:
+
+```powershell
+py organize-library.py register M:/ "Games/USA/Example/Example.iso" --title "Example" --region USA --category Games
+py organize-library.py register M:/ "Games/USA/Example/Example.iso" --title "Example" --region USA --category Games --apply
+```
+
+Registration records the disc as `unverified`, hashes every source file, and
+updates Find and the database with an undo journal. Disc files remain in place.
+Existing covers/previews are preserved. Unchanged registrations survive later
+scans; a full scan rechecks SHA-1, while a quick scan checks size and timestamp.
+Changed files require fresh identification or explicit registration. ISO
+registration checks the 3DO volume header and sector alignment, but does not
+certify signatures or hardware bootability. Existing checksum-verified catalog
+entries cannot be downgraded through `register`.
+
+Audio-only CUEs stay in place during ordinary organization. They are reported
+as audio discs rather than identified as the companion game by title. Use the
+[audio-disc converter](#audio-bonus-discs) for WAV sets, then register the
+resulting CUE with `--category "Bonus Discs"` to add its title to the database.
 
 CUE sets move together. Companion files receive names derived from the disc
 and track number, and their CUE `FILE` references are updated. Comments, track
@@ -903,6 +945,28 @@ folder using fresh listings and the compatibility workaround. A failed restore
 blocks browsing. Cold boot or refresh at the USB root reloads both indices.
 Holding X at startup bypasses USB media access. The project logo/loading screen
 and offline demo covers stay embedded in the ISO.
+
+## Audio bonus discs
+
+`prepare-audio-disc.py` combines an audio-only WAV/CUE set into one BIN/CUE
+pair, preserving its samples and recorded track gaps. It requires Python 3.9+
+and CD-quality PCM WAVs; FFmpeg and an ISO rebuild are unnecessary.
+
+```powershell
+py prepare-audio-disc.py "D:/rips/album.cue" "D:/3DO/Bonus Discs/USA/Album (Audio CD)"
+py index-media.py D:/3DO
+```
+
+Choose a new output folder, then select its CUE in the menu. Original files
+remain in place. The converter verifies each output track and writes a local
+`audio-disc.json` with source and output hashes. It supports one WAV per track
+with INDEX 00/01; unsupported layouts are rejected.
+
+These images need a playback test on the installed ODE firmware. The
+[open-source firmware](https://github.com/FCare/SataTo3DO/blob/main/src/interfaces/MSC.c)
+has audio-only BIN/CUE support, but unusual first-track pregaps can expose
+firmware limitations. Conversion preserves the supplied rip; it does not verify
+which catalog release it belongs to.
 
 ## Menu music
 

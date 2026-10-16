@@ -24,6 +24,7 @@
 !tools/resize-covers.py
 !tools/generate-menu-music.py
 !tools/prepare-music.py
+!tools/prepare-audio-disc.py
 !assets/
 !assets/menu-music.aiff
 

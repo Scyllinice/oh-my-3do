@@ -559,7 +559,12 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertFalse(prepared);self.assertIn('Local cover failed',warnings[0])
         (images/'Example.png').unlink()
         outside=self.cover_image(Path(self.temp.name)/'outside.png')
-        (images/'Example.png').symlink_to(outside)
+        try:
+            (images/'Example.png').symlink_to(outside)
+        except OSError as error:
+            if getattr(error,'winerror',None) == 1314:
+                self.skipTest('Windows requires Developer Mode or symlink privilege')
+            raise
         prepared,warnings=organizer.prepare_local_covers(self.scan()['entries'],images)
         self.assertFalse(prepared);self.assertIn('No local cover',warnings[0])
         before=snapshot(self.root)
@@ -781,11 +786,12 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         plan=self.scan(quick=True)
         bonus=next(r for r in plan['entries'] if r['source']==source)
         self.assertEqual(bonus['category'],'Bonus Discs')
-        self.assertIn('[CD-Audio]',bonus['target'])
-        self.assertTrue(bonus['target'].startswith('Bonus Discs/USA/'))
-        self.assertTrue(all(r['status']=='review' for r in plan['entries']))
+        self.assertEqual(bonus['confidence'],'audio-only')
+        self.assertEqual(bonus['moves'],[])
+        self.assertIn('prepare-audio-disc.py',bonus['reason'])
         tx=self.apply(plan,names=True)
-        self.assertIn(b'[CD-Audio].bin',(self.root/bonus['target']).read_bytes())
+        self.assertEqual(cue.read_bytes(),before[source])
+        self.assertEqual((self.root/'4 Bonus Discs/Example/audio.bin').read_bytes(),b'extra audio')
         self.assertTrue((self.root/'Games/USA/Example (USA)/Example (USA).iso').exists())
         with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
             self.assertEqual({r[0] for r in db.execute('SELECT category FROM games')},{'Games','Bonus Discs'})
@@ -867,7 +873,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         (self.cache/'catalog.json').write_text(json.dumps(self.catalog))
         with mock.patch.object(organizer.catalog_tools,'download',side_effect=AssertionError('must reuse local files')):
             catalog=organizer.catalog_tools.load_catalog(self.cache,offline=True)
-        self.assertEqual(catalog['schema'],2)
+        self.assertEqual(catalog['schema'],3)
         row=organizer.release_records(catalog['games'])[0]
         self.assertEqual(row['metadata']['release_type'],'Demo')
         self.assertEqual(organizer.classify(row)[0],'Demos')
@@ -1179,7 +1185,12 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
 
     def test_symlink_and_case_collision_rejected(self):
         outside=Path(self.temp.name)/'outside';outside.mkdir()
-        (self.root/'Games').symlink_to(outside,target_is_directory=True)
+        try:
+            (self.root/'Games').symlink_to(outside,target_is_directory=True)
+        except OSError as error:
+            if getattr(error,'winerror',None) == 1314:
+                self.skipTest('Windows requires Developer Mode or symlink privilege')
+            raise
         self.put('old.iso',b'payload')
         self.catalog['games']=[game('Example (USA)',[b'payload'])]
         self.assertEqual(self.scan()['entries'][0]['status'],'blocked')
@@ -1300,6 +1311,85 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         index=organizer.index_tools.existing_index(self.root/'covers')
         self.assertEqual(len(set(index.values())),2)
         tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_official_categories_override_incomplete_metadata_but_honor_choices(self):
+        for official,expected in [('Games','Games'),('Demos','Demos'),('Video','Multimedia'),
+                                  ('Coverdiscs','Samplers'),('Educational','Educational'),
+                                  ('Applications','Applications'),('Bonus Discs','Bonus Discs'),('Add-Ons','Games')]:
+            entry=game('Example (USA)',[b'data']);entry['category']=official
+            entry['metadata']['genre']='Adventure'
+            row=organizer.release_records([entry])[0]
+            self.assertEqual(organizer.classify(row)[0],expected)
+            self.assertEqual(organizer.classify(row,'Games')[0],'Games')
+
+    def test_xml_compound_region_uses_first_region_for_folder(self):
+        data=b'demo';self.put('unknown.iso',data)
+        row=game('Example (Japan, Europe) (Demo)',[data]);row.pop('region');row['category']='Demos'
+        self.catalog['games']=[row]
+        self.assertTrue(self.scan()['entries'][0]['target'].startswith('Demos/Japan/'))
+
+    def test_single_unlicensed_candidate_is_unverified_not_multiple_releases(self):
+        self.put('Mortal Kombat II (USA).iso',b'unknown build')
+        self.catalog['games']=[game('Mortal Kombat II (USA) (Unl)',[b'catalog dump'])]
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['confidence'],'unverified-release')
+        self.assertEqual(row['moves'],[])
+        self.assertNotIn('More than one',row['reason'])
+        self.assertIn('no complete disc checksum matched',row['reason'])
+
+    def test_full_scan_reports_exact_duplicates_without_deleting(self):
+        self.put('one.iso',b'same data');self.put('two.iso',b'same data')
+        self.catalog['games']=[game('Example (USA)',[b'same data'])]
+        before=snapshot(self.root);rows=self.scan()['entries']
+        self.assertTrue(all(r['status']=='blocked' for r in rows))
+        self.assertEqual(rows[0]['duplicate_sources'],['two.iso'])
+        self.assertIn('no duplicate is deleted automatically',rows[0]['reason'])
+        self.assertEqual(before,snapshot(self.root))
+        self.assertTrue(all('duplicate_sources' not in r for r in self.scan(quick=True)['entries']))
+
+    def test_register_existing_disc_is_offline_preserves_iso_and_undoes(self):
+        source='Games/USA/New Game/New Game.iso'
+        payload=b'\x01ZZZZZ\x01'+b'\0'*(2048-7)
+        self.put(source,payload);before=snapshot(self.root)
+        with mock.patch.object(organizer.catalog_tools,'load_catalog',side_effect=AssertionError('no catalog download')):
+            organizer.register_disc(self.root,source,'New Game','Games','USA')
+            self.assertEqual(before,snapshot(self.root))
+            organizer.register_disc(self.root,source,'New Game','Games','USA',True)
+        self.assertEqual((self.root/source).read_bytes(),payload)
+        self.assertIn(source.encode(),(self.root/'library.3di').read_bytes())
+        with contextlib.closing(sqlite3.connect(self.root/'.ohmy3do/library.sqlite')) as db:
+            self.assertEqual(db.execute('SELECT title,identification FROM games').fetchone(),('New Game','unverified'))
+        receipt=json.loads((self.root/'.ohmy3do/library.json').read_text())['games'][0]['registration']
+        self.assertEqual(receipt[source]['sha1'],hashlib.sha1(payload).hexdigest())
+        # An unchanged registration survives later scans; a modified image does not.
+        row=self.scan()['entries'][0]
+        self.assertEqual((row['status'],row['confidence']),('registered','unverified'))
+        stale=self.scan()
+        self.put(source,payload[:-1]+b'x')
+        self.assertNotEqual(self.scan()['entries'][0]['status'],'registered')
+        with self.assertRaisesRegex(ValueError,'Registered disc changed'):self.apply(stale)
+        self.put(source,payload)
+        journal=next((self.root/'.ohmy3do/transactions').glob('*.json'))
+        organizer.Transaction(self.root,path=journal.relative_to(self.root).as_posix()).undo()
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_register_rejects_archive_empty_invalid_header_and_bad_cue(self):
+        for name,data in [('empty.iso',b''),('zip.iso',b'PK\x03\x04data'),('bad.iso',b'x'*2048),
+                          ('bad.cue',b'FILE "missing.wav" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n')]:
+            self.put(name,data)
+            before=snapshot(self.root)
+            with self.assertRaises(ValueError):organizer.register_disc(self.root,name,'Example','Games','USA',True)
+            self.assertEqual(before,snapshot(self.root))
+
+    def test_register_audio_cue_preserves_it_without_game_catalog_label(self):
+        self.put('Bonus Discs/Album/audio.bin',b'\0'*2352)
+        source='Bonus Discs/Album/Album.cue'
+        self.put(source,b'FILE "audio.bin" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n')
+        organizer.register_disc(self.root,source,'Album (Audio CD)','Bonus Discs','Japan',True)
+        self.assertEqual(self.scan()['entries'][0]['status'],'registered')
+        db=json.loads((self.root/'.ohmy3do/library.json').read_text())
+        self.assertIsNone(db['games'][0]['catalog_name'])
+
 
 
 if __name__=='__main__':unittest.main()
