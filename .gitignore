@@ -76,3 +76,8 @@ Thumbs.db
 *.wav
 *.aifc
 *:Zone.Identifier
+
+# Native desktop application builds
+/desktop/target/
+/desktop/build/
+*.pdb

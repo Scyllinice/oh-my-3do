@@ -113,3 +113,7 @@ build/test_preview_audio: src/preview_audio.c src/preview_audio.h tests/audio_sd
 build/test_cover_cache: src/cover_cache.c src/cover_cache.h src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_cover_cache.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/cover_cache.c src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_cover_cache.c $(LDFLAGS) -o $@
+
+.PHONY: test-desktop
+test-desktop:
+	cargo test --locked --manifest-path desktop/Cargo.toml

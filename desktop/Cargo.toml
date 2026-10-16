@@ -1,0 +1,42 @@
+[package]
+name = "oh-my-3do-library"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.88"
+
+[dependencies]
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland"] }
+wgpu = { version = "27", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "metal", "gles"] }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+crc32fast = "1"
+flate2 = "1"
+regex = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.38"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "tiff", "gif"] }
+kamadak-exif = "0.6"
+rusqlite = { version = "0.37", features = ["bundled"] }
+filetime = "0.2"
+fs2 = "0.4"
+walkdir = "2"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+encoding_rs = "0.8"
+anyhow = "1"
+
+tempfile = "3"
+unicode-normalization = "0.1"
+urlencoding = "2"
+
+[dev-dependencies]
+
+[profile.release]
+lto = "thin"
+strip = true

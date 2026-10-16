@@ -405,6 +405,21 @@ images, Nintendo 3DS files or game-progress editors. Invalid names, checksums,
 duplicates and lengths reject the whole archive. Files are self-delimiting so an
 old USB tail does not require unsupported truncate/seek commands.
 
+## Desktop library app (preview)
+
+The [native Rust desktop app](desktop/README.md) can import selected ISOs or
+source directories, review uncertain matches, add supplied or matching local
+covers/previews, download missing covers, and prepare a USB copy. Disc sources
+are preserved. The app runs standalone without Python or Docker.
+
+Portable builds are available in the
+[desktop v0.1.0 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.0).
+Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
+Windows x64 and Linux x64 builds are provided; macOS can be built from source
+but has not been packaged here. Preview conversion uses separate native
+FFmpeg tools, downloadable inside the Windows app. Existing settings and
+media remain compatible, and the console ISO is unchanged.
+
 ## Keeping a staging library and USB drive updated
 
 `library-maintenance.py` adds missing media to an organized library without a
