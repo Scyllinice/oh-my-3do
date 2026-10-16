@@ -772,41 +772,80 @@ def prepare_covers(rows, cache, offline=False):
     return prepared, warnings
 
 
-def prepare_previews(rows, directory, start=0):
-    """Import local, already downloaded clips; ambiguous matches stay untouched."""
+def local_media_files(directory, extensions):
     if not directory.is_dir() or directory.is_symlink():
-        raise ValueError('Preview directory must be a real, existing directory')
-    if not 0 <= start <= 86400:
-        raise ValueError('Preview start must be 0-86400 seconds')
+        raise ValueError('Media directory must be a real, existing directory')
     directory = directory.resolve()
-    clips = []
+    paths = []
     for folder, dirs, files in os.walk(directory, followlinks=False):
         dirs[:] = sorted(d for d in dirs if not (Path(folder)/d).is_symlink())
         for name in sorted(files):
             path = Path(folder)/name
-            if path.suffix.lower() in ('.mp4', '.avi', '.mkv', '.mov', '.webm') and not path.is_symlink() and path.is_file():
-                clips.append(path)
-    converter = module('prepare-preview')
-    prepared, warnings, converted = {}, [], {}
-    # Demo/sampler clips must never become a full game's preview via title_key.
+            if path.suffix.lower() in extensions and not path.is_symlink() and path.is_file():
+                paths.append(path)
+    return paths
+
+
+def local_media_matches(row, paths):
+    """Prefer exact names; only fall back to compatible, normalized titles."""
     def kind(name):
         match = re.search(r'\b(demo|demonstration|trial|sampler)\b', name, re.I)
         return match[1].casefold() if match else 'game'
+    for name in filter(None, (row['canonical'], row.get('catalog_name'), Path(row['source']).stem)):
+        exact = [p for p in paths if p.stem.casefold() == name.casefold()]
+        if exact:
+            return exact
+    # Demo/sampler media must not become full-game art via title_key.
+    return [p for p in paths
+        if identification_title(p.stem) == identification_title(row['canonical'])
+        and kind(p.stem) == kind(row['canonical'])
+        and (not region_of(p.stem) or bool(region_of(p.stem) & region_of(row['canonical'])))
+        and (disc_of(p.stem) is None or disc_of(p.stem) == row.get('disc'))]
+
+
+def prepare_local_covers(rows, directory):
+    """Prepare local front-box images, with no network requests or replacements."""
+    resizer = module('resize-covers')
+    paths = local_media_files(directory, resizer.EXTENSIONS)
+    directory = directory.resolve()
+    prepared, warnings, converted = {}, [], {}
+    for row in rows:
+        if row.get('cover'):
+            continue
+        candidates = local_media_matches(row, paths)
+        if len(candidates) != 1:
+            warnings.append(f'{"Ambiguous" if candidates else "No"} local cover found: {row["canonical"]}')
+            continue
+        image = candidates[0]
+        try:
+            if image not in converted:
+                with tempfile.TemporaryDirectory(prefix='oh3do-cover-') as temp:
+                    target = Path(temp)/'cover.png'
+                    resizer.convert(image, target)
+                    content = target.read_bytes()
+                key = hashlib.sha256(content).hexdigest()[:16]
+                converted[image] = ('cover-' + key + '.png', content)
+            basename, content = converted[image]
+            prepared[basename] = content
+            row['cover'] = basename
+            row['cover_source'] = image.relative_to(directory).as_posix()
+        except (ValueError, OSError) as error:
+            warnings.append(f'Local cover failed for {row["canonical"]}: {error}')
+    return prepared, warnings
+
+
+def prepare_previews(rows, directory, start=0):
+    """Import local, already downloaded clips; ambiguous matches stay untouched."""
+    clips = local_media_files(directory, ('.mp4', '.avi', '.mkv', '.mov', '.webm'))
+    if not 0 <= start <= 86400:
+        raise ValueError('Preview start must be 0-86400 seconds')
+    directory = directory.resolve()
+    converter = module('prepare-preview')
+    prepared, warnings, converted = {}, [], {}
     for row in rows:
         if row.get('preview'):
             continue
-        names = [row['canonical'], row.get('catalog_name'), Path(row['source']).stem]
-        candidates = []
-        for name in filter(None, names):
-            candidates = [p for p in clips if p.stem.casefold() == name.casefold()]
-            if candidates:
-                break
-        if not candidates:
-            candidates = [p for p in clips
-                if identification_title(p.stem) == identification_title(row['canonical'])
-                and kind(p.stem) == kind(row['canonical'])
-                and (not region_of(p.stem) or bool(region_of(p.stem) & region_of(row['canonical'])))
-                and (disc_of(p.stem) is None or disc_of(p.stem) == row.get('disc'))]
+        candidates = local_media_matches(row, clips)
         if len(candidates) != 1:
             warnings.append(f'{"Ambiguous" if candidates else "No"} preview found: {row["canonical"]}')
             continue
@@ -863,9 +902,11 @@ def write_database(root, tx, plan, selected):
         tx.write('.ohmy3do/library.sqlite', path.read_bytes())
 
 
-def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False, preview_dir=None, preview_start=0):
+def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False, preview_dir=None, preview_start=0, cover_dir=None):
     if plan.get('schema') != 2 or plan.get('root') != str(root):
         raise ValueError('Plan version or USB root does not match; scan this drive again')
+    if cover_dir is not None and not covers:
+        raise ValueError('--cover-dir cannot be combined with --no-covers')
     rows = [r for r in plan['entries'] if r['status'] == 'ready' or (accept_names and r['status'] == 'review')]
     destinations, sources, cues = set(), set(), {}
     for row in rows:
@@ -902,11 +943,15 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
         if path.exists() and (not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
             raise ValueError(f'Invalid support file: {name}')
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
-    # Check the drive again: a preview added after scan also takes precedence.
+    # Media added after scan also takes precedence over imports and downloads.
     for row in rows:
+        row['cover'] = existing_asset(associations['covers'], row['source'])
         row['preview'] = existing_asset(associations['previews'], row['source'])
     preview_files, preview_warnings = prepare_previews(rows, preview_dir, preview_start) if preview_dir is not None else ({}, [])
-    prepared, warnings = prepare_covers(rows, cache, offline) if covers else ({}, [])
+    if cover_dir is not None:
+        prepared, warnings = prepare_local_covers(rows, cover_dir)
+    else:
+        prepared, warnings = prepare_covers(rows, cache, offline) if covers else ({}, [])
     for warning in warnings + preview_warnings:
         print(warning)
     for name, content in prepared.items():
@@ -1009,7 +1054,8 @@ def main():
     apply.add_argument('usb_root', type=Path)
     apply.add_argument('--plan', type=Path, default=Path('library-plan.json'))
     apply.add_argument('--accept-name-matches', action='store_true', help='also accept the unverified filename matches in this plan')
-    apply.add_argument('--no-covers', action='store_true')
+    apply.add_argument('--no-covers', action='store_true', help='skip all cover imports and downloads')
+    apply.add_argument('--cover-dir', type=Path, help='import local front-box images instead of downloading covers; subfolders included')
     apply.add_argument('--preview-dir', type=Path, help='import matching clips downloaded with EmuMovies Sync or another source')
     apply.add_argument('--preview-start', type=float, default=0, help='clip offset in seconds (default: 0); requires --preview-dir')
     apply.add_argument('--offline', action='store_true')
@@ -1046,7 +1092,7 @@ def main():
             plan = json.loads(args.plan.read_text(encoding='utf-8'))
             if args.preview_start and args.preview_dir is None:
                 raise ValueError('--preview-start requires --preview-dir')
-            apply_plan(root, plan, cache, not args.no_covers, args.offline, args.accept_name_matches, args.preview_dir, args.preview_start)
+            apply_plan(root, plan, cache, not args.no_covers, args.offline, args.accept_name_matches, args.preview_dir, args.preview_start, args.cover_dir)
         else:
             tx = Transaction(root, path=args.journal)
             tx.undo()

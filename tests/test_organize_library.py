@@ -66,6 +66,103 @@ class OrganizerTest(unittest.TestCase):
             self.catalog['games'].append(game(name,[data]))
         return clips
 
+    def cover_image(self, path, color='red'):
+        from PIL import Image
+        path.parent.mkdir(parents=True,exist_ok=True)
+        Image.new('RGB',(300,420),color).save(path)
+        return path
+
+    def test_local_cover_resize_matching_multidisc_database_and_undo(self):
+        from PIL import Image
+        images=self.preview_fixture(discs=2)
+        original=self.cover_image(images/'Box - Front'/'Example (USA).jpg')
+        original_bytes=original.read_bytes()
+        before=snapshot(self.root)
+        with mock.patch.object(organizer.catalog_tools,'cover_names',side_effect=AssertionError('No network for local covers')):
+            tx=organizer.apply_plan(self.root,self.scan(),self.cache,cover_dir=images,offline=True)
+        index=organizer.index_tools.existing_index(self.root/'covers')
+        self.assertEqual(len(index),2);self.assertEqual(len(set(index.values())),1)
+        with Image.open(self.root/'covers'/next(iter(index.values()))) as image:
+            self.assertEqual(image.size,(84,105));self.assertEqual(image.mode,'RGB');self.assertEqual(image.format,'PNG')
+        records=json.loads((self.root/'.ohmy3do/library.json').read_text())['games']
+        self.assertTrue(all(r['cover_source']=='Box - Front/Example (USA).jpg' for r in records))
+        self.assertEqual(original.read_bytes(),original_bytes)
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_local_covers_ambiguous_and_region_disc_demo_filters(self):
+        images=self.preview_fixture(discs=2)
+        for name in ('Example.jpg','Example.png','Example (Japan).png','Example (Demo).png'):
+            self.cover_image(images/name)
+        prepared,warnings=organizer.prepare_local_covers(self.scan()['entries'],images)
+        self.assertFalse(prepared);self.assertTrue(all('Ambiguous' in w for w in warnings))
+        for path in images.iterdir():path.unlink()
+        self.cover_image(images/'Example (USA) (Disc 1).jpg')
+        prepared,warnings=organizer.prepare_local_covers(self.scan()['entries'],images)
+        self.assertEqual(len(prepared),1);self.assertEqual(len(warnings),1)
+        self.assertIn('Disc 2',warnings[0])
+
+    def test_local_cover_exact_name_beats_generic_and_other_regions(self):
+        images=self.preview_fixture()
+        self.cover_image(images/'Example.png','blue')
+        self.cover_image(images/'Example (USA).jpg','red')
+        self.cover_image(images/'Example (Japan).jpg','green')
+        rows=self.scan()['entries']
+        prepared,warnings=organizer.prepare_local_covers(rows,images)
+        self.assertEqual(len(prepared),1);self.assertFalse(warnings)
+        self.assertEqual(rows[0]['cover_source'],'Example (USA).jpg')
+
+    def test_local_cover_added_after_scan_is_preserved(self):
+        images=self.preview_fixture()
+        plan=self.scan()
+        self.cover_image(self.root/'covers/Example (USA).png','blue')
+        self.cover_image(images/'Example (USA).jpg','red')
+        before=snapshot(self.root)
+        tx=organizer.apply_plan(self.root,plan,self.cache,cover_dir=images)
+        index=organizer.index_tools.existing_index(self.root/'covers')
+        self.assertEqual(list(index.values()),['Example (USA).png'])
+        self.assertEqual(len(list((self.root/'covers').glob('*.png'))),1)
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_local_cover_corrupt_missing_symlink_and_conflicting_flags(self):
+        images=self.preview_fixture()
+        (images/'Example.png').write_bytes(b'not an image')
+        prepared,warnings=organizer.prepare_local_covers(self.scan()['entries'],images)
+        self.assertFalse(prepared);self.assertIn('Local cover failed',warnings[0])
+        (images/'Example.png').unlink()
+        outside=self.cover_image(Path(self.temp.name)/'outside.png')
+        (images/'Example.png').symlink_to(outside)
+        prepared,warnings=organizer.prepare_local_covers(self.scan()['entries'],images)
+        self.assertFalse(prepared);self.assertIn('No local cover',warnings[0])
+        before=snapshot(self.root)
+        for directory,covers in ((images/'missing',True),(images,False)):
+            with self.assertRaises(ValueError):
+                organizer.apply_plan(self.root,self.scan(),self.cache,covers=covers,cover_dir=directory)
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_local_cover_rollback_removes_imported_images(self):
+        images=self.preview_fixture()
+        self.cover_image(images/'Example.jpg')
+        before=snapshot(self.root)
+        with mock.patch.object(organizer,'write_database',side_effect=OSError('test failure')):
+            with self.assertRaises(OSError):
+                organizer.apply_plan(self.root,self.scan(),self.cache,cover_dir=images)
+        self.assertEqual(before,snapshot(self.root))
+
+    def test_local_covers_and_previews_import_together(self):
+        images=self.preview_fixture()
+        self.cover_image(images/'Example.png')
+        (images/'Example.mp4').write_bytes(b'fake clip')
+        before=snapshot(self.root)
+        def prepare(rows,directory,start):
+            rows[0]['preview']='sample.3dv'
+            return {'sample.3dv':b'clip'},[]
+        with mock.patch.object(organizer,'prepare_previews',side_effect=prepare) as previews:
+            tx=organizer.apply_plan(self.root,self.scan(),self.cache,cover_dir=images,preview_dir=images)
+        previews.assert_called_once()
+        self.assertEqual(len(organizer.index_tools.existing_index(self.root/'covers')),1)
+        self.assertEqual(list(organizer.index_tools.existing_index(self.root/'previews').values()),['sample.3dv'])
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
     def test_preview_conversion_association_database_and_undo(self):
         clips=self.preview_fixture(discs=2)
         source=clips/'Example (USA).mp4';source.write_bytes(b'fake clip')

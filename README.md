@@ -520,14 +520,35 @@ test directory. A CUE and its referenced ISO are treated as one move group.
 Apply downloads available [Libretro box scans](https://github.com/libretro-thumbnails/libretro-thumbnails),
 prepares 84×105 RGB PNGs, and links them to the correct game paths. Existing
 cover and preview associations are preserved. Missing or ambiguous artwork is
-reported without blocking other games. `--no-covers` skips downloads. Use
+reported without blocking other games. `--no-covers` skips cover downloads and
+imports. Use
 `--offline` on scan/apply to work from existing caches; `scan --refresh-catalog`
 refreshes the identification and metadata sources.
+
+Use `--cover-dir` to import local front-box images instead of downloading covers.
+Point it at the front-cover folder inside an EmuMovies download, rather than a
+parent containing screenshots, logos, and back covers:
+
+```powershell
+py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches --cover-dir "D:/EmuMovies/Panasonic_3DO/<front-cover-folder>"
+```
+
+Replace `<front-cover-folder>` with the actual folder name. Subfolders are
+searched. PNG, JPEG, WebP, BMP, GIF, and TIFF are supported; install Pillow with
+`py -m pip install Pillow`. Images are resized to native 84×105 RGB PNGs, indexed
+automatically, and included in the undo journal. Originals and existing USB
+covers are retained. Local imports work offline and do not fall back to network
+downloads. Missing, ambiguous, or unreadable images are reported and skipped.
+Matching follows the same exact-name/unique-title rules as preview imports,
+including region and disc checks. A generic cover can serve every disc of a
+game. The JSON export records the image's relative source filename.
 
 To import downloaded gameplay clips during apply, add
 `--preview-dir "C:/EmuMovies/3DO"`; see the EmuMovies workflow below. Existing
 previews take precedence. New clips and their index associations are included
 in the same undo journal as the disc moves.
+`--cover-dir` and `--preview-dir` can be used together on the same apply command.
+No ISO update is needed for either import feature.
 
 Favorites, recent games, and the selected saved game are updated to the new
 paths. If a saved folder loses its contents, the saved position resets to the

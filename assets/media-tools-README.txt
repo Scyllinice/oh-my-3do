@@ -80,6 +80,20 @@ deleted. Existing artwork links are preserved; downloaded covers are native
 84x105 PNGs. Favorites, recent games, saved selection and media/search indices
 are updated. boot.iso, settings, NVRAM backups and music stay in place.
 
+To import EmuMovies covers instead of downloading covers, add:
+  --cover-dir "D:/EmuMovies/Panasonic_3DO/<front-cover-folder>"
+Replace the placeholder with the actual front-box image folder. Avoid a parent
+folder containing back covers, screenshots and logos. Subfolders are included.
+Install Pillow: py -m pip install Pillow
+PNG/JPEG/WebP/BMP/GIF/TIFF images are converted to native 84x105 RGB PNGs and
+indexed automatically. Exact names are preferred, then unique title matches
+with compatible region/disc labels. A generic cover can serve all discs.
+Ambiguous, missing and unreadable images are skipped. Existing USB covers and
+original images stay intact. Local imports make no cover-download requests and
+work with --offline. New files are included in the undo journal. --no-covers
+skips all cover imports/downloads and cannot be combined with --cover-dir.
+Use --cover-dir and --preview-dir together to import both. No ISO update needed.
+
 The game information database is USB/.ohmy3do/library.sqlite, with a readable
 library.json beside it. It contains genre, publisher, year, developer and
 identification/source information. Current console menus do not display those
