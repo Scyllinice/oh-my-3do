@@ -13,10 +13,32 @@ Pillow for covers with: py -m pip install Pillow
 Preview without modifying USB files:
   py organize-library.py scan M:/ --quick --plan library-plan.json
 
-Open library-plan.html to review proposed moves and game information. Games use
-Games/<region>/<game title>/, with discs of the same edition together. The first
+Open library-plan.html to review proposed moves and game information. Discs use
+<category>/<region>/<title>/, with discs of the same edition together. Categories
+are Games, Demos, Samplers, Applications, Multimedia and Educational. The first
 scan downloads a Redump DAT and LaunchBox's metadata archive (about 104 MiB),
 cached on the PC. Subsequent scans use the cache. Metadata fields may be missing.
+
+Catalog title labels, release type and genre determine the category. Full game
+compilations remain Games; FMV gameplay alone does not make a disc multimedia.
+Explicit atlases/almanacs and other reference media go to Multimedia. Uncertain
+or mixed classifications show category-review and stay in place even when file
+hashes match or --accept-name-matches is supplied. Educational software and
+educational games go to Educational. Specific reference titles stay Multimedia,
+and explicit demos/samplers keep those categories regardless of educational
+theme. Music/life-simulation labels alone may require a category choice.
+
+Copy/edit categories.example.json on the PC with current relative disc paths:
+  {"Unsorted/3DO Game Guru.iso": "Applications"}
+Then scan with the category choices:
+  py organize-library.py scan M:/ --quick --categories categories.json --plan library-plan.json
+
+Choices are stored during apply and reused for the same title at its new path.
+Later scans can omit --categories; update paths in the file if using it again
+after a move. Category choices do not identify unmatched discs. The database and
+HTML preview include the category, evidence and review flag. Old plans must be
+regenerated for this version. Older parsed catalogs are upgraded using existing
+cached downloads, without requiring another download when those files exist.
 
 Apply the reviewed filename matches, download covers, and build the database:
   py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches

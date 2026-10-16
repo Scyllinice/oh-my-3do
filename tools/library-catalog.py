@@ -121,7 +121,7 @@ def launchbox_games(path):
                 if depth == 2:
                     if element.tag == 'Game' and '3DO' in (element.findtext('Platform') or ''):
                         game = {k: element.findtext(k) or '' for k in (
-                            'Name', 'DatabaseID', 'Genres', 'Publisher', 'Developer', 'ReleaseDate', 'ReleaseYear')}
+                            'Name', 'DatabaseID', 'Genres', 'Publisher', 'Developer', 'ReleaseDate', 'ReleaseYear', 'ReleaseType')}
                         game['aliases'] = []
                         games[game['DatabaseID']] = game
                     elif element.tag == 'GameAlternateName':
@@ -153,6 +153,7 @@ def enrich(games, metadata):
             year = re.match(r'^\d{4}', date)
             game['metadata'] = dict(title=match['Name'], genre=match['Genres'] or None,
                                     publisher=match['Publisher'] or None, developer=match['Developer'] or None,
+                                    release_type=match.get('ReleaseType') or None,
                                     year=int(year[0]) if year else None, release_date=match['ReleaseDate'] or None,
                                     launchbox_id=match['DatabaseID'], source=LAUNCHBOX)
     return games
@@ -164,7 +165,7 @@ def load_catalog(cache, offline=False, refresh=False, dat=None, launchbox=None):
     output = cache / 'catalog.json'
     if not refresh and dat is None and launchbox is None and output.is_file():
         result = json.loads(output.read_text(encoding='utf-8'))
-        if result.get('schema') == 1:
+        if result.get('schema') == 2:
             return result
     local_dat, local_launchbox = dat is not None, launchbox is not None
     dat = Path(dat) if local_dat else cache / 'redump.dat'
@@ -180,7 +181,7 @@ def load_catalog(cache, offline=False, refresh=False, dat=None, launchbox=None):
     if not launchbox.exists():
         print('First metadata download is about 104 MiB; later scans use the local cache.', flush=True)
         download(LAUNCHBOX, launchbox, 256 * 1024 * 1024, offline)
-    result = dict(schema=1, fetched=time.time(), sources=[
+    result = dict(schema=2, fetched=time.time(), sources=[
         dict(url=REDUMP, sha256=hashlib.sha256(dat.read_bytes()).hexdigest()),
         dict(url=LAUNCHBOX, sha256=hashlib.sha256(launchbox.read_bytes()).hexdigest()),
         dict(url=ART)], games=enrich(dat_games(dat.read_text(encoding='utf-8-sig')), launchbox_games(launchbox)))

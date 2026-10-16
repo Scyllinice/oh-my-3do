@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore, plus optional menu music. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-version is **0.13.2**.
+version is **0.14.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -385,7 +385,7 @@ py organize-library.py scan M:/ --quick --plan library-plan.json
 Run this from the extracted tools folder on the PC. Replace `M:/` with the USB
 drive. Scanning leaves USB files unchanged and produces `library-plan.json` and
 a searchable `library-plan.html` preview. The preview shows original/proposed
-paths, identification confidence, genre, publisher, year, and unresolved matches.
+paths, identification confidence, category, genre, publisher, year, and unresolved matches.
 
 The first scan downloads the [Libretro/Redump identification DAT](https://github.com/libretro/libretro-database)
 and the [LaunchBox metadata archive](https://forums.launchbox-app.com/topic/30123-launchbox-games-db-external-scraper/),
@@ -396,13 +396,56 @@ than guaranteeing dates or publishers for each regional pressing. Source URLs an
 checksums accompany the generated database. No account or API key is needed.
 
 Open the HTML preview before applying changes. The layout is
-`Games/<region>/<game title>/<disc image>`, with discs of the same edition in
-one folder. For example:
+`<category>/<region>/<title>/<disc image>`, with discs of the same edition in
+one folder. Categories are `Games`, `Demos`, `Samplers`, `Applications`,
+`Multimedia`, and `Educational`. For example:
 
 ```text
 Games/USA/D (USA)/D (USA) (Disc 1).iso
 Games/USA/D (USA)/D (USA) (Disc 2).iso
+Samplers/USA/3DO Interactive Sampler CD 2, The (USA)/...
+Multimedia/USA/20th Century Video Almanac (USA)/...
+Educational/USA/Learning title (USA)/...
 ```
+
+Classification uses catalog title labels, release type, and genre. Explicit demo
+labels go to Demos; sampler discs go to Samplers; utilities go to Applications;
+multimedia/reference discs such as atlases and almanacs go to Multimedia. Full
+game compilations remain Games, and games containing full-motion video are not
+classified as multimedia solely because they contain video.
+Educational software, including educational games, goes to Educational. Clear
+reference titles take precedence over a broad Education genre, and explicit
+demo/sampler labels take precedence over the educational theme.
+
+Uncertain classifications are marked **category-review** and stay in place,
+even with `--accept-name-matches` or a verified checksum. Examples include mixed
+sampler/utility discs, missing genre information, and music or life-simulation
+labels that do not establish a category. The HTML preview
+shows the evidence for each choice. These are catalog-based classifications;
+the script does not inspect the content inside a disc image to determine its type.
+
+Choose categories in a separate PC-side `categories.json` file, using the current
+relative disc paths copied from the preview:
+
+```json
+{
+  "Unsorted/3DO Game Guru.iso": "Applications",
+  "Unsorted/Interactive reference disc.iso": "Multimedia",
+  "Unsorted/Educational game.iso": "Educational"
+}
+```
+
+```powershell
+py organize-library.py scan M:/ --quick --categories categories.json --plan library-plan.json
+```
+
+Category choices are saved in the USB library database during apply and retained
+by later scans of the same identified title at its new path. After moving files,
+omit `--categories` to reuse those choices, or update the file with current paths
+to change them. Identification overrides (`--overrides`) remain separate: a
+category choice cannot identify an unmatched disc. Old plans must be regenerated
+with this version before apply. Existing cached source downloads are reused
+when the parsed catalog is upgraded to include release type.
 
 `--quick` matches filenames without reading entire disc images. These matches
 are marked **review**, and moving them requires an explicit option:
@@ -490,7 +533,9 @@ music are left in place.
 The USB database lives in `.ohmy3do/library.sqlite`, with a readable
 `.ohmy3do/library.json` export. SQLite's `games` table contains paths, titles,
 regions, disc numbers, genre, publisher, year, developer, match type, and cover
-associations. These information fields are available for PC tools; the current
+associations, plus category, classification evidence, and a category-review flag.
+The `games` table includes supported disc images from all six categories.
+These information fields are available for PC tools; the current
 console menu uses the generated search/artwork indices and does not yet display
 genre, publisher, or year.
 

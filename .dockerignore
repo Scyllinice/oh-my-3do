@@ -3,6 +3,7 @@
 !Dockerfile
 !Makefile
 !ohmy3do.ini
+!categories.example.json
 !docker/
 !docker/**
 !src/

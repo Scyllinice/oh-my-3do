@@ -68,6 +68,7 @@ class OrganizerTest(unittest.TestCase):
         before=snapshot(self.root)
         plan=self.scan()
         self.assertEqual(before,snapshot(self.root))
+
         self.assertEqual(plan['entries'][0]['confidence'],'checksum')
         tx=self.apply(plan)
         target='Games/USA/Example (USA)/Example (USA).iso'
@@ -81,6 +82,93 @@ class OrganizerTest(unittest.TestCase):
         journal=tx.path.relative_to(self.root).as_posix()
         organizer.Transaction(self.root,path=journal).undo()
         self.assertEqual(before,snapshot(self.root))
+
+    def test_six_categories_move_to_separate_roots_and_undo(self):
+        cases=[('Example (USA)','Adventure','Games'),('Example (USA) (Demo)','Adventure','Demos'),
+               ('Interactive Sampler CD (USA)','Compilation','Samplers'),
+               ('Storage Manager (USA)',None,'Applications'),('Video Almanac (USA)',None,'Multimedia'),
+               ('Learning Numbers (USA)','Education; Puzzle','Educational')]
+        for i,(title,genre,category) in enumerate(cases):
+            data=f'disc {i}'.encode();self.put(f'old{i}.iso',data)
+            row=game(title,[data]);row['metadata']['genre']=genre
+            self.catalog['games'].append(row)
+        before=snapshot(self.root)
+        plan=self.scan()
+        self.assertEqual({r['category'] for r in plan['entries']},set(organizer.CATEGORIES))
+        self.assertTrue(all(r['status']=='ready' for r in plan['entries']))
+        tx=self.apply(plan)
+        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+            self.assertEqual({row[0] for row in db.execute('select category from games')},set(organizer.CATEGORIES))
+        for row in plan['entries']:self.assertTrue((self.root/row['target']).is_file())
+        self.assertTrue(all(r['source']==r['target'] for r in self.scan()['entries']))
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_uncertain_categories_stay_put_even_with_filename_approval(self):
+        cases=[('Music Experience (USA)','Music'),('Unknown Disc (USA)',None),
+               ('Sampler and Storage Manager (USA)',None),('Atlas Adventure (USA)','Adventure'),
+               ('Example (USA) (Sample)','Adventure')]
+        for i,(title,genre) in enumerate(cases):
+            data=f'uncertain {i}'.encode();self.put(f'old{i}.iso',data)
+            row=game(title,[data]);row['metadata']['genre']=genre;self.catalog['games'].append(row)
+        plan=self.scan()
+        self.assertTrue(all(r['status']=='category-review' and not r['moves'] and r['target'] is None for r in plan['entries']))
+        tx=self.apply(plan,names=True)
+        self.assertTrue(all((self.root/f'old{i}.iso').exists() for i in range(len(cases))))
+        self.assertFalse((self.root/'Games').exists())
+        with sqlite3.connect(self.root/'.ohmy3do/library.sqlite') as db:
+            self.assertEqual(db.execute('select count(*) from games where category_review=1 and category is null').fetchone()[0],len(cases))
+        tx.undo()
+
+    def test_category_override_persists_after_move_with_cue_and_saved_links(self):
+        self.put('old.cue',b'FILE "old.bin" BINARY\n');self.put('old.bin',b'utility data')
+        self.put('favorites.txt',b'old.cue\n')
+        row=game('Unknown Program (USA)',[b'utility data']);row['metadata']['genre']=None
+        self.catalog['games']=[row]
+        before=snapshot(self.root)
+        self.assertEqual(self.scan()['entries'][0]['status'],'category-review')
+        plan=organizer.build_plan(self.root,self.catalog,categories={'old.cue':'Applications'})
+        self.assertEqual(plan['entries'][0]['status'],'ready')
+        tx=self.apply(plan)
+        target=plan['entries'][0]['target']
+        self.assertTrue(target.startswith('Applications/'))
+        self.assertIn(target.encode(),(self.root/'favorites.txt').read_bytes())
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['category'],'Applications');self.assertEqual(row['source'],row['target'])
+        self.assertEqual(row['category_reason'],'Explicit category override')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_classification_does_not_confuse_full_games_or_fmv_with_samplers(self):
+        for title,genre in [('Demolition Man (USA)','Action'),('Game Collection (USA)','Compilation'),
+                            ('Interactive Movie Adventure (USA)','Adventure'),('Story (USA)','Visual Novel')]:
+            row=game(title,[b'data']);row['metadata']['genre']=genre
+            classified=organizer.release_records([row])[0]
+            self.assertEqual(organizer.classify(classified)[0],'Games')
+        row=game('Learning Atlas (USA)',[b'data']);row['metadata']['genre']='Education'
+        self.assertEqual(organizer.classify(organizer.release_records([row])[0])[0],'Multimedia')
+        for title in ('Learning Numbers (USA) (Demo)','Learning Numbers Sampler (USA)'):
+            row=game(title,[b'data']);row['metadata']['genre']='Education'
+            expected='Demos' if '(Demo)' in title else 'Samplers'
+            self.assertEqual(organizer.classify(organizer.release_records([row])[0])[0],expected)
+
+    def test_invalid_category_overrides_and_legacy_plan_are_rejected(self):
+        self.put('old.iso',b'data');self.catalog['games']=[game('Example (USA)',[b'data'])]
+        for overrides in ({'old.iso':'../Games'},{'old.iso':None},{'missing.iso':'Games'},['Games']):
+            with self.assertRaises(ValueError):organizer.build_plan(self.root,self.catalog,categories=overrides)
+        plan=self.scan();plan['schema']=1
+        with self.assertRaisesRegex(ValueError,'scan this drive again'):self.apply(plan)
+
+    def test_metadata_cache_upgrade_reuses_downloads_and_adds_release_type(self):
+        dat='game ( name "Example (USA)" region "USA" rom ( name "Example.bin" size 4 sha1 ABCD ) )'
+        (self.cache/'redump.dat').write_text(dat)
+        xml=b'<LaunchBox><Game><Name>Example</Name><DatabaseID>42</DatabaseID><Platform>3DO Interactive Multiplayer</Platform><Genres>Adventure</Genres><ReleaseType>Demo</ReleaseType></Game></LaunchBox>'
+        with zipfile.ZipFile(self.cache/'launchbox.zip','w') as z:z.writestr('Metadata.xml',xml)
+        (self.cache/'catalog.json').write_text(json.dumps(self.catalog))
+        with mock.patch.object(organizer.catalog_tools,'download',side_effect=AssertionError('must reuse local files')):
+            catalog=organizer.catalog_tools.load_catalog(self.cache,offline=True)
+        self.assertEqual(catalog['schema'],2)
+        row=organizer.release_records(catalog['games'])[0]
+        self.assertEqual(row['metadata']['release_type'],'Demo')
+        self.assertEqual(organizer.classify(row)[0],'Demos')
 
     def test_multidisc_cue_renames_tracks_and_preserves_crlf(self):
         for disc in (1,2):

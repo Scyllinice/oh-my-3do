@@ -30,6 +30,8 @@
 # Personal library reports, metadata caches and organizer journals
 /library-plan*.json
 /library-plan*.html
+/categories.json
+/overrides.json
 /library-cache/
 .ohmy3do/
 *.sqlite

@@ -33,6 +33,7 @@ index_tools = module('index-media')
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
+CATEGORIES = ('Games', 'Demos', 'Samplers', 'Applications', 'Multimedia', 'Educational')
 REGIONS = {'us': 'USA', 'usa': 'USA', 'na': 'USA', 'europe': 'Europe', 'eu': 'Europe',
            'pal': 'Europe', 'uk': 'Europe', 'jp': 'Japan', 'japan': 'Japan', 'j': 'Japan',
            'korea': 'Korea', 'kr': 'Korea', 'germany': 'Germany', 'france': 'France',
@@ -376,8 +377,61 @@ def existing_asset(associations, source):
         associations.get('previous', {}).get(index_tools.fold(source)))
 
 
-def build_plan(root, catalog, quick=False, overrides=None, accept_names=False):
+def classify(game, override=None):
+    if override is not None:
+        choices = {name.casefold(): name for name in CATEGORIES}
+        if not isinstance(override,str) or override.casefold() not in choices:
+            raise ValueError('Category must be one of: ' + ', '.join(CATEGORIES))
+        return choices[override.casefold()], 'Explicit category override'
+    title = game['_release_name']
+    metadata = game.get('metadata', {})
+    genres = {s.strip().casefold() for s in re.split(r'[;,]',metadata.get('genre') or '') if s.strip()}
+    release = (metadata.get('release_type') or '').strip().casefold()
+    game_genres = {'action','adventure','arcade','board game','casino','compilation','fighting','flight simulator',
+                   'horror','pinball','platform','puzzle','racing','role-playing','shooter',
+                   'simulation','sports','strategy','visual novel','quiz','sandbox','party','construction and management simulation'}
+    evidence = {}
+    if re.search(r'\b(?:sampler|sample\s+(?:disc|cd))\b', title, re.I) or release == 'sampler':
+        evidence['Samplers'] = 'Catalog title/release type identifies a sampler'
+    if re.search(r'\((?:demo|demonstration|trial)(?:[^)]*)\)|\b(?:demo|demonstration|trial\s+version)\b',title,re.I) or release in ('demo','demonstration','trial'):
+        evidence['Demos'] = 'Catalog title/release type identifies a demo'
+    if re.search(r'\b(?:storage\s+manager|system\s+utility|utilities|operating\s+system)\b',title,re.I) or genres & {'utility','utilities','application','applications','operating system'}:
+        evidence['Applications'] = 'Catalog title/genre identifies an application'
+    if re.search(r'\b(?:atlas|almanac|encyclop(?:e|ae)dia|dictionary|museum|art\s+gallery|documentary|photo\s*(?:cd|shoot)|slide\s*show|interactive\s+(?:book|magazine)|music\s+video|karaoke)\b',title,re.I) or genres & {'multimedia','reference','documentary','encyclopedia','music video','karaoke'}:
+        evidence['Multimedia'] = 'Catalog title/genre identifies multimedia/reference content'
+    if (genres & {'education','educational'} or re.search(r'\beducational\b',title,re.I)) and not evidence.keys() & {'Demos','Samplers','Multimedia'}:
+        evidence['Educational'] = 'Catalog title/genre identifies educational software'
+    if 'Multimedia' in evidence and genres & game_genres and not genres & {'education','educational','multimedia','reference','documentary','encyclopedia'}:
+        return None, 'Multimedia title/genre conflicts with a game genre; choose a category'
+    if len(evidence) == 1:
+        return next(iter(evidence.items()))
+    if evidence:
+        return None, 'Mixed category evidence: ' + ', '.join(evidence) + '; choose a category'
+    if re.search(r'\((?:sample|preview)(?:[^)]*)\)',title,re.I) or genres & {'music','life simulation'}:
+        return None, 'Music/life-simulation/sample labels alone do not establish a category; choose a category'
+    if genres & game_genres:
+        return 'Games', 'Catalog genre identifies a game'
+    return None, 'Insufficient evidence to distinguish a game from other software; choose a category'
+
+
+def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, categories=None):
     units = scan_units(root)
+    categories = {} if categories is None else categories
+    if not isinstance(categories,dict):
+        raise ValueError('Category overrides must be a JSON object mapping relative paths to categories')
+    for source, category in categories.items():
+        if source not in {unit['source'] for unit in units}:
+            raise ValueError(f'Category override does not name a scanned disc entry: {source}')
+        if not isinstance(category,str):
+            raise ValueError('Category overrides must contain category names')
+        classify({}, category)
+    saved = {}
+    database = relative_path(root,'.ohmy3do/library.json')
+    if database.exists():
+        if not database.is_file() or database.stat().st_size > 16*1024*1024:
+            raise ValueError('Invalid existing library.json')
+        saved = {row['path']:row for row in json.loads(database.read_text(encoding='utf-8')).get('games',[])
+                 if row.get('category') in CATEGORIES and row.get('category_reason') == 'Explicit category override'}
     games = release_records(catalog['games'])
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
     entries = []
@@ -402,15 +456,25 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False):
         group = re.sub(r'\s*\[Variant [0-9A-F]{8}\]', '', without_disc(canonical)).strip()
         if game.get('_edition_unresolved'):
             group = without_disc(game['name'])
-        directory = PurePosixPath('Games') / safe_name(region) / safe_name(group)
-        main = str(directory / (disc_stem(canonical) + Path(unit['source']).suffix.lower()))
+        override = categories.get(unit['source'])
+        previous = saved.get(unit['source'],{})
+        if override is None and previous.get('title') == canonical:
+            override = previous['category']
+        category, category_reason = classify(game,override)
+        directory = PurePosixPath(category) / safe_name(region) / safe_name(group) if category else None
+        main = str(directory / (disc_stem(canonical) + Path(unit['source']).suffix.lower())) if directory else None
         row.update(status='ready' if confidence in ('checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
                    catalog_name=None if game.get('_edition_unresolved') else game['name'], variant=game['_variant'],
                    edition_unresolved=bool(game.get('_edition_unresolved')),
+                   category=category, category_reason=category_reason, category_review=category is None,
                    metadata=game.get('metadata', {}), group=group,
                    cover=existing_asset(associations['covers'], unit['source']),
                    preview=existing_asset(associations['previews'], unit['source']))
+        if category is None:
+            row.update(status='category-review',reason=reason + '; ' + category_reason)
+            entries.append(row)
+            continue
         for track, file in enumerate(unit['files']):
             if file == unit['source']:
                 target = main
@@ -435,7 +499,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False):
                     raise ValueError(f'Destination collision: {move["target"]}')
             except ValueError as error:
                 row.update(status='blocked', reason=str(error))
-    return dict(schema=1, root=str(root), created=time.time(), quick=quick,
+    return dict(schema=2, root=str(root), created=time.time(), quick=quick,
                 sources=catalog['sources'], entries=entries)
 
 
@@ -450,10 +514,13 @@ def report_html(plan):
         meta = row.get('metadata', {})
         suggestions = ''.join('<li>' + escape(name) + '</li>' for name in row.get('suggestions', []))
         notes = escape(row['reason'])
+        if row.get('category_reason'):
+            notes += '<br><small>' + escape(row['category_reason']) + '</small>'
         if suggestions:
             notes += '<details><summary>Catalog suggestions (not selected)</summary><ul>' + suggestions + '</ul></details>'
         cells = [escape(row['status']) + '<br><small>' + escape(row.get('confidence', '')) + '</small>',
-                 escape(row['source']) + '<br><strong>' + escape(row.get('target', 'Stays in place')) + '</strong>',
+                 escape(row['source']) + '<br><strong>' + escape(row.get('target') or 'Stays in place') + '</strong>',
+                 escape(row.get('category') or 'Needs classification'),
                  '<br>'.join(escape(meta.get(field)) for field in ('genre', 'publisher', 'year')), notes]
         rows.append('<tr class="' + escape(row['status']) + '">' + ''.join('<td>' + cell + '</td>' for cell in cells) + '</tr>')
     return ('''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -462,14 +529,15 @@ body{font:16px system-ui,sans-serif;background:#101b2d;color:#e1e9f3;margin:2rem
 input{padding:.7rem;width:min(90%,36rem);margin:1rem 0;font:inherit}table{border-collapse:collapse;width:100%;background:#17283e}
 th,td{padding:.8rem;text-align:left;border-bottom:1px solid #344960;vertical-align:top;overflow-wrap:anywhere}
 th{background:#243c55}small,summary{color:#bacbdb}.blocked td:first-child,.unmatched td:first-child{color:#ffb6a5}
-.ready td:first-child{color:#59e0bf}.review td:first-child{color:#ffda85}strong{font-weight:500;color:#9be7d9}
+.ready td:first-child{color:#59e0bf}.review td:first-child,.category-review td:first-child{color:#ffda85}strong{font-weight:500;color:#9be7d9}
 @media(max-width:700px){body{margin:.6rem}table{font-size:13px}th,td{padding:.4rem}}
 </style><h1>Library preview</h1><p>USB root: ''' + escape(plan['root']) + '''</p>
 <p>No USB files changed during scanning. Ready entries have checksum or manual matches.
 Review entries use filenames and need <code>--accept-name-matches</code>. Other entries stay in place.
+Category-review entries need a category override and a new scan, even when their checksums match.
 Metadata is community supplied; empty fields are unknown. No fuzzy suggestions are applied automatically.</p>
-<input id="filter" type="search" placeholder="Filter by title, region, status, genre or publisher" aria-label="Filter games">
-<table><thead><tr><th>Status / match</th><th>Original → proposed path</th><th>Genre / publisher / year</th><th>Notes</th></tr></thead>
+<input id="filter" type="search" placeholder="Filter by title, category, region, status, genre or publisher" aria-label="Filter library">
+<table><thead><tr><th>Status / match</th><th>Original → proposed path</th><th>Category</th><th>Genre / publisher / year</th><th>Notes</th></tr></thead>
 <tbody>''' + ''.join(rows) + '''</tbody></table>
 <script>document.getElementById('filter').addEventListener('input',function(){const q=this.value.toLowerCase();
 document.querySelectorAll('tbody tr').forEach(row=>{row.hidden=!row.textContent.toLowerCase().includes(q);});});</script></html>''').encode('utf-8')
@@ -712,6 +780,8 @@ def write_database(root, tx, plan, selected):
         path = mapping.get(row['source'], row['source'])
         records.pop(row['source'], None)
         records[path] = dict(path=path, title=row.get('canonical'), region=row.get('region'),
+            category=row.get('category'),category_review=row.get('category_review',True),
+            category_reason=row.get('category_reason'),
             catalog_name=row.get('catalog_name'), variant=row.get('variant'),
             edition_unresolved=row.get('edition_unresolved',False),
             disc=row.get('disc'), identification=row.get('confidence', 'unmatched'),
@@ -724,21 +794,23 @@ def write_database(root, tx, plan, selected):
     with tempfile.TemporaryDirectory(prefix='oh3do-db-') as directory:
         path = Path(directory) / 'library.sqlite'
         with sqlite3.connect(path) as db:
-            db.execute('CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, edition_unresolved INTEGER)')
+            db.execute('CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, edition_unresolved INTEGER, category TEXT, category_review INTEGER, category_reason TEXT)')
             db.execute('CREATE TABLE sources (url TEXT, sha256 TEXT)')
             db.executemany('INSERT INTO sources VALUES (?, ?)', [(s['url'], s.get('sha256')) for s in plan['sources']])
             for record in records:
                 meta = record['metadata']
-                db.execute('INSERT INTO games VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (record['path'], record['title'], record['region'], record['disc'], meta.get('genre'), meta.get('publisher'), meta.get('year'), meta.get('developer'), record['identification'], record['cover'], meta.get('source'), record.get('variant'), record.get('catalog_name'), int(record.get('edition_unresolved',False))))
+                db.execute('INSERT INTO games VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (record['path'], record['title'], record['region'], record['disc'], meta.get('genre'), meta.get('publisher'), meta.get('year'), meta.get('developer'), record['identification'], record['cover'], meta.get('source'), record.get('variant'), record.get('catalog_name'), int(bool(record.get('edition_unresolved',False))),record.get('category'),int(bool(record.get('category_review',True))),record.get('category_reason')))
         tx.write('.ohmy3do/library.sqlite', path.read_bytes())
 
 
 def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False):
-    if plan.get('schema') != 1 or plan.get('root') != str(root):
+    if plan.get('schema') != 2 or plan.get('root') != str(root):
         raise ValueError('Plan version or USB root does not match; scan this drive again')
     rows = [r for r in plan['entries'] if r['status'] == 'ready' or (accept_names and r['status'] == 'review')]
     destinations, sources, cues = set(), set(), {}
     for row in rows:
+        if row.get('category_review') or row.get('category') not in CATEGORIES or not isinstance(row.get('target'),str) or PurePosixPath(row['target']).parts[0] != row['category']:
+            raise ValueError('Category is unresolved or does not match the destination; scan again with a category override')
         if row['confidence'] not in ('checksum', 'manual') and not accept_names:
             raise ValueError('Filename matches need --accept-name-matches after reviewing the plan')
         relative_path(root, row['source'])
@@ -858,6 +930,7 @@ def main():
     scan.add_argument('--plan', type=Path, default=Path('library-plan.json'))
     scan.add_argument('--quick', action='store_true', help='skip checksum reads; filename matches require review')
     scan.add_argument('--overrides', type=Path, help='JSON object mapping relative paths to exact catalog names')
+    scan.add_argument('--categories', type=Path, help='JSON object mapping relative disc paths to ' + ', '.join(CATEGORIES))
     scan.add_argument('--offline', action='store_true')
     scan.add_argument('--refresh-catalog', action='store_true')
     scan.add_argument('--dat', type=Path, help='use a local Redump-format DAT')
@@ -888,13 +961,14 @@ def main():
                     raise ValueError('Keep the preview plan and download cache on the PC, outside the USB root')
             catalog = catalog_tools.load_catalog(cache, args.offline, args.refresh_catalog, args.dat, args.launchbox)
             overrides = json.loads(args.overrides.read_text(encoding='utf-8')) if args.overrides else None
-            plan = build_plan(root, catalog, args.quick, overrides)
+            categories = json.loads(args.categories.read_text(encoding='utf-8')) if args.categories else None
+            plan = build_plan(root, catalog, args.quick, overrides,categories=categories)
             atomic_write(args.plan, json_bytes(plan))
             report = args.plan.with_suffix('.html')
             atomic_write(report, report_html(plan))
             counts = collections.Counter(row['status'] for row in plan['entries'])
             for row in plan['entries']:
-                print(f'{row["status"].upper():9} {row["source"]}\n          {row.get("target", row["reason"])}')
+                print(f'{row["status"].upper():9} {row["source"]}\n          {row.get("target") or row["reason"]}')
             print(f'Plan: {args.plan.resolve()}\nOpen preview: {report.resolve()}\nCounts: {dict(counts)}\nNo USB files changed. Filename matches need review and --accept-name-matches.')
         elif args.command == 'apply':
             plan = json.loads(args.plan.read_text(encoding='utf-8'))
