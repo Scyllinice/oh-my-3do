@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.16.0-rc2)
+Oh My 3DO media tools (scanner v0.16.0-rc3)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -293,19 +293,18 @@ Convert a local clip; the output is a small 64x80 RAM-playable animation:
   py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
   py index-media.py E:/
 
-Default: 15 fps with source audio. Keep the longest source prefix that fits
-within a 1 MiB combined video/audio payload. Length is reduced as needed; frame
-rate is never lowered automatically. --duration 30 is a maximum length, not a
-promise of 30 seconds. Conversion decodes once and reports the resulting length,
-frame rate and RAM usage. Shorter previews load faster.
-The format allows 720 frames and 120 seconds; at 15 fps, that means at most 48
-seconds before the RAM limit. Install menu v0.16.0-rc2+ for 15 fps files.
-Older silent and sound-enabled previews remain supported by the updated menu.
+New conversions have a 15-second overall cap at 15 fps with source audio.
+Shorter sources stay shorter. Complex footage may be trimmed further to fit the
+1 MiB video/audio RAM budget; frame rate is never lowered automatically.
+--duration can request less than 15 seconds. Older requests for longer clips are
+capped at 15, including "full". Conversion reports actual duration and RAM size.
+Install menu v0.16.0-rc2+ for 15 fps files. The cap is a PC-tool update; the RC2
+boot.iso is unchanged. Existing previews keep their old length until reconverted.
 Video is losslessly compressed RGB555. Audio is signed 8-bit 11025 Hz mono PCM.
 FFmpeg and ffprobe must both be on PATH; no additional audio encoder is needed.
 
 Optional:
-  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --duration 30
+  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --duration 10
 Use --silent to omit audio. --frames 24 --fps 6 explicitly creates the old silent
 format for an older boot.iso; it cannot be combined with --duration.
 Enable Video previews in Tools > Settings, save, then cold boot. Preview sound
@@ -325,8 +324,9 @@ MP4/AVI/MKV/MOV/WebM clips in subfolders are supported. Exact names are preferre
 a unique normalized title match is allowed when known region/disc labels agree.
 Generic clips without a disc label can serve every disc. Ambiguous/missing
 clips and conversion failures are reported and skipped. Existing previews stay.
-Imports use 15 fps with source audio, shortening the clip to fit RAM.
---preview-duration 30 caps the length; --preview-silent omits audio.
+Imports use at most 15 seconds at 15 fps with source audio, trimming further
+when needed to fit RAM.
+--preview-duration 10 requests a shorter maximum; --preview-silent omits audio.
 --replace-previews explicitly upgrades existing associations, preserving old media
 files. A fresh scan/plan is recommended before applying. The preview index is
 built automatically and new previews are covered by the organizer undo journal.

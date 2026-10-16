@@ -81,6 +81,26 @@ class PreviewToolsTest(unittest.TestCase):
             converter.convert(source,out,frames=6);self.run_loader('video',out)
             self.assertEqual(source.read_bytes(),before)
 
+    def test_all_conversion_requests_respect_15_second_cap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);source=root/'source.mkv';source.write_bytes(b'placeholder')
+            for duration,available,expected in ((None,'60',15),('full','60',15),('30','60',15),('5','60',5),(None,'8',8),(None,None,15)):
+                durations=[]
+                def run(args,**kwargs):
+                    if '-show_format' in args:
+                        return subprocess.CompletedProcess(args,0,json.dumps({'format':{'duration':available},'streams':[{'codec_type':'video'},{'codec_type':'audio'}]}).encode())
+                    if '-frames:v' in args:
+                        durations.append(float(args[args.index('-t')+1]));n=int(args[args.index('-frames:v')+1])
+                        return subprocess.CompletedProcess(args,0,b'\0'*(n*64*80*3))
+                    return subprocess.CompletedProcess(args,0,b'\0')
+                with mock.patch.object(converter.shutil,'which',return_value='ffmpeg'),mock.patch.object(converter.subprocess,'run',side_effect=run):
+                    result=converter.convert(source,root/'preview.3dv',duration=duration)
+                self.assertEqual(durations,[expected])
+                self.assertEqual(result['fps'],15)
+                self.assertEqual(result['seconds'],expected)
+                self.assertLessEqual(result['frames'],225)
+                self.run_loader('video2large',root/'preview.3dv')
+
     def test_clip_shortens_without_reducing_fps_under_ram_budget(self):
         # Synthetic decoder output is deliberately incompressible, so the
         # converter must shorten at 15 fps, rather than overallocate or lower fps.
@@ -98,10 +118,10 @@ class PreviewToolsTest(unittest.TestCase):
                 return subprocess.CompletedProcess(args,0,b'\x11'*330752)
             with mock.patch.object(converter.shutil,'which',return_value='ffmpeg'),mock.patch.object(converter.subprocess,'run',side_effect=run):
                 result=converter.convert(source,root/'preview.3dv')
-            self.assertEqual(durations,[48])
+            self.assertEqual(durations,[15])
             self.assertEqual(result['fps'],15)
             self.assertLess(result['frames'],720)
-            self.assertLessEqual(result['seconds'],30)
+            self.assertLessEqual(result['seconds'],15)
             self.assertLessEqual(result['bytes'],converter.MAX_BYTES)
             next_count=result['frames']+1
             frame_size=len(zlib.compress(converter.rgb555(random_frame),9))

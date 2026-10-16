@@ -39,8 +39,8 @@ def convert_legacy(source, target, fps=6, frames=24, start=0):
 
 
 MAX_BYTES = 1024 * 1024
-MAX_SECONDS = 120
 MAX_FRAMES = 720
+CLIP_CAP_SECONDS = 15
 
 
 def rgb555(raw):
@@ -76,14 +76,12 @@ def convert(source, target, fps=None, frames=None, start=0, duration=None, sound
         available = float(info.get('format', {}).get('duration', 'nan')) - start
     except (ValueError, TypeError):
         available = float('nan')
-    requested = available if full else float(duration)
-    if full and not math.isfinite(requested):
-        requested = 30
-        print('Source duration is unknown; using at most 30 seconds.')
-    if full and math.isfinite(requested):
-        requested = min(requested, MAX_SECONDS)
-    if not math.isfinite(requested) or not 0 < requested <= MAX_SECONDS:
-        raise ValueError('Preview duration must be greater than zero and at most 120 seconds')
+    requested = CLIP_CAP_SECONDS if full else float(duration)
+    if not math.isfinite(requested) or requested <= 0:
+        raise ValueError('Preview duration must be a finite value greater than zero')
+    if requested > CLIP_CAP_SECONDS:
+        print('Preview length capped at 15 seconds.')
+    requested = min(requested, CLIP_CAP_SECONDS)
     if math.isfinite(available):
         requested = min(requested, available)
     if requested <= 0:
@@ -98,7 +96,7 @@ def convert(source, target, fps=None, frames=None, start=0, duration=None, sound
         f'fps={fps},scale=64:80:force_original_aspect_ratio=decrease:flags=area,pad=64:80:(ow-iw)/2:(oh-ih)/2:color=0x081021',
         '-frames:v', str(limit), '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'],
         check=True, stdout=subprocess.PIPE).stdout
-    if not raw or len(raw) % (64*80*3) or len(raw) > MAX_FRAMES*64*80*3:
+    if not raw or len(raw) % (64*80*3) or len(raw) > limit*64*80*3:
         raise ValueError('Video did not produce complete bounded frames')
     source_count = len(raw)//(64*80*3)
     blocks, compressed_bytes = [], 0
@@ -152,7 +150,7 @@ def main():
     parser.add_argument("output", type=Path, help="USB .ohmy3do/previews/Game Title.3dv (or legacy previews/)")
     parser.add_argument("--fps", type=int, help="frame rate (default: 15; legacy --frames defaults to 6)")
     parser.add_argument("--frames", type=int, help="legacy silent video: 1-32 frames")
-    parser.add_argument("--duration", default=None, help="full (default) or maximum seconds, up to 120; shortened to fit RAM at the requested fps")
+    parser.add_argument("--duration", default=None, help="maximum seconds (default and overall cap: 15); shortened further to fit RAM at the requested fps")
     parser.add_argument("--silent", action="store_true", help="omit audio")
     parser.add_argument("--start", type=float, default=0)
     args = parser.parse_args()

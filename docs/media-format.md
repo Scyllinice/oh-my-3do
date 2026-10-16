@@ -100,7 +100,7 @@ cancellation and allocation failures release all owned memory. CRC covers both
 buffers incrementally, avoiding a second copy of the audio in general-purpose
 RAM. Original video sources and older `.3dv` files are never modified by loading.
 
-The converter defaults to 15 fps and shortens the source prefix to fit the RAM
-budget. It does not lower frame rate automatically. The 720-frame limit allows
-up to 48 seconds at 15 fps; actual duration also depends on video compression
-and audio storage. Older version-1 previews retain their 1–12 fps limit.
+The converter caps new clips at 15 seconds at 15 fps, shortening further to fit
+the RAM budget without lowering frame rate. This is an authoring policy; the
+player still accepts older longer clips within the format limits above.
+Older version-1 previews retain their 1–12 fps limit.

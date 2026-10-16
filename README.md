@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-version is **0.16.0-rc2**.
+menu version is **0.16.0-rc2**; media tools are **0.16.0-rc3**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -861,18 +861,17 @@ into the artwork area. The PC converts MP4/AVI/MKV/MOV/WebM sources; the console
 plays the prepared `.3dv` file from RAM. Install **v0.16.0 or newer** for the new
 compressed-video/audio format. Older silent previews remain supported.
 
-By default, conversion keeps **15 fps** and includes as much of the source as
-fits a **1 MiB combined video/audio payload**. Clips are shortened to fit;
-the frame rate is never reduced automatically. `--duration 30` sets an upper
-length limit, rather than guaranteeing 30 seconds. The converter decodes video
-once and retains the longest prefix that fits, including aligned audio storage.
-It reports the actual duration, frame rate and RAM size.
+New previews are capped at **15 seconds at 15 fps**, including source audio.
+Shorter sources stay shorter. Complex footage is shortened further when needed
+to fit the **1 MiB combined video/audio payload**; frame rate is never reduced
+automatically. `--duration` can request a shorter clip, and older commands asking
+for more than 15 seconds are capped automatically. Conversion decodes the source
+once and reports the actual duration, frame rate and RAM size.
 
-The format allows 720 frames and up to 120 seconds. At 15 fps, the frame limit
-is 48 seconds; complex gameplay generally reaches the RAM limit sooner. Shorter
-clips load faster. **15 fps files require v0.16.0-rc2 or newer**; the first RC
-supports only up to 12 fps. Lower frame rates can still be requested explicitly
-with `--fps`, and older preview files remain playable.
+**15 fps files require v0.16.0-rc2 or newer.** The 15-second policy is a PC-tool
+update; RC2 `boot.iso` does not need replacement. Existing previews are unchanged
+until reconverted. The player still accepts older longer files within its format
+limits. Lower frame rates can be requested explicitly with `--fps`.
 
 Video frames use lossless zlib compression of RGB555 pixels. Audio is signed
 8-bit mono PCM at 11,025 Hz, with modest headroom and short endpoint fades.
@@ -883,7 +882,7 @@ the menu usable; audio failure allows silent video playback.
 ```sh
 ./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv'
 # Explicit length and starting point:
-./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv' --start 10 --duration 30
+./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv' --start 10 --duration 10
 ```
 
 Copy the generated `.3dv` into `.ohmy3do/previews` on USB, then run the indexer
@@ -928,8 +927,8 @@ matches are reported and skipped. It does not infer the edition of an ISO from
 the clip. Rename or remove duplicate source clips before running a new scan and
 apply if a match needs attention.
 
-Imports use 15 fps and retain the longest clip that fits RAM, with audio when present.
-Add `--preview-start 5`, `--preview-duration 30`, or `--preview-silent` as needed.
+Imports use up to 15 seconds at 15 fps with source audio, shortening further to fit RAM.
+Add `--preview-start 5`, `--preview-duration 10`, or `--preview-silent` as needed.
 Clips are converted before USB changes, indexed automatically, and covered by
 the organizer's undo journal. Existing previews are retained by default.
 To upgrade existing silent clips, add **`--replace-previews`**:
