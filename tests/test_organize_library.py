@@ -214,6 +214,69 @@ class OrganizerTest(unittest.TestCase):
         with mock.patch.object(organizer.sector_tools,'native_encoder',return_value=None):
             self.assertEqual(self.scan()['entries'][0]['confidence'],'converted-checksum')
 
+    def test_empty_iso_blocked_even_with_manual_override_and_quick(self):
+        self.catalog['games']=[game('Example (USA)',[b'valid disc'])]
+        self.put('Example (USA).iso',b'')
+        for quick in (False,True):
+            row=self.scan(quick,{'Example (USA).iso':'Example (USA)'})['entries'][0]
+            self.assertEqual(row['status'],'blocked')
+            self.assertIn('Empty disc data',row['reason'])
+            self.assertFalse(row['moves'])
+
+    def test_archives_disguised_as_iso_blocked_before_hashing(self):
+        self.catalog['games']=[game('Example (USA)',[b'valid disc'])]
+        path=self.root/'Example (USA).iso'
+        signatures=(b'PK\x03\x04',b'PK\x05\x06',b'PK\x07\x08',b'7z\xbc\xaf\x27\x1c',
+                    b'Rar!\x1a\x07\x01\0',b'\x1f\x8b',b'BZh9',b'\xfd7zXZ\0')
+        for signature in signatures:
+            path.write_bytes(signature+b'archive payload')
+            with mock.patch.object(organizer,'fingerprint',side_effect=AssertionError('must reject before hashing')):
+                for quick in (False,True):
+                    row=self.scan(quick,{'Example (USA).iso':'Example (USA)'})['entries'][0]
+                    self.assertEqual(row['status'],'blocked')
+                    self.assertIn('archive disguised',row['reason'])
+
+    def test_ordinary_zip_is_not_a_scan_unit_or_renamed(self):
+        path=self.put('Example (USA).zip',b'')
+        with zipfile.ZipFile(path,'w') as archive: archive.writestr('Example.iso',b'disc')
+        before=snapshot(self.root)
+        self.assertEqual(self.scan()['entries'],[])
+        self.assertEqual(snapshot(self.root),before)
+
+    def test_apply_old_plan_rejects_empty_or_archive_before_any_changes(self):
+        self.catalog['games']=[game('Example (USA)',[b'valid disc'])]
+        path=self.put('Example (USA).iso',b'valid disc')
+        plan=self.scan()
+        for invalid in (b'',b'PK\x03\x04archive'):
+            path.write_bytes(invalid)
+            old=copy.deepcopy(plan)
+            old['entries'][0]['moves'][0]['fingerprint']=organizer.fingerprint(path)
+            old['entries'][0]['confidence']='manual'
+            before=snapshot(self.root)
+            with self.assertRaisesRegex(ValueError,'Empty disc data|archive disguised'):
+                self.apply(old)
+            self.assertEqual(snapshot(self.root),before)
+            self.assertFalse((self.root/'.ohmy3do').exists())
+
+    def test_empty_or_archived_cue_companions_are_blocked(self):
+        self.catalog['games']=[game('Example (USA)',[b'valid disc'])]
+        self.put('Example (USA).cue',b'FILE "track.bin" BINARY\nTRACK 01 MODE1/2352\nINDEX 01 00:00:00\n')
+        for invalid in (b'',b'PK\x03\x04archive'):
+            self.put('track.bin',invalid)
+            row=self.scan(True,{'Example (USA).cue':'Example (USA)'})['entries'][0]
+            self.assertEqual(row['status'],'blocked')
+            self.assertFalse(row['moves'])
+
+    def test_find_index_omits_empty_and_disguised_isos(self):
+        self.put('Good.iso',b'actual disc data')
+        self.put('Empty.iso',b'')
+        self.put('Archive.iso',b'PK\x03\x04archive')
+        organizer.index_tools.index(self.root)
+        index=(self.root/'library.3di').read_bytes()
+        self.assertIn(b'Good.iso',index)
+        self.assertNotIn(b'Empty.iso',index)
+        self.assertNotIn(b'Archive.iso',index)
+
     def test_review_groups_separate_filename_matches_choices_and_file_errors(self):
         cases=[({'status':'review','confidence':'filename'},'matched'),({'status':'ready'},'matched'),
             ({'status':'unmatched','confidence':'ambiguous'},'decisions'),({'status':'category-review'},'decisions'),

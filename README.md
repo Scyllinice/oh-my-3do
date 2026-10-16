@@ -555,6 +555,14 @@ compiler installed. The Windows cross-build uses Clang and LLD:
 and are never included in `boot.iso`. `--dat` also accepts a local
 clrmamepro-format DAT, including one for the ISO format in use.
 
+ZIP files are not scanned or renamed into ISOs; extract them first and preserve
+their BIN/CUE or ISO contents. Empty data files and recognized archive headers
+disguised as disc images are blocked before identification, even with an
+explicit override. Apply repeats these checks before any moves, including for
+older saved plans. The standalone indexer omits empty/archive-disguised ISOs
+from Find and artwork associations. These checks do not replace checksum
+verification or repair damaged images.
+
 Ambiguous versions, fuzzy suggestions, broken/shared CUE sets, and destination
 collisions stay in place. No duplicate images are deleted. To resolve a match,
 put its relative USB path and exact catalog name in a PC-side overrides file,

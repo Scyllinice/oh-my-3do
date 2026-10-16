@@ -11,6 +11,21 @@ def fold(value):
     return value.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
 
 
+def disc_data_issue(path):
+    """Reject empty data and recognizable archives, without guessing a game."""
+    if not path.stat().st_size:
+        return 'Empty disc data file: ' + path.name
+    with path.open('rb') as stream:
+        header = stream.read(16)
+    formats = ((b'PK\x03\x04','ZIP'),(b'PK\x05\x06','ZIP'),(b'PK\x07\x08','ZIP'),
+               (b'7z\xbc\xaf\x27\x1c','7-Zip'),(b'Rar!\x1a\x07','RAR'),
+               (b'\x1f\x8b','gzip'),(b'BZh','bzip2'),(b'\xfd7zXZ\0','xz'))
+    for signature, name in formats:
+        if header.startswith(signature):
+            return name + ' archive disguised as disc data: ' + path.name + '; extract it before scanning'
+    return None
+
+
 def support_base(root):
     directory = root/'.ohmy3do'
     marker = directory/'ohmy3do.ini'
@@ -114,6 +129,11 @@ def index(root):
             continue
         if path.suffix.lower() == '.cue' and redundant_cue_iso(path) is not None:
             continue
+        if path.suffix.lower() == '.iso':
+            issue = disc_data_issue(path)
+            if issue:
+                print('Skipped: ' + issue)
+                continue
         game = relative.as_posix()
         if any(ord(c) < 32 or ord(c) == 127 or c in "\\:" for c in game) or len(game.encode()) > 8192:
             raise ValueError(f"Unsupported game path: {game}")

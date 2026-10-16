@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.15.1)
+Oh My 3DO media tools (scanner v0.15.2)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -28,6 +28,13 @@ Pillow for covers with: py -m pip install Pillow
 
 Preview without modifying USB files:
   py organize-library.py scan M:/ --quick --plan library-plan.json
+
+ZIP archives are not scanned or renamed into ISO files. Extract archives first
+and keep their original BIN/CUE or ISO contents together. Empty disc files and
+recognized archive headers disguised as disc images are blocked even with a
+manual override. Apply checks again before any moves, including for older plans.
+The standalone indexer omits empty/archive-disguised ISOs from Find and media
+associations. These checks do not replace checksum verification of valid data.
 
 Open library-plan.html to review proposed moves and game information. Discs use
 <category>/<region>/<title>/, with discs of the same edition together. Categories

@@ -65,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
     # Indexing reports oversized PNGs without rewriting artwork.
     index_spec=importlib.util.spec_from_file_location('index_media',ROOT/'tools/index-media.py')
     indexer=importlib.util.module_from_spec(index_spec); index_spec.loader.exec_module(indexer)
-    usb=root/'audit-usb'; (usb/'covers').mkdir(parents=True); (usb/'Large.iso').write_bytes(b'')
+    usb=root/'audit-usb'; (usb/'covers').mkdir(parents=True); (usb/'Large.iso').write_bytes(b'synthetic disc')
     large=usb/'covers/Large.png'; Image.new('RGB',(256,320),'red').save(large)
     original=large.read_bytes(); messages=io.StringIO()
     with contextlib.redirect_stdout(messages): indexer.index(usb)
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
     subprocess.run(['python3', str(ROOT/'tools/resize-covers.py'), str(source/'Wide.bmp'), str(renamed)], check=True)
     assert renamed.exists()
     usb=root/'usb';(usb/'Games').mkdir(parents=True)
-    (usb/'Games'/'Game.iso').touch()
+    (usb/'Games'/'Game.iso').write_bytes(b'synthetic disc')
     subprocess.run(['python3', str(ROOT/'tools/resize-covers.py'), str(source/'Wide.bmp'), str(usb/'covers'/'Game.png')], check=True)
     subprocess.run(['python3', str(ROOT/'tools/index-media.py'), str(usb)], check=True)
     subprocess.run([str(ROOT/'build/test_usb_media'), 'index', str(usb/'covers'/'index.3di')], check=True)

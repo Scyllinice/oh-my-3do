@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.15.1'
+SCANNER_VERSION = '0.15.2'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -291,6 +291,14 @@ def scan_units(root):
                 unit.update(source=cue, files=[cue] + [f for f in unit['files'] if f != cue])
                 unit.pop('ignored_cues'); unit.pop('aliases')
             unit['error'] = 'Data files are shared between disc entries; organize this set manually'
+        if not unit.get('error'):
+            for file in unit['files']:
+                if Path(file).suffix.lower() == '.cue':
+                    continue
+                issue = index_tools.disc_data_issue(relative_path(root,file))
+                if issue:
+                    unit.update(error=issue, invalid_data=True)
+                    break
     return units
 
 
@@ -500,6 +508,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
                    ignored_cues=unit.get('ignored_cues', []), aliases=unit.get('aliases', []))
         if unit.get('error'):
             row['reason'] = unit['error']
+            if unit.get('invalid_data'): row['status'] = 'blocked'
             entries.append(row)
             continue
         stats = {}
@@ -1087,6 +1096,10 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
             sources.add(move['source'].casefold())
             destinations.add(move['target'].casefold())
             actual = fingerprint(source, False)
+            if source.suffix.lower() != '.cue':
+                issue = index_tools.disc_data_issue(source)
+                if issue:
+                    raise ValueError(issue + '; no files were reorganized')
             if any(actual[k] != move['fingerprint'][k] for k in actual):
                 raise ValueError(f'Source changed since scan: {source}; scan again')
             if target.exists() and move['source'] != move['target']:
@@ -1161,11 +1174,18 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
                 (mirror/'.ohmy3do').mkdir()
                 (mirror/'.ohmy3do/ohmy3do.ini').write_bytes(b'layout marker')
             for unit in scan_units(root):
+                if unit.get('invalid_data'):
+                    continue
                 for file in unit['files'][:1]:
                     path = mirror / file
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.touch()
-            # CUE FILE parsing is unnecessary here: index() enumerates paths only.
+                    if path.suffix.lower() == '.iso':
+                        # Preserve the validation prefix without copying images.
+                        with relative_path(root,file).open('rb') as stream:
+                            path.write_bytes(stream.read(16))
+                    else:
+                        path.touch()
+            # CUE sets were validated by scan_units; no CUE parsing is needed here.
             for folder in ('covers', 'previews'):
                 usb = index_tools.support_base(root) / folder
                 if usb.exists():
