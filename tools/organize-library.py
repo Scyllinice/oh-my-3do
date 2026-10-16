@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.16.0-rc3'
+SCANNER_VERSION = '0.16.0-rc4'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']

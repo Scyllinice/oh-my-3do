@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc2**; media tools are **0.16.0-rc3**.
+menu version is **0.16.0-rc2**; media tools are **0.16.0-rc4**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -400,6 +400,56 @@ per archive. They are custom file archives, not raw NVRAM dumps, emulator `.srm`
 images, Nintendo 3DS files or game-progress editors. Invalid names, checksums,
 duplicates and lengths reject the whole archive. Files are self-delimiting so an
 old USB tail does not require unsupported truncate/seek commands.
+
+## Keeping a staging library and USB drive updated
+
+`library-maintenance.py` adds missing media to an organized library without a
+new identification scan, and prepares a USB copy containing runtime files.
+Run these commands from the extracted `media-tools` folder:
+
+```powershell
+py library-maintenance.py update-media D:/3DO --emu-movies D:/EmuMovies
+py library-maintenance.py update-media D:/3DO --emu-movies D:/EmuMovies --apply
+py library-maintenance.py review D:/3DO --report artwork-review.html
+py library-maintenance.py prepare-usb D:/3DO M:/ --report usb-copy-report.json
+py library-maintenance.py prepare-usb D:/3DO M:/ --report usb-copy-report.json --apply
+```
+
+Replace `M:/` with the USB drive's actual letter. Both operations preview by
+default. The HTML media report includes cover thumbnails, title/path search,
+and a missing-media filter. Cover imports/thumbnails need Pillow; preview
+conversion needs FFmpeg and ffprobe. USB validation and copying need only Python.
+
+Media updates preserve existing artwork, disc identities, registrations and
+folder locations. New discs first need to be organized or registered and
+indexed. The command uses the current database and never hashes game images.
+EmuMovies front covers come from `Box`; videos prefer `Video_MP4_HD`, then
+`Video_MP4_HI_QUAL`, then `Video_MP4`, selecting one quality per title. Exact
+matches are preferred; ambiguous or incompatible regional matches stay
+unselected. `--cover-dir` and `--preview-dir` select other local sources.
+Conversions are cached by source content and settings; imports are undoable
+with the organizer. New previews use 15 fps, a 15-second cap, and source audio.
+
+USB preparation validates the consolidated `.ohmy3do` layout, the boot volume
+header/length, settings, Find, disc/CUE paths and indexed media. It checks PNG
+chunks and decodes every compressed preview frame. This does not verify the
+boot signature or replace hardware testing. A stale Find index must be rebuilt
+with `py index-media.py D:/3DO` before copying.
+
+The copy includes disc files, `boot.iso`, settings, indexes, referenced media,
+and available favorites/history/saves. PC databases, reports, caches and
+recovery data stay on the PC. Existing destination settings, favorites,
+history and saves are preserved. Different existing disc files block copying;
+updated runtime files are backed up beside the copy report. Each new copy
+passes SHA-256 readback before replacement. Interrupted copies can be rerun,
+and destination files are never deleted.
+
+Existing discs with the same size and exact timestamp are skipped quickly.
+Reuse the same copy report to retain verified-copy receipts, which also avoid
+rehashing unchanged copies when FAT rounds their timestamps. `--verify-discs` instead hashes them all, which can take considerable time.
+Other runtime files are compared by content. Keep reports, conversion caches
+and copy backups outside both library roots. The full command reference is
+included in the media-tools ZIP's `README.txt`.
 
 ## USB library organizer
 

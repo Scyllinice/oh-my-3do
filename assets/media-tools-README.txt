@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.16.0-rc3)
+Oh My 3DO media tools (scanner v0.16.0-rc4)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -367,3 +367,74 @@ These are audio CDs, not bootable game ISOs. The open-source ODE has audio-track
 support, but playback on each installed firmware needs a hardware test. Unusual
 first-track pregaps may expose firmware limitations. Test a conventional disc
 before a 99-track bonus disc. Conversion does not certify a Redump release.
+
+INCREMENTAL MEDIA AND USB PREPARATION
+
+Run these commands from the extracted media-tools directory. Python 3.9+ is
+required. Cover imports and review thumbnails use Pillow; preview imports need
+FFmpeg and ffprobe on PATH. USB validation/copy uses the Python standard library.
+
+Preview only the missing covers and videos for an already organized library:
+  py library-maintenance.py update-media D:/3DO --emu-movies D:/EmuMovies
+
+Review artwork-review.html, then repeat with --apply to import matching media:
+  py library-maintenance.py update-media D:/3DO --emu-movies D:/EmuMovies --apply
+
+Existing associations and media are preserved. Disc identities, registrations,
+folder locations, Find, settings and saves stay unchanged. New game files must
+first be organized or registered with organize-library.py, then indexed. The
+update command reads the existing database; it does not checksum game images
+or discover/re-identify newly added discs. Missing and ambiguous matches stay
+unselected. A failed conversion is reported and does not block other matches.
+Converted files are cached on the PC, keyed by source content and conversion
+settings. Imports have an organizer undo journal; rollback covers media,
+association indexes and both library databases.
+
+--emu-movies accepts D:/EmuMovies or D:/EmuMovies/Panasonic_3DO. It uses Box for
+covers and prefers Video_MP4_HD, then Video_MP4_HI_QUAL, then Video_MP4, once per
+title. Alternate directories can be supplied with --cover-dir and --preview-dir.
+Only the supplied front-cover directory is searched, avoiding logos/back covers.
+New previews are 15 fps, at most 15 seconds, with sound when present. Existing
+previews are kept, including older clips. No account login or download occurs.
+
+Create a fresh, searchable contact sheet of installed covers at any time:
+  py library-maintenance.py review D:/3DO --report artwork-review.html
+
+Validate staging and preview the files needed on a USB drive (replace M:/ with
+its actual drive letter):
+  py library-maintenance.py prepare-usb D:/3DO M:/ --report usb-copy-report.json
+
+If Find is stale, rebuild it first:
+  py index-media.py D:/3DO
+
+Copy after reviewing the JSON report:
+  py library-maintenance.py prepare-usb D:/3DO M:/ --report usb-copy-report.json --apply
+
+Both roots must already exist and be separate. The staging library must use
+the consolidated .ohmy3do layout and contain boot.iso, configuration and Find.
+The command checks the boot volume header/length (not its cryptographic boot
+signature), config syntax, Find paths/checksums, disc archive signatures/CUE
+references, media associations, cover PNG chunks and every compressed preview
+frame. This validates files; it cannot certify hardware playback or identify
+which game is inside an image. Media absent from the index is not copied.
+
+Only disc files, boot.iso, configuration, indexes, referenced covers/previews,
+and available favorites/history/save files are eligible. PC library JSON and
+SQLite databases, reports, caches, old CUE archives and undo/recovery folders
+are excluded. Existing destination settings, favorites, history and save files
+are preserved, including legacy root settings. Missing ones can be copied.
+Nothing is deleted from the destination. Different existing game files block
+copying rather than being overwritten. Updated boot/index/media files are
+backed up on the PC beside the report. Each copy goes to a temporary file and
+passes SHA-256 readback before replacement. Failed copies can be rerun.
+
+Unchanged existing discs use size and exact timestamp as a fast shortcut;
+otherwise matching-size files are hashed. Keep reusing the same copy report:
+it also records verified source/destination sizes and timestamps, allowing fast
+skips after a verified copy even when FAT rounds destination timestamps.
+Preview runs preserve these copy receipts. Add --verify-discs to hash every
+existing disc, including those whose size/timestamp agree. That reads the
+entire matching destination library and can take a long time. Non-disc runtime
+files are compared by content. The tool does not remove old games or stale
+files from the USB drive. Reports, conversion cache and update backups must
+stay outside both roots.

@@ -30,6 +30,10 @@
 # Personal library reports, metadata caches and organizer journals
 /library-plan*.json
 /library-plan*.html
+/artwork-review*.html
+/artwork-review*.json
+/usb-copy-*.json
+/usb-copy-backup-*/
 /categories.json
 /overrides.json
 /library-cache/

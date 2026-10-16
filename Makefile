@@ -6,6 +6,7 @@ test: build/test_cover_cache build/test_preview_audio build/test_ui_font build/t
 	python3 tools/build-sector-codec.py
 	python3 tests/test_sector_codec.py
 	python3 tests/test_organize_library.py
+	python3 tests/test_library_maintenance.py
 	python3 tests/test_library_catalog.py
 	python3 tests/test_prepare_audio_disc.py
 	python3 tests/test_preview_tools.py

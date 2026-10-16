@@ -16,6 +16,7 @@
 !tools/prepare-runtime.py
 !tools/index-media.py
 !tools/organize-library.py
+!tools/library-maintenance.py
 !tools/library-catalog.py
 !tools/sector-codec.py
 !tools/sector-codec.c
