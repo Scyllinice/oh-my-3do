@@ -8,7 +8,7 @@ RUN test "$TARGETARCH" = amd64
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        bash build-essential ca-certificates file git \
+        bash build-essential ca-certificates clang lld file git \
         libc6:i386 libgcc-s1:i386 libstdc++6:i386 \
         python3 unzip zip wine wine32:i386 wine64 xauth xvfb \
     && rm -rf /var/lib/apt/lists/*
@@ -65,6 +65,7 @@ COPY --chown=developer:developer src/ /tmp/project-check/src/
 COPY --chown=developer:developer vendor/ /tmp/project-check/vendor/
 COPY --chown=developer:developer tests/ /tmp/project-check/tests/
 COPY --chown=developer:developer tools/prepare-runtime.py tools/index-media.py tools/prepare-preview.py tools/resize-covers.py tools/generate-menu-music.py tools/prepare-music.py /tmp/project-check/tools/
+COPY --chown=developer:developer tools/organize-library.py tools/library-catalog.py tools/sector-codec.py tools/sector-codec.c tools/build-sector-codec.py /tmp/project-check/tools/
 COPY --chown=developer:developer assets/menu-music.aiff /tmp/project-check/assets/menu-music.aiff
 COPY --chown=developer:developer ohmy3do.ini /tmp/project-check/ohmy3do.ini
 RUN make -C /tmp/project-check test test-sdk test-cover-resize \

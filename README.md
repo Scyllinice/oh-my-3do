@@ -520,11 +520,40 @@ py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches
 
 Without `--quick`, scanning reads each image/data file and compares complete
 SHA-1 hashes and sizes against the identification catalog. This can take a long
-time on a large USB drive. Checksum and explicit manual matches are marked
-**ready**; apply these without `--accept-name-matches`. The default DAT describes
-raw Redump dumps. Converted 2048-byte-sector ISOs often cannot match those
-checksums and still need a filename match or manual identification. `--dat`
-accepts a local clrmamepro-format DAT, including one for the ISO format in use.
+time on a large USB drive. For whole-sector 2048-byte ISOs with a plausible
+catalog track size, the scanner also reconstructs standard Mode 1 headers,
+EDC and ECC in memory and compares the resulting 2352-byte-sector checksum.
+The source ISO stays unchanged. Both checksums are computed in one read, with
+bounded memory and progress messages during long reads.
+
+`checksum` identifies a byte-for-byte catalog dump. `converted-checksum`
+identifies the complete single-track catalog image after reconstruction; both
+are **ready** without `--accept-name-matches`. `data-track` identifies only the
+first track of a multi-track catalog entry and remains **review**: absent audio
+or other tracks have not been verified or restored. Accept it explicitly with
+`--accept-name-matches` only after reviewing the missing-track warning. Shared
+checksums across releases stay ambiguous even when the filename suggests one.
+Modified images, nonstandard headers, trimmed sectors, gaps and Mode 2 data
+are not repaired or guessed; unsuccessful reconstruction leaves the existing
+filename/manual identification workflow available.
+
+To check existing guesses, write a separate plan without `--quick` or
+`--overrides`. Explicit overrides still take precedence over identification
+and are labeled `manual`, even during a full scan:
+
+```powershell
+py organize-library.py scan M:/ --plan verified-plan.json
+```
+
+The release ZIP includes native accelerators for Windows x64 and Linux x64.
+Keep them beside the Python tools; no compiler or extra Python package is
+needed on those systems. Other systems use a slower Python fallback. To build
+an accelerator from a source checkout, run `python3 tools/build-sector-codec.py`.
+From the extracted ZIP, run `python3 build-sector-codec.py --output .` with a C
+compiler installed. The Windows cross-build uses Clang and LLD:
+`python3 tools/build-sector-codec.py --windows`. These helpers run on the PC
+and are never included in `boot.iso`. `--dat` also accepts a local
+clrmamepro-format DAT, including one for the ISO format in use.
 
 Ambiguous versions, fuzzy suggestions, broken/shared CUE sets, and destination
 collisions stay in place. No duplicate images are deleted. To resolve a match,
@@ -554,6 +583,10 @@ and variant codes survive filename shortening. CUE companions receive the same
 variant label and updated references. Opaque codes identify individual dumps;
 they do not establish which differently coded discs belong to the same edition.
 Such discs stay in the common game folder and can be queued manually.
+Matched discs with the same category, region and game/edition title are moved
+into that common folder even when they started in separate folders. Disc
+numbers remain in filenames; unresolved entries and destination conflicts
+still need review. Empty source folders can be removed with `clean-empty`.
 
 When the filename has no region, clearly named parent folders such as `US`,
 `USA`, `1 US`, or `Japan` narrow filename candidates. A region in the filename

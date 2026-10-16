@@ -31,6 +31,13 @@ Signed ISO outputs contain SDK runtime components. Consult the dependency terms
 when redistributing compiled images; this source license does not grant rights
 to dependency components.
 
+The PC scanner's Mode 1 sector encoder is original project code implementing
+[ECMA-130](https://ecma-international.org/publications-and-standards/standards/ecma-130/).
+It is covered by the root MIT license. Native PC accelerators are built from
+`tools/sector-codec.c`; they contain no third-party encoder or CRT dependencies
+in the Windows build. Synthetic test vectors were checked with an external
+UNECM executable; its GPL source and executable are not bundled or linked.
+
 The ISO retains the complete pinned SDK bootstrap runtime. The build records
 runtime components, linked libraries and their hashes in `runtime-audit.json`.
 

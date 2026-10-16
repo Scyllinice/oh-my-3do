@@ -1,22 +1,35 @@
 #!/usr/bin/env python3
 """Package the portable Python media tools without SDK or FFmpeg binaries."""
 from pathlib import Path
-import sys
+import argparse
 import binascii
 import struct
 import zipfile
 ROOT=Path(__file__).resolve().parent.parent
-output=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'iso/media-tools.zip'
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('output',type=Path,nargs='?',default=ROOT/'iso/media-tools.zip')
+parser.add_argument('--native-dir',type=Path,default=ROOT/'build/media-native')
+parser.add_argument('--require-native',action='store_true',help='require Windows x64 and Linux accelerators for release packaging')
+args=parser.parse_args()
+output=args.output
 output.parent.mkdir(parents=True,exist_ok=True)
 files={'index-media.py':'tools/index-media.py',
        'ohmy3do.ini':'ohmy3do.ini',
        'categories.example.json':'categories.example.json',
        'organize-library.py':'tools/organize-library.py',
        'library-catalog.py':'tools/library-catalog.py',
+       'sector-codec.py':'tools/sector-codec.py',
+       'sector-codec.c':'tools/sector-codec.c',
+       'build-sector-codec.py':'tools/build-sector-codec.py',
        'prepare-preview.py':'tools/prepare-preview.py',
        'resize-covers.py':'tools/resize-covers.py',
        'prepare-music.py':'tools/prepare-music.py',
        'README.txt':'assets/media-tools-README.txt','LICENSE':'LICENSE'}
+for name in ('sector-codec-win64.dll','sector-codec.so','sector-codec.dylib'):
+    path=args.native_dir/name
+    if path.is_file(): files[name]=path
+    elif args.require_native and name != 'sector-codec.dylib':
+        parser.error('Missing release accelerator: '+str(path))
 # Original moving test pattern lets the first console test skip FFmpeg setup.
 pixels=bytearray()
 for frame in range(24):

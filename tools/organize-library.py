@@ -33,6 +33,8 @@ def module(name):
 
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
+sector_tools = module('sector-codec')
+SCANNER_VERSION = '0.15.1'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -309,6 +311,28 @@ def identify(unit, games, stats, override=None, quick=False):
             return matches[0], 'checksum', 'Complete data-file SHA-1 and size match', []
         if len(matches) > 1:
             return None, 'ambiguous', 'Checksums identify multiple catalog releases', [g['_release_name'] for g in matches]
+        if len(data) == 1 and data[0].get('mode1_raw'):
+            raw = data[0]['mode1_raw']
+            key = (raw['size'], raw['sha1'].lower())
+            complete, partial = [], []
+            for game in games:
+                roms = game['roms']
+                if len(roms) == 1:
+                    if (int(roms[0]['size']), roms[0].get('sha1', '').lower()) == key:
+                        complete.append(game)
+                else:
+                    # DAT ordering is not a track number. Only a named first
+                    # track can identify data when the other tracks are absent.
+                    first = [r for r in roms if re.search(r'(?:\(Track\s+0*1\)|\btrack0*1)\.bin$', r.get('name',''), re.I)]
+                    if len(first) == 1 and (int(first[0]['size']),first[0].get('sha1','').lower()) == key:
+                        partial.append(game)
+            names = sorted({g['_release_name'] for g in complete + partial})
+            if len(names) > 1:
+                return None, 'ambiguous', 'Reconstructed data checksum identifies multiple releases; exact disc unresolved', names
+            if complete:
+                return complete[0], 'converted-checksum', 'Complete single-track SHA-1 and size match after MODE1/2048 reconstruction (LBA 0); source ISO unchanged', []
+            if partial:
+                return partial[0], 'data-track', 'Reconstructed first data-track SHA-1 and size match; remaining catalog tracks are absent and unverified; review required', []
     name = Path(unit.get('name_source', unit['source'])).stem
     exact = [g for g in games if name.casefold() in (g['_release_name'].casefold(), disc_stem(g['_release_name']).casefold())]
     if not exact:
@@ -465,6 +489,9 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         saved = {row['path']:row for row in json.loads(database.read_text(encoding='utf-8')).get('games',[])
                  if row.get('category') in CATEGORIES and row.get('category_reason') == 'Explicit category override'}
     games = release_records(catalog['games'])
+    raw_sizes = {int(r['size']) for g in games for r in g['roms']
+                 if re.fullmatch(r'[0-9a-fA-F]{40}',r.get('sha1',''))}
+    encoder, announced = None, False
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
     entries = []
     for number, unit in enumerate(units, 1):
@@ -475,9 +502,30 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
             row['reason'] = unit['error']
             entries.append(row)
             continue
-        stats = {file: fingerprint(relative_path(root, file), not quick or Path(file).suffix.lower() == '.cue') for file in unit['files']}
+        stats = {}
+        data_files = [f for f in unit['files'] if Path(f).suffix.lower() != '.cue']
+        for file in unit['files']:
+            path = relative_path(root,file)
+            size = path.stat().st_size
+            reconstruct = (not quick and len(data_files) == 1 and file == unit['source'] and path.suffix.lower() == '.iso'
+                           and size > 0 and size % 2048 == 0 and size//2048 <= sector_tools.MAX_SECTORS
+                           and size//2048*2352 in raw_sizes)
+            if reconstruct:
+                if not announced:
+                    encoder = sector_tools.native_encoder() or sector_tools.encode_python
+                    print('Converted ISO verification: ' + ('native accelerator' if encoder != sector_tools.encode_python
+                          else 'portable Python (slower; see build-sector-codec.py)'), flush=True)
+                    announced = True
+                stats[file] = sector_tools.digests(path,encoder)
+            else:
+                stats[file] = fingerprint(path, not quick or path.suffix.lower() == '.cue')
         game, confidence, reason, suggestions = identify(unit, games, stats,
             choice(overrides or {},unit), quick)
+        if any(f.get('mode1_raw') for f in stats.values()):
+            if confidence in ('filename','unmatched'):
+                reason += '; reconstructed Mode 1 checksum did not match the catalog'
+            elif confidence == 'manual':
+                reason += '; explicit choice takes precedence over checksum identification'
         if row['ignored_cues']:
             reason += '; redundant ISO CUE will be archived if this entry is applied'
         row.update(confidence=confidence, reason=reason, suggestions=suggestions)
@@ -504,7 +552,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         # pack-in labels. Keep those source labels instead of renaming it as the game.
         output_title = Path(unit.get('name_source', unit['source'])).stem if category == 'Bonus Discs' else canonical
         main = str(directory / (disc_stem(output_title) + Path(unit['source']).suffix.lower())) if directory else None
-        row.update(status='ready' if confidence in ('checksum', 'manual') or accept_names else 'review',
+        row.update(status='ready' if confidence in ('checksum', 'converted-checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
                    catalog_name=None if game.get('_edition_unresolved') else game['name'], variant=game['_variant'],
                    edition_unresolved=bool(game.get('_edition_unresolved')),
@@ -1026,8 +1074,8 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
     for row in rows:
         if row.get('category_review') or row.get('category') not in CATEGORIES or not isinstance(row.get('target'),str) or PurePosixPath(row['target']).parts[0] != row['category']:
             raise ValueError('Category is unresolved or does not match the destination; scan again with a category override')
-        if row['confidence'] not in ('checksum', 'manual') and not accept_names:
-            raise ValueError('Filename matches need --accept-name-matches after reviewing the plan')
+        if row['confidence'] not in ('checksum', 'converted-checksum', 'manual') and not accept_names:
+            raise ValueError('Filename and partial data-track matches need --accept-name-matches after reviewing the plan')
         relative_path(root, row['source'])
         if not row.get('moves') or row['moves'][0]['source'] != row['source'] or row['moves'][0]['target'] != row['target']:
             raise ValueError('Invalid move group in plan')
@@ -1291,6 +1339,7 @@ def cleanup_empty(root, apply=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--version',action='version',version='Oh My 3DO library organizer '+SCANNER_VERSION)
     parser.add_argument('--cache', type=Path, default=default_cache())
     commands = parser.add_subparsers(dest='command', required=True)
     report_command = commands.add_parser('report', help='rebuild the interactive HTML report from an existing plan without scanning')
@@ -1315,7 +1364,7 @@ def main():
     apply = commands.add_parser('apply', help='apply a reviewed plan and build covers, database and menu indices')
     apply.add_argument('usb_root', type=Path)
     apply.add_argument('--plan', type=Path, default=Path('library-plan.json'))
-    apply.add_argument('--accept-name-matches', action='store_true', help='also accept the unverified filename matches in this plan')
+    apply.add_argument('--accept-name-matches', action='store_true', help='also accept reviewed filename and partial data-track matches in this plan')
     apply.add_argument('--no-covers', action='store_true', help='skip all cover imports and downloads')
     apply.add_argument('--cover-dir', type=Path, help='import local front-box images instead of downloading covers; subfolders included')
     apply.add_argument('--preview-dir', type=Path, help='import matching clips downloaded with EmuMovies Sync or another source')

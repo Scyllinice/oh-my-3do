@@ -17,6 +17,9 @@
 !tools/index-media.py
 !tools/organize-library.py
 !tools/library-catalog.py
+!tools/sector-codec.py
+!tools/sector-codec.c
+!tools/build-sector-codec.py
 !tools/prepare-preview.py
 !tools/resize-covers.py
 !tools/generate-menu-music.py

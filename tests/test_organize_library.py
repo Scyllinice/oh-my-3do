@@ -78,6 +78,142 @@ class OrganizerTest(unittest.TestCase):
         self.assertEqual(organizer.region_of('Example (GB)'),{'Europe'})
         self.assertEqual(organizer.disc_of('Example (Disk 02 of 03)'),2)
 
+    def converted_game(self, name='Example (USA)', data=None):
+        data = data if data is not None else bytes(range(256))*16
+        raw = organizer.sector_tools.encode_python(data)
+        self.catalog['games'].append(game(name,[raw]))
+        return data,raw
+
+    def test_converted_iso_identifies_contents_over_incorrect_name_and_region(self):
+        data,raw = self.converted_game()
+        source='Japan/Entirely Wrong - Disc 9.iso'
+        path=self.put(source,data);before=snapshot(self.root)
+        plan=self.scan();row=plan['entries'][0]
+        self.assertEqual((row['confidence'],row['status']),('converted-checksum','ready'))
+        self.assertEqual(row['canonical'],'Example (USA)')
+        self.assertEqual(row['moves'][0]['fingerprint']['sha1'],hashlib.sha1(data).hexdigest())
+        self.assertEqual(row['moves'][0]['fingerprint']['mode1_raw']['sha1'],hashlib.sha1(raw).hexdigest())
+        self.assertEqual(before,snapshot(self.root))
+        tx=self.apply(plan)
+        self.assertEqual((self.root/row['target']).read_bytes(),data)
+        database=json.loads((self.root/'.ohmy3do/library.json').read_text())
+        self.assertEqual(database['games'][0]['identification'],'converted-checksum')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_converted_iso_distinguishes_revisions_and_unnamed_variants(self):
+        data,_=self.converted_game('Example (USA) (Rev 1)')
+        self.converted_game('Example (USA)',b'\x01'*4096)
+        self.put('Example (USA).iso',data)
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['canonical'],'Example (USA) (Rev 1)')
+        self.catalog['games'][0]['name']='Example (USA)'
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['confidence'],'converted-checksum')
+        self.assertIn('[Variant ',row['target'])
+
+    def test_converted_iso_ambiguous_releases_do_not_fall_back_to_filename(self):
+        data,_=self.converted_game('Example (USA)')
+        self.converted_game('Example (Japan)',data)
+        self.put('Example (USA).iso',data)
+        row=self.scan()['entries'][0]
+        self.assertEqual((row['status'],row['confidence']),('unmatched','ambiguous'))
+        self.assertEqual(set(row['suggestions']),{'Example (USA)','Example (Japan)'})
+        self.assertFalse(row['moves'])
+
+    def test_converted_iso_checksum_mismatch_remains_unverified(self):
+        data,_=self.converted_game()
+        changed=bytearray(data);changed[99]^=1
+        self.put('Example (USA).iso',changed)
+        row=self.scan()['entries'][0]
+        self.assertEqual((row['status'],row['confidence']),('review','filename'))
+        self.assertIn('not verified',row['reason'])
+
+    def test_converted_iso_only_named_first_track_match_requires_review(self):
+        data,raw=self.converted_game()
+        self.catalog['games']=[game('Example (USA)',[raw,b'audio'])]
+        self.catalog['games'][0]['roms'][0]['name']='Example (USA) (Track 01).bin'
+        self.catalog['games'][0]['roms'][1]['name']='Example (USA) (Track 02).bin'
+        self.put('unknown.iso',data)
+        plan=self.scan();row=plan['entries'][0]
+        self.assertEqual((row['status'],row['confidence']),('review','data-track'))
+        self.assertIn('absent and unverified',row['reason'])
+        tx=self.apply(plan)
+        self.assertTrue((self.root/'unknown.iso').exists())
+        tx.undo()
+        tx=self.apply(plan,names=True)
+        self.assertTrue((self.root/row['target']).exists())
+        self.assertEqual(len(row['moves']),1)
+        tx.undo()
+        self.catalog['games'][0]['roms'][0]['name']='Example (Track 02).bin'
+        self.assertEqual(self.scan()['entries'][0]['status'],'unmatched')
+
+    def test_reconstructed_shared_data_tracks_never_guess_release(self):
+        data,raw=self.converted_game()
+        self.catalog['games']=[game('Example (USA)',[raw,b'audio 1']),
+                               game('Example (USA) (Rev 1)',[raw,b'audio 2'])]
+        for g in self.catalog['games']:
+            g['roms'][0]['name']='Example (Track 1).bin'
+            g['roms'][1]['name']='Example (Track 2).bin'
+        self.put('Example (USA).iso',data)
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['confidence'],'ambiguous')
+        self.assertFalse(row['moves'])
+
+    def test_quick_and_impossible_sizes_never_reconstruct(self):
+        data,_=self.converted_game()
+        self.put('Example (USA).iso',data)
+        with mock.patch.object(organizer.sector_tools,'digests',side_effect=AssertionError('must skip')):
+            self.assertEqual(self.scan(quick=True)['entries'][0]['confidence'],'filename')
+            self.put('Example (USA).iso',data+b'\0'*2048)
+            self.assertEqual(self.scan()['entries'][0]['confidence'],'filename')
+
+    def test_raw_checksum_and_explicit_override_precedence_remain(self):
+        data,raw=self.converted_game()
+        self.put('raw.iso',raw)
+        self.assertEqual(self.scan()['entries'][0]['confidence'],'checksum')
+        (self.root/'raw.iso').unlink()
+        self.put('cooked.iso',data)
+        self.converted_game('Manual Choice (USA)',b'\2'*4096)
+        row=self.scan(overrides={'cooked.iso':'Manual Choice (USA)'})['entries'][0]
+        self.assertEqual((row['confidence'],row['canonical']),('manual','Manual Choice (USA)'))
+
+    def test_four_converted_discs_from_separate_folders_consolidate_and_undo(self):
+        for disc in range(1,5):
+            data,_=self.converted_game(f'Example (USA) (Disc {disc})',bytes([disc])*4096)
+            self.put(f'Unsorted/Separate {disc}/unknown.iso',data)
+        before=snapshot(self.root)
+        plan=self.scan()
+        self.assertEqual({r['status'] for r in plan['entries']},{'ready'})
+        folders={Path(r['target']).parent.as_posix() for r in plan['entries']}
+        self.assertEqual(folders,{'Games/USA/Example (USA)'})
+        tx=self.apply(plan)
+        for disc in range(1,5):
+            self.assertEqual((self.root/f'Games/USA/Example (USA)/Example (USA) (Disc {disc}).iso').read_bytes(),bytes([disc])*4096)
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_converted_iso_redundant_cue_uses_same_checksum_path(self):
+        data,_=self.converted_game()
+        self.put('Old/unknown.iso',data)
+        self.put('Old/unknown.cue',b'FILE "unknown.iso" BINARY\nTRACK 01 MODE1/2048\nINDEX 01 00:00:00\n')
+        row=self.scan()['entries'][0]
+        self.assertEqual(row['confidence'],'converted-checksum')
+        self.assertEqual(row['ignored_cues'],['Old/unknown.cue'])
+
+    def test_useful_cue_layout_is_not_reconstructed_as_a_plain_iso(self):
+        data,_=self.converted_game()
+        self.put('Old/Example (USA).iso',data)
+        self.put('Old/Example (USA).cue',b'FILE "Example (USA).iso" BINARY\nTRACK 01 MODE1/2048\nPREGAP 00:02:00\nINDEX 01 00:00:00\n')
+        with mock.patch.object(organizer.sector_tools,'digests',side_effect=AssertionError('must retain meaningful CUE layout')):
+            row=self.scan()['entries'][0]
+        self.assertTrue(row['source'].endswith('.cue'))
+        self.assertEqual(row['confidence'],'filename')
+
+    def test_converted_scan_without_accelerator_uses_portable_encoder(self):
+        data,_=self.converted_game()
+        self.put('unknown.iso',data)
+        with mock.patch.object(organizer.sector_tools,'native_encoder',return_value=None):
+            self.assertEqual(self.scan()['entries'][0]['confidence'],'converted-checksum')
+
     def test_review_groups_separate_filename_matches_choices_and_file_errors(self):
         cases=[({'status':'review','confidence':'filename'},'matched'),({'status':'ready'},'matched'),
             ({'status':'unmatched','confidence':'ambiguous'},'decisions'),({'status':'category-review'},'decisions'),

@@ -42,6 +42,10 @@ __pycache__/
 *.py[cod]
 *.o
 *.obj
+*.dll
+*.so
+*.dylib
+*.lib
 *.a
 *.d
 *.log

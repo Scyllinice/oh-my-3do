@@ -1,4 +1,4 @@
-Oh My 3DO media tools
+Oh My 3DO media tools (scanner v0.15.1)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -77,9 +77,10 @@ Apply the reviewed filename matches, download covers, and build the database:
   py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches
 
 Without --quick, scan reads the entire data files and compares their SHA-1 and
-size to the DAT. Checksum/manual matches can be applied without accepting name
-matches. Converted ISOs often differ from raw Redump hashes. Filename matches
-are unverified; ambiguous or fuzzy suggestions never move automatically.
+size to the DAT, including reconstruction for standard converted ISOs (below).
+Checksum/manual matches can be applied without accepting name matches.
+Filename matches are unverified; ambiguous or fuzzy suggestions never move
+automatically.
 
 Variant labels (Alt, Rev, Beta, etc.) are retained even when the DAT places them
 only in track filenames. Distinct dumps with the same name get stable filenames
@@ -105,6 +106,34 @@ Resolve a match with a PC-side overrides.json object, for example:
   {"Unsorted/game.iso": "Doom (USA, Japan)"}
 Then scan again with --overrides overrides.json. --dat can select a local
 clrmamepro-format DAT; --launchbox selects an existing Metadata.zip.
+
+VERIFY CONVERTED ISOS
+
+Run a full scan into a separate plan without --quick or --overrides:
+  py organize-library.py scan M:/ --plan verified-plan.json
+Whole-sector MODE1/2048 ISOs with plausible catalog track sizes are hashed as
+both their original bytes and reconstructed MODE1/2352 sectors in a single
+read. Reconstruction is in memory; no images are changed or written.
+  checksum: original data-file size and SHA-1 match the catalog.
+  converted-checksum: complete single-track checksum matches after reconstruction.
+  data-track: only the first track matches; remaining tracks are absent/unverified.
+Checksum and converted-checksum matches are ready. Partial data-track matches
+require review and --accept-name-matches. Shared checksums remain ambiguous.
+Reconstruction assumes standard Mode 1 sectors starting at LBA 0. It does not
+guess offsets, restore audio, repair modified images or trim/pad tracks.
+Explicit overrides still take precedence and are labeled manual, so omit them
+when checking guesses. --quick skips all image checksums and reconstruction.
+
+Keep the supplied sector-codec-win64.dll / sector-codec.so beside the Python
+tools for native acceleration on Windows x64 / Linux x64. No extra packages
+or compiler are needed. Other platforms fall back to slower portable Python;
+with a C compiler installed, build locally with:
+  python3 build-sector-codec.py --output .
+The helpers are PC tools and do not require a menu ISO update.
+
+Matched discs with the same category, region and game/edition title consolidate
+into a common game folder even when their source folders differ. Disc numbers
+stay in filenames. Conflicts and unmatched discs still require review.
 
 CUE companions move and are renamed together; FILE references are updated.
 Only sibling-file references are supported. Shared/missing tracks, ambiguous
