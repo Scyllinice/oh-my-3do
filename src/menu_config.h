@@ -15,7 +15,7 @@ typedef struct MenuConfig {
     int remember_position;
     int recent_games;
     int video_previews;
-    int menu_music;
+    int preview_sound;
 } MenuConfig;
 
 /* Reads the E7 data FIFO and validates its status reply, exactly 2048 bytes. */

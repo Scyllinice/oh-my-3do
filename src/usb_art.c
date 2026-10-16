@@ -9,7 +9,7 @@ static unsigned long word(const unsigned char *p)
            ((unsigned long)p[2] << 8) | p[3];
 }
 
-unsigned long usb_art_crc32(const unsigned char *data, size_t size)
+unsigned long usb_art_crc32_update(unsigned long crc, const unsigned char *data, size_t size)
 {
     static const unsigned long table[16] = {
         0x00000000UL, 0x1db71064UL, 0x3b6e20c8UL, 0x26d930acUL,
@@ -17,13 +17,16 @@ unsigned long usb_art_crc32(const unsigned char *data, size_t size)
         0xedb88320UL, 0xf00f9344UL, 0xd6d6a3e8UL, 0xcb61b38cUL,
         0x9b64c2b0UL, 0x86d3d2d4UL, 0xa00ae278UL, 0xbdbdf21cUL
     };
-    unsigned long crc=0xffffffffUL;
     size_t i;
     for (i=0;i<size;++i) {
         crc ^= data[i];
         crc=(crc>>4)^table[crc&15]; crc=(crc>>4)^table[crc&15];
     }
-    return crc^0xffffffffUL;
+    return crc;
+}
+unsigned long usb_art_crc32(const unsigned char *data, size_t size)
+{
+    return usb_art_crc32_update(0xffffffffUL,data,size)^0xffffffffUL;
 }
 
 static int exchange(Ode *ode, unsigned char *packet, unsigned char *reply, size_t expected)

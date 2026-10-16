@@ -587,7 +587,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.cover_image(images/'Example.png')
         (images/'Example.mp4').write_bytes(b'fake clip')
         before=snapshot(self.root)
-        def prepare(rows,directory,start):
+        def prepare(rows,directory,start,*options):
             rows[0]['preview']='sample.3dv'
             return {'sample.3dv':b'clip'},[]
         with mock.patch.object(organizer,'prepare_previews',side_effect=prepare) as previews:
@@ -603,7 +603,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         before=snapshot(self.root)
         converter=organizer.module('prepare-preview')
         def convert(source,target,**kwargs):
-            self.assertEqual(kwargs,dict(start=5))
+            self.assertEqual(kwargs,dict(start=5,duration=None,sound=True))
             target.write_bytes(b'converted clip')
         with mock.patch.object(converter,'convert',side_effect=convert) as conversion, mock.patch.object(organizer,'module',return_value=converter):
             tx=organizer.apply_plan(self.root,self.scan(),self.cache,covers=False,preview_dir=clips,preview_start=5)
@@ -645,6 +645,22 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertEqual(list(organizer.index_tools.existing_index(self.root/'previews').values()),['Example (USA).3dv'])
         tx.undo();self.assertEqual(before,snapshot(self.root))
 
+    def test_explicit_preview_upgrade_preserves_old_media_and_undoes(self):
+        clips=self.preview_fixture();(clips/'Example.mp4').write_bytes(b'clip source')
+        self.put('previews/Example (USA).3dv',b'old silent clip')
+        before=snapshot(self.root)
+        converter=organizer.module('prepare-preview')
+        def convert(source,target,**kwargs):
+            self.assertEqual(kwargs,dict(start=0,duration='30',sound=True))
+            target.write_bytes(b'new sound clip')
+        with mock.patch.object(converter,'convert',side_effect=convert),mock.patch.object(organizer,'module',return_value=converter):
+            tx=organizer.apply_plan(self.root,self.scan(),self.cache,covers=False,preview_dir=clips,preview_duration='30',replace_previews=True)
+        mapping=organizer.index_tools.existing_index(self.root/'previews')
+        self.assertEqual(len(mapping),1)
+        self.assertNotEqual(next(iter(mapping.values())),'Example (USA).3dv')
+        self.assertEqual((self.root/'previews/Example (USA).3dv').read_bytes(),b'old silent clip')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
     def test_preview_failed_conversion_and_bad_directory(self):
         clips=self.preview_fixture();(clips/'Example.mp4').write_bytes(b'bad video')
         converter=organizer.module('prepare-preview')
@@ -676,12 +692,12 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         index=organizer.index_tools.existing_index(self.root/'previews')
         clip=self.root/'previews'/next(iter(index.values()))
         data=clip.read_bytes()
-        self.assertEqual(data[:8],b'OM3DVID1')
-        self.assertEqual(data[-8:],b'END3DV01')
-        self.assertEqual(len(data),24+24*64*80*2+8)
+        self.assertEqual(data[:8],b'OM3DVID2')
+        self.assertEqual(data[-8:],b'END3DV02')
+        self.assertEqual(len(data),40+int.from_bytes(data[12:16],"big")+8)
         player=ROOT/'build/test_usb_media'
         if player.exists():
-            subprocess.run([str(player),'video',str(clip)],check=True,stdout=subprocess.PIPE)
+            subprocess.run([str(player),'video2',str(clip)],check=True,stdout=subprocess.PIPE)
         tx.undo();self.assertEqual(before,snapshot(self.root))
 
     def test_iso_checksum_identification_database_history_and_undo(self):

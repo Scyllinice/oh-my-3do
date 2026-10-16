@@ -3,48 +3,118 @@
 #include "../vendor/pngle/pngle.h"
 #include <stdlib.h>
 #include <string.h>
+#include "../vendor/pngle/miniz.h"
+#ifdef OH3DO_SDK
+#include "mem.h"
+#endif
 
 static unsigned long word(const unsigned char *p)
 {
     return ((unsigned long)p[0]<<24)|((unsigned long)p[1]<<16)|((unsigned long)p[2]<<8)|p[3];
 }
+static unsigned char *audio_memory(unsigned long bytes)
+{
+#ifdef OH3DO_SDK
+    return (unsigned char *)AllocMem((int32)bytes,MEMTYPE_AUDIO);
+#else
+    return (unsigned char *)malloc((size_t)bytes);
+#endif
+}
 void usb_preview_free(UsbPreview *preview)
 {
-    free(preview->pixels); memset(preview,0,sizeof(*preview));
+#ifdef OH3DO_SDK
+    if (preview->audio) FreeMem(preview->audio,(int32)preview->audio_bytes);
+#else
+    free(preview->audio);
+#endif
+    free(preview->pixels); free(preview->frame_buffer); free(preview->decoder);
+    memset(preview,0,sizeof(*preview));
+}
+int usb_preview_frame(UsbPreview *preview,unsigned int frame,unsigned char *pixels)
+{
+    unsigned long begin,end;
+    size_t in_bytes,out_bytes=USB_ART_PIXELS;
+    tinfl_status status;
+    tinfl_decompressor *decoder=(tinfl_decompressor *)preview->decoder;
+    if (!preview->pixels || frame>=preview->frames || !pixels) return -1;
+    if (preview->version==1) {
+        memcpy(pixels,preview->pixels+frame*USB_ART_PIXELS,USB_ART_PIXELS); return 0;
+    }
+    if (preview->version!=2 || !decoder) return -1;
+    begin=word(preview->pixels+frame*4); end=word(preview->pixels+(frame+1)*4);
+    if (begin<(preview->frames+1)*4UL || begin>=end || end>preview->video_bytes) return -1;
+    in_bytes=(size_t)(end-begin); tinfl_init(decoder);
+    status=tinfl_decompress(decoder,preview->pixels+begin,&in_bytes,pixels,pixels,&out_bytes,
+                            TINFL_FLAG_PARSE_ZLIB_HEADER|TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+    return status==TINFL_STATUS_DONE && out_bytes==USB_ART_PIXELS && in_bytes==(size_t)(end-begin) ? 0 : -1;
+}
+static int preview_bytes(Ode *ode,OdeReadBuffer reader,unsigned char *data,unsigned long bytes,
+                         unsigned long *crc,MediaCancel cancel,void *context)
+{
+    unsigned long pos=0;
+    while (pos<bytes) {
+        size_t n=bytes-pos>2048 ? 2048 : (size_t)(bytes-pos);
+        if ((cancel && cancel(context)) || usb_file_read(ode,reader,data+pos,n,0)<0) return -1;
+        *crc=usb_art_crc32_update(*crc,data+pos,n); pos+=n;
+    }
+    return 0;
 }
 int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
                      UsbPreview *preview, MediaCancel cancel, void *context)
 {
-    unsigned char header[24];
+    unsigned char header[40];
     UsbPreview next;
-    unsigned long bytes;
-    size_t pos;
+    unsigned long bytes,crc=0xffffffffUL;
+    unsigned int frame;
     char path[128];
-    int result = -1;
+    int result=-1;
     memset(&next,0,sizeof(next));
     if (!usb_media_filename(filename) || menu_path_compare(filename+strlen(filename)-4,".3dv")) return -1;
     strcpy(path,"previews/"); strcat(path,filename);
-    if (usb_file_open(ode,path) < 0) return -1;
-    if (usb_file_read(ode,reader,header,24,1) < 0 || memcmp(header,"OM3DVID1",8) ||
-        header[8] || header[9] != 64 || header[10] || header[11] != 80) goto done;
-    next.frames = header[20]*256U+header[21]; next.fps = header[22]*256U+header[23];
-    bytes = word(header+12);
-    if (!next.frames || next.frames > USB_PREVIEW_MAX_FRAMES || !next.fps || next.fps > 12 ||
-        bytes != next.frames * (unsigned long)USB_ART_PIXELS) goto done;
-    next.pixels = (unsigned char *)malloc((size_t)bytes);
-    if (!next.pixels) goto done;
-    for (pos = 0; pos < (size_t)bytes;) {
-        size_t n = bytes-pos > 2048 ? 2048 : (size_t)bytes-pos;
-        if ((cancel && cancel(context)) || usb_file_read(ode,reader,next.pixels+pos,n,0) < 0) goto done;
-        pos += n;
+    if (usb_file_open(ode,path)<0) return -1;
+    if (usb_file_read(ode,reader,header,24,1)<0 ||
+        (memcmp(header,"OM3DVID1",8) && memcmp(header,"OM3DVID2",8)) ||
+        header[8] || header[9]!=64 || header[10] || header[11]!=80) goto done;
+    next.version=header[7]=='2' ? 2 : 1;
+    next.frames=header[20]*256U+header[21]; next.fps=header[22]*256U+header[23];
+    bytes=word(header+12);
+    if (!next.frames || !next.fps || next.fps>12) goto done;
+    if (next.version==1) {
+        if (next.frames>USB_PREVIEW_MAX_FRAMES || bytes!=next.frames*(unsigned long)USB_ART_PIXELS) goto done;
+        next.video_bytes=bytes;
+    } else {
+        unsigned long expected;
+        if (next.frames>USB_PREVIEW_V2_MAX_FRAMES || next.frames>next.fps*120U || bytes>USB_PREVIEW_MAX_BYTES ||
+            usb_file_read(ode,reader,header+24,16,1)<0) goto done;
+        next.video_bytes=word(header+24); next.audio_bytes=word(header+28);
+        next.audio_rate=word(header+32); next.audio_frames=word(header+36);
+        if (next.video_bytes>bytes || next.audio_bytes!=bytes-next.video_bytes || next.video_bytes<=(next.frames+1)*4UL) goto done;
+        if (next.audio_bytes) {
+            expected=(((next.frames*11025UL+next.fps-1)/next.fps)+3)&~3UL;
+            if (next.audio_rate!=11025 || next.audio_bytes!=next.audio_frames || next.audio_frames!=expected) goto done;
+        } else if (next.audio_rate || next.audio_frames) goto done;
+        next.decoder=malloc(sizeof(tinfl_decompressor)); next.frame_buffer=(unsigned char *)malloc(USB_ART_PIXELS);
+        if (!next.decoder || !next.frame_buffer) goto done;
     }
-    if (cancel && cancel(context)) goto done;
-    if (usb_art_crc32(next.pixels,(size_t)bytes) != word(header+16) ||
-        usb_file_verify(ode,reader,(const unsigned char *)"END3DV01",8) < 0) goto done;
-    result = 0;
+    next.pixels=(unsigned char *)malloc((size_t)next.video_bytes);
+    if (!next.pixels) goto done;
+    if (preview_bytes(ode,reader,next.pixels,next.video_bytes,&crc,cancel,context)<0) goto done;
+    if (next.audio_bytes) {
+        next.audio=audio_memory(next.audio_bytes);
+        if (!next.audio || preview_bytes(ode,reader,next.audio,next.audio_bytes,&crc,cancel,context)<0) goto done;
+    }
+    if ((cancel && cancel(context)) || (crc^0xffffffffUL)!=word(header+16) ||
+        usb_file_verify(ode,reader,(const unsigned char *)(next.version==1 ? "END3DV01" : "END3DV02"),8)<0) goto done;
+    if (next.version==2) {
+        if (word(next.pixels)!=(next.frames+1)*4UL || word(next.pixels+next.frames*4)!=next.video_bytes) goto done;
+        for (frame=0;frame<next.frames;++frame) {
+            if ((cancel && cancel(context)) || usb_preview_frame(&next,frame,next.frame_buffer)<0) goto done;
+        }
+    }
+    result=0;
 done:
-    if (usb_file_close(ode) < 0) result = -1;
-    if (!result) { usb_preview_free(preview); *preview = next; memset(&next,0,sizeof(next)); }
+    if (usb_file_close(ode)<0) result=-1;
+    if (!result) { usb_preview_free(preview); *preview=next; memset(&next,0,sizeof(next)); }
     usb_preview_free(&next);
     return result;
 }

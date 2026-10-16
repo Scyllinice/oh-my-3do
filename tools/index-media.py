@@ -185,6 +185,11 @@ def index(root):
         rows = []
         for folded, game, stem in sorted(games):
             name=assets.get(stem,previous.get(folded))
+            # Explicit preview imports can supersede an older same-name clip.
+            # Keep that association across indexing without deleting originals.
+            associated=previous.get(folded)
+            if folder == 'previews' and associated and (directory/associated).is_file():
+                name=associated
             if not name or not (directory/name).is_file() or (directory/name).is_symlink():
                 continue
             if Path(name).suffix.lower() not in ((".png",".3dc") if folder=="covers" else (".3dv",)):

@@ -118,7 +118,7 @@ static void parser(void)
 
 static void readable_files(void)
 {
-    static const char settings[]="folder_workaround=1\r\nusb_covers=1\r\nvideo_previews=0\r\nscreen_margin=8\r\nlarge_titles=0\r\ntheme=0\r\nremember_position=1\r\nrecent_games=1\r\nmenu_music=0\r\n";
+    static const char settings[]="folder_workaround=1\r\nusb_covers=1\r\nvideo_previews=0\r\nscreen_margin=8\r\nlarge_titles=0\r\ntheme=0\r\nremember_position=1\r\nrecent_games=1\r\npreview_sound=0\r\n";
     char data[MENU_CONFIG_BYTES+1];
     size_t used=sizeof(settings)-1;
     MenuConfig c;
@@ -126,10 +126,10 @@ static void readable_files(void)
     memset(data,' ',MENU_CONFIG_BYTES); data[MENU_CONFIG_BYTES]=0;
     memcpy(data,settings,used); memcpy(data+used,MENU_CONFIG_END "\r\n",sizeof(MENU_CONFIG_END)+1);
     assert(!menu_config_parse(&c,data,MENU_CONFIG_BYTES));
-    assert(c.folder_workaround && c.screen_margin==8 && !c.menu_music);
+    assert(c.folder_workaround && c.screen_margin==8 && !c.preview_sound);
     /* Exact-size printable files go through the real startup USB loader. */
     setup(&fake,&ode); fake.file=data;
-    assert(!menu_config_load(&ode,read_buffer,&c) && c.screen_margin==8 && !c.menu_music);
+    assert(!menu_config_load(&ode,read_buffer,&c) && c.screen_margin==8 && !c.preview_sound);
     /* Text after the boundary cannot overwrite settings above it. */
     memcpy(data+used+sizeof(MENU_CONFIG_END)+1,"folder_workaround=0\r\n",21);
     assert(!menu_config_parse(&c,data,MENU_CONFIG_BYTES) && c.folder_workaround);
@@ -154,10 +154,13 @@ static void display_config(void)
     assert(c.folder_workaround && c.screen_margin == 12 && c.large_titles && c.theme == 2 && c.usb_covers);
     assert(menu_config_parse(&c,"screen_margin=13",16) < 0 && !c.folder_workaround && !c.screen_margin);
     assert(menu_config_parse(&c,"theme=3",7) < 0);
-    assert(c.remember_position && c.recent_games && !c.video_previews && c.menu_music);
-    assert(!menu_config_parse(&c,"[audio]\nmenu_music=0\n",strlen("[audio]\nmenu_music=0\n")) && !c.menu_music);
-    assert(menu_config_parse(&c,"menu_music=2",strlen("menu_music=2")) < 0);
-    assert(menu_config_parse(&c,"menu_music=0\nmenu_music=1",strlen("menu_music=0\nmenu_music=1")) < 0);
+    assert(!menu_config_parse(&c,"[audio]\nmenu_music=1\n",strlen("[audio]\nmenu_music=1\n")) && c.preview_sound);
+    assert(!menu_config_parse(&c,"[audio]\nmenu_music=0\npreview_sound=0\n",strlen("[audio]\nmenu_music=0\npreview_sound=0\n")) && !c.preview_sound);
+    menu_config_defaults(&c);
+    assert(c.remember_position && c.recent_games && !c.video_previews && c.preview_sound);
+    assert(!menu_config_parse(&c,"[audio]\npreview_sound=0\n",strlen("[audio]\npreview_sound=0\n")) && !c.preview_sound);
+    assert(menu_config_parse(&c,"preview_sound=2",strlen("preview_sound=2")) < 0);
+    assert(menu_config_parse(&c,"preview_sound=0\npreview_sound=1",strlen("preview_sound=0\npreview_sound=1")) < 0);
     assert(!menu_config_parse(&c,"[artwork]\nvideo_previews=1\n",strlen("[artwork]\nvideo_previews=1\n")) && c.video_previews);
     assert(menu_config_parse(&c,"video_previews=2",strlen("video_previews=2")) < 0);
     {

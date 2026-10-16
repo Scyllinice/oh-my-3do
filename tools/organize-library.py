@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.15.3'
+SCANNER_VERSION = '0.16.0'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -1051,7 +1051,7 @@ def prepare_local_covers(rows, directory):
     return prepared, warnings
 
 
-def prepare_previews(rows, directory, start=0):
+def prepare_previews(rows, directory, start=0, duration=None, sound=True, replace=False):
     """Import local, already downloaded clips; ambiguous matches stay untouched."""
     clips = local_media_files(directory, ('.mp4', '.avi', '.mkv', '.mov', '.webm'))
     if not 0 <= start <= 86400:
@@ -1060,7 +1060,7 @@ def prepare_previews(rows, directory, start=0):
     converter = module('prepare-preview')
     prepared, warnings, converted = {}, [], {}
     for row in rows:
-        if row.get('preview'):
+        if row.get('preview') and not replace:
             continue
         candidates = local_media_matches(row, clips)
         if len(candidates) != 1:
@@ -1071,10 +1071,10 @@ def prepare_previews(rows, directory, start=0):
             if clip not in converted:
                 # Conversion happens on the PC before any USB changes. Include
                 # content and settings in the name so reruns never replace art.
-                key = hashlib.sha256((digest(clip) + f':{start}:6:24:1').encode()).hexdigest()[:16]
+                key = hashlib.sha256((digest(clip) + f':{start}:6:{duration or "full"}:{int(sound)}:2').encode()).hexdigest()[:16]
                 with tempfile.TemporaryDirectory(prefix='oh3do-preview-') as temp:
                     target = Path(temp)/'clip.3dv'
-                    converter.convert(clip, target, start=start)
+                    converter.convert(clip, target, start=start, duration=duration, sound=sound)
                     converted[clip] = (key, target.read_bytes())
             key, content = converted[clip]
             basename = 'clip-' + key + '.3dv'
@@ -1219,7 +1219,7 @@ def register_disc(root, source, title, category, region='Unknown', apply=False):
     return row
 
 
-def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False, preview_dir=None, preview_start=0, cover_dir=None):
+def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False, preview_dir=None, preview_start=0, cover_dir=None, preview_duration=None, preview_sound=True, replace_previews=False):
     if plan.get('schema') != 2 or plan.get('root') != str(root):
         raise ValueError('Plan version or USB root does not match; scan this drive again')
     if cover_dir is not None and not covers:
@@ -1275,7 +1275,7 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
     for row in rows:
         row['cover'] = row_asset(associations['covers'], row)
         row['preview'] = row_asset(associations['previews'], row)
-    preview_files, preview_warnings = prepare_previews(rows, preview_dir, preview_start) if preview_dir is not None else ({}, [])
+    preview_files, preview_warnings = prepare_previews(rows, preview_dir, preview_start, preview_duration, preview_sound, replace_previews) if preview_dir is not None else ({}, [])
     if cover_dir is not None:
         prepared, warnings = prepare_local_covers(rows, cover_dir)
     else:
@@ -1509,6 +1509,9 @@ def main():
     apply.add_argument('--cover-dir', type=Path, help='import local front-box images instead of downloading covers; subfolders included')
     apply.add_argument('--preview-dir', type=Path, help='import matching clips downloaded with EmuMovies Sync or another source')
     apply.add_argument('--preview-start', type=float, default=0, help='clip offset in seconds (default: 0); requires --preview-dir')
+    apply.add_argument('--preview-duration', default=None, help='full (default, with 30s RAM fallback), or seconds up to 120; requires --preview-dir')
+    apply.add_argument('--preview-silent', action='store_true', help='omit preview audio; requires --preview-dir')
+    apply.add_argument('--replace-previews', action='store_true', help='import new previews even when an association exists; keep old media files')
     apply.add_argument('--offline', action='store_true')
     undo = commands.add_parser('undo', help='restore a transaction; refuses to overwrite later edits')
     undo.add_argument('usb_root', type=Path)
@@ -1566,9 +1569,9 @@ def main():
             print(f'Batch matches: {groups["matched"]}; choices: {groups["decisions"]}; unidentified: {groups["unidentified"]}; file problems: {groups["problems"]}. Unresolved entries stay in place and do not block batch apply.')
         elif args.command == 'apply':
             plan = json.loads(args.plan.read_text(encoding='utf-8'))
-            if args.preview_start and args.preview_dir is None:
-                raise ValueError('--preview-start requires --preview-dir')
-            apply_plan(root, plan, cache, not args.no_covers, args.offline, args.accept_name_matches, args.preview_dir, args.preview_start, args.cover_dir)
+            if (args.preview_start or args.preview_duration or args.preview_silent or args.replace_previews) and args.preview_dir is None:
+                raise ValueError('Preview options require --preview-dir')
+            apply_plan(root, plan, cache, not args.no_covers, args.offline, args.accept_name_matches, args.preview_dir, args.preview_start, args.cover_dir, args.preview_duration, not args.preview_silent, args.replace_previews)
         else:
             tx = Transaction(root, path=args.journal)
             tx.undo()

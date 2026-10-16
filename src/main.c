@@ -3,8 +3,7 @@
 #include "menu_config.h"
 #include "menu_ui.h"
 #include "ui_font.h"
-#include "menu_music.h"
-#include "usb_music.h"
+#include "preview_audio.h"
 #include "usb_art.h"
 #include "cover_cache.h"
 #include "usb_media.h"
@@ -30,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.15.0"
+#define MENU_VERSION "0.16.0"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -68,7 +67,7 @@ typedef struct UiText {
 
 typedef struct Menu {
     ScreenContext screen;
-    MenuMusic music;
+    PreviewAudio preview_audio;
     CCB *splash;
     int booting;
     LibraryCatalog catalog;
@@ -76,8 +75,6 @@ typedef struct Menu {
     size_t search_matches[LIBRARY_CATALOG_MAX], search_count;
     unsigned long search_redraw;
     u32 suppress_buttons;
-    int usb_music_result;
-    u32 music_ignore_buttons;
     UiText text_cache[UI_TEXT_CACHE];
     unsigned int text_cursor;
     int text_style, text_failed;
@@ -224,6 +221,7 @@ static unsigned long now_ms(Menu *menu)
 
 static void stop_preview(Menu *menu)
 {
+    preview_audio_close(&menu->preview_audio);
     if (menu->preview_cel) UnloadCel(menu->preview_cel);
     menu->preview_cel = NULL;
     usb_preview_free(&menu->preview);
@@ -286,7 +284,6 @@ static void draw_cel(Menu *menu, CCB *cel)
     copy.ccb_Flags |= CCB_LAST;
     DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen], &copy);
 }
-static void sync_music(Menu *menu);
 static void text(Menu *menu,int x,int y,const char *string,Color color)
 {
     UiText *cached;
@@ -589,9 +586,19 @@ static void draw(Menu *menu)
         rounded(menu,14,54,94,132,BG); rounded(menu,14,52,94,132,PANEL);
         if (menu->preview_cel && menu->preview.pixels) {
             unsigned long elapsed=now-menu->preview_since;
-            unsigned int frame=(unsigned int)(((elapsed/1000)*menu->preview.fps+((elapsed%1000)*menu->preview.fps)/1000)%menu->preview.frames);
-            if (frame!=menu->preview_frame) { memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.pixels+frame*USB_ART_PIXELS,USB_ART_PIXELS); menu->preview_frame=frame; }
-            media_cel(menu,menu->preview_cel);
+            unsigned long tick=(elapsed/1000)*menu->preview.fps+((elapsed%1000)*menu->preview.fps)/1000;
+            unsigned int frame;
+            if (tick>=menu->preview.frames) {
+                /* Restart both timelines at the same VBL; audio never drifts across loops. */
+                menu->preview_since=now; tick=0;
+                if (menu->preview_audio.status==1) preview_audio_restart(&menu->preview_audio);
+            }
+            frame=(unsigned int)tick;
+            if (frame!=menu->preview_frame) {
+                if (usb_preview_frame(&menu->preview,frame,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) stop_preview(menu);
+                else menu->preview_frame=frame;
+            }
+            if (menu->preview_cel) media_cel(menu,menu->preview_cel);
         } else if (menu->cover) media_cel(menu,menu->cover);
         else media_placeholder(menu,chosen ? chosen->is_directory : (menu->listing.has_parent && !selected));
         label(menu,24,168,menu->preview_cel ? "Playing preview" : (chosen && chosen->is_directory ? "Folder" : "Game library"),MUTED,UI_FONT_SMALL);
@@ -726,60 +733,6 @@ static int read_usb_cover(void *context)
     if (!menu_path_compare(read->filename+strlen(read->filename)-4,".png"))
         return usb_png_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
     return usb_legacy_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
-}
-
-static unsigned char *music_allocate(void *context,const UsbMusicSpec *spec)
-{
-    return menu_music_buffer(&((Menu *)context)->music,spec->frames,spec->rate);
-}
-static int music_cancel(void *context)
-{
-    Menu *menu=(Menu *)context;
-    ControlPadEventData pad;
-    if (GetControlPad(1,0,&pad)>=0) {
-        menu->music_ignore_buttons &= pad.cped_ButtonBits;
-        if (pad.cped_ButtonBits & ~menu->music_ignore_buttons) menu->media_cancelled=1;
-    }
-    return menu->media_cancelled;
-}
-static int read_usb_music(void *context)
-{
-    Menu *menu=(Menu *)context;
-    return usb_music_load(&menu->ode,ode_bus_read_buffer,music_allocate,menu,music_cancel,menu);
-}
-static void sync_music(Menu *menu)
-{
-    ArtRouteStep route[MAX_DEPTH];
-    const char *message;
-    unsigned int i;
-    int result=-1, volume=1;
-    ControlPadEventData pad;
-    if (!menu->config.menu_music || !(menu->demo || menu->ready) ||
-        menu->config_result==2 || menu->launching || menu->bus.timed_out || menu->ode.navigation_failed) { menu_music_close(&menu->music); return; }
-    if (menu->music.status) return;
-    if (!menu->depth)
-        for (i=0;i<menu->listing.count;++i)
-            if (!(menu->listing.entries[i]->toc_id & 0xffffffUL)) volume=0;
-    if (!menu->demo && volume && menu->config_result==0 && !strcmp(menu->ode.identity,"LOCODE") &&
-        !menu->ode.navigation_failed && !menu->bus.timed_out) {
-        stop_preview(menu);
-        for (i=0;i<menu->depth;++i) { route[i].id=menu->path_ids[i]; route[i].name=menu->path[i]; }
-        menu->music_ignore_buttons=0;
-        if (GetControlPad(1,0,&pad)>=0) menu->music_ignore_buttons=pad.cped_ButtonBits;
-        menu->media_cancelled=0;
-        message=menu->message; menu->message="Loading menu music..."; draw(menu);
-        result=art_at_root(&menu->ode,route,menu->depth,&menu->listing,menu->config.folder_workaround,read_usb_music,menu);
-        menu->message=message;
-        menu->usb_music_result=result ? (menu->media_cancelled ? -3 : -1) : 1;
-        if (result==-2 || menu->bus.timed_out || menu->ode.navigation_failed) {
-            menu_music_close(&menu->music); menu->usb_music_result=-2;
-            menu->ready=menu->view_valid=0; menu->ode.navigation_failed=1;
-            menu->message="Music I/O failed. Restart console."; return;
-        }
-        if (result || menu->media_cancelled) menu_music_close(&menu->music);
-        if (menu->media_cancelled) return;
-    }
-    menu_music_set(&menu->music,1);
 }
 
 static void update_cover(Menu *menu)
@@ -921,7 +874,9 @@ static void update_preview(Menu *menu)
         if (menu->preview_cel) {
             menu->preview_cel->ccb_XPos=236<<16; menu->preview_cel->ccb_YPos=86<<16;
             menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;
-            memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.pixels,USB_ART_PIXELS);
+            usb_preview_frame(&menu->preview,0,(unsigned char *)menu->preview_cel->ccb_SourcePtr);
+            if (menu->config.preview_sound && menu->preview.audio)
+                preview_audio_start(&menu->preview_audio,menu->preview.audio,menu->preview.audio_frames,menu->preview.audio_rate);
             menu->preview_frame=0; menu->preview_since=now_ms(menu);
         } else { usb_preview_free(&menu->preview); menu->preview_result=-1; }
     }
@@ -973,7 +928,6 @@ static void show_demo(Menu *menu)
     menu->message = NULL;
     update_breadcrumb(menu);
     selection_changed(menu);
-    sync_music(menu);
 }
 
 static void connect_ode(Menu *menu)
@@ -982,7 +936,6 @@ static void connect_ode(Menu *menu)
     ControlPadEventData pad;
     menu->booting=1;
     library_catalog_free(&menu->catalog);
-    menu_music_close(&menu->music);
     ode_playlist_dispose(&menu->playlist);
     menu->review = 0;
     menu->demo = menu->ready = menu->view_valid = 0;
@@ -990,7 +943,6 @@ static void connect_ode(Menu *menu)
     menu->notice_active = 0;
     selection_changed(menu);
     update_breadcrumb(menu);
-    menu->usb_music_result=0;
     menu->usb_tested = menu->backup_result = menu->restore_result = 0;
     menu->position_result = menu->recent_result = menu->diagnostics_result = 0;
     memset(&menu->last_position,0,sizeof(menu->last_position));
@@ -1049,7 +1001,6 @@ done:
     menu->booting=0;
     if (menu->splash) { UnloadCel(menu->splash); menu->splash=NULL; }
     draw(menu);
-    sync_music(menu);
 }
 
 static void go_back(Menu *menu)
@@ -1115,7 +1066,7 @@ static void activate(Menu *menu)
         menu->message = "Starting game...";
         draw(menu);
         menu->playlist.synchronized = 0;
-        menu_music_close(&menu->music);
+        stop_preview(menu);
         if (ode_launch(&menu->ode, entry) < 0) menu->message = menu->ode.error;
         else {
             menu->launching = 1;
@@ -1164,8 +1115,8 @@ static void start_queue(Menu *menu)
     if (menu->playlist.dirty && apply_queue(menu) < 0) { menu->message = menu->ode.error; return; }
     if (menu->playlist.count) record_launch(menu,menu->playlist.paths[0]);
     if (!menu->ready || menu->ode.navigation_failed || menu->bus.timed_out) return;
+    if (menu->playlist.count && menu->playlist.synchronized) stop_preview(menu);
     menu->message="Starting first queued disc..."; draw(menu);
-    if (menu->playlist.count && menu->playlist.synchronized) menu_music_close(&menu->music);
     if (ode_playlist_start(&menu->ode, &menu->playlist) < 0) {
         menu->message = menu->ode.error;
         return;
@@ -1501,7 +1452,7 @@ static void export_diagnostics(Menu *menu)
     format(line,"\nlast_error=%08lx\nlast_fault_command=%02x\nlast_fault_status=%02x\nfault_error=%08lx\n",(unsigned long)snapshot.last_error & 0xffffffffUL,snapshot.failed_command,snapshot.failed_status,(unsigned long)snapshot.failure_error & 0xffffffffUL); strcat(data,line);
     format(line,"timeout=%d\nnavigation_blocked=%d\nconfig_result=%d\n",snapshot.timed_out,menu->ode.navigation_failed,menu->config_result); strcat(data,line);
     format(line,"folder_workaround=%d\nusb_covers=%d\nscreen_margin=%d\nlarge_titles=%d\ntheme=%d\n",menu->config.folder_workaround,menu->config.usb_covers,menu->config.screen_margin,menu->config.large_titles,menu->config.theme); strcat(data,line);
-    format(line,"menu_music=%d\nmusic_result=%d\nmusic_source=%d\nusb_music_result=%d\n",menu->config.menu_music,menu->music.status,menu->music.source,menu->usb_music_result); strcat(data,line);
+    format(line,"preview_sound=%d\npreview_audio_status=%d\n",menu->config.preview_sound,menu->preview_audio.status); strcat(data,line);
     format(line,"cover_load_ms=%lu\ncover_commands=%lu\ncover_cached=%d\n",menu->cover_load_ms,menu->cover_commands,menu->cover_cached); strcat(data,line);
     format(line,"remember_position=%d\nrecent_games=%d\nvideo_previews=%d\nunsaved_settings=%d\n",menu->config.remember_position,menu->config.recent_games,menu->config.video_previews,config_dirty(menu)); strcat(data,line);
     format(line,"queue_count=%lu\nqueue_synchronized=%d\nqueue_dirty=%d\n",(unsigned long)menu->playlist.count,menu->playlist.synchronized,menu->playlist.dirty); strcat(data,line);
@@ -1677,12 +1628,11 @@ static int config_dirty(const Menu *menu)
     settings_values(menu,&current);
     return current.folder_workaround != saved->folder_workaround || current.usb_covers != saved->usb_covers ||
         current.screen_margin != saved->screen_margin || current.large_titles != saved->large_titles ||
-        current.theme != saved->theme || current.remember_position != saved->remember_position || current.recent_games != saved->recent_games || current.video_previews != saved->video_previews || current.menu_music != saved->menu_music;
+        current.theme != saved->theme || current.remember_position != saved->remember_position || current.recent_games != saved->recent_games || current.video_previews != saved->video_previews || current.preview_sound != saved->preview_sound;
 }
 static void discard_config(Menu *menu)
 {
-    menu->config.menu_music = menu->saved_config.menu_music;
-    sync_music(menu);
+    menu->config.preview_sound = menu->saved_config.preview_sound;
     menu->config.screen_margin = menu->saved_config.screen_margin;
     menu->config.large_titles = menu->saved_config.large_titles; menu->config.theme = menu->saved_config.theme;
     menu->settings_folder_workaround = menu->saved_config.folder_workaround;
@@ -1703,7 +1653,7 @@ static void change_config(Menu *menu, int direction)
 {
     menu->tool_message = "Changed. C:Save to USB";
     if (menu->tool_selected == 11) { save_config(menu); return; }
-    if (menu->tool_selected == 8) { menu->config.menu_music = !menu->config.menu_music; sync_music(menu); return; }
+    if (menu->tool_selected == 8) { menu->config.preview_sound = !menu->config.preview_sound; return; }
     if (menu->tool_selected == 5) { menu->settings_video_previews = !menu->settings_video_previews; return; }
     if (!menu->tool_selected) menu->config.screen_margin = (menu->config.screen_margin + direction + 13) % 13;
     else if (menu->tool_selected == 1) menu->config.large_titles = !menu->config.large_titles;
@@ -1935,10 +1885,7 @@ static void draw_tools(Menu *menu)
             else if (i == 4) format(line,"USB covers: %s",menu->settings_usb_covers ? "ON" : "OFF");
             else if (i == 6) format(line,"Remember position: %s",menu->settings_remember_position ? "ON" : "OFF");
             else if (i == 7) format(line,"Recent games: %s",menu->settings_recent_games ? "ON" : "OFF");
-            else if (i == 8) {
-                if (!menu->config.menu_music) strcpy(line,"Menu music: OFF");
-                else format(line,"Menu music: ON / %s",menu->music.source==2 ? "USB" : (menu->music.source==1 ? "bundled" : "silent"));
-            }
+            else if (i == 8) format(line,"Preview sound: %s",menu->config.preview_sound ? "ON" : "OFF");
             else if (i == 9) strcpy(line,"Restore display defaults");
             else if (i == 10) strcpy(line,"Discard unsaved changes");
             else if (i == 11) strcpy(line,"Save changes to USB");

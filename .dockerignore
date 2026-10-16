@@ -22,11 +22,8 @@
 !tools/build-sector-codec.py
 !tools/prepare-preview.py
 !tools/resize-covers.py
-!tools/generate-menu-music.py
-!tools/prepare-music.py
 !tools/prepare-audio-disc.py
 !assets/
-!assets/menu-music.aiff
 
 # Re-apply exclusions after the allowlist so generated test files stay out.
 **/__pycache__/

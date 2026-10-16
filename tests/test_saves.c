@@ -158,13 +158,13 @@ int main(void)
         assert(f.size==MENU_CONFIG_BYTES && !memchr(f.file,0,MENU_CONFIG_BYTES));
         assert(!menu_config_load(&ode,reader,&parsed) && parsed.screen_margin==8);
         config.screen_margin=12;
-        config.folder_workaround=0; config.usb_covers=1; config.remember_position=0; config.recent_games=0; config.video_previews=1; config.menu_music=0;
+        config.folder_workaround=0; config.usb_covers=1; config.remember_position=0; config.recent_games=0; config.video_previews=1; config.preview_sound=0;
         setup(&f,&ode); assert(!menu_settings_save(&ode,reader,&config));
         setup(&f,&ode); f.new_layout=1; ode.support_directory=1;
         assert(!menu_settings_save(&ode,reader,&config));
         assert(!menu_config_load(&ode,reader,&parsed) && ode.support_directory && parsed.screen_margin==12);
         assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
-        assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2 && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.menu_music);
+        assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2 && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.preview_sound);
         setup(&f,&ode); f.short_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
         setup(&f,&ode); f.no_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
         setup(&f,&ode); memcpy(f.file,"Games/D.iso\n",12); f.size=12;

@@ -20,4 +20,5 @@ int usb_art_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index);
 int usb_art_pixels(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels);
 unsigned long usb_art_crc32(const unsigned char *data, size_t size);
+unsigned long usb_art_crc32_update(unsigned long crc, const unsigned char *data, size_t size);
 #endif

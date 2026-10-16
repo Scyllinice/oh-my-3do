@@ -3,6 +3,8 @@
 from pathlib import Path
 import argparse
 import binascii
+import math
+import zlib
 import struct
 import zipfile
 ROOT=Path(__file__).resolve().parent.parent
@@ -23,7 +25,6 @@ files={'index-media.py':'tools/index-media.py',
        'build-sector-codec.py':'tools/build-sector-codec.py',
        'prepare-preview.py':'tools/prepare-preview.py',
        'resize-covers.py':'tools/resize-covers.py',
-       'prepare-music.py':'tools/prepare-music.py',
        'prepare-audio-disc.py':'tools/prepare-audio-disc.py',
        'README.txt':'assets/media-tools-README.txt','LICENSE':'LICENSE'}
 for name in ('sector-codec-win64.dll','sector-codec.so','sector-codec.dylib'):
@@ -40,7 +41,15 @@ for frame in range(24):
             elif ((x//8)+(y//8))%2: color=(3<<10)|(5<<5)|9
             else: color=(1<<10)|(2<<5)|4
             pixels+=struct.pack('>H',color)
-sample=b'OM3DVID1'+struct.pack('>HHIIHH',64,80,len(pixels),binascii.crc32(pixels),24,6)+pixels+b'END3DV01'
+blocks=[zlib.compress(pixels[i:i+10240],9) for i in range(0,len(pixels),10240)]
+offset=25*4; offsets=[offset]
+for block in blocks:
+    offset+=len(block); offsets.append(offset)
+video=b''.join(struct.pack('>I',n) for n in offsets)+b''.join(blocks)
+# Original quiet test tone, not background music or downloaded audio.
+audio=bytes(int(10*math.sin(2*math.pi*440*i/11025)*min(1,i/220,(44099-i)/220))&255 for i in range(44100))
+payload=video+audio
+sample=b'OM3DVID2'+struct.pack('>HHIIHHIIII',64,80,len(payload),binascii.crc32(payload),24,6,len(video),len(audio),11025,len(audio))+payload+b'END3DV02'
 with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED) as archive:
     for name,source in files.items():
         entry=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0))

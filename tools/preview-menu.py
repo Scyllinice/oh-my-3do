@@ -30,25 +30,16 @@ STUBS = r'''
 #include "menu_settings.h"
 #include "menu_position.h"
 #include "ui_font.h"
-#include "menu_music.h"
-#include "usb_music.h"
-int menu_music_set(MenuMusic *m,int enabled) { m->status=enabled ? 1 : 0; m->source=enabled ? (m->data ? 2 : 1) : 0; return 0; }
-void menu_music_close(MenuMusic *m) { m->status=0; m->source=0; m->data=0; }
-unsigned char *menu_music_buffer(MenuMusic *m,unsigned long frames,unsigned long rate) { static unsigned char data[786432]; m->data=data; m->frames=frames; m->rate=rate; return data; }
+#include "preview_audio.h"
+static int audio_starts,audio_restarts,audio_fail;
+int preview_audio_start(PreviewAudio *a,unsigned char *p,unsigned long n,unsigned long rate) { (void)p;(void)n;(void)rate;++audio_starts;a->status=audio_fail ? -1 : 1;return audio_fail ? -1 : 0; }
+int preview_audio_restart(PreviewAudio *a) { ++audio_restarts; return a->status==1 ? 0 : -1; }
+void preview_audio_close(PreviewAudio *a) { a->status=0; }
 #define UI_PREVIEW_TEXT(s) printf("L %s\n",s)
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-static int preview_music_result=-1, preview_music_calls;
-int usb_music_load(Ode *ode,OdeReadBuffer reader,UsbMusicAlloc allocate,void *context,UsbMusicCancel cancel,void *cancel_context) {
-    UsbMusicSpec spec={11025,1207640,603820};
-    (void)reader; ++preview_music_calls;
-    if (cancel && cancel(cancel_context)) return -1;
-    if (preview_music_result==-2) ode->navigation_failed=1;
-    if (!preview_music_result && allocate(context,&spec)) return 0;
-    return -1;
-}
 #define abort() do { fprintf(stderr,"Preview assertion failed at line %d\n",__LINE__); exit(1); } while (0)
 typedef unsigned long u32;
 typedef unsigned char u8;
@@ -140,7 +131,9 @@ static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, 
     preview->pixels=(unsigned char *)malloc(2*USB_ART_PIXELS);
     if (!preview->pixels) return -1;
     memset(preview->pixels,0x11,USB_ART_PIXELS); memset(preview->pixels+USB_ART_PIXELS,0x22,USB_ART_PIXELS);
-    preview->frames=2; preview->fps=6; return 0;
+    preview->audio=(unsigned char *)malloc(4); if (!preview->audio) return -1;
+    preview->audio_bytes=preview->audio_frames=4; preview->audio_rate=11025;
+    preview->version=1; preview->frames=2; preview->fps=6; return 0;
 }
 static unsigned long preview_now;
 static int preview_unloads;
@@ -204,7 +197,7 @@ NVRAM_STUBS = r'''
 static int preview_mounts;
 static int preview_mount(void *context,const unsigned char *packet,unsigned char *reply,size_t capacity,size_t *length) {
     Menu *menu=(Menu *)context;
-    if (packet[0]!=0xc5 || menu->music.status || capacity<2) abort();
+    if (packet[0]!=0xc5 || menu->preview_audio.status || capacity<2) abort();
     ++preview_mounts; reply[0]=0xc5; reply[1]=0; *length=2; return 0;
 }
 static void activate(Menu *menu) { (void)menu; }
@@ -344,7 +337,7 @@ int main(int argc, char **argv) {
         if (!menu.usb_previews.entries) abort();
         menu.usb_previews.entries[0].path="Alone in the Dark.iso";
         menu.usb_previews.entries[0].file="Game.3dv"; menu.usb_previews.count=1;
-        menu.config.video_previews=1; preview_video_enabled=1; preview_cel_fail=0;
+        menu.config.video_previews=1; menu.config.preview_sound=1; preview_video_enabled=1; preview_cel_fail=0;
         selection_changed(&menu); preview_now+=1199; update_preview(&menu);
         if (preview_video_loads || menu.preview_attempted) abort();
         ++preview_now;
@@ -354,19 +347,26 @@ int main(int argc, char **argv) {
         menu.config.video_previews=0; update_preview(&menu);
         if (preview_video_loads) abort();
         menu.config.video_previews=1; update_preview(&menu);
-        if (preview_video_loads != 1 || !menu.preview_cel || !menu.preview.pixels) abort();
+        if (preview_video_loads != 1 || !menu.preview_cel || !menu.preview.pixels || audio_starts!=1 || menu.preview_audio.status!=1) abort();
         preview_now+=167; draw(&menu);
         if (menu.preview_frame != 1 || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x22) abort();
         preview_now+=167; draw(&menu);
-        if (menu.preview_frame || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x11) abort();
+        if (menu.preview_frame || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x11 || audio_restarts!=1) abort();
         stop_preview(&menu); update_preview(&menu);
-        if (menu.preview.pixels || menu.preview_cel || preview_video_loads != 1) abort();
+        if (menu.preview.pixels || menu.preview.audio || menu.preview_cel || menu.preview_audio.status || preview_video_loads != 1) abort();
         selection_changed(&menu); preview_now+=1200; preview_buttons=ControlB;
         update_preview(&menu); preview_buttons=0;
         if (menu.preview.pixels || menu.preview_cel || !menu.preview_attempted || preview_video_loads != 2) abort();
         selection_changed(&menu); preview_now+=1200; preview_cel_fail=1;
         update_preview(&menu); preview_cel_fail=0;
         if (menu.preview.pixels || menu.preview_cel) abort();
+        menu.config.preview_sound=0; selection_changed(&menu); preview_now+=1200;
+        update_preview(&menu);
+        if (!menu.preview_cel || menu.preview_audio.status || audio_starts!=1) abort();
+        menu.config.preview_sound=1; selection_changed(&menu); preview_now+=1200; audio_fail=1;
+        update_preview(&menu); audio_fail=0;
+        if (!menu.preview_cel || menu.preview_audio.status!=-1) abort();
+        stop_preview(&menu);
         usb_art_index_free(&menu.usb_previews); preview_video_enabled=0;
         menu.config.video_previews=0; menu.demo=1;
         /* Tools wraps across eight entries; viewing Help/Diagnostics is read-only. */
@@ -451,11 +451,9 @@ int main(int argc, char **argv) {
         menu.config_result=0; menu.ready=1; menu.demo=1;
         menu.saved_config=menu.config;
         menu.tool_selected=8; tools_input(&menu,ControlA);
-        if (menu.config.menu_music || menu.music.status || !config_dirty(&menu)) abort();
+        if (menu.config.preview_sound || !config_dirty(&menu)) abort();
         tools_input(&menu,ControlX);
-        if (!menu.config.menu_music || menu.music.status!=1 || config_dirty(&menu)) abort();
-        menu.config_result=2; sync_music(&menu); if (menu.music.status) abort();
-        menu.config_result=0; sync_music(&menu); if (menu.music.status!=1) abort();
+        if (!menu.config.preview_sound || config_dirty(&menu)) abort();
         menu.demo=1;
         /* Unsaved marker tracks all settings; discard restores the saved snapshot. */
         menu.saved_config=menu.config;
@@ -639,35 +637,16 @@ int main(int argc, char **argv) {
             menu.listing=original;
         }
         {
-            Menu custom_music;
-            memset(&custom_music,0,sizeof(custom_music)); custom_music.ready=1; custom_music.config.menu_music=1;
-            strcpy(custom_music.ode.identity,"LOCODE");
-            preview_music_result=0; preview_buttons=ControlA;
-            sync_music(&custom_music);
-            if (custom_music.music.source!=2 || custom_music.usb_music_result!=1 || !preview_music_calls) abort();
-            { int calls=preview_music_calls; sync_music(&custom_music); if (preview_music_calls!=calls) abort(); }
-            menu_music_close(&custom_music.music); preview_music_result=-1;
-            sync_music(&custom_music);
-            if (custom_music.music.source!=1 || custom_music.usb_music_result!=-1) abort();
-            menu_music_close(&custom_music.music); preview_music_result=-2;
-            sync_music(&custom_music);
-            if (custom_music.music.status || custom_music.ready || custom_music.usb_music_result!=-2) abort();
-            preview_music_result=-1; preview_buttons=0;
-            custom_music.demo=1; custom_music.ready=1;
-            sync_music(&custom_music);
-            if (custom_music.music.status) abort();
-        }
-        {
             Menu launching;
             memset(&launching,0,sizeof(launching));
-            launching.ready=1; launching.music.status=1; launching.playlist.synchronized=1;
+            launching.ready=1; launching.preview_audio.status=1; launching.playlist.synchronized=1;
             launching.ode.transfer=preview_mount; launching.ode.context=&launching;
             start_queue(&launching);
-            if (launching.music.status!=1 || preview_mounts || launching.launching) abort();
+            if (launching.preview_audio.status!=1 || preview_mounts || launching.launching) abort();
             if (ode_playlist_append_local(&launching.ode,&launching.playlist,"/Storage/Game.iso")) abort();
             launching.playlist.dirty=0;
             start_queue(&launching);
-            if (launching.music.status || preview_mounts!=1 || !launching.launching) abort();
+            if (launching.preview_audio.status || preview_mounts!=1 || !launching.launching) abort();
             ode_playlist_dispose(&launching.playlist);
         }
         save_archive_free(&menu.nvram); save_archive_free(&menu.pending); save_archive_free(&menu.backup);

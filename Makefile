@@ -2,15 +2,14 @@ CC = cc
 CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 
 .PHONY: test test-firmware test-covers test-sdk test-media clean
-test: build/test_cover_cache build/test_usb_music build/test_menu_music build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+test: build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
 	python3 tools/build-sector-codec.py
 	python3 tests/test_sector_codec.py
 	python3 tests/test_organize_library.py
 	python3 tests/test_library_catalog.py
 	python3 tests/test_prepare_audio_disc.py
+	python3 tests/test_preview_tools.py
 	python3 tests/test_media_tools.py
-	python3 tests/test_music_sample.py
-	python3 tests/test_music_tools.py
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
 	python3 tests/test_queue_workflow.py
@@ -28,7 +27,7 @@ test: build/test_cover_cache build/test_usb_music build/test_menu_music build/te
 	./build/test_menu_ui
 	./build/test_cover_cache
 	./build/test_ui_font
-	./build/test_menu_music
+	./build/test_preview_audio
 	./build/test_usb_art
 
 test-covers: test-cover-resize build/test_usb_art
@@ -58,7 +57,7 @@ build/test_usb_art: src/usb_art.c src/usb_art.h src/menu_config.h src/ode.h src/
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_usb_art.c $(LDFLAGS) -o $@
 
 clean:
-	rm -f build/test_cover_cache build/test_usb_music build/test_menu_music build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+	rm -f build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
 
 build/test_saves: src/save_archive.c src/save_archive.h src/save_usb.c src/save_usb.h src/usb_art.c src/usb_file.h src/menu_ui.c src/menu_ui.h src/cover_catalog.c src/menu_settings.c src/menu_settings.h src/menu_config.c tests/test_saves.c
 	mkdir -p build
@@ -104,13 +103,11 @@ build/test_ui_font: src/ui_font.c src/ui_font.h src/ui_font_data.h tests/test_ui
 test-cover-resize: build/test_usb_media
 	python3 tests/test_resize_covers.py
 
-build/test_menu_music: src/menu_music.c src/menu_music.h tests/audio_sdk/audio.h tests/audio_sdk/mem.h tests/test_menu_music.c
+build/test_preview_audio: src/preview_audio.c src/preview_audio.h tests/audio_sdk/audio.h tests/audio_sdk/mem.h tests/test_preview_audio.c
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/audio_sdk -Isrc src/menu_music.c tests/test_menu_music.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/audio_sdk -Isrc src/preview_audio.c tests/test_preview_audio.c $(LDFLAGS) -o $@
 
-build/test_usb_music: tests/test_usb_music.c src/usb_music.c src/usb_music.h src/usb_art.c src/menu_ui.c src/cover_catalog.c
-	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_music.c src/usb_music.c src/usb_art.c src/menu_ui.c src/cover_catalog.c $(LDFLAGS) -o $@
+
 
 build/test_cover_cache: src/cover_cache.c src/cover_cache.h src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_cover_cache.c
 	mkdir -p build

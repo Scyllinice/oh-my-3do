@@ -165,13 +165,3 @@ License: bitstream-vera
  org.
 
 ```
-
-## 3at (host audio conversion only)
-
-Music preparation uses [3at](https://github.com/trapexit/3at), pinned in the Docker
-image to `4b47aadfaba31b27519d4a84d2ef9bdfeb61d229`. It encodes blockless ADP4
-with its bundled adpcm-xq encoder. Its ISC license and David Bryant's BSD license
-remain in `/opt/3at` and `/usr/local/share/doc/3at` in the development image.
-3at is not included in the console ISO or the portable media-tools ZIP. The
-portable script invokes a separately installed copy. Personal input music and
-converted tracks are not included in project releases.

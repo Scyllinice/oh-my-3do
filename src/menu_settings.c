@@ -16,13 +16,13 @@ int menu_settings_save(Ode *ode, OdeReadBuffer reader, const MenuConfig *c)
     memset(data,0,sizeof(data)); strcpy((char *)data,"; Saved by Oh My 3DO.\r\n[compatibility]\r\n");
     if (c->folder_workaround < 0 || c->folder_workaround > 1 || c->usb_covers < 0 || c->usb_covers > 1 ||
         c->screen_margin < 0 || c->screen_margin > 12 || c->large_titles < 0 || c->large_titles > 1 || c->theme < 0 || c->theme > 2 ||
-        c->remember_position < 0 || c->remember_position > 1 || c->recent_games < 0 || c->recent_games > 1 || c->video_previews < 0 || c->video_previews > 1 || c->menu_music < 0 || c->menu_music > 1) return -1;
+        c->remember_position < 0 || c->remember_position > 1 || c->recent_games < 0 || c->recent_games > 1 || c->video_previews < 0 || c->video_previews > 1 || c->preview_sound < 0 || c->preview_sound > 1) return -1;
     setting((char *)data,"folder_workaround",c->folder_workaround);
     strcat((char *)data,"\r\n[artwork]\r\n"); setting((char *)data,"usb_covers",c->usb_covers); setting((char *)data,"video_previews",c->video_previews);
     strcat((char *)data,"\r\n[display]\r\n"); setting((char *)data,"screen_margin",c->screen_margin);
     setting((char *)data,"large_titles",c->large_titles); setting((char *)data,"theme",c->theme);
     strcat((char *)data,"\r\n[library]\r\n"); setting((char *)data,"remember_position",c->remember_position); setting((char *)data,"recent_games",c->recent_games);
-    strcat((char *)data,"\r\n[audio]\r\n"); setting((char *)data,"menu_music",c->menu_music);
+    strcat((char *)data,"\r\n[audio]\r\n"); setting((char *)data,"preview_sound",c->preview_sound);
     strcat((char *)data,"\r\n" MENU_CONFIG_END "\r\n");
     used=strlen((char *)data);
     if (used>sizeof(data)-2) return -1;

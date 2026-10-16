@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.15.3)
+Oh My 3DO media tools (scanner v0.16.0)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -283,48 +283,34 @@ It preserves existing valid associations, including converted .3dc covers.
 It does not convert or modify PNGs. The same game basename in different folders
 shares its matching media. Cold boot or refresh at USB root reloads indices.
 
-REPLACEABLE MENU MUSIC (MENU 0.10.0 OR NEWER)
-
-Music is loaded completely into RAM, then decoded by the 3DO DSP. It does not
-stream from USB, so artwork reads do not compete with music file reads.
-
-Install FFmpeg and the separate 3at native audio encoder, and put both on PATH:
-  https://ffmpeg.org/download.html
-  https://github.com/trapexit/3at
-
-Convert the complete track, optionally making a decoded WAV listening copy:
-  py prepare-music.py "song.mp3" "M:/.ohmy3do/music/menu.3dm" --preview "listen.wav"
-
-Use Python 3.9+. Default: 11025 Hz mono ADP4, up to about 2 minutes 22 seconds.
---rate 22050 allows about 1 minute 11 seconds at higher fidelity. Tracks that
-exceed the 768 KiB cap are rejected without shortening or replacing the output.
-
-No media index is needed for music. Cold boot or turn Menu music off and back on
-to reload it. The menu's original synthesized sample is the missing/invalid-file
-fallback; cancelled loads stay silent. The on/off setting still saves to the INI.
-Audio DSP, memory availability and long-track playback need a console test.
-
-The project Docker image includes both dependencies:
-  ./tools/dev-container music artwork/song.mp3 --preview iso/listen.wav
-Copy the resulting music folder into USB .ohmy3do/. Future tracks require no ISO rebuild.
-
-SILENT VIDEO PREVIEWS
+VIDEO PREVIEWS WITH SOUND (MENU v0.16.0+)
 
 For a first test without FFmpeg, copy the included original moving test pattern
-"demo-preview.3dv" into USB previews/, rename it to match one game's basename
+"demo-preview.3dv" (moving pattern and quiet test tone) into USB .ohmy3do/previews/, rename it to match one game's basename
 (e.g. Road Rash.3dv), then run the indexer and enable previews as described below.
 
 Convert a local clip; the output is a small 64x80 RAM-playable animation:
   py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
   py index-media.py E:/
 
-Default: 24 frames at 6 fps (four seconds, 240 KiB). Optional:
-  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --frames 12 --fps 6
+Default: try the full source at 6 fps with audio, reducing frame rate to fit.
+If the full source does not fit, try 30 seconds. Video/audio payload is limited
+to 1 MiB, 720 frames and 120 seconds. Longer sources use the 30-second fallback.
+Full attempts retain at least 4 fps; the fallback can reduce as far as 2 fps.
+Conversion reports actual duration, rate and RAM size. Shorter clips load faster.
+Video is losslessly compressed RGB555. Audio is signed 8-bit 11025 Hz mono PCM.
+The new format requires menu v0.16.0+. Old silent previews remain playable.
+FFmpeg and ffprobe must both be on PATH; no additional audio encoder is needed.
 
-Limits: 1-32 frames, 1-12 fps. There is no audio or direct MP4 playback.
-Enable Video previews in Tools > Settings, save, then cold boot.
-Keep the existing INI and folder-workaround setting. Alternatively add
-video_previews=1 under [artwork] in the USB ohmy3do.ini.
+Optional:
+  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --duration 30
+Use --silent to omit audio. --frames 24 --fps 6 explicitly creates the old silent
+format for an older boot.iso; it cannot be combined with --duration.
+Enable Video previews in Tools > Settings, save, then cold boot. Preview sound
+can be toggled independently and saves as preview_sound=0/1 under [audio].
+Keep the existing INI and folder-workaround setting. Old menu_music keys remain
+readable but are ignored; there is no background music or bundled music sample.
+Existing music files are left alone.
 
 Bulk import from EmuMovies:
 Download 3DO Video Snaps using EmuMovies Sync with a supporting membership,
@@ -337,10 +323,14 @@ MP4/AVI/MKV/MOV/WebM clips in subfolders are supported. Exact names are preferre
 a unique normalized title match is allowed when known region/disc labels agree.
 Generic clips without a disc label can serve every disc. Ambiguous/missing
 clips and conversion failures are reported and skipped. Existing previews stay.
-Each imported clip becomes a four-second silent loop. The preview index is
+Imports use the full-source/30-second fallback policy, including source audio.
+--preview-duration 30 fixes the length; --preview-silent omits audio.
+--replace-previews explicitly upgrades existing associations, preserving old media
+files. A fresh scan/plan is recommended before applying. The preview index is
 built automatically and new previews are covered by the organizer undo journal.
 Original videos stay on the PC. Enable Video previews in Settings afterward.
-No ISO rebuild is needed. This tool does not log into EmuMovies or store account
+Install the v0.16.0+ boot.iso once; later media changes need no ISO rebuild.
+This tool does not log into EmuMovies or store account
 credentials. Direct API integration needs separate developer access:
   https://emumovies.com/forums/topic/58984-new-2023-emumovies-api-available-to-developers/
   https://emumovies.com/faq/4-questions-about-emumovies-sync

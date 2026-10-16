@@ -5,12 +5,12 @@ static int space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
 void menu_config_defaults(MenuConfig *config)
 {
-    memset(config, 0, sizeof(*config)); config->usb_covers = config->remember_position = config->recent_games = config->menu_music = 1;
+    memset(config, 0, sizeof(*config)); config->usb_covers = config->remember_position = config->recent_games = config->preview_sound = 1;
 }
 int menu_config_parse(MenuConfig *config, const char *data, size_t length)
 {
-    static const char *keys[] = {"folder_workaround", "usb_covers", "screen_margin", "large_titles", "theme", "remember_position", "recent_games", "video_previews", "menu_music"};
-    int values[9] = {0, 1, 0, 0, 0, 1, 1, 0, 1};
+    static const char *keys[] = {"folder_workaround", "usb_covers", "screen_margin", "large_titles", "theme", "remember_position", "recent_games", "video_previews", "menu_music", "preview_sound"};
+    int values[10] = {0, 1, 0, 0, 0, 1, 1, 0, 0, 1};
     unsigned int seen = 0;
     size_t pos = 0, i;
     int ended = 0;
@@ -27,7 +27,7 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
         if (end-start == sizeof(MENU_CONFIG_END)-1 && !memcmp(data+start,MENU_CONFIG_END,sizeof(MENU_CONFIG_END)-1)) {
             /* Generated files have all keys before this marker. Stop here so
              * printable padding or an older on-disk tail cannot add settings. */
-            if (seen != 0x1ffU) return -1;
+            if ((seen & 0xffU) != 0xffU || !(seen & 0x300U)) return -1;
             ended = 1; break;
         }
         if (start == end || data[start] == '#' || data[start] == ';') continue;
@@ -40,8 +40,8 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
         eq = start; while (eq < end && data[eq] != '=') ++eq;
         if (eq == end) return -1;
         key_end = eq; while (key_end > start && space(data[key_end-1])) --key_end;
-        for (i = 0; i < 9; ++i) if (strlen(keys[i]) == key_end-start && !memcmp(data+start,keys[i],key_end-start)) break;
-        if (i == 9 || (seen & (1U << i))) return -1;
+        for (i = 0; i < 10; ++i) if (strlen(keys[i]) == key_end-start && !memcmp(data+start,keys[i],key_end-start)) break;
+        if (i == 10 || (seen & (1U << i))) return -1;
         ++eq; while (eq < end && space(data[eq])) ++eq;
         while (eq < end && data[eq] >= '0' && data[eq] <= '9') {
             if (++digits > 2) return -1;
@@ -57,7 +57,7 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
     config->folder_workaround = values[0]; config->usb_covers = values[1];
     config->screen_margin = values[2]; config->large_titles = values[3]; config->theme = values[4];
     config->remember_position = values[5]; config->recent_games = values[6];
-    config->video_previews = values[7]; config->menu_music = values[8];
+    config->video_previews = values[7]; config->preview_sound = values[9];
     return 0;
 }
 

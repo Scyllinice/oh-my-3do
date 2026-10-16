@@ -91,6 +91,32 @@ int main(int argc,char **argv)
         assert(center && center!=0x7fff && (center&31)==((center>>5)&31) && (center&31)==((center>>10)&31));
     } else if (!strcmp(argv[1],"badpng")) {
         assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
+    } else if (!strcmp(argv[1],"badvideo2")) {
+        assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !preview.pixels && !preview.audio);
+    } else if (!strcmp(argv[1],"video2") || !strcmp(argv[1],"video2large")) {
+        assert(!usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f));
+        assert(preview.version==2 && preview.frames && preview.fps && preview.decoder);
+        assert(!usb_preview_frame(&preview,0,pixels));
+        if (argc==4) {
+            expected=load(argv[3],&bytes);assert(bytes==USB_ART_PIXELS && !memcmp(pixels,expected,bytes));free(expected);
+        }
+        if (preview.audio_bytes) assert(preview.audio && preview.audio_rate==11025 && preview.audio_frames==preview.audio_bytes);
+        calls=f.calls;usb_preview_free(&preview);
+        assert(!preview.pixels && !preview.audio && !preview.decoder);
+        if (!strcmp(argv[1],"video2")) {
+            for (i=1;i<=calls;++i) {
+                reset(&f,&ode); f.fail_at=i;
+                assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && !preview.pixels && !preview.audio);
+            }
+            for (i=1;i<=12;++i) {
+                reset(&f,&ode);f.size=original-i;
+                assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !preview.audio);
+            }
+            f.size=original;reset(&f,&ode);f.cancel_after=10;
+            assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !ode.navigation_failed);
+            reset(&f,&ode);f.data[original-9]^=1;
+            assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !preview.pixels);
+        }
     } else if (!strcmp(argv[1],"video")) {
         assert(!usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f));
         assert(preview.frames && preview.fps && !memcmp(preview.pixels,f.data+24,original-32));

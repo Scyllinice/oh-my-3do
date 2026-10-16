@@ -9,9 +9,9 @@ sorting: `Disc 2` comes before `Disc 10`. No firmware update is required.
 
 Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
-restore, plus optional menu music. PC tools can identify and organize a USB
+restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-version is **0.14.0**.
+version is **0.16.0**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -37,7 +37,7 @@ commands needed by the normal browser.
 
 Keep `boot.iso` at the USB root. The consolidated layout stores menu-owned files
 under `.ohmy3do/`: `ohmy3do.ini`, favorites, recent history, saved position,
-diagnostics, search index, covers, previews, music, and NVRAM backups. Databases,
+diagnostics, search index, covers, previews, and NVRAM backups. Databases,
 transaction journals, and ignored CUE files also live there. Game paths stay
 relative to the USB volume and are unchanged by support migration.
 
@@ -88,7 +88,7 @@ Outputs in `iso/`:
 | `ohmy3do.ini` | Editable startup configuration |
 | `favorites.txt` | Editable favorites template |
 | `covers/` | Raw PNGs or converted thumbnails and checked index |
-| `previews/` | Optional converted silent clips and checked index |
+| `previews/` | Optional converted video/audio clips and checked index |
 | `saves/` | Copy this folder to USB for save backups |
 | `library.3di` | Search index generated on the PC by `index-media.py` |
 
@@ -292,8 +292,8 @@ while an uncertain transport or failed folder restoration blocks it.
 Tools → Settings exposes every INI setting: additional screen
 margins (0–12 pixels), larger game/queue titles, teal/high-contrast/amber
 themes, the folder compatibility workaround, USB covers, video previews,
-remembered position, recent games, and menu music. Left/Right or A changes the selected
-value. Music and display changes take effect immediately. Save the remaining
+remembered position, recent games, and preview sound. Left/Right or A changes the selected
+value. Preview sound and display changes take effect immediately. Save the remaining
 options and cold boot to apply them. The settings list spans two pages; keep
 pressing Down to reach the remaining actions, or press C to save from either page.
 
@@ -342,7 +342,7 @@ remember_position=1
 recent_games=1
 
 [audio]
-menu_music=1
+preview_sound=1
 ```
 
 `folder_workaround=0` is normal navigation; `1` enables the workaround for
@@ -831,7 +831,6 @@ USB/
     previews/
       Road Rash.3dv
       index.3di
-    music/
     saves/
 ```
 
@@ -857,29 +856,49 @@ with the same basename share the matching artwork. Each index supports up to
 footage is downloaded by these tools. The organizer can download covers and
 import clips already saved on the PC.
 
-Video previews are small **silent 64×80 RGB555 loops**, fitted into the artwork
-area. They are converted on the PC; the console does not play MP4/MOV files. The
-default clip is 24 frames at 6 fps (four seconds, 240 KiB). The limits are 32
-frames and 1–12 fps. Fewer frames reduce loading time and memory use.
+Video previews are **64×80 RGB555 loops with optional game audio**, fitted
+into the artwork area. The PC converts MP4/AVI/MKV/MOV/WebM sources; the console
+plays the prepared `.3dv` file from RAM. Install **v0.16.0 or newer** for the new
+compressed-video/audio format. Older silent previews remain supported.
+
+By default, the converter tries the full source clip at 6 fps, reducing frame
+rate as needed to fit a **1 MiB combined video/audio payload**. If a full clip
+cannot fit, it tries 30 seconds. Full-source attempts retain at least 4 fps;
+the 30-second fallback can reduce to 2 fps for complex footage. The format is
+bounded to 120 seconds and 720 frames. Sources longer than 120 seconds use the
+30-second fallback. Conversion reports the actual duration, frame rate and RAM
+size. Shorter clips load faster and leave more room for other optional media.
+
+Video frames use lossless zlib compression of RGB555 pixels. Audio is signed
+8-bit mono PCM at 11,025 Hz, with modest headroom and short endpoint fades.
+Playback requires no USB reads. Audio and video restart together each loop;
+changing selection stops both. Allocation or audio initialization failures leave
+the menu usable; audio failure allows silent video playback.
 
 ```sh
-./tools/dev-container build
 ./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv'
-# Optional shorter clip from a chosen point:
-./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv' --start 10 --frames 12 --fps 6
+# Explicit length and starting point:
+./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv' --start 10 --duration 30
 ```
 
-Copy the generated `.3dv` into `.ohmy3do/previews` on USB, then run the indexer against
-that drive. Alternatively, with FFmpeg installed locally:
+Copy the generated `.3dv` into `.ohmy3do/previews` on USB, then run the indexer
+against that drive. With Python 3.9+, FFmpeg and ffprobe installed locally:
 
-```sh
-python3 tools/prepare-preview.py input.mp4 '/path/to/USB/.ohmy3do/previews/Road Rash.3dv'
-python3 tools/index-media.py /path/to/USB
+```powershell
+py prepare-preview.py input.mp4 "M:/.ohmy3do/previews/Road Rash.3dv"
+py index-media.py M:/
 ```
+
+Use `--silent` to omit audio. `--frames 24 --fps 6` explicitly generates the old
+four-second silent format for older menu builds. This legacy option cannot be
+combined with `--duration`.
 
 Enable **Video previews** in Tools → Settings, save, and cold boot
-(or add `video_previews=1` under `[artwork]` in the USB INI). Old INIs keep
-previews disabled. `usb_covers` controls static covers independently.
+(or set `video_previews=1` under `[artwork]` in the INI). **Preview sound**
+controls audio separately and saves as `preview_sound=0/1` under `[audio]`.
+Previews remain disabled by default. Existing `menu_music` INI keys are accepted
+for compatibility and ignored; background music and its bundled sample have
+been removed. Existing music files are not read or deleted.
 
 ### Importing EmuMovies clips
 
@@ -889,7 +908,7 @@ with a supporting membership, or extract a downloaded 3DO video pack there.
 Keep that folder limited to 3DO clips and keep the original game-based filenames.
 MP4, AVI, MKV, MOV, and WebM files are supported. Subfolders are searched.
 
-Install FFmpeg on the PC and make sure `ffmpeg` is available on PATH. Scan the
+Install FFmpeg on the PC and make sure `ffmpeg` and `ffprobe` are available on PATH. Scan the
 drive, review the HTML plan, then apply it with the clip folder:
 
 ```powershell
@@ -904,13 +923,22 @@ matches are reported and skipped. It does not infer the edition of an ISO from
 the clip. Rename or remove duplicate source clips before running a new scan and
 apply if a match needs attention.
 
-The imported preview is a four-second silent loop. Add `--preview-start 5` to
-start five seconds into each source clip. Clips are converted before any USB
-files move, stored under `previews/`, and indexed automatically. Existing
-previews are retained, originals stay on the PC, and conversion failures are
-reported without blocking other games. The JSON database records each imported
-preview's filename and relative source filename. Enable **Video previews** in
-Tools → Settings after importing; no ISO rebuild is needed.
+Imports use the full-clip/30-second policy above, with audio when present.
+Add `--preview-start 5`, `--preview-duration 30`, or `--preview-silent` as needed.
+Clips are converted before USB changes, indexed automatically, and covered by
+the organizer's undo journal. Existing previews are retained by default.
+To upgrade existing silent clips, add **`--replace-previews`**:
+
+```powershell
+py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches --preview-dir "D:/EmuMovies/Panasonic_3DO/Video_MP4" --replace-previews
+```
+
+This selects newly converted previews without deleting old media files or PC
+originals. Explicit preview associations take precedence over older same-name
+files during reindexing. Conversion failures are reported without blocking
+other games. The database records each imported clip's filename and relative
+source filename. Install the new `boot.iso` once; subsequent preview changes
+require no ISO rebuild. Review a fresh plan before applying to reorganize files.
 
 The tool does not log into EmuMovies or store account credentials. Direct API
 integration requires separate developer access from
@@ -919,12 +947,14 @@ Downloaded footage is not included in this repository or its releases.
 
 Covers start loading after 350 ms without a selection change; previews wait 1.2
 seconds. A whole clip is checked and loaded into RAM before playback, so looping
-needs no USB reads and uses at most 320 KiB for frame data. Pressing a button
+needs no USB reads. The new payload cap is 1 MiB, plus a frame buffer and decoder
+state. Longer clips may take longer to load and can be cancelled. Pressing a button
 cancels an in-progress media load or stops playback. Selecting another game
 releases the clip; a stopped clip waits for a new selection before retrying.
 Missing, corrupt or cancelled previews leave the static cover available. Actual
 USB loading time depends on the firmware and folder navigation. The diagnostics
-export includes `preview_result` and `preview_load_ms` for the last attempt. The
+export includes `preview_result`, `preview_load_ms`, `preview_sound` and
+`preview_audio_status` for the last attempt. The
 binary layouts are documented in [docs/media-format.md](docs/media-format.md).
 
 For faster cover reads, convert artwork to the compact `.3dc` format:
@@ -968,64 +998,6 @@ has audio-only BIN/CUE support, but unusual first-track pregaps can expose
 firmware limitations. Conversion preserves the supplied rip; it does not verify
 which catalog release it belongs to.
 
-## Menu music
-
-Music can be replaced from USB without rebuilding the ISO. Put the prepared
-track at `.ohmy3do/music/menu.3dm` on the USB drive. The menu loads and verifies the whole
-track before playback, then the 3DO DSP decodes it directly from RAM. Music
-performs no USB reads while playing, so cover loading does not compete with an
-audio stream. This adds a one-time load when music starts, after the browser has
-restored and displayed the saved folder. Press a controller button during music
-loading to cancel it.
-
-Prepare a track with the Docker image, which includes FFmpeg and the pinned
-[3at native audio encoder](https://github.com/trapexit/3at):
-
-```sh
-./tools/dev-container build
-./tools/dev-container music artwork/music.mp3 --preview iso/music-preview.wav
-```
-
-Copy the prepared music folder into USB `.ohmy3do/`, then cold boot. The optional WAV is a decoded
-listening copy of the converted track. It does not need to be copied to USB.
-Neither an artwork index nor another ISO rebuild is needed for future tracks.
-Install version 0.10.0 or newer once to enable USB music loading.
-
-The portable `media-tools.zip` includes `prepare-music.py`. With Python 3.9+,
-FFmpeg and 3at installed on PATH, Windows can use:
-
-```sh
-py prepare-music.py "music.mp3" "M:/.ohmy3do/music/menu.3dm" --preview "music-preview.wav"
-```
-
-The default is mono ADP4 at 11,025 Hz, with a 768 KiB compressed-data cap. That
-fits about **2 minutes 22 seconds**, including a complete 1:49 track. This is a
-lossy conversion with less high-frequency detail than the source. `--rate 22050`
-keeps more detail but fits about **1 minute 11 seconds**. Oversized tracks are
-rejected rather than silently shortened. The converter preserves the source,
-pads to DMA alignment, applies tiny endpoint fades, and adds a checksum and end
-marker to protect against firmware EOF errors.
-
-Music is enabled by default. **Tools → Settings → Menu music**
-changes playback immediately; press **C** to save. Turning it off releases audio
-RAM. Turning it back on reloads the file from the selected USB volume; folder
-navigation uses the same restoration and compatibility checks as USB artwork.
-The settings row shows whether the active music is from USB or bundled. Holding
-X at startup skips music. On a PC, `menu_music=0` under `[audio]` disables it.
-
-An original synthesized 20-second loop remains bundled for the demo and as a
-fallback when USB music is missing or invalid. No external recordings are in
-that loop. A cancelled load stays silent, and an uncertain USB transport blocks
-browsing without attempting fallback disc reads. Audio resources are released
-before any game mount. Allocation or DSP failures leave the menu usable and
-silent; toggle music off/on to retry. Larger tracks leave less RAM for other
-optional media. Console playback still needs hardware testing.
-
-The diagnostics export includes `music_source` (0 none, 1 bundled, 2 USB) and
-`usb_music_result` (0 not attempted, 1 loaded, -1 unavailable/invalid, -2 transport
-or folder failure, -3 cancelled), alongside the music setting and playback result.
-The prepared file layout is described in [docs/media-format.md](docs/media-format.md).
-
 ## Diagnostics and compatibility limits
 
 L+R → Diagnostics has three pages (Left/Right): reported identity/revision and
@@ -1067,7 +1039,7 @@ Image formats visible to the browser depend on the installed firmware.
 
 ## Testing and repository setup
 
-Portable host tests (music conversion tests need FFmpeg and 3at on PATH):
+Portable host tests (video conversion tests need FFmpeg and ffprobe on PATH):
 
 ```sh
 make test
