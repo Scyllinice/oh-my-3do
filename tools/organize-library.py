@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.16.0'
+SCANNER_VERSION = '0.16.0-rc2'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -1071,7 +1071,7 @@ def prepare_previews(rows, directory, start=0, duration=None, sound=True, replac
             if clip not in converted:
                 # Conversion happens on the PC before any USB changes. Include
                 # content and settings in the name so reruns never replace art.
-                key = hashlib.sha256((digest(clip) + f':{start}:6:{duration or "full"}:{int(sound)}:2').encode()).hexdigest()[:16]
+                key = hashlib.sha256((digest(clip) + f':{start}:15:{duration or "full"}:{int(sound)}:2:fixed-fps').encode()).hexdigest()[:16]
                 with tempfile.TemporaryDirectory(prefix='oh3do-preview-') as temp:
                     target = Path(temp)/'clip.3dv'
                     converter.convert(clip, target, start=start, duration=duration, sound=sound)
@@ -1509,7 +1509,7 @@ def main():
     apply.add_argument('--cover-dir', type=Path, help='import local front-box images instead of downloading covers; subfolders included')
     apply.add_argument('--preview-dir', type=Path, help='import matching clips downloaded with EmuMovies Sync or another source')
     apply.add_argument('--preview-start', type=float, default=0, help='clip offset in seconds (default: 0); requires --preview-dir')
-    apply.add_argument('--preview-duration', default=None, help='full (default, with 30s RAM fallback), or seconds up to 120; requires --preview-dir')
+    apply.add_argument('--preview-duration', default=None, help='full (default) or maximum seconds up to 120; clip shortens to preserve 15 fps; requires --preview-dir')
     apply.add_argument('--preview-silent', action='store_true', help='omit preview audio; requires --preview-dir')
     apply.add_argument('--replace-previews', action='store_true', help='import new previews even when an association exists; keep old media files')
     apply.add_argument('--offline', action='store_true')

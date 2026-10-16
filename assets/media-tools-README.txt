@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.16.0)
+Oh My 3DO media tools (scanner v0.16.0-rc2)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -293,13 +293,15 @@ Convert a local clip; the output is a small 64x80 RAM-playable animation:
   py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
   py index-media.py E:/
 
-Default: try the full source at 6 fps with audio, reducing frame rate to fit.
-If the full source does not fit, try 30 seconds. Video/audio payload is limited
-to 1 MiB, 720 frames and 120 seconds. Longer sources use the 30-second fallback.
-Full attempts retain at least 4 fps; the fallback can reduce as far as 2 fps.
-Conversion reports actual duration, rate and RAM size. Shorter clips load faster.
+Default: 15 fps with source audio. Keep the longest source prefix that fits
+within a 1 MiB combined video/audio payload. Length is reduced as needed; frame
+rate is never lowered automatically. --duration 30 is a maximum length, not a
+promise of 30 seconds. Conversion decodes once and reports the resulting length,
+frame rate and RAM usage. Shorter previews load faster.
+The format allows 720 frames and 120 seconds; at 15 fps, that means at most 48
+seconds before the RAM limit. Install menu v0.16.0-rc2+ for 15 fps files.
+Older silent and sound-enabled previews remain supported by the updated menu.
 Video is losslessly compressed RGB555. Audio is signed 8-bit 11025 Hz mono PCM.
-The new format requires menu v0.16.0+. Old silent previews remain playable.
 FFmpeg and ffprobe must both be on PATH; no additional audio encoder is needed.
 
 Optional:
@@ -323,13 +325,13 @@ MP4/AVI/MKV/MOV/WebM clips in subfolders are supported. Exact names are preferre
 a unique normalized title match is allowed when known region/disc labels agree.
 Generic clips without a disc label can serve every disc. Ambiguous/missing
 clips and conversion failures are reported and skipped. Existing previews stay.
-Imports use the full-source/30-second fallback policy, including source audio.
---preview-duration 30 fixes the length; --preview-silent omits audio.
+Imports use 15 fps with source audio, shortening the clip to fit RAM.
+--preview-duration 30 caps the length; --preview-silent omits audio.
 --replace-previews explicitly upgrades existing associations, preserving old media
 files. A fresh scan/plan is recommended before applying. The preview index is
 built automatically and new previews are covered by the organizer undo journal.
 Original videos stay on the PC. Enable Video previews in Settings afterward.
-Install the v0.16.0+ boot.iso once; later media changes need no ISO rebuild.
+Install v0.16.0-rc2+ boot.iso for 15 fps; later media changes need no ISO rebuild.
 This tool does not log into EmuMovies or store account
 credentials. Direct API integration needs separate developer access:
   https://emumovies.com/forums/topic/58984-new-2023-emumovies-api-available-to-developers/

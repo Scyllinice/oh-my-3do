@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-version is **0.16.0**.
+version is **0.16.0-rc2**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -861,13 +861,18 @@ into the artwork area. The PC converts MP4/AVI/MKV/MOV/WebM sources; the console
 plays the prepared `.3dv` file from RAM. Install **v0.16.0 or newer** for the new
 compressed-video/audio format. Older silent previews remain supported.
 
-By default, the converter tries the full source clip at 6 fps, reducing frame
-rate as needed to fit a **1 MiB combined video/audio payload**. If a full clip
-cannot fit, it tries 30 seconds. Full-source attempts retain at least 4 fps;
-the 30-second fallback can reduce to 2 fps for complex footage. The format is
-bounded to 120 seconds and 720 frames. Sources longer than 120 seconds use the
-30-second fallback. Conversion reports the actual duration, frame rate and RAM
-size. Shorter clips load faster and leave more room for other optional media.
+By default, conversion keeps **15 fps** and includes as much of the source as
+fits a **1 MiB combined video/audio payload**. Clips are shortened to fit;
+the frame rate is never reduced automatically. `--duration 30` sets an upper
+length limit, rather than guaranteeing 30 seconds. The converter decodes video
+once and retains the longest prefix that fits, including aligned audio storage.
+It reports the actual duration, frame rate and RAM size.
+
+The format allows 720 frames and up to 120 seconds. At 15 fps, the frame limit
+is 48 seconds; complex gameplay generally reaches the RAM limit sooner. Shorter
+clips load faster. **15 fps files require v0.16.0-rc2 or newer**; the first RC
+supports only up to 12 fps. Lower frame rates can still be requested explicitly
+with `--fps`, and older preview files remain playable.
 
 Video frames use lossless zlib compression of RGB555 pixels. Audio is signed
 8-bit mono PCM at 11,025 Hz, with modest headroom and short endpoint fades.
@@ -923,7 +928,7 @@ matches are reported and skipped. It does not infer the edition of an ISO from
 the clip. Rename or remove duplicate source clips before running a new scan and
 apply if a match needs attention.
 
-Imports use the full-clip/30-second policy above, with audio when present.
+Imports use 15 fps and retain the longest clip that fits RAM, with audio when present.
 Add `--preview-start 5`, `--preview-duration 30`, or `--preview-silent` as needed.
 Clips are converted before USB changes, indexed automatically, and covered by
 the organizer's undo journal. Existing previews are retained by default.

@@ -51,16 +51,18 @@ def rgb555(raw):
     return pixels
 
 
-def convert(source, target, fps=6, frames=None, start=0, duration=None, sound=True):
+def convert(source, target, fps=None, frames=None, start=0, duration=None, sound=True):
+    if fps is None:
+        fps = 6 if frames is not None else 15
     # Explicit --frames retains the old silent format for old boot.iso builds.
     if frames is not None:
         if duration is not None:
             raise ValueError('Use --frames for legacy video or --duration for the new player, not both')
         return convert_legacy(source, target, fps, frames, start)
     source, target = Path(source), Path(target)
-    if (not source.is_file() or not 1 <= fps <= 12 or not 0 <= start <= 86400 or
+    if (not source.is_file() or not isinstance(fps, int) or not 1 <= fps <= 15 or not 0 <= start <= 86400 or
             not math.isfinite(start) or target.suffix.lower() != '.3dv' or source.resolve() == target.resolve()):
-        raise ValueError('Choose an existing input, a separate .3dv output, 1-12 fps, and a valid start time')
+        raise ValueError('Choose an existing input, a separate .3dv output, 1-15 fps, and a valid start time')
     ffmpeg, ffprobe = shutil.which('ffmpeg'), shutil.which('ffprobe')
     if not ffmpeg or not ffprobe:
         raise ValueError('FFmpeg and ffprobe are required on PATH')
@@ -75,9 +77,11 @@ def convert(source, target, fps=6, frames=None, start=0, duration=None, sound=Tr
     except (ValueError, TypeError):
         available = float('nan')
     requested = available if full else float(duration)
-    if full and (not math.isfinite(requested) or requested > MAX_SECONDS):
+    if full and not math.isfinite(requested):
         requested = 30
-        print('Full clip exceeds the 120-second format limit or has unknown duration; trying 30 seconds.')
+        print('Source duration is unknown; using at most 30 seconds.')
+    if full and math.isfinite(requested):
+        requested = min(requested, MAX_SECONDS)
     if not math.isfinite(requested) or not 0 < requested <= MAX_SECONDS:
         raise ValueError('Preview duration must be greater than zero and at most 120 seconds')
     if math.isfinite(available):
@@ -85,42 +89,40 @@ def convert(source, target, fps=6, frames=None, start=0, duration=None, sound=Tr
     if requested <= 0:
         raise ValueError('Start position is beyond the end of the source')
     has_audio = sound and any(s.get('codec_type') == 'audio' for s in info.get('streams', []))
-    attempts = [requested]
-    if full and requested > 30:
-        attempts.append(30)
-    selected = None
-    for seconds in attempts:
-        # Preserve more of a full clip at 4 fps before falling back to 30s.
-        minimum = min(fps, 4 if full and seconds > 30 else 2)
-        for rate in range(fps, minimum-1, -1):
-            limit = min(MAX_FRAMES, math.ceil(seconds * rate))
-            if seconds * rate > MAX_FRAMES:
-                continue
-            raw = subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-ss', str(start), '-i', str(source),
-                '-map', '0:v:0', '-an', '-sn', '-t', str(seconds), '-vf',
-                f'fps={rate},scale=64:80:force_original_aspect_ratio=decrease:flags=area,pad=64:80:(ow-iw)/2:(oh-ih)/2:color=0x081021',
-                '-frames:v', str(limit), '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'],
-                check=True, stdout=subprocess.PIPE).stdout
-            if not raw or len(raw) % (64*80*3) or len(raw) > MAX_FRAMES*64*80*3:
-                raise ValueError('Video did not produce complete bounded frames')
-            count = len(raw)//(64*80*3)
-            blocks = [zlib.compress(rgb555(raw[i:i+64*80*3]), 9) for i in range(0, len(raw), 64*80*3)]
-            offset = (count+1)*4
-            offsets = [offset]
-            for block in blocks:
-                offset += len(block)
-                offsets.append(offset)
-            audio_size = ((math.ceil(count*11025/rate)+3)//4)*4 if has_audio else 0
-            if offset + audio_size <= MAX_BYTES:
-                video = b''.join(struct.pack('>I', n) for n in offsets) + b''.join(blocks)
-                selected = (video, count, rate, audio_size, count/rate)
-                break
-        if selected:
+    # Decode at the requested frame rate once. Retain the longest prefix whose
+    # compressed video AND aligned audio fit RAM; never silently reduce fps.
+    requested = min(requested, MAX_FRAMES / fps)
+    limit = min(MAX_FRAMES, math.ceil(requested * fps))
+    raw = subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-ss', str(start), '-i', str(source),
+        '-map', '0:v:0', '-an', '-sn', '-t', str(requested), '-vf',
+        f'fps={fps},scale=64:80:force_original_aspect_ratio=decrease:flags=area,pad=64:80:(ow-iw)/2:(oh-ih)/2:color=0x081021',
+        '-frames:v', str(limit), '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'],
+        check=True, stdout=subprocess.PIPE).stdout
+    if not raw or len(raw) % (64*80*3) or len(raw) > MAX_FRAMES*64*80*3:
+        raise ValueError('Video did not produce complete bounded frames')
+    source_count = len(raw)//(64*80*3)
+    blocks, compressed_bytes = [], 0
+    for i in range(source_count):
+        block = zlib.compress(rgb555(raw[i*64*80*3:(i+1)*64*80*3]), 9)
+        count = len(blocks)+1
+        audio_size = ((math.ceil(count*11025/fps)+3)//4)*4 if has_audio else 0
+        if (count+1)*4 + compressed_bytes + len(block) + audio_size > MAX_BYTES:
             break
-        print(f'{seconds:g}-second clip exceeds the 1 MiB RAM payload budget.')
-    if not selected:
-        raise ValueError('Preview exceeds the RAM budget; use a shorter --duration or lower --fps')
-    video, count, rate, audio_size, seconds = selected
+        blocks.append(block)
+        compressed_bytes += len(block)
+    count, rate = len(blocks), fps
+    if not count:
+        raise ValueError('Preview cannot fit a single frame and audio in the RAM budget')
+    if count < source_count:
+        print(f'Shortened to {count/fps:.2f} seconds to keep {fps} fps within the 1 MiB RAM payload budget.')
+    offset = (count+1)*4
+    offsets = [offset]
+    for block in blocks:
+        offset += len(block)
+        offsets.append(offset)
+    video = b''.join(struct.pack('>I', n) for n in offsets) + b''.join(blocks)
+    audio_size = ((math.ceil(count*11025/fps)+3)//4)*4 if has_audio else 0
+    seconds = count/fps
     audio = b''
     if audio_size:
         audio = subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-ss', str(start), '-i', str(source),
@@ -140,7 +142,7 @@ def convert(source, target, fps=6, frames=None, start=0, duration=None, sound=Tr
         temporary.unlink(missing_ok=True)
     print(f'Created {target}: {seconds:.2f} seconds, {count} frames at {rate} fps, '
           f'{len(payload)/1024:.1f} KiB RAM; ' + ('11025 Hz mono audio' if audio else 'silent'))
-    print('Requires the v0.16.0+ menu. Playback is entirely from RAM; original source unchanged.')
+    print('15 fps requires the v0.16.0-rc2+ menu. Playback is entirely from RAM; original source unchanged.')
     return dict(seconds=seconds, frames=count, fps=rate, bytes=len(payload), audio_bytes=len(audio))
 
 
@@ -148,9 +150,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path, help="USB .ohmy3do/previews/Game Title.3dv (or legacy previews/)")
-    parser.add_argument("--fps", type=int, default=6)
+    parser.add_argument("--fps", type=int, help="frame rate (default: 15; legacy --frames defaults to 6)")
     parser.add_argument("--frames", type=int, help="legacy silent video: 1-32 frames")
-    parser.add_argument("--duration", default=None, help="full (default, with 30s RAM fallback) or seconds, up to 120")
+    parser.add_argument("--duration", default=None, help="full (default) or maximum seconds, up to 120; shortened to fit RAM at the requested fps")
     parser.add_argument("--silent", action="store_true", help="omit audio")
     parser.add_argument("--start", type=float, default=0)
     args = parser.parse_args()

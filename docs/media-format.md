@@ -70,7 +70,7 @@ All integers are big-endian. `previews/Title.3dv` uses:
 | 12 | 4 | Combined video/audio payload bytes, at most 1048576 |
 | 16 | 4 | Standard CRC32 of video followed by audio |
 | 20 | 2 | Frame count, 1–720, no more than fps × 120 |
-| 22 | 2 | Frames per second, 1–12 |
+| 22 | 2 | Frames per second, 1–15 (15 fps requires v0.16.0-rc2+) |
 | 24 | 4 | Video payload bytes, including the offset table |
 | 28 | 4 | Audio payload bytes, zero for silent clips |
 | 32 | 4 | Audio sample rate, 11025 or zero when silent |
@@ -99,3 +99,8 @@ frame before playback. Partial reads, invalid offsets, bad zlib lengths,
 cancellation and allocation failures release all owned memory. CRC covers both
 buffers incrementally, avoiding a second copy of the audio in general-purpose
 RAM. Original video sources and older `.3dv` files are never modified by loading.
+
+The converter defaults to 15 fps and shortens the source prefix to fit the RAM
+budget. It does not lower frame rate automatically. The 720-frame limit allows
+up to 48 seconds at 15 fps; actual duration also depends on video compression
+and audio storage. Older version-1 previews retain their 1–12 fps limit.

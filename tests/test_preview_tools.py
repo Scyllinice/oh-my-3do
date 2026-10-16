@@ -37,7 +37,7 @@ class PreviewToolsTest(unittest.TestCase):
     def test_c_player_sound_silent_and_long_clips(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);expected=root/'red.rgb555';expected.write_bytes(b'\x7c\0'*(64*80))
-            for frames,fps,sound in ((2,6,True),(2,6,False),(180,6,True),(720,6,False)):
+            for frames,fps,sound in ((2,6,True),(2,6,False),(180,6,True),(30,15,True),(720,15,False)):
                 path=root/'clip.3dv';path.write_bytes(container(frames,fps,sound))
                 self.run_loader('video2' if frames==2 else 'video2large',path,expected)
 
@@ -55,6 +55,10 @@ class PreviewToolsTest(unittest.TestCase):
             video=struct.pack('>II',8,8+len(small))+small
             bad=b'OM3DVID2'+struct.pack('>HHIIHHIIII',64,80,len(video),binascii.crc32(video),1,6,len(video),0,0,0)+video+b'END3DV02'
             bads.append(bad)
+            bad=bytearray(valid);struct.pack_into('>H',bad,22,16);bads.append(bad)
+            legacy_payload=b'\0'*10240
+            legacy=b'OM3DVID1'+struct.pack('>HHIIHH',64,80,len(legacy_payload),binascii.crc32(legacy_payload),1,15)+legacy_payload+b'END3DV01'
+            bads.append(legacy)
             for data in bads:
                 path.write_bytes(data);self.run_loader('badvideo2',path)
 
@@ -62,11 +66,12 @@ class PreviewToolsTest(unittest.TestCase):
     def test_full_source_audio_and_legacy_conversion(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);source=root/'source.mkv';out=root/'preview.3dv'
-            subprocess.run(['ffmpeg','-v','error','-nostdin','-f','lavfi','-i','color=c=red:s=64x80:r=6:d=1.5',
-                '-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=1.5','-c:v','ffv1','-c:a','pcm_s16le','-shortest',str(source)],check=True)
+            subprocess.run(['ffmpeg','-v','error','-nostdin','-f','lavfi','-i','color=c=red:s=64x80:r=30:d=2',
+                '-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=2','-c:v','ffv1','-c:a','pcm_s16le','-shortest',str(source)],check=True)
             before=source.read_bytes();result=converter.convert(source,out)
-            self.assertEqual(result['frames'],9)
-            self.assertAlmostEqual(result['seconds'],1.5)
+            self.assertEqual(result['frames'],30)
+            self.assertEqual(result['fps'],15)
+            self.assertAlmostEqual(result['seconds'],2)
             self.assertGreater(result['audio_bytes'],0)
             data=out.read_bytes();video_bytes=struct.unpack_from('>I',data,24)[0]
             self.assertTrue(any(data[40+video_bytes:-8]))
@@ -76,9 +81,9 @@ class PreviewToolsTest(unittest.TestCase):
             converter.convert(source,out,frames=6);self.run_loader('video',out)
             self.assertEqual(source.read_bytes(),before)
 
-    def test_full_clip_falls_back_to_30_seconds_under_ram_budget(self):
+    def test_clip_shortens_without_reducing_fps_under_ram_budget(self):
         # Synthetic decoder output is deliberately incompressible, so the
-        # converter must shorten and reduce frame rate, rather than overallocate.
+        # converter must shorten at 15 fps, rather than overallocate or lower fps.
         import random
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);source=root/'source.mkv';source.write_bytes(b'placeholder')
@@ -93,9 +98,16 @@ class PreviewToolsTest(unittest.TestCase):
                 return subprocess.CompletedProcess(args,0,b'\x11'*330752)
             with mock.patch.object(converter.shutil,'which',return_value='ffmpeg'),mock.patch.object(converter.subprocess,'run',side_effect=run):
                 result=converter.convert(source,root/'preview.3dv')
-            self.assertIn(60,durations);self.assertIn(30,durations)
+            self.assertEqual(durations,[48])
+            self.assertEqual(result['fps'],15)
+            self.assertLess(result['frames'],720)
             self.assertLessEqual(result['seconds'],30)
             self.assertLessEqual(result['bytes'],converter.MAX_BYTES)
+            next_count=result['frames']+1
+            frame_size=len(zlib.compress(converter.rgb555(random_frame),9))
+            next_audio=((next_count*735+3)//4)*4
+            self.assertGreater((next_count+1)*4+next_count*frame_size+next_audio,converter.MAX_BYTES)
+
             self.run_loader('video2large',root/'preview.3dv')
 
 

@@ -78,9 +78,9 @@ int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
     next.version=header[7]=='2' ? 2 : 1;
     next.frames=header[20]*256U+header[21]; next.fps=header[22]*256U+header[23];
     bytes=word(header+12);
-    if (!next.frames || !next.fps || next.fps>12) goto done;
+    if (!next.frames || !next.fps || next.fps>15) goto done;
     if (next.version==1) {
-        if (next.frames>USB_PREVIEW_MAX_FRAMES || bytes!=next.frames*(unsigned long)USB_ART_PIXELS) goto done;
+        if (next.frames>USB_PREVIEW_MAX_FRAMES || next.fps>12 || bytes!=next.frames*(unsigned long)USB_ART_PIXELS) goto done;
         next.video_bytes=bytes;
     } else {
         unsigned long expected;
