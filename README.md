@@ -24,6 +24,10 @@ release](https://github.com/Scyllinice/oh-my-3do/releases/latest). Back up the
 existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
+For the current preview-audio menu and maintenance tools, use the
+[v0.16.0-rc4 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc4).
+Its console images are unchanged from rc2; the new maintenance commands run on the PC.
+
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
 covers, previews, and save backups are optional.
