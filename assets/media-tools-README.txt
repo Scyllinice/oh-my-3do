@@ -92,6 +92,9 @@ matches, and destination collisions stay in place. No duplicate images are
 deleted. Existing artwork links are preserved; downloaded covers are native
 84x105 PNGs. Favorites, recent games, saved selection and media/search indices
 are updated. boot.iso, settings, NVRAM backups and music stay in place.
+Menu-written text is read up to its first NUL terminator, ignoring stale tails.
+Invalid saved positions reset to the USB root with a warning; undo restores
+the original file. Text changes are prepared before any discs are moved.
 
 To import EmuMovies covers instead of downloading covers, add:
   --cover-dir "D:/EmuMovies/Panasonic_3DO/<front-cover-folder>"

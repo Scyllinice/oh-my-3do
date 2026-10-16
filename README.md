@@ -579,6 +579,11 @@ USB root. The search and artwork indices are rebuilt automatically. Original
 empty game folders are retained. `boot.iso`, INI settings, save backups, and
 music are left in place.
 
+Menu-written text ends at its first NUL terminator; old bytes after that point
+are ignored when updating favorites, history, and saved position. An invalid
+saved-position file is reset to the USB root with a warning, and undo restores
+its original bytes. Text updates are prepared before any disc moves begin.
+
 The USB database lives in `.ohmy3do/library.sqlite`, with a readable
 `.ohmy3do/library.json` export. SQLite's `games` table contains paths, titles,
 regions, disc numbers, genre, publisher, year, developer, match type, and cover

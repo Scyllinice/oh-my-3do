@@ -335,6 +335,49 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         organizer.Transaction(self.root,path=journal).undo()
         self.assertEqual(before,snapshot(self.root))
 
+    def test_menu_nul_terminated_text_with_stale_tail_remaps_and_undoes(self):
+        source='Unsorted/old.iso';data=b'synthetic disc'
+        self.put(source,data);self.catalog['games']=[game('Example (USA)',[data])]
+        self.put('last-position.txt',b'OH3DO_POSITION1\n/Storage/Unsorted\nold.iso\n\0old data\nextra lines\n')
+        self.put('favorites.txt',b'Unsorted/old.iso\0Unsorted/stale.iso\n')
+        self.put('recent.txt',b'Unsorted/old.iso\n\0stale history')
+        before=snapshot(self.root)
+        tx=self.apply(self.scan())
+        target='Games/USA/Example (USA)/Example (USA).iso'
+        self.assertEqual((self.root/'favorites.txt').read_bytes(),target.encode())
+        self.assertEqual((self.root/'recent.txt').read_bytes(),target.encode()+b'\n')
+        self.assertEqual((self.root/'last-position.txt').read_bytes(),b'OH3DO_POSITION1\n/Storage/Games/USA/Example (USA)\nExample (USA).iso\n')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_invalid_saved_positions_reset_without_blocking_and_undo_restores_bytes(self):
+        for raw in (b'bad header\n',b'OH3DO_POSITION1\n/Storage/../bad\nold.iso\n',
+                    b'OH3DO_POSITION1\n/Other\nold.iso\n',b'OH3DO_POSITION1\n/Storage\n\xff\n',
+                    b'OH3DO_POSITION1\n/Storage\nold.iso\nextra\n'):
+            with self.subTest(raw=raw):
+                self.put('old.iso',b'synthetic');self.catalog['games']=[game('Example (USA)',[b'synthetic'])]
+                self.put('last-position.txt',raw);before=snapshot(self.root)
+                tx=self.apply(self.scan())
+                self.assertEqual((self.root/'last-position.txt').read_bytes(),b'OH3DO_POSITION1\n/Storage\n\n')
+                tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_saved_position_bom_crlf_and_empty_selection(self):
+        self.put('Unsorted/old.iso',b'synthetic');self.catalog['games']=[game('Example (USA)',[b'synthetic'])]
+        self.put('last-position.txt',b'\xef\xbb\xbfOH3DO_POSITION1\r\n/Storage/Unsorted\r\n\r\n\0')
+        before=snapshot(self.root)
+        tx=self.apply(self.scan())
+        self.assertEqual((self.root/'last-position.txt').read_bytes(),b'OH3DO_POSITION1\n/Storage\n\n')
+        tx.undo();self.assertEqual(before,snapshot(self.root))
+
+    def test_text_preflight_failure_does_not_create_journal_or_move_files(self):
+        self.put('old.iso',b'synthetic');self.catalog['games']=[game('Example (USA)',[b'synthetic'])]
+        self.put('favorites.txt',b'\xff')
+        before=snapshot(self.root)
+        with mock.patch.object(organizer.Transaction,'move',side_effect=AssertionError('No moves before text preflight')):
+            with self.assertRaises(UnicodeError):self.apply(self.scan())
+        self.assertEqual(before,snapshot(self.root))
+        self.assertFalse((self.root/'.ohmy3do/transactions').exists())
+
+
     def test_six_categories_move_to_separate_roots_and_undo(self):
         cases=[('Example (USA)','Adventure','Games'),('Example (USA) (Demo)','Adventure','Demos'),
                ('Interactive Sampler CD (USA)','Compilation','Samplers'),

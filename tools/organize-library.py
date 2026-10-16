@@ -728,14 +728,16 @@ class Transaction:
         self.save()
 
 
-def remap_text(root, tx, mapping):
+def prepare_text_remaps(root, mapping):
+    """Parse menu text before moving discs; firmware text ends at its first NUL."""
+    updates = {}
     folded = {index_tools.fold(k): v for k, v in mapping.items()}
     for name in ('favorites.txt', 'recent.txt'):
         path = relative_path(root, name)
         if not path.exists():
             continue
         raw = path.read_bytes()
-        text = raw.decode('utf-8-sig')
+        text = raw.split(b'\0', 1)[0].decode('utf-8-sig')
         lines = []
         for line in text.splitlines(keepends=True):
             # Favorites are volume-relative; comments and unknown paths survive.
@@ -748,19 +750,34 @@ def remap_text(root, tx, mapping):
         updated = ''.join(lines).encode('utf-8-sig' if raw.startswith(b'\xef\xbb\xbf') else 'utf-8')
         if len(updated) >= 8192:
             raise ValueError(f'Renamed paths exceed the menu limit for {name}')
-        tx.write(name, updated)
+        updates[name] = updated
     position = relative_path(root, 'last-position.txt')
     if position.exists():
-        lines = position.read_text(encoding='utf-8').splitlines()
-        if len(lines) != 3 or lines[0] != 'OH3DO_POSITION1':
-            raise ValueError('Invalid saved position; no files were reorganized')
+        raw = position.read_bytes().split(b'\0', 1)[0]
+        try:
+            lines = raw.decode('utf-8-sig').splitlines()
+            if len(raw) >= 9216 or len(lines) != 3 or lines[0] != 'OH3DO_POSITION1':
+                raise ValueError('Invalid saved-position header or length')
+            if lines[1] != '/Storage' and not lines[1].startswith('/Storage/'):
+                raise ValueError('Invalid saved-position root')
+            parts = lines[1][9:].split('/') if lines[1] != '/Storage' else []
+            if lines[2]:
+                parts.append(lines[2])
+            if len(lines[1].encode()) > 8192 or any(not part or len(part.encode()) >= 1024 or part in ('.', '..') or
+                    any(ord(c) < 32 or ord(c) == 127 or c in '/\\:' for c in part) for part in parts):
+                raise ValueError('Invalid saved-position path')
+        except (UnicodeError, ValueError):
+            print('Warning: invalid last-position.txt; resetting the saved menu position to the USB root. Undo restores the original file.')
+            updates['last-position.txt'] = b'OH3DO_POSITION1\n/Storage\n\n'
+            return updates
         folder = lines[1][9:] if lines[1].startswith('/Storage/') else ''
         current = (folder.rstrip('/') + '/' if folder else '') + lines[2]
         target = folded.get(index_tools.fold(current))
         if target:
-            tx.write('last-position.txt', ('OH3DO_POSITION1\n/Storage/' + str(PurePosixPath(target).parent) + '\n' + Path(target).name + '\n').encode())
+            updates['last-position.txt'] = ('OH3DO_POSITION1\n/Storage/' + str(PurePosixPath(target).parent) + '\n' + Path(target).name + '\n').encode()
         elif any(old.startswith(current.rstrip('/') + '/') or (folder and old.startswith(folder + '/')) for old in mapping):
-            tx.write('last-position.txt', b'OH3DO_POSITION1\n/Storage\n\n')
+            updates['last-position.txt'] = b'OH3DO_POSITION1\n/Storage\n\n'
+    return updates
 
 
 def media_index(mapping):
@@ -989,6 +1006,8 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
         path = relative_path(root, name)
         if path.exists() and (not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
             raise ValueError(f'Invalid support file: {name}')
+    mapping = {r['source']: r['target'] for r in rows}
+    text_updates = prepare_text_remaps(root, mapping)
     associations = {folder: asset_associations(root, folder) for folder in ('covers', 'previews')}
     # Media added after scan also takes precedence over imports and downloads.
     for row in rows:
@@ -1017,8 +1036,8 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
                 tx.move(move)
         for name, content in cues.items():
             tx.write(name, content)
-        mapping = {r['source']: r['target'] for r in rows}
-        remap_text(root, tx, mapping)
+        for name, content in text_updates.items():
+            tx.write(name, content)
         for name, content in prepared.items():
             tx.write('covers/' + name, content)
         for name, content in preview_files.items():
