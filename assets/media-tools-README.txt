@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.16.0-rc5)
+Oh My 3DO media tools (scanner v0.16.0-rc6)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.

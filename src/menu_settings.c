@@ -15,7 +15,7 @@ int menu_settings_save(Ode *ode, OdeReadBuffer reader, const MenuConfig *c)
     size_t used;
     memset(data,0,sizeof(data)); strcpy((char *)data,"; Saved by Oh My 3DO.\r\n[compatibility]\r\n");
     if (c->folder_workaround < 0 || c->folder_workaround > 1 || c->usb_covers < 0 || c->usb_covers > 1 ||
-        c->screen_margin < 0 || c->screen_margin > 12 || c->large_titles < 0 || c->large_titles > 1 || c->theme < 0 || c->theme > 2 ||
+        c->screen_margin < 0 || c->screen_margin > 12 || c->large_titles < 0 || c->large_titles > 1 || c->theme < 0 || c->theme >= MENU_THEME_COUNT ||
         c->remember_position < 0 || c->remember_position > 1 || c->recent_games < 0 || c->recent_games > 1 || c->video_previews < 0 || c->video_previews > 1 || c->preview_sound < 0 || c->preview_sound > 1) return -1;
     setting((char *)data,"folder_workaround",c->folder_workaround);
     strcat((char *)data,"\r\n[artwork]\r\n"); setting((char *)data,"usb_covers",c->usb_covers); setting((char *)data,"video_previews",c->video_previews);

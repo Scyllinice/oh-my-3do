@@ -52,7 +52,7 @@ pub fn config(path: &Path) -> Result<()> {
         ("usb_covers", 1),
         ("screen_margin", 12),
         ("large_titles", 1),
-        ("theme", 2),
+        ("theme", 3),
         ("remember_position", 1),
         ("recent_games", 1),
         ("video_previews", 1),

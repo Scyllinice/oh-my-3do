@@ -170,6 +170,15 @@ class MaintenanceTest(unittest.TestCase):
             m.prepare_usb(self.root,self.target,self.base/'copy.json',True)
         self.assertEqual(snapshot(self.target),{})
 
+    def test_settings_accept_gecko_tv_and_reject_unknown_themes(self):
+        path=self.root/'.ohmy3do/ohmy3do.ini'
+        original=path.read_bytes()
+        path.write_bytes(original.replace(b'theme=0',b'theme=3'))
+        m.validate_config(path)
+        path.write_bytes(original.replace(b'theme=0',b'theme=4'))
+        with self.assertRaisesRegex(ValueError,'Invalid menu setting'):
+            m.validate_config(path)
+
     def test_copy_preserves_destination_preferences_and_saves_then_skips_unchanged(self):
         self.put('.ohmy3do/saves/backup.3ds',b'staging save')
         self.put('.ohmy3do/saves/backup.3ds',b'USB save',self.target)

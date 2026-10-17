@@ -47,7 +47,7 @@ int menu_config_parse(MenuConfig *config, const char *data, size_t length)
             if (++digits > 2) return -1;
             value = value * 10 + data[eq++] - '0';
         }
-        if (!digits || value > (i == 2 ? 12 : (i == 4 ? 2 : 1))) return -1;
+        if (!digits || value > (i == 2 ? 12 : (i == 4 ? MENU_THEME_COUNT-1 : 1))) return -1;
         while (eq < end && space(data[eq])) ++eq;
         if (eq < end && data[eq] != '#' && data[eq] != ';') return -1;
         values[i] = value; seen |= 1U << i;

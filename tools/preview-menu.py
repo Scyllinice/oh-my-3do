@@ -250,6 +250,11 @@ int main(int argc, char **argv) {
     menu.logo=&logo;
     menu.message=NULL;
     if (argc > 1 && !strcmp(argv[1], "self-test")) {
+        menu.tool_selected=2; menu.config.theme=2;
+        change_config(&menu,1); if (menu.config.theme!=MENU_THEME_GECKO) abort();
+        change_config(&menu,1); if (menu.config.theme!=0) abort();
+        change_config(&menu,-1); if (menu.config.theme!=MENU_THEME_GECKO) abort();
+        menu.config.theme=0; menu.tool_selected=0;
         reading_menu=&menu;
         menu.selected=2;
         menu.ode.progress=progress;
@@ -746,6 +751,19 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1],"slot-details")) {
         preview_nvram_fixture(&menu.backup); menu.tools=TOOL_BACKUP_DETAILS; menu.backup_slot_valid=1;
     }
+    if (argc>1 && !strncmp(argv[1],"gecko",5)) {
+        static LibraryGameInfo gecko_info={"Alone in the Dark.iso","Adventure","Infogrames","1994-09-29"};
+        menu.config.theme=MENU_THEME_GECKO; menu.selected=2;
+        if (strcmp(argv[1],"gecko") && strcmp(argv[1],"gecko-folder")) { menu.metadata.entries=&gecko_info; menu.metadata.count=1; }
+        if (!strcmp(argv[1],"gecko-folder")) menu.selected=0;
+        if (!strcmp(argv[1],"gecko-cover")) menu.cover=&cover;
+        if (!strcmp(argv[1],"gecko-tools")) menu.tools=TOOL_HOME;
+        if (!strcmp(argv[1],"gecko-settings")) { menu.tools=TOOL_CONFIG; menu.tool_selected=2; }
+        if (!strcmp(argv[1],"gecko-margin")) menu.config.screen_margin=12;
+        if (!strcmp(argv[1],"gecko-large")) menu.config.large_titles=1;
+        if (!strcmp(argv[1],"gecko-alphabet")) { menu.selected=0; alphabet_input(&menu,ControlUp); }
+        menu.saved_config=menu.config;
+    }
     if (argc>1 && !strncmp(argv[1],"metadata",8)) {
         static LibraryGameInfo info={"Alone in the Dark.iso","Adventure","Infogrames","1994-09-29"};
         menu.metadata.entries=&info; menu.metadata.count=1; menu.selected=2; menu.cover=&cover;
@@ -806,8 +824,12 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
+            if mode.startswith("gecko"):
+                assert "L GECKO TV" in commands
+            if mode == "gecko-settings":
+                assert "L Theme: Gecko TV" in commands
             if mode in ("metadata","metadata-large","metadata-margin"):
                 assert "L Genre: Adventure" in commands and "L Publisher: Infogrames" in commands and "L Released: 1994-09-29" in commands
             if mode == "metadata-missing":

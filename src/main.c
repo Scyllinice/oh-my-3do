@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc5"
+#define MENU_VERSION "0.16.0-rc6"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -47,14 +47,16 @@
 #define TOOL_FIND 15
 #define TOOL_RESULTS 16
 #define MAX_DEPTH 32
-#define BG (menu->config.theme == 1 ? MakeRGB15(0,0,0) : MakeRGB15(1,2,4))
-#define TEXT (menu->config.theme == 1 ? MakeRGB15(31,31,31) : MakeRGB15(29,29,26))
-#define MUTED (menu->config.theme == 1 ? MakeRGB15(27,27,27) : MakeRGB15(25,27,29))
-#define ACCENT (menu->config.theme ? MakeRGB15(31,25,10) : MakeRGB15(7,26,22))
-#define PANEL (menu->config.theme == 1 ? MakeRGB15(1,1,1) : (menu->config.theme == 2 ? MakeRGB15(4,3,8) : MakeRGB15(2,4,7)))
-#define LINE (menu->config.theme == 1 ? MakeRGB15(12,12,12) : (menu->config.theme == 2 ? MakeRGB15(11,7,15) : MakeRGB15(5,9,12)))
-#define SELECT (menu->config.theme == 1 ? MakeRGB15(7,7,7) : (menu->config.theme == 2 ? MakeRGB15(10,6,13) : MakeRGB15(4,10,13)))
-#define DIM (menu->config.theme == 1 ? MakeRGB15(13,13,13) : MakeRGB15(9,11,14))
+#define GECKO (menu->config.theme == MENU_THEME_GECKO)
+#define BG (GECKO ? MakeRGB15(2,0,4) : (menu->config.theme == 1 ? MakeRGB15(0,0,0) : MakeRGB15(1,2,4)))
+#define TEXT (GECKO ? MakeRGB15(31,31,25) : (menu->config.theme == 1 ? MakeRGB15(31,31,31) : MakeRGB15(29,29,26)))
+#define MUTED (GECKO ? MakeRGB15(27,29,25) : (menu->config.theme == 1 ? MakeRGB15(27,27,27) : MakeRGB15(25,27,29)))
+#define ACCENT (GECKO ? MakeRGB15(23,30,5) : (menu->config.theme ? MakeRGB15(31,25,10) : MakeRGB15(7,26,22)))
+#define PANEL (GECKO ? MakeRGB15(5,2,8) : (menu->config.theme == 1 ? MakeRGB15(1,1,1) : (menu->config.theme == 2 ? MakeRGB15(4,3,8) : MakeRGB15(2,4,7))))
+#define LINE (GECKO ? MakeRGB15(13,8,18) : (menu->config.theme == 1 ? MakeRGB15(12,12,12) : (menu->config.theme == 2 ? MakeRGB15(11,7,15) : MakeRGB15(5,9,12))))
+#define SELECT (GECKO ? MakeRGB15(11,5,15) : (menu->config.theme == 1 ? MakeRGB15(7,7,7) : (menu->config.theme == 2 ? MakeRGB15(10,6,13) : MakeRGB15(4,10,13))))
+#define DIM (GECKO ? MakeRGB15(13,12,17) : (menu->config.theme == 1 ? MakeRGB15(13,13,13) : MakeRGB15(9,11,14)))
+#define TV_ORANGE MakeRGB15(31,15,3)
 #define AMBER MakeRGB15(30, 22, 9)
 
 #define UI_TEXT_CACHE 64
@@ -301,8 +303,8 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
     int max_width=(308-x)*(320-2*margin)/320;
     Color background=BG;
     if (menu->text_background_set) background=menu->text_background;
-    else if (y<52) background=menu->config.theme == 1 ? MakeRGB15(1,1,1) :
-        (menu->config.theme == 2 ? MakeRGB15(4,3,9-(y/24)/3) : MakeRGB15(2,4,9-(y/24)/2));
+    else if (y<52) background=GECKO ? MakeRGB15(8-(y/24)/2,2,13-(y/24)/2) : (menu->config.theme == 1 ? MakeRGB15(1,1,1) :
+        (menu->config.theme == 2 ? MakeRGB15(4,3,9-(y/24)/3) : MakeRGB15(2,4,9-(y/24)/2)));
     else if (y<186) background=PANEL;
     if (max_width>UI_FONT_WIDTH) max_width=UI_FONT_WIDTH;
     if (max_width<=0 || !*string) return;
@@ -402,11 +404,21 @@ static void backdrop(Menu *menu)
     int i;
     rectangle(menu,0,0,320,240,BG);
     for (i=0;i<8;++i) {
-        Color shade=menu->config.theme == 1 ? MakeRGB15(1,1,1) :
-            (menu->config.theme == 2 ? MakeRGB15(4,3,9-i/3) : MakeRGB15(2,4,9-i/2));
+        Color shade=GECKO ? MakeRGB15(8-i/2,2,13-i/2) : (menu->config.theme == 1 ? MakeRGB15(1,1,1) :
+            (menu->config.theme == 2 ? MakeRGB15(4,3,9-i/3) : MakeRGB15(2,4,9-i/2)));
         rectangle(menu,0,i*24,320,24,shade);
     }
     rectangle(menu,0,210,320,30,BG);
+    if (GECKO) {
+        /* Casing details stay outside text and artwork: no scanline overlay. */
+        for (i=0;i<5;++i) {
+            rectangle(menu,3,61+i*26,5,12,LINE);
+            rectangle(menu,312,72+i*26,5,12,LINE);
+        }
+        rectangle(menu,14,208,292,1,LINE);
+        rectangle(menu,14,208,48,1,ACCENT);
+        rectangle(menu,64,208,18,1,TV_ORANGE);
+    }
 }
 
 
@@ -492,7 +504,14 @@ static void draw_alphabet(Menu *menu)
 }
 static void brand(Menu *menu,const char *title)
 {
-    if (menu->logo) {
+    if (GECKO) {
+        rounded(menu,10,3,100,43,LINE);
+        rounded(menu,13,6,94,36,SELECT);
+        label_on(menu,20,10,"OH MY 3DO",ACCENT,UI_FONT_NORMAL,SELECT);
+        label_on(menu,22,27,"GECKO TV",TV_ORANGE,UI_FONT_SMALL,SELECT);
+        rectangle(menu,118,5,39,2,TV_ORANGE);
+        rectangle(menu,159,5,17,2,ACCENT);
+    } else if (menu->logo) {
         CCB logo=*menu->logo;
         logo.ccb_XPos=12<<16; logo.ccb_YPos=5<<16;
         logo.ccb_HDX=(1<<20)*2/3; logo.ccb_VDY=(1<<16)*2/3;
@@ -510,7 +529,28 @@ static void media_cel(Menu *menu,CCB *source)
 static void media_placeholder(Menu *menu,int folder)
 {
     int y=91;
-    if (folder) {
+    if (GECKO) {
+        rounded(menu,29,87,59,46,LINE);
+        rounded(menu,33,91,48,34,SELECT);
+        if (folder) {
+            rounded(menu,40,100,16,6,ACCENT);
+            rounded(menu,39,104,33,15,ACCENT);
+            rectangle(menu,43,109,25,6,SELECT);
+        } else {
+            /* Original little lizard silhouette: no game sprites or logos. */
+            rounded(menu,43,98,23,23,ACCENT);
+            rounded(menu,57,105,20,12,ACCENT);
+            rectangle(menu,45,102,10,5,BG);
+            rectangle(menu,58,102,10,5,BG);
+            rectangle(menu,54,103,5,2,BG);
+            rectangle(menu,62,112,12,2,SELECT);
+        }
+        rectangle(menu,82,96,3,3,TV_ORANGE);
+        rectangle(menu,82,103,3,3,ACCENT);
+        rectangle(menu,39,133,11,3,LINE);
+        rectangle(menu,68,133,11,3,LINE);
+        label(menu,folder ? 29 : 34,142,folder ? "Browse folder" : "No artwork",MUTED,UI_FONT_SMALL);
+    } else if (folder) {
         rounded(menu,35,y+4,23,10,ACCENT);
         rounded(menu,32,y+11,49,32,ACCENT);
         rectangle(menu,36,y+17,41,20,SELECT);
@@ -558,6 +598,7 @@ static void draw(Menu *menu)
     format(line,"%lu discs",(unsigned long)menu->playlist.count);
     label_on(menu,252,14,line,menu->playlist.count ? MakeRGB15(1,2,4) : MUTED,UI_FONT_SMALL,menu->playlist.count ? ACCENT : LINE);
     rounded(menu,left,54,width,132,BG);
+    if (GECKO) rounded(menu,left-2,50,width+4,136,LINE);
     rounded(menu,left,52,width,132,PANEL);
     if (menu->view_valid || menu->review) {
         for (i=start;i<total && i<start+rows;++i) {
@@ -575,7 +616,17 @@ static void draw(Menu *menu)
                 label_on(menu,left+9,y+3,line,ink,UI_FONT_SMALL,i==selected ? (menu->alphabet_active ? SELECT : ACCENT) : PANEL);
                 title_x=left+28; room=width-40;
             } else if (directory) folder_icon(menu,left+9,y+5,ink);
-            else {
+            else if (GECKO && i==selected) {
+                rectangle(menu,left+12,y+8,4,4,ink);
+                rectangle(menu,left+8,y+5,2,2,ink);
+                rectangle(menu,left+12,y+3,2,2,ink);
+                rectangle(menu,left+17,y+5,2,2,ink);
+                rectangle(menu,left+18,y+10,2,2,ink);
+            } else if (GECKO) {
+                rectangle(menu,left+9,y+5,10,7,ink);
+                rectangle(menu,left+11,y+7,6,3,PANEL);
+                rectangle(menu,left+11,y+13,6,1,ink);
+            } else {
                 rounded(menu,left+10,y+5,7,7,ink);
                 rectangle(menu,left+13,y+8,1,1,i==selected ? ACCENT : PANEL);
             }
@@ -588,6 +639,7 @@ static void draw(Menu *menu)
         }
     }
     if (!menu->review) {
+        if (GECKO) rounded(menu,12,50,98,136,LINE);
         rounded(menu,14,54,94,132,BG); rounded(menu,14,52,94,132,PANEL);
         if (menu->preview_cel && menu->preview.pixels) {
             unsigned long elapsed=now-menu->preview_since;
@@ -606,7 +658,12 @@ static void draw(Menu *menu)
             if (menu->preview_cel) media_cel(menu,menu->preview_cel);
         } else if (menu->cover) media_cel(menu,menu->cover);
         else media_placeholder(menu,chosen ? chosen->is_directory : (menu->listing.has_parent && !selected));
-        label(menu,24,168,menu->preview_cel ? "Playing preview" : (chosen && chosen->is_directory ? "Folder" : "Game library"),MUTED,UI_FONT_SMALL);
+        label(menu,24,168,GECKO ? (menu->preview_cel ? "ON AIR" : "TV LIBRARY") : (menu->preview_cel ? "Playing preview" : (chosen && chosen->is_directory ? "Folder" : "Game library")),MUTED,UI_FONT_SMALL);
+        if (GECKO) {
+            rectangle(menu,22,180,26,1,LINE);
+            rectangle(menu,51,180,26,1,LINE);
+            rectangle(menu,96,177,4,4,menu->preview_cel ? ACCENT : TV_ORANGE);
+        }
         draw_alphabet(menu);
         if (menu->metadata.count) {
             static char path[9217];
@@ -1698,7 +1755,7 @@ static void change_config(Menu *menu, int direction)
     if (menu->tool_selected == 5) { menu->settings_video_previews = !menu->settings_video_previews; return; }
     if (!menu->tool_selected) menu->config.screen_margin = (menu->config.screen_margin + direction + 13) % 13;
     else if (menu->tool_selected == 1) menu->config.large_titles = !menu->config.large_titles;
-    else if (menu->tool_selected == 2) menu->config.theme = (menu->config.theme + direction + 3) % 3;
+    else if (menu->tool_selected == 2) menu->config.theme = (menu->config.theme + direction + MENU_THEME_COUNT) % MENU_THEME_COUNT;
     else if (menu->tool_selected == 3) menu->settings_folder_workaround = !menu->settings_folder_workaround;
     else if (menu->tool_selected == 4) menu->settings_usb_covers = !menu->settings_usb_covers;
     else if (menu->tool_selected == 6) menu->settings_remember_position = !menu->settings_remember_position;
@@ -1921,7 +1978,7 @@ static void draw_tools(Menu *menu)
         for (i = start; i < 12 && i < start+9; ++i) {
             if (!i) format(line,"Screen margin: %d",menu->config.screen_margin);
             else if (i == 1) format(line,"Large game titles: %s",menu->config.large_titles ? "ON" : "OFF");
-            else if (i == 2) format(line,"Theme: %s",menu->config.theme == 1 ? "High contrast" : (menu->config.theme == 2 ? "Amber" : "Teal"));
+            else if (i == 2) format(line,"Theme: %s",GECKO ? "Gecko TV" : (menu->config.theme == 1 ? "High contrast" : (menu->config.theme == 2 ? "Amber" : "Teal")));
             else if (i == 3) format(line,"Folder workaround: %s",menu->settings_folder_workaround ? "ON" : "OFF");
             else if (i == 4) format(line,"USB covers: %s",menu->settings_usb_covers ? "ON" : "OFF");
             else if (i == 6) format(line,"Remember position: %s",menu->settings_remember_position ? "ON" : "OFF");
@@ -1934,7 +1991,7 @@ static void draw_tools(Menu *menu)
             if (i == menu->tool_selected) rectangle(menu,16,81+(i-start)*12,287,12,LINE);
             label_on(menu,24,82+(i-start)*12,line,i == menu->tool_selected ? TEXT : MUTED,UI_FONT_SMALL,i==menu->tool_selected ? LINE : PANEL);
         }
-        label(menu,24,194,"Music + display apply now. C saves.",MUTED,UI_FONT_SMALL);
+        label(menu,24,194,"Sound + display apply now. C saves.",MUTED,UI_FONT_SMALL);
         label(menu,270,64,start ? "2 / 2" : "1 / 2",MUTED,UI_FONT_SMALL);
     } else if (menu->tools == TOOL_RESULTS) {
         count=menu->search_count;

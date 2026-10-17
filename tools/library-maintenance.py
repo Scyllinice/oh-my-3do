@@ -369,7 +369,7 @@ def validate_config(path):
     if len(data)>512 or b'\0' in data:
         raise ValueError('Invalid settings length or NUL padding: ' + str(path))
     values = {}
-    limits = dict(folder_workaround=1,usb_covers=1,screen_margin=12,large_titles=1,theme=2,
+    limits = dict(folder_workaround=1,usb_covers=1,screen_margin=12,large_titles=1,theme=3,
                   remember_position=1,recent_games=1,video_previews=1,menu_music=1,preview_sound=1)
     ended = False
     for line in data.decode('utf-8-sig').split('\n'):

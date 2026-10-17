@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu and media-tools version is **0.16.0-rc5**.
+menu and media-tools version is **0.16.0-rc6**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -25,7 +25,7 @@ existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
 For the current preview-audio menu, game information panel, and maintenance tools, use the
-[v0.16.0-rc5 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc5).
+[v0.16.0-rc6 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc6).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -294,12 +294,23 @@ while an uncertain transport or failed folder restoration blocks it.
 ## Display preferences and configuration
 
 Tools → Settings exposes every INI setting: additional screen
-margins (0–12 pixels), larger game/queue titles, teal/high-contrast/amber
+margins (0–12 pixels), larger game/queue titles, teal/high-contrast/amber/Gecko TV
 themes, the folder compatibility workaround, USB covers, video previews,
 remembered position, recent games, and preview sound. Left/Right or A changes the selected
 value. Preview sound and display changes take effect immediately. Save the remaining
 options and cold boot to apply them. The settings list spans two pages; keep
 pressing Down to reach the remaining actions, or press C to save from either page.
+
+**Gecko TV** is a Gex-inspired theme with purple TV casing, lime selection
+highlights, orange accents, a gecko cursor and original lizard artwork. Select
+it under **Tools → Settings → Theme**, then press **C** to save. It can also be
+enabled with `theme=3` in `.ohmy3do/ohmy3do.ini`. Existing themes retain their
+numbers and the default remains teal. Use desktop v0.1.2 or newer when preparing
+a USB copy with Gecko TV settings.
+
+![Gecko TV layout preview](docs/images/gecko-tv.png)
+
+Layout preview rendered from the menu drawing code.
 
 **C** or **Save changes to USB** writes all nine settings, closes/reopens the
 file and verifies every byte. B returns without writing; unsaved display
@@ -354,7 +365,7 @@ FCare's directory-local ID collision bug. Keep the existing value if folder
 navigation already works. `Compat on` appears at the bottom of the browser when
 the workaround is enabled. `usb_covers` and `video_previews` are 0/1; previews
 default off. Margin is 0–12; large titles is 0/1; theme is 0 teal, 1 high
-contrast, 2 amber. The two library settings are 0/1. Old configs containing only
+contrast, 2 amber, or 3 Gecko TV. The two library settings are 0/1. Old configs containing only
 the earlier keys remain valid and use display defaults. Unknown/duplicate
 settings or invalid values reject the config. PC text must stay below 512 bytes unless it retains all nine settings and the
 end comment within the first 512 bytes;
@@ -413,7 +424,7 @@ covers/previews, download missing covers, and prepare a USB copy. Disc sources
 are preserved. The app runs standalone without Python or Docker.
 
 Portable builds are available in the
-[desktop v0.1.1 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.1).
+[desktop v0.1.2 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.2).
 Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
 Windows x64 and Linux x64 builds are provided; macOS can be built from source
 but has not been packaged here. Preview conversion uses separate native

@@ -100,6 +100,20 @@ fn metadata_export_matches_console_fixture_and_rejects_corruption() {
         assert!(library::metadata_paths(&bad).is_err());
     }
 }
+
+#[test]
+fn usb_configuration_accepts_gecko_tv_and_rejects_unknown_themes() {
+    let temp = tempfile::tempdir().unwrap();
+    let text = include_str!("../../ohmy3do.ini");
+    let path = put(
+        temp.path(),
+        "settings.ini",
+        text.replace("theme=0", "theme=3").as_bytes(),
+    );
+    usb::config(&path).unwrap();
+    fs::write(&path, text.replace("theme=0", "theme=4")).unwrap();
+    assert!(usb::config(&path).is_err());
+}
 #[test]
 fn scanner_identifies_converted_iso_without_changing_input() {
     let t = tempfile::tempdir().unwrap();

@@ -153,7 +153,8 @@ static void display_config(void)
     assert(!menu_config_parse(&c,valid,strlen(valid)));
     assert(c.folder_workaround && c.screen_margin == 12 && c.large_titles && c.theme == 2 && c.usb_covers);
     assert(menu_config_parse(&c,"screen_margin=13",16) < 0 && !c.folder_workaround && !c.screen_margin);
-    assert(menu_config_parse(&c,"theme=3",7) < 0);
+    assert(!menu_config_parse(&c,"theme=3",7) && c.theme == MENU_THEME_GECKO);
+    assert(menu_config_parse(&c,"theme=4",7) < 0);
     assert(!menu_config_parse(&c,"[audio]\nmenu_music=1\n",strlen("[audio]\nmenu_music=1\n")) && c.preview_sound);
     assert(!menu_config_parse(&c,"[audio]\nmenu_music=0\npreview_sound=0\n",strlen("[audio]\nmenu_music=0\npreview_sound=0\n")) && !c.preview_sound);
     menu_config_defaults(&c);

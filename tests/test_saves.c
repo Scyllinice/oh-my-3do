@@ -139,7 +139,7 @@ int main(void)
         MenuConfig config, parsed;
         char text[8192]; size_t length;
         menu_config_defaults(&config); config.folder_workaround=1; config.usb_covers=0;
-        config.screen_margin=12; config.large_titles=1; config.theme=2;
+        config.screen_margin=12; config.large_titles=1; config.theme=MENU_THEME_GECKO;
         setup(&f,&ode);
         strcpy((char *)f.file,"folder_workaround=1\n"); f.size=MENU_CONFIG_BYTES;
         assert(!menu_config_load(&ode,reader,&parsed) && parsed.folder_workaround);
@@ -150,7 +150,7 @@ int main(void)
         assert(!menu_config_load(&ode,reader,&parsed));
         assert(parsed.folder_workaround && parsed.screen_margin==12);
         assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
-        assert(parsed.folder_workaround == 1 && !parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2);
+        assert(parsed.folder_workaround == 1 && !parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == MENU_THEME_GECKO);
         /* Rewrite a shorter single-digit margin over the existing 512-byte
          * file, then load through the actual startup USB reader. */
         config.screen_margin=8;
@@ -164,7 +164,7 @@ int main(void)
         assert(!menu_settings_save(&ode,reader,&config));
         assert(!menu_config_load(&ode,reader,&parsed) && ode.support_directory && parsed.screen_margin==12);
         assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
-        assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == 2 && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.preview_sound);
+        assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && parsed.theme == MENU_THEME_GECKO && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.preview_sound);
         setup(&f,&ode); f.short_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
         setup(&f,&ode); f.no_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
         setup(&f,&ode); memcpy(f.file,"Games/D.iso\n",12); f.size=12;

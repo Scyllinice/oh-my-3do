@@ -75,6 +75,9 @@ library database. The v0.16.0-rc5 console menu uses it to show the selected
 game's genre, publisher and release date. A year is shown when no full date
 is available. The optional index is included in USB preparation.
 
+Desktop v0.1.2 accepts and copies Gecko TV settings (`theme=3`), introduced
+in console v0.16.0-rc6. Older desktop builds reject this new theme value.
+
 Graphics uses a working GPU when available, with software fallback if device
 creation fails. **Tools & settings** shows the active adapter and offers a
 software graphics override; restart after changing it. The compatibility
