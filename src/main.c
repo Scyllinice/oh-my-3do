@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc6"
+#define MENU_VERSION "0.16.0-rc7"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -507,16 +507,17 @@ static void brand(Menu *menu,const char *title)
     if (GECKO) {
         rounded(menu,10,3,100,43,LINE);
         rounded(menu,13,6,94,36,SELECT);
-        label_on(menu,20,10,"OH MY 3DO",ACCENT,UI_FONT_NORMAL,SELECT);
-        label_on(menu,22,27,"GECKO TV",TV_ORANGE,UI_FONT_SMALL,SELECT);
         rectangle(menu,118,5,39,2,TV_ORANGE);
         rectangle(menu,159,5,17,2,ACCENT);
-    } else if (menu->logo) {
+    }
+    if (menu->logo) {
         CCB logo=*menu->logo;
-        logo.ccb_XPos=12<<16; logo.ccb_YPos=5<<16;
+        logo.ccb_XPos=(GECKO ? 16 : 12)<<16;
+        logo.ccb_YPos=(GECKO ? 8 : 5)<<16;
         logo.ccb_HDX=(1<<20)*2/3; logo.ccb_VDY=(1<<16)*2/3;
         draw_cel(menu,&logo);
-    } else label(menu,14,15,"Oh My 3DO",TEXT,UI_FONT_NORMAL);
+    } else if (GECKO) label_on(menu,20,15,"OH MY 3DO",ACCENT,UI_FONT_NORMAL,SELECT);
+    else label(menu,14,15,"Oh My 3DO",TEXT,UI_FONT_NORMAL);
     label(menu,118,8,title,TEXT,UI_FONT_HEADING);
 }
 static void media_cel(Menu *menu,CCB *source)

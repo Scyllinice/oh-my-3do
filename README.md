@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu and media-tools version is **0.16.0-rc6**.
+menu version is **0.16.0-rc7**; media tools are **0.16.0-rc6**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -25,7 +25,7 @@ existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
 For the current preview-audio menu, game information panel, and maintenance tools, use the
-[v0.16.0-rc6 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc6).
+[v0.16.0-rc7 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc7).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -302,7 +302,8 @@ options and cold boot to apply them. The settings list spans two pages; keep
 pressing Down to reach the remaining actions, or press C to save from either page.
 
 **Gecko TV** is a Gex-inspired theme with purple TV casing, lime selection
-highlights, orange accents, a gecko cursor and original lizard artwork. Select
+highlights, orange accents, a gecko cursor and original lizard artwork. The
+graphical Oh My 3DO logo sits inside the matching TV frame. Select
 it under **Tools → Settings → Theme**, then press **C** to save. It can also be
 enabled with `theme=3` in `.ohmy3do/ohmy3do.ini`. Existing themes retain their
 numbers and the default remains teal. Use desktop v0.1.2 or newer when preparing

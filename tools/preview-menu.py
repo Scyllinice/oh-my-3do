@@ -827,7 +827,7 @@ def main():
         for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode.startswith("gecko"):
-                assert "L GECKO TV" in commands
+                assert sum(command.startswith("I 1 ") for command in commands) == 1, "Gecko TV must retain the graphical logo"
             if mode == "gecko-settings":
                 assert "L Theme: Gecko TV" in commands
             if mode in ("metadata","metadata-large","metadata-margin"):
