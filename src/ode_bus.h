@@ -7,6 +7,7 @@
 typedef struct OdeBus {
     Item device;
     Item request;
+    Item data_request;
     Item timer;
     int timed_out;
     Err last_error;

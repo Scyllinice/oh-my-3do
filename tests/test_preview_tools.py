@@ -62,6 +62,15 @@ class PreviewToolsTest(unittest.TestCase):
             for data in bads:
                 path.write_bytes(data);self.run_loader('badvideo2',path)
 
+    def test_later_frames_decode_on_playback_not_during_startup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data=bytearray(container(2))
+            second=struct.unpack_from('>I',data,44)[0]
+            data[40+second]=0
+            struct.pack_into('>I',data,16,binascii.crc32(data[40:-8]))
+            path=Path(temp)/'late-bad.3dv';path.write_bytes(data)
+            self.run_loader('latebadvideo2',path)
+
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),'FFmpeg is required')
     def test_full_source_audio_and_legacy_conversion(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc7**; media tools are **0.16.0-rc6**.
+menu version is **0.16.0-rc8**; media tools are **0.16.0-rc6**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -25,7 +25,7 @@ existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
 For the current preview-audio menu, game information panel, and maintenance tools, use the
-[v0.16.0-rc7 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc7).
+[v0.16.0-rc8 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc8).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -1041,15 +1041,21 @@ integration requires separate developer access from
 Downloaded footage is not included in this repository or its releases.
 
 Covers start loading after 350 ms without a selection change; previews wait 1.2
-seconds. A whole clip is checked and loaded into RAM before playback, so looping
+seconds. A whole clip is loaded into RAM before playback, so looping
 needs no USB reads. The new payload cap is 1 MiB, plus a frame buffer and decoder
 state. Longer clips may take longer to load and can be cancelled. Pressing a button
 cancels an in-progress media load or stops playback. Selecting another game
 releases the clip; a stopped clip waits for a new selection before retrying.
-Missing, corrupt or cancelled previews leave the static cover available. Actual
+The menu verifies the payload CRC, footer, every frame boundary and the first
+frame before starting. Later frames are decompressed and checked as they play;
+a bad frame stops the preview and restores the static cover. This avoids
+decompressing the entire clip twice. PC USB validation still checks every frame.
+Missing or cancelled previews leave the static cover available. Actual
 USB loading time depends on the firmware and folder navigation. The diagnostics
-export includes `preview_result`, `preview_load_ms`, `preview_sound` and
-`preview_audio_status` for the last attempt. The
+export includes total load time, read/CRC time, checks/first-frame time,
+folder-navigation time, audio/display setup time, payload size and command count
+for the last attempt. `preview_result=-3` means a later frame failed to decode.
+Existing preview files work without reconversion. The
 binary layouts are documented in [docs/media-format.md](docs/media-format.md).
 
 For faster cover reads, convert artwork to the compact `.3dc` format:
@@ -1095,9 +1101,11 @@ which catalog release it belongs to.
 
 ## Diagnostics and compatibility limits
 
-L+R → Diagnostics has three pages (Left/Right): reported identity/revision and
+L+R → Diagnostics has four pages (Left/Right): reported identity/revision and
 raw `93` reply; active settings and session results; XBUS replies, command
-count, last fault, timeout and navigation state. Viewing diagnostics sends no
+count, last fault, timeout and navigation state; and a preview loading breakdown.
+Use the last page after a slow preview to distinguish reading from checks,
+folder restoration and audio setup. Viewing diagnostics sends no
 commands and remains available after a transport failure. USB write-check
 results appear only after the automatic check has run.
 

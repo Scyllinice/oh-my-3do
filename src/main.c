@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc7"
+#define MENU_VERSION "0.16.0-rc8"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -132,6 +132,9 @@ typedef struct Menu {
     unsigned long preview_since;
     unsigned int preview_frame;
     unsigned long preview_load_ms;
+    unsigned long preview_read_ms, preview_check_ms, preview_navigation_ms, preview_setup_ms;
+    unsigned long preview_bytes, preview_commands;
+    unsigned int preview_frames, preview_fps;
     int preview_result;
     CCB *logo;
     CCB *cover;
@@ -653,7 +656,9 @@ static void draw(Menu *menu)
             }
             frame=(unsigned int)tick;
             if (frame!=menu->preview_frame) {
-                if (usb_preview_frame(&menu->preview,frame,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) stop_preview(menu);
+                if (usb_preview_frame(&menu->preview,frame,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) {
+                    stop_preview(menu); menu->preview_result=-3;
+                }
                 else menu->preview_frame=frame;
             }
             if (menu->preview_cel) media_cel(menu,menu->preview_cel);
@@ -926,12 +931,29 @@ positioned:
 typedef struct PreviewRead {
     Menu *menu;
     const char *file;
+    unsigned long started, checked, finished;
+    int checking;
 } PreviewRead;
+static void preview_phase(void *context,int phase)
+{
+    PreviewRead *read=(PreviewRead *)context;
+    unsigned long now=now_ms(read->menu);
+    if (phase==1) {
+        read->checked=now; read->checking=1;
+        read->menu->preview_read_ms=now-read->started;
+    } else if (read->checking) read->menu->preview_check_ms=now-read->checked;
+    else read->menu->preview_read_ms=now-read->started;
+}
 static int read_usb_preview(void *context)
 {
     PreviewRead *read = (PreviewRead *)context;
-    return usb_preview_load(&read->menu->ode,ode_bus_read_buffer,read->file,
-                            &read->menu->preview,media_cancel,read->menu);
+    int result;
+    read->started=now_ms(read->menu);
+    result=usb_preview_load_profiled(&read->menu->ode,ode_bus_read_buffer,read->file,
+                            &read->menu->preview,media_cancel,read->menu,preview_phase,read);
+    read->finished=now_ms(read->menu);
+    if (!read->checking) read->menu->preview_read_ms=read->finished-read->started;
+    return result;
 }
 static void update_preview(Menu *menu)
 {
@@ -942,7 +964,7 @@ static void update_preview(Menu *menu)
     PreviewRead read;
     unsigned int i;
     int result;
-    unsigned long started;
+    unsigned long started, commands, setup_started;
     if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE") || !menu->config.video_previews || menu->preview_attempted || menu->demo || menu->tools ||
         menu->review || menu->alphabet_active || !menu->ready || menu->loading || menu->bus.timed_out ||
         menu->ode.navigation_failed || !menu->usb_previews.count || now_ms(menu)-menu->selection_since < 1200UL) return;
@@ -959,25 +981,40 @@ static void update_preview(Menu *menu)
     free(path);
     if (!file) return;
     for (i=0;i<menu->depth;++i) { route[i].id=menu->path_ids[i]; route[i].name=menu->path[i]; }
+    memset(&read,0,sizeof(read));
     read.menu=menu; read.file=file; message=menu->message;
     menu->message="Loading preview... Press to cancel."; draw(menu);
-    menu->media_cancelled=0; started=now_ms(menu);
+    menu->media_cancelled=0; started=now_ms(menu); commands=menu->bus.commands;
+    menu->preview_read_ms=menu->preview_check_ms=menu->preview_bytes=0;
+    menu->preview_frames=menu->preview_fps=0;
     result=art_at_root(&menu->ode,route,menu->depth,&menu->listing,
                        menu->config.folder_workaround,read_usb_preview,&read);
     menu->message=message;
-    menu->preview_load_ms=now_ms(menu)-started; menu->preview_result=result ? -1 : 1;
+    setup_started=now_ms(menu);
+    menu->preview_navigation_ms=setup_started-started-(read.finished-read.started);
+    menu->preview_result=result ? -1 : 1;
     if (!result && menu->media_cancelled) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-1; }
     if (!result) {
         menu->preview_cel=CreateCel(64,80,16,CREATECEL_UNCODED,NULL);
         if (menu->preview_cel) {
             menu->preview_cel->ccb_XPos=236<<16; menu->preview_cel->ccb_YPos=86<<16;
             menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;
-            usb_preview_frame(&menu->preview,0,(unsigned char *)menu->preview_cel->ccb_SourcePtr);
+            if (menu->preview.version==2 && menu->preview.frame_buffer)
+                memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.frame_buffer,USB_ART_PIXELS);
+            else if (usb_preview_frame(&menu->preview,0,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) {
+                stop_preview(menu); menu->preview_result=-1; goto preview_done;
+            }
             if (menu->config.preview_sound && menu->preview.audio)
                 preview_audio_start(&menu->preview_audio,menu->preview.audio,menu->preview.audio_frames,menu->preview.audio_rate);
             menu->preview_frame=0; menu->preview_since=now_ms(menu);
+            menu->preview_bytes=menu->preview.video_bytes+menu->preview.audio_bytes;
+            menu->preview_frames=menu->preview.frames; menu->preview_fps=menu->preview.fps;
         } else { usb_preview_free(&menu->preview); menu->preview_result=-1; }
     }
+preview_done:
+    menu->preview_setup_ms=now_ms(menu)-setup_started;
+    menu->preview_load_ms=now_ms(menu)-started;
+    menu->preview_commands=menu->bus.commands-commands;
     if (result == -2 || menu->bus.timed_out || menu->ode.navigation_failed) {
         stop_preview(menu); menu->ode.navigation_failed=1; menu->ready=menu->view_valid=0;
         menu->message="Preview I/O failed. Restart console.";
@@ -1558,6 +1595,8 @@ static void export_diagnostics(Menu *menu)
     format(line,"usb_write_check=%d\nbackup_result=%d\nrestore_result=%d\nnvram_error=%08lx\n",menu->usb_tested,menu->backup_result,menu->restore_result,(unsigned long)menu->nvram_info.last_error & 0xffffffffUL); strcat(data,line);
     format(line,"position_result=%d\nrecent_result=%d\nfolder=%.64s\n",menu->position_result,menu->recent_result,menu->breadcrumb); strcat(data,line);
     format(line,"preview_result=%d\npreview_load_ms=%lu\n",menu->preview_result,menu->preview_load_ms); strcat(data,line);
+    format(line,"preview_read_ms=%lu\npreview_check_ms=%lu\npreview_navigation_ms=%lu\npreview_setup_ms=%lu\n",menu->preview_read_ms,menu->preview_check_ms,menu->preview_navigation_ms,menu->preview_setup_ms); strcat(data,line);
+    format(line,"preview_bytes=%lu\npreview_commands=%lu\npreview_frames=%u\npreview_fps=%u\n",menu->preview_bytes,menu->preview_commands,menu->preview_frames,menu->preview_fps); strcat(data,line);
     strcat(data,"Identity/revision may be hard-coded; exact firmware build is unknown.\nSnapshot taken before export file I/O.\n");
     /* Fixed report extent replaces previous reports without firmware truncate. */
     i = strlen(data); memset(data+i,'\n',sizeof(data)-1-i); data[sizeof(data)-1] = 0;
@@ -2066,7 +2105,7 @@ static void draw_tools(Menu *menu)
             format(line, "Queued discs: %lu / 16", (unsigned long)menu->playlist.count); tool_line(menu, row++, line, MUTED);
             format(line, "NVRAM error: %08lx", (unsigned long)menu->nvram_info.last_error & 0xffffffffUL); tool_line(menu, row++, line, MUTED);
             tool_line(menu, row, "Results apply to this session.", MUTED);
-        } else {
+        } else if (menu->tool_selected == 2) {
             format(line, "Commands sent: %lu", menu->bus.commands); tool_line(menu, 0, line, TEXT);
             format(line, "Last command: %02x (%lu bytes)", menu->bus.last_command, (unsigned long)menu->bus.last_length); tool_line(menu, 1, line, TEXT);
             format(line, "Reply: %02x %02x %02x %02x", menu->bus.last_reply[0], menu->bus.last_reply[1], menu->bus.last_reply[2], menu->bus.last_reply[3]); tool_line(menu, 2, line, TEXT);
@@ -2077,6 +2116,17 @@ static void draw_tools(Menu *menu)
             format(line, "Fault error: %08lx", (unsigned long)menu->bus.failure_error & 0xffffffffUL); tool_line(menu, 7, line, MUTED);
             format(line,"Cover: %lums / %lu cmds%s",menu->cover_load_ms,menu->cover_commands,menu->cover_cached ? " RAM" : ""); tool_line(menu,8,line,MUTED);
             format(line,"Diagnostic export: %d",menu->diagnostics_result); tool_line(menu,9,line,MUTED);
+        } else {
+            tool_line(menu,0,"Last preview load",TEXT);
+            format(line,"Result: %d  Total: %lums",menu->preview_result,menu->preview_load_ms); tool_line(menu,1,line,TEXT);
+            format(line,"Read + CRC: %lums",menu->preview_read_ms); tool_line(menu,2,line,MUTED);
+            format(line,"Checks / first frame: %lums",menu->preview_check_ms); tool_line(menu,3,line,MUTED);
+            format(line,"Folder navigation: %lums",menu->preview_navigation_ms); tool_line(menu,4,line,MUTED);
+            format(line,"Audio / display setup: %lums",menu->preview_setup_ms); tool_line(menu,5,line,MUTED);
+            format(line,"Payload: %lu KiB",(menu->preview_bytes+1023)/1024); tool_line(menu,6,line,MUTED);
+            format(line,"Frames: %u at %u fps",menu->preview_frames,menu->preview_fps); tool_line(menu,7,line,MUTED);
+            format(line,"Commands: %lu",menu->preview_commands); tool_line(menu,8,line,MUTED);
+            tool_line(menu,9,"Playback checks frames as shown.",MUTED);
         }
     } else if (menu->tools == TOOL_CONFIRM_BACKUP) {
         slot_path(line, menu->backup_slot); tool_line(menu, 0, line, TEXT);
@@ -2303,8 +2353,8 @@ static void tools_input(Menu *menu, u32 pressed)
     }
     if (page == TOOL_DIAG) {
         if (pressed & ControlC) { export_diagnostics(menu); return; }
-        if (pressed & ControlRight) menu->tool_selected = (menu->tool_selected + 1) % 3;
-        if (pressed & ControlLeft) menu->tool_selected = (menu->tool_selected + 2) % 3;
+        if (pressed & ControlRight) menu->tool_selected = (menu->tool_selected + 1) % 4;
+        if (pressed & ControlLeft) menu->tool_selected = (menu->tool_selected + 3) % 4;
         return;
     }
     if (page == TOOL_SAVES && (pressed & ControlX)) { scan_nvram(menu); return; }

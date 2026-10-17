@@ -59,8 +59,8 @@ static int preview_bytes(Ode *ode,OdeReadBuffer reader,unsigned char *data,unsig
     }
     return 0;
 }
-int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
-                     UsbPreview *preview, MediaCancel cancel, void *context)
+int usb_preview_load_profiled(Ode *ode, OdeReadBuffer reader, const char *filename,
+    UsbPreview *preview, MediaCancel cancel, void *context,MediaLoadPhase phase,void *phase_context)
 {
     unsigned char header[40];
     UsbPreview next;
@@ -103,20 +103,32 @@ int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
         next.audio=audio_memory(next.audio_bytes);
         if (!next.audio || preview_bytes(ode,reader,next.audio,next.audio_bytes,&crc,cancel,context)<0) goto done;
     }
+    if (phase) phase(phase_context,1);
     if ((cancel && cancel(context)) || (crc^0xffffffffUL)!=word(header+16) ||
         usb_file_verify(ode,reader,(const unsigned char *)(next.version==1 ? "END3DV01" : "END3DV02"),8)<0) goto done;
     if (next.version==2) {
         if (word(next.pixels)!=(next.frames+1)*4UL || word(next.pixels+next.frames*4)!=next.video_bytes) goto done;
         for (frame=0;frame<next.frames;++frame) {
-            if ((cancel && cancel(context)) || usb_preview_frame(&next,frame,next.frame_buffer)<0) goto done;
+            unsigned long begin=word(next.pixels+frame*4), end=word(next.pixels+(frame+1)*4);
+            if (((frame&31U)==0 && cancel && cancel(context)) || begin<(next.frames+1)*4UL || begin>=end || end>next.video_bytes) goto done;
         }
+        /* CRC and every frame boundary are checked up front. Decode only the
+         * first frame now; playback checks subsequent zlib streams as needed.
+         * Eagerly decoding an entire clip here repeated all playback work. */
+        if (usb_preview_frame(&next,0,next.frame_buffer)<0) goto done;
     }
     result=0;
 done:
     if (usb_file_close(ode)<0) result=-1;
+    if (phase) phase(phase_context,2);
     if (!result) { usb_preview_free(preview); *preview=next; memset(&next,0,sizeof(next)); }
     usb_preview_free(&next);
     return result;
+}
+int usb_preview_load(Ode *ode,OdeReadBuffer reader,const char *filename,
+                     UsbPreview *preview,MediaCancel cancel,void *context)
+{
+    return usb_preview_load_profiled(ode,reader,filename,preview,cancel,context,NULL,NULL);
 }
 
 typedef struct PngCanvas {

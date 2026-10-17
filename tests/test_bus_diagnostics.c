@@ -3,32 +3,41 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static IOReq request;
+static IOReq requests[32];
 static unsigned char status;
 static long error, clock_ms;
 static int busy;
+static int created, deleted, aborted, data_reads, short_read;
+static int verify_order;
+static Item armed_data;
 Item FindAndOpenDevice(char *name) { (void)name; return 1; }
 long CloseNamedDevice(Item item) { (void)item; return 0; }
 Item GetTimerIOReq(void) { return 3; }
 Item CreateIOReq(char *name, int pri, Item device, int port)
-{ (void)name; (void)pri; (void)device; (void)port; return 2; }
-void DeleteIOReq(Item item) { (void)item; }
+{ (void)name; (void)pri; (void)device; (void)port; return 3+(++created); }
+void DeleteIOReq(Item item) { (void)item; ++deleted; }
 long GetMSecTime(Item item) { (void)item; clock_ms += 1000; return clock_ms; }
 Err SendIO(Item req, IOInfo *info)
 {
     unsigned char *reply = (unsigned char *)info->ioi_Recv.iob_Buffer;
     const unsigned char *packet = (const unsigned char *)info->ioi_Send.iob_Buffer;
-    (void)req;
-    request.io_Error = 0; request.io_Actual = 2;
+    requests[req].io_Error = 0; requests[req].io_Actual = 2;
     if (error) return error;
+    if (info->ioi_Command==CMD_READ) {
+        assert(!packet && info->ioi_Recv.iob_Len==2048 && !armed_data);
+        armed_data=req;
+        memset(reply,0x5a,2048); requests[req].io_Actual=short_read ? 2047 : 2048;
+        ++data_reads; return 0;
+    }
     assert(packet && info->ioi_Send.iob_Len == 7);
+    if (verify_order && packet[0]==0xe7) assert(armed_data && req!=armed_data);
     reply[0] = packet[0]; reply[1] = status; return 0;
 }
 int CheckIO(Item req) { (void)req; return !busy; }
-Err WaitIO(Item req) { (void)req; return 0; }
-Err AbortIO(Item req) { (void)req; return 0; }
+Err WaitIO(Item req) { if (req==armed_data) armed_data=0; return 0; }
+Err AbortIO(Item req) { (void)req; ++aborted; return 0; }
 void SleepMSec(Item req, long ms) { (void)req; (void)ms; }
-void *LookupItem(Item req) { (void)req; return &request; }
+void *LookupItem(Item req) { return &requests[req]; }
 int main(void)
 {
     OdeBus bus;
@@ -51,6 +60,26 @@ int main(void)
     busy = 0;
     assert(ode_bus_transfer(&bus, packet, reply, 32, &len) < 0); assert(bus.commands == 5);
     ode_bus_close(&bus);
+    error=0; status=0; busy=0;
+    {
+        unsigned char block[2048];
+        int before_creates=created, before_deletes=deleted, before_aborts=aborted;
+        Item data_request;
+        verify_order=1;
+        assert(!ode_bus_open(&bus) && bus.data_request<0);
+        assert(!ode_bus_read_buffer(&bus,block,sizeof(block)));
+        assert(block[0]==0x5a && block[2047]==0x5a);
+        data_request=bus.data_request;
+        assert(!ode_bus_read_buffer(&bus,block,sizeof(block)));
+        assert(bus.data_request==data_request && created==before_creates+2 && deleted==before_deletes && data_reads==2);
+        short_read=1;
+        assert(ode_bus_read_buffer(&bus,block,sizeof(block))<0 && bus.timed_out);
+        assert(aborted==before_aborts+1 && created==before_creates+2);
+        assert(ode_bus_read_buffer(&bus,block,sizeof(block))<0 && data_reads==3);
+        ode_bus_close(&bus);
+        assert(deleted==before_deletes+3 && bus.data_request<0);
+        ode_bus_close(&bus); assert(deleted==before_deletes+3);
+    }
     puts("Diagnostics: actual bus capture, retained failures, launch status and timeout gating passed");
     return 0;
 }

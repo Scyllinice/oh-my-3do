@@ -133,7 +133,12 @@ static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, 
     memset(preview->pixels,0x11,USB_ART_PIXELS); memset(preview->pixels+USB_ART_PIXELS,0x22,USB_ART_PIXELS);
     preview->audio=(unsigned char *)malloc(4); if (!preview->audio) return -1;
     preview->audio_bytes=preview->audio_frames=4; preview->audio_rate=11025;
-    preview->version=1; preview->frames=2; preview->fps=6; return 0;
+    preview->version=1; preview->frames=2; preview->fps=6; preview->video_bytes=2*USB_ART_PIXELS; return 0;
+}
+static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context) {
+    int result=preview_video_load(ode,reader,file,preview,cancel,context);
+    if (phase) { phase(phase_context,1); phase(phase_context,2); }
+    return result;
 }
 static unsigned long preview_now;
 static int preview_unloads;
@@ -357,7 +362,9 @@ int main(int argc, char **argv) {
         if (menu.preview_frame != 1 || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x22) abort();
         preview_now+=167; draw(&menu);
         if (menu.preview_frame || ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0] != 0x11 || audio_restarts!=1) abort();
-        stop_preview(&menu); update_preview(&menu);
+        menu.preview.version=0; preview_now+=167; draw(&menu);
+        if (menu.preview_result!=-3) abort();
+        update_preview(&menu);
         if (menu.preview.pixels || menu.preview.audio || menu.preview_cel || menu.preview_audio.status || preview_video_loads != 1) abort();
         selection_changed(&menu); preview_now+=1200; preview_buttons=ControlB;
         update_preview(&menu); preview_buttons=0;
@@ -410,6 +417,9 @@ int main(int argc, char **argv) {
         tools_input(&menu, ControlA); draw(&menu);
         if (menu.tools != TOOL_DIAG || preview_nvram_writes) abort();
         tools_input(&menu, ControlRight); draw(&menu); tools_input(&menu, ControlRight); draw(&menu);
+        tools_input(&menu, ControlRight); draw(&menu); if (menu.tool_selected!=3) abort();
+        tools_input(&menu, ControlRight); if (menu.tool_selected) abort();
+        tools_input(&menu, ControlLeft); if (menu.tool_selected!=3) abort();
         menu.ode.navigation_failed=0;
         /* Filtering leaves source entries and directory IDs intact. */
         {
@@ -693,6 +703,12 @@ int main(int argc, char **argv) {
         menu.tools=TOOL_DIAG; menu.tool_selected=1;
         menu.usb_tested=!strcmp(argv[1], "diagnostics-checked") ? 1 : 0;
     }
+    if (argc>1 && !strcmp(argv[1],"diagnostics-preview")) {
+        menu.tools=TOOL_DIAG; menu.tool_selected=3; menu.preview_result=1;
+        menu.preview_load_ms=31420; menu.preview_read_ms=24100; menu.preview_check_ms=30;
+        menu.preview_navigation_ms=7100; menu.preview_setup_ms=190; menu.preview_bytes=1015000;
+        menu.preview_frames=225; menu.preview_fps=15; menu.preview_commands=1620;
+    }
     if (argc > 1 && !strcmp(argv[1], "saves")) {
         menu.tools=TOOL_SAVES; scan_nvram(&menu);
     }
@@ -812,7 +828,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        loading + '\n#undef ode_read_directory\n#define usb_preview_load preview_video_load\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        loading + '\n#undef ode_read_directory\n#define usb_preview_load_profiled preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_profiled\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
@@ -824,6 +840,9 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
+        timing_lines=subprocess.check_output([str(binary),"diagnostics-preview"],text=True).splitlines()
+        assert "L Last preview load" in timing_lines and "L Read + CRC: 24100ms" in timing_lines
+        assert "L Folder navigation: 7100ms" in timing_lines and "L Frames: 225 at 15 fps" in timing_lines
         for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode.startswith("gecko"):

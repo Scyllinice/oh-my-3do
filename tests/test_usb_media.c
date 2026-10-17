@@ -41,6 +41,13 @@ static int cancel(void *context)
 {
     Fake *f=(Fake *)context; return f->cancel_after && f->calls >= f->cancel_after;
 }
+static int read_phase, check_phase;
+static void phase(void *context,int checking)
+{
+    Fake *f=(Fake *)context;
+    if (checking==1) { assert(f->opened && f->pos+8==f->size && !read_phase && !check_phase); ++read_phase; }
+    else { assert(checking==2 && !f->opened && f->closed && f->pos==f->size && read_phase==1 && !check_phase); ++check_phase; }
+}
 static void reset(Fake *f,Ode *ode)
 {
     f->pos=0; f->calls=f->fail_at=f->opened=f->closed=f->cancel_after=0;
@@ -60,6 +67,7 @@ int main(int argc,char **argv)
     size_t bytes, original; int calls, i;
     int (*decode)(Ode *,OdeReadBuffer,const char *,unsigned char *,MediaCancel,void *)=usb_png_pixels;
     assert(argc >= 3); memset(&f,0,sizeof(f)); memset(&preview,0,sizeof(preview));
+    assert(usb_art_crc32((const unsigned char *)"123456789",9)==0xcbf43926UL);
     f.data=load(argv[2],&f.size); original=f.size; reset(&f,&ode);
     if (!strcmp(argv[1],"cover")) decode=usb_png_cover;
     if (!strcmp(argv[1],"png") || !strcmp(argv[1],"cover")) {
@@ -93,10 +101,18 @@ int main(int argc,char **argv)
         assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
     } else if (!strcmp(argv[1],"badvideo2")) {
         assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !preview.pixels && !preview.audio);
-    } else if (!strcmp(argv[1],"video2") || !strcmp(argv[1],"video2large")) {
+    } else if (!strcmp(argv[1],"latebadvideo2")) {
         assert(!usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f));
+        assert(preview.version==2 && preview.frames>1);
+        assert(!usb_preview_frame(&preview,0,pixels));
+        assert(usb_preview_frame(&preview,1,pixels)<0);
+        usb_preview_free(&preview);
+    } else if (!strcmp(argv[1],"video2") || !strcmp(argv[1],"video2large")) {
+        assert(!usb_preview_load_profiled(&ode,reader,"Game.3dv",&preview,cancel,&f,phase,&f));
+        assert(read_phase==1 && check_phase==1);
         assert(preview.version==2 && preview.frames && preview.fps && preview.decoder);
         assert(!usb_preview_frame(&preview,0,pixels));
+        assert(!memcmp(preview.frame_buffer,pixels,USB_ART_PIXELS));
         if (argc==4) {
             expected=load(argv[3],&bytes);assert(bytes==USB_ART_PIXELS && !memcmp(pixels,expected,bytes));free(expected);
         }

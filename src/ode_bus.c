@@ -15,16 +15,17 @@
 
 void ode_bus_close(OdeBus *bus)
 {
+    if (bus->data_request > 0) DeleteIOReq(bus->data_request);
     if (bus->request > 0) DeleteIOReq(bus->request);
     if (bus->timer > 0) DeleteIOReq(bus->timer);
     if (bus->device > 0) CloseNamedDevice(bus->device);
-    bus->request = bus->timer = bus->device = -1;
+    bus->data_request = bus->request = bus->timer = bus->device = -1;
 }
 
 int ode_bus_open(OdeBus *bus)
 {
     memset(bus, 0, sizeof(*bus));
-    bus->request = bus->timer = bus->device = -1;
+    bus->data_request = bus->request = bus->timer = bus->device = -1;
     bus->device = FindAndOpenDevice("xbus");
     if (bus->device < 0) {
         bus->last_error = bus->device;
@@ -124,7 +125,9 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
     Err error;
     int result = -1;
     if (bus->timed_out || bus->device < 0 || size != 2048) return -1;
-    data_request = CreateIOReq("Oh My 3DO config data", 0, bus->device, 0);
+    if (bus->data_request <= 0)
+        bus->data_request = CreateIOReq("Oh My 3DO USB data", 0, bus->device, 0);
+    data_request = bus->data_request;
     if (data_request < 0) { bus->last_error = data_request; return -1; }
     memset(&info, 0, sizeof(info));
     info.ioi_Command = CMD_READ;
@@ -136,7 +139,6 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
     error = SendIO(data_request, &info);
     if (error < 0) {
         bus->last_error = error;
-        DeleteIOReq(data_request);
         return -1;
     }
     if (ode_bus_transfer(context, packet, reply, sizeof(reply), &length) < 0 ||
@@ -162,6 +164,8 @@ done:
         bus->timed_out = 1;
         bus_failure(bus, bus->last_error < 0 ? bus->last_error : -1);
     }
-    DeleteIOReq(data_request);
+    /* Completed requests can be submitted again. Keep this separate from the
+     * command request so E7 still arms data before waiting for status. Failed
+     * two-FIFO exchanges stay blocked until ode_bus_close/open. */
     return result;
 }

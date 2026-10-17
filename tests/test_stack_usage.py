@@ -38,9 +38,9 @@ print('ARM stack: small launch/persistence frames; disc grouping and diagnostics
 # Bound the combined cover -> streaming PNG/USB/inflate path as well.
 frames = {}
 for source, names in {
-    'main.c': ['update_cover'],
+    'main.c': ['update_cover', 'update_preview', 'read_usb_preview', 'preview_phase'],
     'library_navigation.c': ['library_catalog_build'],
-    'usb_media.c': ['usb_png_pixels', 'usb_png_cover', 'png_pixels', 'usb_legacy_cover', 'smooth_canvas', 'usb_preview_load', 'usb_preview_frame'],
+    'usb_media.c': ['usb_png_pixels', 'usb_png_cover', 'png_pixels', 'usb_legacy_cover', 'smooth_canvas', 'usb_preview_load', 'usb_preview_load_profiled', 'usb_preview_frame'],
     'usb_art.c': ['usb_file_read'],
     'png_decode.c': ['pngle_feed'],
     'png_inflate.c': ['tinfl_decompress'],

@@ -94,8 +94,10 @@ channels of `directout.dsp`. There is no background-music sample or USB stream.
 The menu restarts video and its sample together at every loop boundary, closes
 audio before freeing its borrowed PCM, and releases the entire clip on input.
 
-The loader checks lengths, CRC, the poisoned footer read and every compressed
-frame before playback. Partial reads, invalid offsets, bad zlib lengths,
+The loader checks lengths, CRC, the poisoned footer read, every frame boundary
+and the first compressed frame before playback. Later frames are checked and
+decompressed when displayed, avoiding an eager decode pass over the whole clip.
+The PC validator still checks every frame. Partial reads, invalid offsets, bad zlib lengths,
 cancellation and allocation failures release all owned memory. CRC covers both
 buffers incrementally, avoiding a second copy of the audio in general-purpose
 RAM. Original video sources and older `.3dv` files are never modified by loading.

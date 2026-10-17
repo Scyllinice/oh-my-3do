@@ -6,6 +6,7 @@
 #define USB_PREVIEW_MAX_BYTES (1024UL * 1024UL)
 #define USB_PNG_MAX_BYTES (512UL * 1024UL)
 typedef int (*MediaCancel)(void *context);
+typedef void (*MediaLoadPhase)(void *context,int checking);
 typedef struct UsbPreview {
     unsigned char *pixels;
     unsigned int frames, fps;
@@ -25,6 +26,9 @@ int usb_legacy_cover(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels, MediaCancel cancel, void *context);
 int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
                      UsbPreview *preview, MediaCancel cancel, void *context);
+/* Optional timing hook: 1 after payload reads, 2 after checks/close. */
+int usb_preview_load_profiled(Ode *ode,OdeReadBuffer reader,const char *filename,
+    UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context);
 int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder);
 int usb_media_filename(const char *name);
 #endif
