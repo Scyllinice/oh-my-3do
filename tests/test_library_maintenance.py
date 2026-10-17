@@ -161,7 +161,14 @@ class MaintenanceTest(unittest.TestCase):
         result=m.prepare_usb(self.root,self.target,self.base/'copy.json')
         self.assertEqual(snapshot(self.target),{});self.assertEqual(before,snapshot(self.root))
         names={r['path'] for r in result['files']}
-        self.assertEqual(names,{'boot.iso',self.disc,'.ohmy3do/ohmy3do.ini','.ohmy3do/library.3di'})
+        self.assertEqual(names,{'boot.iso',self.disc,'.ohmy3do/ohmy3do.ini','.ohmy3do/library.3di','.ohmy3do/metadata.3di'})
+
+    def test_prepare_rejects_corrupt_metadata_without_copying(self):
+        path=self.root/'.ohmy3do/metadata.3di'
+        path.write_bytes(b'broken optional metadata')
+        with self.assertRaisesRegex(ValueError,'metadata'):
+            m.prepare_usb(self.root,self.target,self.base/'copy.json',True)
+        self.assertEqual(snapshot(self.target),{})
 
     def test_copy_preserves_destination_preferences_and_saves_then_skips_unchanged(self):
         self.put('.ohmy3do/saves/backup.3ds',b'staging save')

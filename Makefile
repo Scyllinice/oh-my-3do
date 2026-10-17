@@ -11,6 +11,7 @@ test: build/test_cover_cache build/test_preview_audio build/test_ui_font build/t
 	python3 tests/test_prepare_audio_disc.py
 	python3 tests/test_preview_tools.py
 	python3 tests/test_media_tools.py
+	python3 tests/test_metadata_tools.py
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
 	python3 tests/test_queue_workflow.py

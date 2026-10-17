@@ -189,6 +189,18 @@ pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<String>, usize)> {
         }
     }
     let folded = games.iter().map(|s| f::fold(s)).collect::<HashSet<_>>();
+    let metadata = f::safe(root, ".ohmy3do/metadata.3di")?;
+    if metadata.is_file() {
+        if fs::metadata(&metadata)?.len() > 192 * 1024 + 32 {
+            bail!("Oversized metadata index");
+        }
+        for path in library::metadata_paths(&fs::read(metadata)?)? {
+            if !folded.contains(&f::fold(&path)) {
+                bail!("Metadata index refers to a missing game; rebuild indexes");
+            }
+        }
+        files.insert(".ohmy3do/metadata.3di".into());
+    }
     for folder in ["covers", "previews"] {
         let map = library::read_media_index(root, folder)?;
         let index = format!(".ohmy3do/{folder}/index.3di");

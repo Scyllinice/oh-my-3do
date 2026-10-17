@@ -1,9 +1,13 @@
-Oh My 3DO media tools (scanner v0.16.0-rc4)
+Oh My 3DO media tools (scanner v0.16.0-rc5)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
 The tools do not rebuild boot.iso or download games, music or video.
 The optional organizer downloads game metadata and cover artwork.
+The indexer also exports .ohmy3do/metadata.3di from library.json. The
+v0.16.0-rc5 menu shows genre, publisher and release date below the game list.
+When only a year is known, it shows the year. Run index-media.py against an
+existing staging library to export its metadata without rescanning checksums.
 
 SUPPORT LAYOUT (v0.15.0+)
 Install the updated boot.iso first. Keep boot.iso at the USB root.

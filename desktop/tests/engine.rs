@@ -72,6 +72,34 @@ fn mode1_reconstruction_matches_python_reference() {
         "ff2272170b4b3373cfa3674a0c76c51358be39a7"
     );
 }
+
+#[test]
+fn metadata_export_matches_console_fixture_and_rejects_corruption() {
+    use sha2::Sha256;
+    let names = vec![
+        "Games/USA/Beta/Beta.iso".into(),
+        "Games/USA/Alpha/Disc 1.iso".into(),
+    ];
+    let db = json!({"games":[
+        {"path":"Games/USA/Alpha/Disc 1.iso","metadata":{"genre":"Action","publisher":"Café Studio","release_date":"1995-02-03T00:00:00","year":1995}},
+        {"path":"Games/USA/Beta/Beta.iso","metadata":{"publisher":"Test","year":1994}},
+        {"path":"missing.iso","metadata":{"genre":"Ignored"}}
+    ]});
+    let bytes = library::metadata_bytes(&db, &names).unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&bytes)),
+        "b0dfcec455daf4c1a279ee17c522d029f23b22508ad84fd6e6f19e5826572058"
+    );
+    let mut expected = names.clone();
+    expected.sort();
+    assert_eq!(library::metadata_paths(&bytes).unwrap(), expected);
+    for i in 0..bytes.len() {
+        assert!(library::metadata_paths(&bytes[..i]).is_err());
+        let mut bad = bytes.clone();
+        bad[i] ^= 1;
+        assert!(library::metadata_paths(&bad).is_err());
+    }
+}
 #[test]
 fn scanner_identifies_converted_iso_without_changing_input() {
     let t = tempfile::tempdir().unwrap();
@@ -410,14 +438,22 @@ fn usb_preview_excludes_databases_reports_recovery_and_unindexed_art() {
         include_bytes!("../../ohmy3do.ini"),
     );
     put(&root, ".ohmy3do/recovery/old.bin", b"private backup");
-    put(&root, ".ohmy3do/library.json", b"PC metadata");
+    put(
+        &root,
+        ".ohmy3do/library.json",
+        br#"{"schema":1,"sources":[],"games":[]}"#,
+    );
     let cache = t.path().join("cache");
     let mut tx = library::Journal::new(&root, &cache).unwrap();
     library::build_indexes(&root, &mut tx, &Job::default()).unwrap();
     tx.finish().unwrap();
     let p = usb::plan(&root, &dest, &cache, false, &Job::default()).unwrap();
     assert_eq!(p.games, 1);
-    assert_eq!(p.files.len(), 4);
+    assert_eq!(p.files.len(), 5);
+    assert!(p
+        .files
+        .iter()
+        .any(|item| item.path == ".ohmy3do/metadata.3di"));
     assert!(snapshot(&dest).is_empty());
 }
 #[test]

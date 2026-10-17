@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc2"
+#define MENU_VERSION "0.16.0-rc5"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -123,6 +123,7 @@ typedef struct Menu {
     int cover_cached;
     UsbArtIndex usb_art;
     UsbArtIndex usb_previews;
+    LibraryMetadata metadata;
     UsbPreview preview;
     CCB *preview_cel;
     int preview_attempted, media_cancelled;
@@ -191,7 +192,11 @@ static void load_position(Menu *menu);
 static void remember_position(Menu *menu, int force);
 static void record_launch(Menu *menu, const char *path);
 static int config_dirty(const Menu *menu);
-static size_t menu_rows(const Menu *menu) { return menu->config.large_titles ? 6 : ROWS; }
+static size_t menu_rows(const Menu *menu)
+{
+    if (!menu->review && menu->metadata.count) return menu->config.large_titles ? 4 : 5;
+    return menu->config.large_titles ? 6 : ROWS;
+}
 
 /* Use quoted SDK headers: Norcroft's built-in <stdarg.h> uses a different
  * va_list layout from Portfolio vsprintf. With built-in headers, the formatter
@@ -603,11 +608,42 @@ static void draw(Menu *menu)
         else media_placeholder(menu,chosen ? chosen->is_directory : (menu->listing.has_parent && !selected));
         label(menu,24,168,menu->preview_cel ? "Playing preview" : (chosen && chosen->is_directory ? "Folder" : "Game library"),MUTED,UI_FONT_SMALL);
         draw_alphabet(menu);
+        if (menu->metadata.count) {
+            static char path[9217];
+            const LibraryGameInfo *info=NULL;
+            unsigned int part, first=menu->depth && !(menu->path_ids[0]&0xffffffUL) ? 1 : 0;
+            size_t used=0;
+            path[0]=0;
+            if (chosen && !chosen->is_directory) {
+                for (part=first;part<menu->depth;++part) {
+                    size_t length=strlen(menu->path[part]);
+                    if (used+length+1>=sizeof(path)) break;
+                    memcpy(path+used,menu->path[part],length); used+=length; path[used++]='/';
+                }
+                if (part==menu->depth && used+strlen(chosen->name)<sizeof(path)) {
+                    strcpy(path+used,chosen->name);
+                    info=library_metadata_find(&menu->metadata,path);
+                }
+            }
+            rectangle(menu,124,150,178,1,LINE);
+            if (info) {
+                const char *values[3];
+                unsigned int field;
+                values[0]=info->genre; values[1]=info->publisher; values[2]=info->released;
+                for (field=0;field<3;++field) {
+                    const char *prefix=field==0 ? "Genre: " : (field==1 ? "Publisher: " : "Released: ");
+                    format(line,"%s%.80s",prefix,*values[field] ? values[field] : "Unknown");
+                    line[ui_font_fit(line,strlen(line),178*(320-2*menu->config.screen_margin)/320,UI_FONT_SMALL)]=0;
+                    label(menu,124,154+(int)field*10,line,MUTED,UI_FONT_SMALL);
+                }
+            } else label(menu,124,163,chosen && !chosen->is_directory ? "No game information" : "Select a game for details",MUTED,UI_FONT_SMALL);
+        }
     } else label(menu,18,191,"Advance discs when the game asks",MUTED,UI_FONT_SMALL);
     if (total) {
         int bar=menu->review ? 190 : 117;
         int fill=(int)(bar*(selected/rows+1)/((total+rows-1)/rows));
-        rectangle(menu,left+4,184,bar,2,LINE); if (fill) rectangle(menu,left+4,184,fill,2,ACCENT);
+        int bar_y=!menu->review && menu->metadata.count ? 146 : 184;
+        rectangle(menu,left+4,bar_y,bar,2,LINE); if (fill) rectangle(menu,left+4,bar_y,fill,2,ACCENT);
         format(line,"%lu / %lu",(unsigned long)(selected+1),(unsigned long)total);
         label(menu,304-ui_font_width(line,UI_FONT_SMALL),33,line,MUTED,UI_FONT_SMALL);
     }
@@ -675,12 +711,14 @@ static void refresh_usb_art(Menu *menu)
             if (!(menu->listing.entries[i]->toc_id & 0xffffffUL)) {
                 usb_art_index_free(&menu->usb_art);
                 usb_art_index_free(&menu->usb_previews);
+                library_metadata_free(&menu->metadata);
                 menu->covers_enabled = 0;
                 return; /* virtual device list is not a filesystem root */
             }
     }
     usb_art_index_free(&menu->usb_art);
     usb_art_index_free(&menu->usb_previews);
+    library_metadata_free(&menu->metadata);
     menu->covers_enabled = 0;
     if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE")) return;
     message = menu->message;
@@ -689,6 +727,8 @@ static void refresh_usb_art(Menu *menu)
     if (menu->config.usb_covers) usb_art_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_art);
     if (menu->config.video_previews && !menu->bus.timed_out && !menu->ode.navigation_failed)
         usb_media_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_previews,"previews");
+    if (!menu->bus.timed_out && !menu->ode.navigation_failed)
+        library_metadata_load(&menu->ode,ode_bus_read_buffer,&menu->metadata);
     menu->message = message;
     menu->covers_enabled = menu->usb_art.count != 0;
     if (menu->bus.timed_out || menu->ode.navigation_failed) {
@@ -903,6 +943,7 @@ static void show_demo(Menu *menu)
     menu->review = 0;
     usb_art_index_free(&menu->usb_art);
     usb_art_index_free(&menu->usb_previews);
+    library_metadata_free(&menu->metadata);
     menu->covers_enabled = menu_cover_count != 0;
     ode_listing_free(&menu->listing);
     menu->listing.entries = (const MenuEntry **)malloc(9 * sizeof(MenuEntry *));

@@ -70,6 +70,18 @@ source audio when present; complex clips shorten further to fit the menu's
 1 MiB RAM payload budget. Playback requires the v0.16.0-rc2 or newer menu. Enable video previews in the
 console configuration; existing console settings are preserved.
 
+Imports and **Rebuild Find index** also create `.ohmy3do/metadata.3di` from the
+library database. The v0.16.0-rc5 console menu uses it to show the selected
+game's genre, publisher and release date. A year is shown when no full date
+is available. The optional index is included in USB preparation.
+
+Graphics uses a working GPU when available, with software fallback if device
+creation fails. **Tools & settings** shows the active adapter and offers a
+software graphics override; restart after changing it. The compatibility
+override is also available as `--software-rendering`. Large lists draw only
+visible rows, and cover thumbnails load in the background. Graphics startup
+diagnostics are saved as `native-graphics.log` in the app data folder.
+
 Video conversion uses FFmpeg and ffprobe as separate native executables. On
 Windows x64, **Get video tools** downloads BtbN's LGPL shared build directly
 from its provider and checks its published SHA-256 digest. No administrator

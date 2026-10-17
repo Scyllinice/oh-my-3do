@@ -19,7 +19,7 @@ static int transfer(void *context,const unsigned char *packet,unsigned char *rep
         size_t offset=((size_t)packet[1]*256+packet[2])*4;
         assert(offset+4 <= sizeof(f->buffer)); memcpy(f->buffer+offset,packet+3,4);
     } else if (packet[0] == 0xe1) {
-        assert(!strncmp((char *)f->buffer,"covers/",7) || !strncmp((char *)f->buffer,"previews/",9) || !strcmp((char *)f->buffer,"library.3di"));
+        assert(!strncmp((char *)f->buffer,"covers/",7) || !strncmp((char *)f->buffer,"previews/",9) || !strcmp((char *)f->buffer,"library.3di") || !strcmp((char *)f->buffer,"metadata.3di"));
         f->pos=0; f->opened=1; reply[1]=1; *length=3;
     } else if (packet[0] == 0xe3) {
         size_t n=(size_t)packet[1]*256+packet[2], actual=n;
@@ -133,6 +133,41 @@ int main(int argc,char **argv)
         assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f) < 0 && f.closed && !ode.navigation_failed);
         reset(&f,&ode); f.data[20]=1;
         assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f) < 0);
+    } else if (!strcmp(argv[1],"metadata")) {
+        LibraryMetadata metadata;
+        const LibraryGameInfo *info;
+        memset(&metadata,0,sizeof(metadata));
+        assert(!library_metadata_parse(f.data,f.size,&metadata));
+        assert(metadata.count==2);
+        info=library_metadata_find(&metadata,"games/usa/alpha/disc 1.ISO");
+        assert(info && !strcmp(info->genre,"Action") && !strcmp(info->publisher,"Cafe Studio") && !strcmp(info->released,"1995-02-03"));
+        assert(!library_metadata_find(&metadata,"Games/USA/Alpha/Disc 2.iso"));
+        for (i=0;(size_t)i<f.size;++i) assert(library_metadata_parse(f.data,(size_t)i,&metadata)<0 && metadata.count==2);
+        for (i=0;(size_t)i<f.size;++i) {
+            f.data[i]^=1;
+            assert(library_metadata_parse(f.data,f.size,&metadata)<0 && metadata.count==2);
+            f.data[i]^=1;
+        }
+        assert(!library_metadata_load(&ode,reader,&metadata)); calls=f.calls;
+        for (i=1;i<=calls;++i) {
+            reset(&f,&ode); f.fail_at=i;
+            assert(library_metadata_load(&ode,reader,&metadata)<0 && metadata.count==2);
+        }
+        for (i=1;i<=12;++i) {
+            reset(&f,&ode); f.size=original-i;
+            assert(library_metadata_load(&ode,reader,&metadata)<0 && f.closed && metadata.count==2);
+        }
+        f.size=original; library_metadata_free(&metadata); assert(!metadata.count && !metadata.entries && !metadata.storage);
+    } else if (!strcmp(argv[1],"metadatavalid")) {
+        LibraryMetadata metadata; memset(&metadata,0,sizeof(metadata));
+        assert(!library_metadata_parse(f.data,f.size,&metadata));
+        assert(!library_metadata_load(&ode,reader,&metadata));
+        printf("Console metadata: %lu entries validated\n",(unsigned long)metadata.count);
+        library_metadata_free(&metadata);
+    } else if (!strcmp(argv[1],"badmetadata")) {
+        LibraryMetadata metadata; memset(&metadata,0,sizeof(metadata));
+        assert(library_metadata_parse(f.data,f.size,&metadata)<0 && !metadata.count);
+        assert(library_metadata_load(&ode,reader,&metadata)<0 && f.closed && !metadata.count);
     } else if (!strcmp(argv[1],"emptylibrary")) {
         LibraryCatalog catalog;
         memset(&catalog,0,sizeof(catalog));

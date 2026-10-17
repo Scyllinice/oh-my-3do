@@ -5,6 +5,84 @@ import binascii
 from pathlib import Path
 import re
 import struct
+import json
+import unicodedata
+import datetime
+
+
+def metadata_text(value):
+    text = unicodedata.normalize('NFKD', str(value or '')).encode('ascii', 'ignore').decode()
+    return re.sub(r'\s+', ' ', ''.join(c if 32 <= ord(c) <= 126 else ' ' for c in text)).strip()[:96]
+
+
+def metadata_date(meta):
+    date = str(meta.get('release_date') or '')[:10]
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
+        try:
+            return datetime.date.fromisoformat(date).isoformat()
+        except ValueError:
+            pass
+    year = str(meta.get('year') or '')
+    return year if re.fullmatch(r'[12]\d{3}', year) else ''
+
+
+def metadata_index(records, games):
+    """Portable read-only console index; unknown dates stay unknown."""
+    allowed = {fold(path): path for path in games}
+    rows = {}
+    for record in records:
+        path = allowed.get(fold(record.get('path') or ''))
+        if path is None:
+            continue
+        meta = record.get('metadata') or {}
+        fields = [metadata_text(meta.get('genre')), metadata_text(meta.get('publisher')), metadata_date(meta)]
+        if not any(fields):
+            continue
+        key = fold(path)
+        if key in rows:
+            raise ValueError('Duplicate metadata path: ' + path)
+        rows[key] = [path] + fields
+    payload = bytearray()
+    for key in sorted(rows):
+        for field in rows[key]:
+            raw = field.encode('utf-8') + b'\0'
+            if len(raw) > 8193:
+                raise ValueError('Oversized metadata field')
+            payload.extend(struct.pack('>H', len(raw)) + raw)
+    if len(rows) > 2048 or len(payload) + 16 * len(rows) > 192 * 1024:
+        raise ValueError('Console metadata index exceeds capacity')
+    return b'OM3DMET1' + struct.pack('>IIII', len(rows), len(payload), binascii.crc32(payload), 0) + payload + b'END3DM01'
+
+
+def metadata_paths(data):
+    if len(data) < 32 or data[:8] != b'OM3DMET1' or data[-8:] != b'END3DM01':
+        raise ValueError('Invalid metadata header/footer')
+    count, size, crc, reserved = struct.unpack_from('>IIII', data, 8)
+    payload = data[24:-8]
+    if reserved or count > 2048 or size + 16 * count > 192 * 1024 or size != len(payload) or binascii.crc32(payload) != crc:
+        raise ValueError('Invalid metadata bounds/checksum')
+    paths = []; pos = 0
+    for _ in range(count):
+        for field in range(4):
+            if pos + 2 > size:
+                raise ValueError('Truncated metadata')
+            n = struct.unpack_from('>H', payload, pos)[0]; pos += 2
+            raw = payload[pos:pos+n]; pos += n
+            if not n or len(raw) != n or raw[-1:] != b'\0' or b'\0' in raw[:-1]:
+                raise ValueError('Invalid metadata string')
+            if field:
+                if n > 97 or any(c < 32 or c > 126 for c in raw[:-1]):
+                    raise ValueError('Invalid metadata text')
+            else:
+                path = raw[:-1].decode('utf-8')
+                if len(raw) > 8193 or len(path.split('/')) > 33 or any(p in ('', '.', '..') or len(p.encode()) >= 1024 for p in path.split('/')) or any(ord(c) < 32 or ord(c) == 127 or c in '\\:' for c in path) or not path.lower().endswith(('.iso', '.cue')):
+                    raise ValueError('Invalid metadata path')
+                if paths and fold(paths[-1]) >= fold(path):
+                    raise ValueError('Metadata paths must be unique and sorted')
+                paths.append(path)
+    if pos != size:
+        raise ValueError('Trailing metadata')
+    return paths
 
 
 def fold(value):
@@ -151,6 +229,18 @@ def index(root):
         raise ValueError('Search index exceeds 2048 games or 128 KiB of paths')
     library_data=b'OM3DLIB1'+struct.pack('>IIII',len(games),len(library_payload),binascii.crc32(library_payload),0)+library_payload+b'END3DL01'
     library=support/'library.3di'
+    database = support/'library.json'
+    metadata = None
+    if database.is_file():
+        if database.is_symlink() or database.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError('Invalid library metadata database')
+        records = json.loads(database.read_text(encoding='utf-8'))
+        if records.get('schema') != 1 or not isinstance(records.get('games'), list):
+            raise ValueError('Invalid library metadata database')
+        metadata = metadata_index(records['games'], [game for _, game, _ in games])
+        target = support/'metadata.3di'
+        if target.is_symlink() or (target.exists() and not target.is_file()) or (support/'metadata.3di.tmp').is_symlink():
+            raise ValueError('Metadata index must be a regular file')
     if library.is_symlink() or (library.exists() and not library.is_file()):
         raise ValueError('Search index must be a regular file')
     oversized = []
@@ -210,6 +300,9 @@ def index(root):
     temporary=support/'library.3di.tmp'
     if temporary.is_symlink(): raise ValueError('Temporary search index must not be a symlink')
     temporary.write_bytes(library_data); temporary.replace(library)
+    if metadata is not None:
+        temporary = support/'metadata.3di.tmp'
+        temporary.write_bytes(metadata); temporary.replace(support/'metadata.3di')
     print(f'Indexed {len(games)} games for Find in {library}')
     # Validate both indices before replacing either. Media files stay untouched.
     for directory, data, count in outputs:

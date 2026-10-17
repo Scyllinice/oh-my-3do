@@ -746,6 +746,17 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1],"slot-details")) {
         preview_nvram_fixture(&menu.backup); menu.tools=TOOL_BACKUP_DETAILS; menu.backup_slot_valid=1;
     }
+    if (argc>1 && !strncmp(argv[1],"metadata",8)) {
+        static LibraryGameInfo info={"Alone in the Dark.iso","Adventure","Infogrames","1994-09-29"};
+        menu.metadata.entries=&info; menu.metadata.count=1; menu.selected=2; menu.cover=&cover;
+        if (!strcmp(argv[1],"metadata-large")) menu.config.large_titles=1;
+        if (!strcmp(argv[1],"metadata-margin")) menu.config.screen_margin=12;
+        if (!strcmp(argv[1],"metadata-missing")) menu.selected=3;
+        if (!strcmp(argv[1],"metadata-long")) {
+            info.genre="Adventure; Role-Playing; Strategy";
+            info.publisher="A very long publishing company name";
+        }
+    }
     draw(&menu);
     menu_favorites_free(&menu.favorites);
     save_archive_free(&menu.nvram); save_archive_free(&menu.backup);
@@ -795,8 +806,12 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
+            if mode in ("metadata","metadata-large","metadata-margin"):
+                assert "L Genre: Adventure" in commands and "L Publisher: Infogrames" in commands and "L Released: 1994-09-29" in commands
+            if mode == "metadata-missing":
+                assert "L No game information" in commands
             if mode in ("formats","formats-large","results"):
                 assert "L ISO" in commands and "L CUE" in commands
             if mode in ("tools", "diagnostics-state"):

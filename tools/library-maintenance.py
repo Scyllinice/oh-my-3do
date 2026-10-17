@@ -438,6 +438,13 @@ def usb_inventory(root):
     indexed=find_paths(checked_path(root,'.ohmy3do/library.3di'))
     if set(indexed)!=games:
         raise ValueError('Find index is stale; run index-media.py against the staging root first')
+    metadata=checked_path(root,'.ohmy3do/metadata.3di')
+    if metadata.is_file():
+        if metadata.stat().st_size>192*1024+32:
+            raise ValueError('Oversized console metadata index')
+        if not set(map(FOLD,o.index_tools.metadata_paths(metadata.read_bytes())))<=set(map(FOLD,games)):
+            raise ValueError('Metadata index refers to a missing disc; rebuild indexes')
+        files.add('.ohmy3do/metadata.3di')
     maps=associations(root)
     checked=set()
     for kind,(folder,_) in KINDS.items():

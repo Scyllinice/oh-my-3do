@@ -106,4 +106,5 @@ pub struct Preferences {
     pub offline: bool,
     pub quick: bool,
     pub download_covers: bool,
+    pub software_rendering: bool,
 }

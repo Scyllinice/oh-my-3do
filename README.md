@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc2**; media tools are **0.16.0-rc4**.
+menu and media-tools version is **0.16.0-rc5**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -24,9 +24,8 @@ release](https://github.com/Scyllinice/oh-my-3do/releases/latest). Back up the
 existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
-For the current preview-audio menu and maintenance tools, use the
-[v0.16.0-rc4 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc4).
-Its console images are unchanged from rc2; the new maintenance commands run on the PC.
+For the current preview-audio menu, game information panel, and maintenance tools, use the
+[v0.16.0-rc5 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc5).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -95,6 +94,7 @@ Outputs in `iso/`:
 | `previews/` | Optional converted video/audio clips and checked index |
 | `saves/` | Copy this folder to USB for save backups |
 | `library.3di` | Search index generated on the PC by `index-media.py` |
+| `metadata.3di` | Genre, publisher, and release date exported from the library database |
 
 Builds preserve existing `iso/ohmy3do.ini` and `iso/favorites.txt`. Source
 examples are `ohmy3do.ini` and `favorites.example.txt`. Build audits and signed
@@ -413,12 +413,22 @@ covers/previews, download missing covers, and prepare a USB copy. Disc sources
 are preserved. The app runs standalone without Python or Docker.
 
 Portable builds are available in the
-[desktop v0.1.0 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.0).
+[desktop v0.1.1 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.1).
 Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
 Windows x64 and Linux x64 builds are provided; macOS can be built from source
 but has not been packaged here. Preview conversion uses separate native
 FFmpeg tools, downloadable inside the Windows app. Existing settings and
-media remain compatible, and the console ISO is unchanged.
+media remain compatible. The app prefers hardware graphics and falls back to
+software when a graphics device cannot be created. Software rendering can also
+be selected under Tools & settings; restart the app after changing it.
+
+The console's selected-game panel shows genre, publisher, and release date from
+`.ohmy3do/metadata.3di`. Imports and **Rebuild Find index** export this file from
+the library database; the CLI `index-media.py` does the same. USB preparation
+includes it automatically. The menu reads the index at the USB root and keeps
+it in RAM, so browsing adds no metadata I/O. Missing fields show **Unknown**;
+when only a release year is available, the menu shows the year. Dates come
+from the game metadata and may not describe every regional pressing.
 
 ## Keeping a staging library and USB drive updated
 

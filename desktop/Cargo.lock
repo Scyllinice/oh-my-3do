@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "oh-my-3do-library"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2447,6 +2447,7 @@ dependencies = [
  "fs2",
  "image",
  "kamadak-exif",
+ "pollster",
  "quick-xml 0.38.4",
  "regex",
  "reqwest",

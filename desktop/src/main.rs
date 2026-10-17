@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 enum Outcome {
@@ -28,6 +28,32 @@ enum Outcome {
 enum Event {
     Log(String),
     Done(Result<Outcome, String>),
+}
+#[derive(Clone, PartialEq, Eq)]
+enum ThumbnailSource {
+    File(PathBuf),
+    Library(PathBuf, String),
+}
+
+fn load_thumbnail(source: &ThumbnailSource) -> anyhow::Result<egui::ColorImage> {
+    let path = match source {
+        ThumbnailSource::File(path) => path.clone(),
+        ThumbnailSource::Library(root, name) => {
+            f::safe(&f::root(root)?, &format!(".ohmy3do/covers/{name}"))?
+        }
+    };
+    if fs::metadata(&path)?.len() > 32 * 1024 * 1024 {
+        anyhow::bail!("Oversized thumbnail")
+    }
+    let mut reader = image::ImageReader::open(path)?.with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode()?.thumbnail(168, 210).to_rgba8();
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        image.as_raw(),
+    ))
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -64,9 +90,18 @@ struct App {
     supplied_preview: Option<PathBuf>,
     filter: String,
     thumbnail: Option<egui::TextureHandle>,
-    thumb_key: String,
+    thumb_source: Option<ThumbnailSource>,
+    thumb_sender: mpsc::Sender<ThumbnailSource>,
+    thumb_receiver: mpsc::Receiver<(ThumbnailSource, Option<egui::ColorImage>)>,
     screenshot: Option<PathBuf>,
     frames: u32,
+    profile: Option<UiProfile>,
+}
+struct UiProfile {
+    path: PathBuf,
+    previous: Instant,
+    intervals: Vec<f64>,
+    cpu: Vec<f64>,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>, screenshot: Option<PathBuf>) -> Self {
@@ -96,6 +131,23 @@ impl App {
                 .insert(egui::TextStyle::Heading, egui::FontId::proportional(25.));
         });
         let (sender, receiver) = mpsc::channel();
+        let (thumb_sender, requests) = mpsc::channel::<ThumbnailSource>();
+        let (images, thumb_receiver) = mpsc::channel();
+        let context = cc.egui_ctx.clone();
+        std::thread::spawn(move || {
+            while let Ok(mut source) = requests.recv() {
+                // Scrolling quickly should load the latest selection, rather than
+                // queueing every cover passed on the way there.
+                while let Ok(latest) = requests.try_recv() {
+                    source = latest;
+                }
+                let image = load_thumbnail(&source).ok();
+                if images.send((source, image)).is_err() {
+                    break;
+                }
+                context.request_repaint();
+            }
+        });
         Self {
             prefs,
             cache,
@@ -124,9 +176,12 @@ impl App {
             supplied_preview: None,
             filter: String::new(),
             thumbnail: None,
-            thumb_key: String::new(),
+            thumb_source: None,
+            thumb_sender,
+            thumb_receiver,
             screenshot,
             frames: 0,
+            profile: None,
         }
     }
     fn error(&mut self, error: impl std::fmt::Display) {
@@ -228,7 +283,10 @@ impl App {
         });
     }
     fn poll(&mut self) {
-        while let Ok(event) = self.receiver.try_recv() {
+        for _ in 0..100 {
+            let Ok(event) = self.receiver.try_recv() else {
+                break;
+            };
             match event {
                 Event::Log(line) => {
                     self.status = line.clone();
@@ -292,34 +350,20 @@ impl App {
             }
         }
     }
-    fn show_thumbnail(&mut self, ui: &mut egui::Ui, path: Option<PathBuf>) {
-        let key = path
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if key != self.thumb_key {
+    fn show_thumbnail(&mut self, ui: &mut egui::Ui, source: Option<ThumbnailSource>) {
+        if source != self.thumb_source {
             self.thumbnail = None;
-            self.thumb_key = key;
-            if let Some(path) = path {
-                let load = (|| -> anyhow::Result<_> {
-                    if fs::metadata(&path)?.len() > 32 * 1024 * 1024 {
-                        anyhow::bail!("Oversized thumbnail")
-                    };
-                    let mut r = image::ImageReader::open(path)?.with_guessed_format()?;
-                    let mut limits = image::Limits::default();
-                    limits.max_alloc = Some(64 * 1024 * 1024);
-                    r.limits(limits);
-                    let image = r.decode()?.thumbnail(168, 210).to_rgba8();
-                    let size = [image.width() as usize, image.height() as usize];
-                    Ok(ui.ctx().load_texture(
-                        "cover-preview",
-                        egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
-                        egui::TextureOptions::LINEAR,
-                    ))
-                })();
-                if let Ok(texture) = load {
-                    self.thumbnail = Some(texture)
-                }
+            self.thumb_source = source.clone();
+            if let Some(source) = source {
+                let _ = self.thumb_sender.send(source);
+            }
+        }
+        while let Ok((source, image)) = self.thumb_receiver.try_recv() {
+            if Some(&source) == self.thumb_source.as_ref() {
+                self.thumbnail = image.map(|image| {
+                    ui.ctx()
+                        .load_texture("cover-preview", image, egui::TextureOptions::LINEAR)
+                });
             }
         }
         if let Some(texture) = &self.thumbnail {
@@ -409,30 +453,45 @@ impl App {
             egui::ScrollArea::both()
                 .id_salt("import_rows")
                 .max_height(280.)
-                .show(ui, |ui| {
-                    egui::Grid::new("imports")
-                        .striped(true)
-                        .min_col_width(75.)
-                        .show(ui, |ui| {
-                            ui.strong("Add");
-                            ui.strong("Game / disc");
-                            ui.strong("Identification");
-                            ui.strong("Category");
-                            ui.strong("Destination");
-                            ui.end_row();
-                            for (index, e) in plan.entries.iter_mut().enumerate() {
+                .show_rows(ui, 32., plan.entries.len() + 1, |ui, rows| {
+                    ui.set_min_width(1080.);
+                    for row in rows {
+                        ui.horizontal(|ui| {
+                            if row == 0 {
+                                for (width, label) in [
+                                    (35., "Add"),
+                                    (240., "Game / disc"),
+                                    (175., "Identification"),
+                                    (100., "Category"),
+                                    (460., "Destination"),
+                                ] {
+                                    ui.add_sized(
+                                        [width, 32.],
+                                        egui::Label::new(RichText::new(label).strong()).truncate(),
+                                    );
+                                }
+                            } else {
+                                let index = row - 1;
+                                let e = &mut plan.entries[index];
                                 let enabled = e.resolvable();
-                                ui.add_enabled(
-                                    enabled,
-                                    egui::Checkbox::without_text(&mut e.selected),
-                                );
+                                ui.add_enabled_ui(enabled, |ui| {
+                                    ui.add_sized(
+                                        [35., 32.],
+                                        egui::Checkbox::without_text(&mut e.selected),
+                                    );
+                                });
                                 if ui
-                                    .selectable_label(selected == Some(index), &e.title)
+                                    .add_sized(
+                                        [240., 32.],
+                                        egui::Button::selectable(selected == Some(index), &e.title)
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(&e.title)
                                     .clicked()
                                 {
                                     selected = Some(index)
                                 }
-                                ui.label(match e.confidence.as_str() {
+                                let confidence = match e.confidence.as_str() {
                                     "checksum" => "Verified disc",
                                     "converted-checksum" => "Verified converted ISO",
                                     "data-track" => "Partial data match",
@@ -440,16 +499,22 @@ impl App {
                                     "manual" => "Chosen release",
                                     "unverified" => "Unverified title",
                                     _ => "Needs a match",
-                                });
-                                ui.label(if e.category.is_empty() {
+                                };
+                                ui.add_sized([175., 32.], egui::Label::new(confidence).truncate());
+                                let category = if e.category.is_empty() {
                                     "Choose…"
                                 } else {
                                     &e.category
-                                });
-                                ui.label(RichText::new(&e.target).small());
-                                ui.end_row();
+                                };
+                                ui.add_sized([100., 32.], egui::Label::new(category).truncate());
+                                ui.add_sized(
+                                    [460., 32.],
+                                    egui::Label::new(RichText::new(&e.target).small()).truncate(),
+                                )
+                                .on_hover_text(&e.target);
                             }
                         });
+                    }
                 });
             if let Some(index) = selected {
                 if let Some(e) = plan.entries.get_mut(index) {
@@ -504,7 +569,7 @@ impl App {
             .as_ref()
             .and_then(|p| self.selected.and_then(|n| p.entries.get(n)))
             .and_then(|e| e.cover.clone());
-        self.show_thumbnail(ui, thumb);
+        self.show_thumbnail(ui, thumb.map(ThumbnailSource::File));
         if resolve {
             self.release_dialog = true
         }
@@ -520,7 +585,15 @@ impl App {
         egui::Window::new("Resolve selected disc").collapsible(false).default_width(650.).show(ctx,|ui|{
    ui.label("Choose the exact catalog release, or enter a title to import without a verified identity.");
    ui.text_edit_singleline(&mut self.release_search);let filter=self.release_search.to_lowercase();
-   if let Some(plan)=&self.plan{egui::ScrollArea::vertical().id_salt("releases").max_height(230.).show(ui,|ui|{for(index,g)in plan.catalog.games.iter().enumerate(){if !filter.is_empty()&&!g.release.to_lowercase().contains(&filter){continue}if ui.selectable_label(self.release_choice==Some(index),&g.release).clicked(){self.release_choice=Some(index);}}});}
+   if let Some(plan)=&self.plan{
+       let matches=plan.catalog.games.iter().enumerate().filter_map(|(i,g)|(filter.is_empty()||g.release.to_lowercase().contains(&filter)).then_some(i)).collect::<Vec<_>>();
+       let row_height=ui.text_style_height(&egui::TextStyle::Button)+2.*ui.spacing().button_padding.y;
+       egui::ScrollArea::vertical().id_salt("releases").max_height(230.).show_rows(ui,row_height,matches.len(),|ui,rows|{
+           for row in rows{let index=matches[row];let release=&plan.catalog.games[index].release;
+               if ui.add_sized([ui.available_width(),row_height],egui::Button::selectable(self.release_choice==Some(index),release).truncate()).on_hover_text(release).clicked(){self.release_choice=Some(index);}
+           }
+       });
+   }
    egui::ComboBox::from_label("Category").selected_text(&self.edit_category).show_ui(ui,|ui|{for c in CATEGORIES{ui.selectable_value(&mut self.edit_category,c.into(),c);}});
    if ui.add_enabled(self.release_choice.is_some(),egui::Button::new("Use chosen release (manual identification)")).clicked(){action=Some(false)}
    ui.separator();ui.label("Unverified title");ui.text_edit_singleline(&mut self.edit_title);ui.horizontal(|ui|{ui.label("Region");ui.text_edit_singleline(&mut self.edit_region);});
@@ -608,18 +681,27 @@ impl App {
         });
         ui.text_edit_singleline(&mut self.filter);
         let filter = self.filter.to_lowercase();
+        let visible = self
+            .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, r)| {
+                let title = r["title"].as_str().unwrap_or("Untitled");
+                let path = r["path"].as_str().unwrap_or("");
+                (filter.is_empty() || format!("{title} {path}").to_lowercase().contains(&filter))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let row_height =
+            ui.text_style_height(&egui::TextStyle::Button) + 2. * ui.spacing().button_padding.y;
         egui::ScrollArea::vertical()
             .id_salt("library_rows")
             .max_height(260.)
-            .show(ui, |ui| {
-                for (index, r) in self.records.iter().enumerate() {
+            .show_rows(ui, row_height, visible.len(), |ui, rows| {
+                for row in rows {
+                    let index = visible[row];
+                    let r = &self.records[index];
                     let title = r["title"].as_str().unwrap_or("Untitled");
-                    let path = r["path"].as_str().unwrap_or("");
-                    if !filter.is_empty()
-                        && !format!("{title} {path}").to_lowercase().contains(&filter)
-                    {
-                        continue;
-                    }
                     let cover = if r["cover"].is_string() {
                         "cover"
                     } else {
@@ -631,10 +713,15 @@ impl App {
                         "no preview"
                     };
                     if ui
-                        .selectable_label(
-                            self.selected_record == Some(index),
-                            format!("{title}   ·   {cover}   ·   {preview}"),
+                        .add_sized(
+                            [ui.available_width(), row_height],
+                            egui::Button::selectable(
+                                self.selected_record == Some(index),
+                                format!("{title}   ·   {cover}   ·   {preview}"),
+                            )
+                            .truncate(),
                         )
+                        .on_hover_text(title)
                         .clicked()
                     {
                         self.selected_record = Some(index);
@@ -699,16 +786,18 @@ impl App {
                 }
             }
         }
-        let thumb = self.supplied_cover.clone().or_else(|| {
-            self.selected_record
-                .and_then(|n| self.records.get(n))
-                .and_then(|r| r["cover"].as_str())
-                .and_then(|name| {
-                    self.root()
-                        .ok()
-                        .and_then(|root| f::safe(&root, &format!(".ohmy3do/covers/{name}")).ok())
-                })
-        });
+        let thumb = self
+            .supplied_cover
+            .clone()
+            .map(ThumbnailSource::File)
+            .or_else(|| {
+                self.selected_record
+                    .and_then(|n| self.records.get(n))
+                    .and_then(|r| r["cover"].as_str())
+                    .map(|name| {
+                        ThumbnailSource::Library(PathBuf::from(&self.prefs.library), name.into())
+                    })
+            });
         self.show_thumbnail(ui, thumb);
     }
     fn usb_ui(&mut self, ui: &mut egui::Ui) {
@@ -769,6 +858,21 @@ impl App {
     }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Tools & settings");
+        if let Some(state) = ui
+            .ctx()
+            .data(|data| data.get_temp::<String>(egui::Id::new("graphics")))
+        {
+            ui.label(state);
+        }
+        if ui
+            .checkbox(
+                &mut self.prefs.software_rendering,
+                "Use software graphics (restart required)",
+            )
+            .changed()
+        {
+            self.save_preferences();
+        }
         ui.checkbox(
             &mut self.prefs.offline,
             "Offline: use the cached catalog and local media only",
@@ -923,6 +1027,7 @@ fn open(path: &Path) {
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let frame_started = Instant::now();
         self.poll();
         self.frames += 1;
         if self.busy && ctx.input(|i| i.viewport().close_requested()) {
@@ -957,11 +1062,19 @@ impl eframe::App for App {
                     .id_salt("logs")
                     .max_height(130.)
                     .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for line in &self.logs {
-                            ui.label(RichText::new(line).small());
-                        }
-                    });
+                    .show_rows(
+                        ui,
+                        ui.text_style_height(&egui::TextStyle::Small),
+                        self.logs.len(),
+                        |ui, rows| {
+                            for row in rows {
+                                ui.add(
+                                    egui::Label::new(RichText::new(&self.logs[row]).small())
+                                        .truncate(),
+                                );
+                            }
+                        },
+                    );
             });
         });
         egui::SidePanel::left("navigation")
@@ -1049,6 +1162,29 @@ impl eframe::App for App {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
+        if let Some(profile) = &mut self.profile {
+            let now = Instant::now();
+            if self.frames > 15 {
+                profile
+                    .intervals
+                    .push((frame_started - profile.previous).as_secs_f64() * 1000.);
+                profile
+                    .cpu
+                    .push((now - frame_started).as_secs_f64() * 1000.);
+            }
+            profile.previous = frame_started;
+            if profile.cpu.len() >= 120 {
+                profile.cpu.sort_by(f64::total_cmp);
+                profile.intervals.sort_by(f64::total_cmp);
+                let graphics = ctx.data(|data| data.get_temp::<String>(egui::Id::new("graphics")));
+                let report = serde_json::json!({"rows":self.records.len(), "frames":profile.cpu.len(), "ui_cpu_median_ms":profile.cpu[60], "ui_cpu_p95_ms":profile.cpu[114], "frame_median_ms":profile.intervals[60], "frame_p95_ms":profile.intervals[114], "graphics":graphics});
+                let _ = fs::write(&profile.path, serde_json::to_vec_pretty(&report).unwrap());
+                self.profile = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ctx.request_repaint();
+            }
+        }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.save_preferences()
@@ -1060,6 +1196,10 @@ fn main() -> eframe::Result<()> {
         .windows(2)
         .find(|w| w[0] == "--screenshot")
         .map(|w| PathBuf::from(&w[1]));
+    let profile = args
+        .windows(2)
+        .find(|w| w[0] == "--profile-ui")
+        .map(|w| PathBuf::from(&w[1]));
     let mut options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -1067,27 +1207,90 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([980., 680.]),
         ..Default::default()
     };
-    // A library manager does not need a discrete GPU. Prefer the system's
-    // software adapter so remote desktops and troublesome display drivers work.
+    // Try hardware devices first. A failed driver must not prevent startup:
+    // keep a working software device as the final compatibility fallback.
     let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::default();
+    // Pre-created GL devices are tied to a context without our window's
+    // surface. Use native backends so the selected device can present later.
+    setup.instance_descriptor.backends = wgpu::Backends::PRIMARY;
     #[cfg(windows)]
     {
         setup.instance_descriptor.backends = wgpu::Backends::DX12;
     }
-    setup.native_adapter_selector = Some(Arc::new(|adapters, surface| {
-        let supported = |a: &&wgpu::Adapter| surface.is_none_or(|s| a.is_surface_supported(s));
-        adapters
-            .iter()
-            .filter(supported)
-            .find(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
-            .or_else(|| adapters.iter().filter(supported).next())
-            .cloned()
-            .ok_or_else(|| "No compatible display adapter".into())
-    }));
-    options.wgpu_options.wgpu_setup = setup.into();
+    let prefs = fs::read(cache_dir().join("native-settings.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Preferences>(&b).ok())
+        .unwrap_or_default();
+    let software = prefs.software_rendering || args.iter().any(|a| a == "--software-rendering");
+    let instance = wgpu::Instance::new(&setup.instance_descriptor);
+    let mut adapters = instance.enumerate_adapters(setup.instance_descriptor.backends);
+    adapters.sort_by_key(|adapter| {
+        let cpu = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        if software {
+            !cpu
+        } else {
+            cpu
+        }
+    });
+    if software {
+        adapters.retain(|adapter| adapter.get_info().device_type == wgpu::DeviceType::Cpu);
+    }
+    let mut attempts = Vec::new();
+    let mut graphics = None;
+    for adapter in adapters {
+        let info = adapter.get_info();
+        let descriptor = (setup.device_descriptor)(&adapter);
+        match pollster::block_on(adapter.request_device(&descriptor)) {
+            Ok((device, queue)) => {
+                let label = format!(
+                    "Graphics: {} ({:?}, {:?})",
+                    info.name, info.device_type, info.backend
+                );
+                attempts.push(label.clone());
+                graphics = Some((
+                    label,
+                    eframe::egui_wgpu::WgpuSetupExisting {
+                        instance: instance.clone(),
+                        adapter,
+                        device,
+                        queue,
+                    },
+                ));
+                break;
+            }
+            Err(error) => attempts.push(format!("{} ({:?}): {error}", info.name, info.device_type)),
+        }
+    }
+    let cache = cache_dir();
+    let _ = fs::create_dir_all(&cache);
+    let _ = fs::write(cache.join("native-graphics.log"), attempts.join("\n"));
+    let Some((graphics_label, graphics_setup)) = graphics else {
+        return Err(eframe::Error::AppCreation(Box::new(std::io::Error::other(
+            format!("No usable graphics device. {}", attempts.join("; ")),
+        ))));
+    };
+    options.wgpu_options.wgpu_setup = graphics_setup.into();
+    options.wgpu_options.desired_maximum_frame_latency = Some(1);
     eframe::run_native(
         "Oh My 3DO Library",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, screenshot)))),
+        Box::new(move |cc| {
+            cc.egui_ctx
+                .data_mut(|data| data.insert_temp(egui::Id::new("graphics"), graphics_label));
+            let mut app = App::new(cc, screenshot);
+            if let Some(path) = profile {
+                // Explicit diagnostic mode: exercise a large list without
+                // importing files or reading/changing the library.
+                app.records = (0..5000).map(|i| serde_json::json!({"title":format!("Game {i:05}"),"path":format!("Games/USA/Game {i:05}/Disc 1.iso")})).collect();
+                app.tab = Tab::Media;
+                app.profile = Some(UiProfile {
+                    path,
+                    previous: Instant::now(),
+                    intervals: vec![],
+                    cpu: vec![],
+                });
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

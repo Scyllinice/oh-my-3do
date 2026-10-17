@@ -946,7 +946,178 @@ pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
     data.extend(payload);
     data.extend_from_slice(b"END3DL01");
     tx.write(".ohmy3do/library.3di", &data)?;
+    tx.write(
+        ".ohmy3do/metadata.3di",
+        &metadata_bytes(&database(root)?, &names)?,
+    )?;
     Ok(())
+}
+
+fn metadata_text(value: &Value) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let text: String = value
+        .as_str()
+        .unwrap_or("")
+        .nfkd()
+        .filter_map(|c| {
+            c.is_ascii()
+                .then_some(if c.is_ascii_control() { ' ' } else { c })
+        })
+        .collect();
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(96)
+        .collect()
+}
+fn metadata_date(meta: &Value) -> String {
+    if let Some(date) = meta["release_date"].as_str().and_then(|s| s.get(..10)) {
+        if rx(r"^\d{4}-\d{2}-\d{2}$").is_match(date) {
+            let year = date[..4].parse::<u32>().unwrap_or(0);
+            let month = date[5..7].parse::<usize>().unwrap_or(0);
+            let day = date[8..10].parse::<u32>().unwrap_or(0);
+            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            let days = [
+                0,
+                31,
+                if leap { 29 } else { 28 },
+                31,
+                30,
+                31,
+                30,
+                31,
+                31,
+                30,
+                31,
+                30,
+                31,
+            ];
+            if year > 0 && month <= 12 && day > 0 && day <= days[month] {
+                return date.into();
+            }
+        }
+    }
+    let year = meta["year"]
+        .as_i64()
+        .or_else(|| meta["year"].as_str().and_then(|s| s.parse().ok()));
+    year.filter(|y| (1000..3000).contains(y))
+        .map(|y| y.to_string())
+        .unwrap_or_default()
+}
+pub fn metadata_bytes(db: &Value, names: &[String]) -> Result<Vec<u8>> {
+    let allowed = names
+        .iter()
+        .map(|p| (f::fold(p), p))
+        .collect::<HashMap<_, _>>();
+    let mut records = BTreeMap::new();
+    for record in db["games"].as_array().context("Invalid library records")? {
+        let key = f::fold(record["path"].as_str().unwrap_or(""));
+        let Some(path) = allowed.get(&key) else {
+            continue;
+        };
+        let meta = &record["metadata"];
+        let fields = [
+            metadata_text(&meta["genre"]),
+            metadata_text(&meta["publisher"]),
+            metadata_date(meta),
+        ];
+        if fields.iter().all(String::is_empty) {
+            continue;
+        }
+        if records.insert(key, ((*path).clone(), fields)).is_some() {
+            bail!("Duplicate metadata path");
+        }
+    }
+    let count = records.len();
+    let mut payload = vec![];
+    for (path, fields) in records.values() {
+        for field in std::iter::once(path).chain(fields.iter()) {
+            if field.len() > 8192 || field.contains('\0') {
+                bail!("Invalid metadata field");
+            }
+            payload.extend_from_slice(&((field.len() + 1) as u16).to_be_bytes());
+            payload.extend_from_slice(field.as_bytes());
+            payload.push(0);
+        }
+    }
+    if count > 2048 || payload.len() + 16 * count > 192 * 1024 {
+        bail!("Console metadata index exceeds capacity");
+    }
+    let mut result = b"OM3DMET1".to_vec();
+    for n in [
+        count as u32,
+        payload.len() as u32,
+        crc32fast::hash(&payload),
+        0,
+    ] {
+        result.extend_from_slice(&n.to_be_bytes());
+    }
+    result.extend_from_slice(&payload);
+    result.extend_from_slice(b"END3DM01");
+    metadata_paths(&result)?;
+    Ok(result)
+}
+pub fn metadata_paths(data: &[u8]) -> Result<Vec<String>> {
+    if data.len() < 32 || &data[..8] != b"OM3DMET1" || &data[data.len() - 8..] != b"END3DM01" {
+        bail!("Invalid metadata header/footer");
+    }
+    let word = |i| u32::from_be_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+    let count = word(8);
+    let bytes = word(12);
+    if count > 2048
+        || bytes > 192 * 1024
+        || bytes + 16 * count > 192 * 1024
+        || data.len() != bytes + 32
+        || word(20) != 0
+        || crc32fast::hash(&data[24..data.len() - 8]) as usize != word(16)
+    {
+        bail!("Invalid metadata checksum/bounds");
+    }
+    let mut paths = Vec::<String>::new();
+    let mut pos = 24;
+    for _ in 0..count {
+        for field in 0..4 {
+            let length = data.get(pos..pos + 2).context("Truncated metadata")?;
+            let length = u16::from_be_bytes(length.try_into().unwrap()) as usize;
+            pos += 2;
+            let text = data
+                .get(pos..pos + length)
+                .context("Truncated metadata string")?;
+            pos += length;
+            if pos > data.len() - 8
+                || length == 0
+                || text[length - 1] != 0
+                || text[..length - 1].contains(&0)
+            {
+                bail!("Invalid metadata string");
+            }
+            let text = &text[..length - 1];
+            if field == 0 {
+                let path = std::str::from_utf8(text)?;
+                if text.len() > 8192
+                    || path.split('/').count() > 33
+                    || path
+                        .split('/')
+                        .any(|p| p.is_empty() || p == "." || p == ".." || p.len() >= 1024)
+                    || path
+                        .chars()
+                        .any(|c| c.is_control() || c == '\\' || c == ':')
+                    || ![".iso", ".cue"].iter().any(|e| f::fold(path).ends_with(e))
+                    || paths.last().is_some_and(|p| f::fold(p) >= f::fold(path))
+                {
+                    bail!("Invalid or unsorted metadata path");
+                }
+                paths.push(path.into());
+            } else if length > 97 || text.iter().any(|b| !(32..=126).contains(b)) {
+                bail!("Invalid metadata text");
+            }
+        }
+    }
+    if pos != data.len() - 8 {
+        bail!("Trailing metadata");
+    }
+    Ok(paths)
 }
 pub fn database(root: &Path) -> Result<Value> {
     let path = f::safe(root, ".ohmy3do/library.json")?;
@@ -1217,8 +1388,8 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
         if !previews.is_empty() {
             tx.write(".ohmy3do/previews/index.3di", &media_index(&previews)?)?
         }
-        build_indexes(&root, &mut tx, job)?;
         write_database(&mut tx, db.take(), records, &plan.catalog.sources)?;
+        build_indexes(&root, &mut tx, job)?;
         job.check()?;
         tx.finish()?;
         Ok(())

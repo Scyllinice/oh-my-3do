@@ -71,3 +71,96 @@ done:
     if (!result) { library_catalog_free(catalog); *catalog=next; memset(&next,0,sizeof(next)); }
     library_catalog_free(&next); free(data); return result;
 }
+
+void library_metadata_free(LibraryMetadata *metadata)
+{
+    free(metadata->entries); free(metadata->storage);
+    memset(metadata,0,sizeof(*metadata));
+}
+
+int library_metadata_parse(const unsigned char *data,size_t size,LibraryMetadata *metadata)
+{
+    LibraryMetadata next;
+    unsigned long count, bytes;
+    size_t i, pos=0;
+    memset(&next,0,sizeof(next));
+    if (size<32 || memcmp(data,"OM3DMET1",8) || word(data+20)) return -1;
+    count=word(data+8); bytes=word(data+12);
+    if (count>LIBRARY_METADATA_MAX || bytes>LIBRARY_METADATA_BYTES ||
+        bytes+16UL*count>LIBRARY_METADATA_BYTES || size!=24UL+bytes+8 ||
+        memcmp(data+24+bytes,"END3DM01",8) ||
+        usb_art_crc32(data+24,(size_t)bytes)!=word(data+16)) return -1;
+    next.storage=(unsigned char *)malloc(bytes ? (size_t)bytes : 1);
+    next.entries=(LibraryGameInfo *)calloc(count ? (size_t)count : 1,sizeof(LibraryGameInfo));
+    if (!next.storage || !next.entries) { library_metadata_free(&next); return -3; }
+    memcpy(next.storage,data+24,(size_t)bytes);
+    for (i=0;i<(size_t)count;++i) {
+        const char *fields[4];
+        unsigned int field;
+        for (field=0;field<4;++field) {
+            size_t length, k;
+            if (bytes-pos<2) goto invalid;
+            length=(size_t)next.storage[pos]*256+next.storage[pos+1]; pos+=2;
+            if (!length || length>bytes-pos || next.storage[pos+length-1] ||
+                memchr(next.storage+pos,0,length-1)) goto invalid;
+            fields[field]=(const char *)next.storage+pos;
+            if (!field) { if (!relative(fields[field],0)) goto invalid; }
+            else {
+                if (length>97) goto invalid;
+                for (k=0;k+1<length;++k)
+                    if (next.storage[pos+k]<32 || next.storage[pos+k]>126) goto invalid;
+            }
+            pos+=length;
+        }
+        next.entries[i].path=fields[0]; next.entries[i].genre=fields[1];
+        next.entries[i].publisher=fields[2]; next.entries[i].released=fields[3];
+        if (i && menu_path_compare(next.entries[i-1].path,fields[0])>=0) goto invalid;
+    }
+    if (pos!=bytes) goto invalid;
+    next.count=(size_t)count;
+    library_metadata_free(metadata); *metadata=next; return 0;
+invalid:
+    library_metadata_free(&next); return -1;
+}
+
+int library_metadata_load(Ode *ode,OdeReadBuffer reader,LibraryMetadata *metadata)
+{
+    unsigned char header[24], *data=NULL;
+    unsigned long bytes;
+    size_t pos;
+    LibraryMetadata next;
+    int result=-1;
+    memset(&next,0,sizeof(next));
+    if (usb_file_open(ode,"metadata.3di")<0) return -1;
+    if (usb_file_read(ode,reader,header,24,1)<0 || memcmp(header,"OM3DMET1",8) || word(header+20)) goto done;
+    bytes=word(header+12);
+    if (word(header+8)>LIBRARY_METADATA_MAX || bytes>LIBRARY_METADATA_BYTES ||
+        bytes+16UL*word(header+8)>LIBRARY_METADATA_BYTES) goto done;
+    data=(unsigned char *)malloc((size_t)bytes+32);
+    if (!data) { result=-3; goto done; }
+    memcpy(data,header,24); pos=0;
+    while (pos<(size_t)bytes) {
+        size_t n=bytes-pos>2048 ? 2048 : (size_t)bytes-pos;
+        if (usb_file_read(ode,reader,data+24+pos,n,0)<0) goto done;
+        pos+=n;
+    }
+    if (usb_file_verify(ode,reader,(const unsigned char *)"END3DM01",8)<0) goto done;
+    memcpy(data+24+bytes,"END3DM01",8);
+    result=library_metadata_parse(data,(size_t)bytes+32,&next);
+done:
+    if (usb_file_close(ode)<0) result=-1;
+    if (!result) { library_metadata_free(metadata); *metadata=next; memset(&next,0,sizeof(next)); }
+    library_metadata_free(&next); free(data); return result;
+}
+
+const LibraryGameInfo *library_metadata_find(const LibraryMetadata *metadata,const char *path)
+{
+    size_t low=0, high=metadata->count;
+    while (low<high) {
+        size_t mid=low+(high-low)/2;
+        int order=menu_path_compare(path,metadata->entries[mid].path);
+        if (!order) return metadata->entries+mid;
+        if (order<0) high=mid; else low=mid+1;
+    }
+    return NULL;
+}

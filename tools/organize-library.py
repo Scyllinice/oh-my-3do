@@ -34,9 +34,9 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.16.0-rc4'
+SCANNER_VERSION = '0.16.0-rc5'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
-STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di',
+STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di', 'metadata.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
 CATEGORIES = ('Games', 'Demos', 'Samplers', 'Applications', 'Multimedia', 'Educational', 'Bonus Discs')
 REGIONS = {'us': 'USA', 'usa': 'USA', 'na': 'USA', 'europe': 'Europe', 'eu': 'Europe',
@@ -1118,6 +1118,7 @@ def write_database(root, tx, plan, selected):
     records = [r for r in records.values() if relative_path(root, r['path']).is_file()]
     data = dict(schema=1, generated=time.time(), sources=plan['sources'], games=sorted(records, key=lambda r: r['path']))
     tx.write('.ohmy3do/library.json', json_bytes(data))
+    tx.write('.ohmy3do/metadata.3di', index_tools.metadata_index(records, [r['path'] for r in records if Path(r['path']).suffix.lower() in ('.iso', '.cue')]))
     with tempfile.TemporaryDirectory(prefix='oh3do-db-') as directory:
         path = Path(directory) / 'library.sqlite'
         # SQLite's transaction context commits/rolls back, but does not close
@@ -1354,7 +1355,7 @@ def directory_link(path):
 
 def migrate_support(root, apply=False):
     """Move menu-owned support files into .ohmy3do with a normal undo journal."""
-    names = ('favorites.txt','recent.txt','last-position.txt','diagnostics.txt','library.3di',
+    names = ('favorites.txt','recent.txt','last-position.txt','diagnostics.txt','library.3di','metadata.3di',
              'covers','previews','music','saves')
     operations, directories = [], []
     for name in names:
