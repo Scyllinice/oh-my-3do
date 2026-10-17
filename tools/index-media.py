@@ -264,7 +264,7 @@ def index(root):
                     header = stream.read(24)
                 if len(header) == 24 and header[:8] == b'\x89PNG\r\n\x1a\n' and header[12:16] == b'IHDR':
                     w, h = struct.unpack_from('>II', header, 16)
-                    if (w,h) != (84,105):
+                    if (w,h) != (96,120):
                         oversized.append((name,w,h))
             key = fold(path.stem)
             if key in assets:
@@ -292,10 +292,10 @@ def index(root):
         data = b"OM3DIDX1"+struct.pack(">IIII",len(rows),len(payload),binascii.crc32(payload),0)+payload
         outputs.append((directory, data, len(rows)))
     if oversized:
-        print(f'{len(oversized)} PNG cover(s) differ from the native 84x105 cover size:')
+        print(f'{len(oversized)} PNG cover(s) differ from the native 96x120 cover size:')
         for name,w,h in oversized[:5]:
             print(f'  {name}: {w}x{h}')
-        print('Use resize-covers.py with a separate output folder for 84x105 PNGs; originals were not changed.')
+        print('Use resize-covers.py with a separate output folder for 96x120 PNGs; originals were not changed.')
     # Validate every index before replacing any existing output.
     temporary=support/'library.3di.tmp'
     if temporary.is_symlink(): raise ValueError('Temporary search index must not be a symlink')

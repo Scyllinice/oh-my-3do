@@ -62,14 +62,17 @@ a compatible, unique match is available. Previews come from local footage;
 the app does not log into EmuMovies or download membership videos. Downloaded
 game artwork and footage are not included in the app download.
 
-**Update missing media** preserves existing associations. **Apply supplied
+**Update missing media** preserves existing associations. **Rebuild media quality**
+reconverts recorded original images and videos for the larger console panel.
+Install menu v0.16.0-rc10+ first. Missing originals are skipped, prior media files
+are retained, and the changes can be undone. **Apply supplied
 media** deliberately replaces the association for the selected entry while
 retaining the former media file. **Artwork review page** produces a searchable
 HTML contact sheet. Library identity and registration fields are preserved.
 
-Covers are 84×105 PNGs. Previews are 15 fps, capped at 15 seconds, with mono
+Covers are 96×120 PNGs. Previews are 160×120 at 15 fps, capped at 15 seconds, with mono
 source audio when present; complex clips shorten further to fit the menu's
-1 MiB RAM payload budget. Playback requires the v0.16.0-rc2 or newer menu. Enable video previews in the
+1 MiB RAM payload budget. New previews require the v0.16.0-rc10 or newer menu. Enable video previews in the
 console configuration; existing console settings are preserved.
 
 Imports and **Rebuild Find index** also create `.ohmy3do/metadata.3di` from the

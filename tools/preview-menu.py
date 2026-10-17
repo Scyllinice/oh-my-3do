@@ -133,6 +133,7 @@ static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, 
     memset(preview->pixels,0x11,USB_ART_PIXELS); memset(preview->pixels+USB_ART_PIXELS,0x22,USB_ART_PIXELS);
     preview->audio=(unsigned char *)malloc(4); if (!preview->audio) return -1;
     preview->audio_bytes=preview->audio_frames=4; preview->audio_rate=11025;
+    preview->width=64; preview->height=80; preview->frame_bytes=USB_ART_PIXELS;
     preview->version=1; preview->frames=2; preview->fps=6; preview->video_bytes=2*USB_ART_PIXELS; return 0;
 }
 static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context) {
@@ -151,7 +152,7 @@ static CCB *LoadCel(char *file, unsigned long flags) {
     return preview_cel_fail ? NULL : &preview_loaded;
 }
 static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
-    static unsigned char pixels[USB_COVER_PIXELS];
+    static unsigned char pixels[USB_PREVIEW_FRAME_BYTES];
     (void)flags; (void)data;
     if (bpp==4) {
         static CCB fonts[128];
@@ -187,7 +188,7 @@ static void DrawCels(Item item, CCB *cel) {
         for (i=0;i<UI_FONT_STRIDE*cel->ccb_Height;++i) printf("%02x",((unsigned char *)cel->ccb_SourcePtr)[i]);
         printf("\n"); return;
     }
-    (void)item; printf("I %d %.6f %.6f %.6f %.6f\n",cel->tag,cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy);
+    (void)item; printf("I %d %.6f %.6f %.6f %.6f\n",cel->tag==2 && cel->ccb_Width==160 ? 4 : cel->tag,cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy);
 }
 static void DisplayScreen(Item item, int flag) { (void)item; (void)flag; }
 static int preview_read_directory(Ode *ode, OdeListing *listing);
@@ -326,7 +327,7 @@ int main(int argc, char **argv) {
         menu.usb_art.entries[1].path="Disc 1.iso"; menu.usb_art.entries[1].file="Disc.png";
         menu.selected=2; preview_cel_fail=0;
         selection_changed(&menu); preview_now+=350; update_cover(&menu);
-        if (!menu.cover || preview_png_loads!=1 || menu.cover_cached || menu.cover->ccb_Width!=84 || menu.cover->ccb_Height!=105) abort();
+        if (!menu.cover || preview_png_loads!=1 || menu.cover_cached || menu.cover->ccb_Width!=USB_COVER_WIDTH || menu.cover->ccb_Height!=USB_COVER_HEIGHT) abort();
         menu.selected=3; selection_changed(&menu); preview_now+=349; update_cover(&menu);
         if (menu.cover || preview_png_loads!=1) abort();
         ++preview_now; update_cover(&menu); if (!menu.cover || preview_png_loads!=2) abort();
@@ -780,6 +781,12 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[1],"gecko-alphabet")) { menu.selected=0; alphabet_input(&menu,ControlUp); }
         menu.saved_config=menu.config;
     }
+    if (argc>1 && !strcmp(argv[1],"gecko-preview")) {
+        static CCB video={2,0,0,0};
+        video.ccb_Width=160; video.ccb_Height=120;
+        menu.preview_cel=&video; menu.preview.pixels=(unsigned char *)"synthetic";
+        menu.preview.frames=1; menu.preview.fps=15;
+    }
     if (argc>1 && !strncmp(argv[1],"metadata",8)) {
         static LibraryGameInfo info={"Alone in the Dark.iso","Adventure","Infogrames","1994-09-29"};
         menu.metadata.entries=&info; menu.metadata.count=1; menu.selected=2; menu.cover=&cover;
@@ -843,17 +850,19 @@ def main():
         timing_lines=subprocess.check_output([str(binary),"diagnostics-preview"],text=True).splitlines()
         assert "L Last preview load" in timing_lines and "L Read + CRC: 24100ms" in timing_lines
         assert "L Folder navigation: 7100ms" in timing_lines and "L Frames: 225 at 15 fps" in timing_lines
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet"):
+        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "restore", "display", "display-save", "large", "margin", "contrast", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "violet", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-preview", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode.startswith("gecko"):
                 assert sum(command.startswith("I 1 ") for command in commands) == 1, "Gecko TV must retain the graphical logo"
+            if mode == "gecko-preview":
+                assert "I 4 146.000000 50.000000 1.000000 1.000000" in commands
             if mode == "gecko-settings":
                 assert "L Theme: Gecko TV" in commands
             if mode in ("metadata","metadata-large","metadata-margin"):
                 assert "L Genre: Adventure" in commands and "L Publisher: Infogrames" in commands and "L Released: 1994-09-29" in commands
             if mode == "metadata-missing":
                 assert "L No game information" in commands
-            if mode in ("formats","formats-large","results"):
+            if mode == "results":
                 assert "L ISO" in commands and "L CUE" in commands
             if mode in ("tools", "diagnostics-state"):
                 assert not any("USB write" in command for command in commands)
@@ -879,11 +888,11 @@ def main():
                 elif command.startswith("I "):
                     _, tag, x, y, sx, sy = command.split()
                     x,y,sx,sy=map(float,(x,y,sx,sy))
-                    source_art = ROOT / ("assets/demo-cover.png" if tag == "2" else "assets/logo-menu.png")
+                    source_art = ROOT / ("assets/demo-preview.svg" if tag == "4" else "assets/demo-cover.png" if tag == "2" else "assets/logo-menu.png")
                     art = base64.b64encode(source_art.read_bytes()).decode()
-                    width,height=(64,80) if tag == "2" else (133,48)
+                    width,height=(160,120) if tag == "4" else (64,80) if tag == "2" else (133,48)
                     svg.append(f'<image x="{x}" y="{y}" width="{width*sx}" height="{height*sy}" '
-                               f'xlink:href="data:image/png;base64,{art}"/>')
+                               f'xlink:href="data:{"image/svg+xml" if tag == "4" else "image/png"};base64,{art}"/>')
                 elif command.startswith("R "):
                     _, x, y, w, h, c = command.split()
                     assert 0 <= int(x) < int(x) + int(w) <= 320
@@ -913,7 +922,9 @@ def main():
                 local.write_text(target.read_text().replace(
                     f"data:image/png;base64,{logo}", str(ROOT / "assets/logo-menu.png")).replace(
                     "data:image/png;base64," + base64.b64encode((ROOT / "assets/demo-cover.png").read_bytes()).decode(),
-                    str(ROOT / "assets/demo-cover.png")))
+                    str(ROOT / "assets/demo-cover.png")).replace(
+                    "data:image/svg+xml;base64," + base64.b64encode((ROOT / "assets/demo-preview.svg").read_bytes()).decode(),
+                    str(ROOT / "assets/demo-preview.svg")))
                 png = target.with_suffix(".png")
                 subprocess.run(["magick", str(local), "-filter", "point",
                                 "-resize", "960x720", str(png)], check=True)

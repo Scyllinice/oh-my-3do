@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.16.0-rc9'
+SCANNER_VERSION = '0.16.0-rc10'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di', 'metadata.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -1082,7 +1082,7 @@ def prepare_previews(rows, directory, start=0, duration=None, sound=True, replac
             if clip not in converted:
                 # Conversion happens on the PC before any USB changes. Include
                 # content and settings in the name so reruns never replace art.
-                key = hashlib.sha256((digest(clip) + f':{start}:15:{duration or "15"}:{int(sound)}:2:fixed-fps:cap15').encode()).hexdigest()[:16]
+                key = hashlib.sha256((digest(clip) + f':{start}:15:{duration or "15"}:{int(sound)}:2:160x120:fixed-fps:cap15').encode()).hexdigest()[:16]
                 with tempfile.TemporaryDirectory(prefix='oh3do-preview-') as temp:
                     target = Path(temp)/'clip.3dv'
                     converter.convert(clip, target, start=start, duration=duration, sound=sound)

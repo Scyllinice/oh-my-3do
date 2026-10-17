@@ -19,15 +19,15 @@ converter=importlib.util.module_from_spec(spec);spec.loader.exec_module(converte
 BINARY=ROOT/'build/test_usb_media'
 
 
-def container(frames,fps=6,audio=True):
-    raw=b'\x7c\0'*(64*80)
+def container(frames,fps=6,audio=True,width=64,height=80):
+    raw=b'\x7c\0'*(width*height)
     blocks=[zlib.compress(raw)]*frames
     offset=(frames+1)*4;table=[offset]
     for block in blocks:offset+=len(block);table.append(offset)
     video=b''.join(struct.pack('>I',x) for x in table)+b''.join(blocks)
     pcm=bytes((((frames*11025+fps-1)//fps+3)//4)*4) if audio else b''
     payload=video+pcm
-    return b'OM3DVID2'+struct.pack('>HHIIHHIIII',64,80,len(payload),binascii.crc32(payload),frames,fps,len(video),len(pcm),11025 if pcm else 0,len(pcm))+payload+b'END3DV02'
+    return b'OM3DVID2'+struct.pack('>HHIIHHIIII',width,height,len(payload),binascii.crc32(payload),frames,fps,len(video),len(pcm),11025 if pcm else 0,len(pcm))+payload+b'END3DV02'
 
 
 class PreviewToolsTest(unittest.TestCase):
@@ -40,6 +40,20 @@ class PreviewToolsTest(unittest.TestCase):
             for frames,fps,sound in ((2,6,True),(2,6,False),(180,6,True),(30,15,True),(720,15,False)):
                 path=root/'clip.3dv';path.write_bytes(container(frames,fps,sound))
                 self.run_loader('video2' if frames==2 else 'video2large',path,expected)
+
+    def test_landscape_resolution_and_wrong_frame_sizes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);path=root/'landscape.3dv';expected=root/'red.rgb555'
+            path.write_bytes(container(2,15,True,160,120))
+            expected.write_bytes(b'\x7c\0'*(160*120))
+            self.run_loader('video2',path,expected)
+            # A valid CRC cannot make an unsupported dimension or short frame safe.
+            original=path.read_bytes()
+            for width,height in ((0,120),(161,120),(160,121),(64,80),(65535,65535)):
+                bad=bytearray(original);struct.pack_into('>HH',bad,8,width,height);path.write_bytes(bad)
+                self.run_loader('badvideo2',path)
+            old=bytearray(container(2));struct.pack_into('>HH',old,8,160,120);path.write_bytes(old)
+            self.run_loader('badvideo2',path)
 
     def test_c_player_rejects_bad_metadata_indexes_zlib_and_checksums(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -100,7 +114,7 @@ class PreviewToolsTest(unittest.TestCase):
                         return subprocess.CompletedProcess(args,0,json.dumps({'format':{'duration':available},'streams':[{'codec_type':'video'},{'codec_type':'audio'}]}).encode())
                     if '-frames:v' in args:
                         durations.append(float(args[args.index('-t')+1]));n=int(args[args.index('-frames:v')+1])
-                        return subprocess.CompletedProcess(args,0,b'\0'*(n*64*80*3))
+                        return subprocess.CompletedProcess(args,0,b'\0'*(n*160*120*3))
                     return subprocess.CompletedProcess(args,0,b'\0')
                 with mock.patch.object(converter.shutil,'which',return_value='ffmpeg'),mock.patch.object(converter.subprocess,'run',side_effect=run):
                     result=converter.convert(source,root/'preview.3dv',duration=duration)
@@ -116,7 +130,7 @@ class PreviewToolsTest(unittest.TestCase):
         import random
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);source=root/'source.mkv';source.write_bytes(b'placeholder')
-            random_frame=random.Random(42).randbytes(64*80*3)
+            random_frame=random.Random(42).randbytes(160*120*3)
             durations=[]
             def run(args,**kwargs):
                 if '-show_format' in args:

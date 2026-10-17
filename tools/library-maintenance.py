@@ -148,7 +148,7 @@ def media_plan(root, sources):
 
 def cached_conversion(kind, source, cache):
     before = source.stat()
-    policy = 'cover-84x105-v1' if kind == 'cover' else 'preview-v2-15fps-15sec-sound-v1'
+    policy = 'cover-96x120-v2' if kind == 'cover' else 'preview-v2-160x120-15fps-15sec-sound-v2'
     converter_file = Path(__file__).with_name('resize-covers.py' if kind == 'cover' else 'prepare-preview.py')
     key = hashlib.sha256((sha256(source) + policy + sha256(converter_file)).encode()).hexdigest()
     target = cache / (key + KINDS[kind][1])
@@ -307,8 +307,8 @@ def validate_media(path):
                 if pos != 8 or len(chunk) != 13:
                     raise ValueError('Invalid PNG header')
                 w,h,depth,color,comp,filt,interlace = struct.unpack('>IIBBBBB', chunk)
-                if (w,h,depth,comp,filt,interlace) != (84,105,8,0,0,0) or color not in (2,6):
-                    raise ValueError('Prepare covers as native 84x105 RGB/RGBA PNGs: ' + str(path))
+                if (w,h) not in ((84,105),(96,120)) or (depth,comp,filt,interlace) != (8,0,0,0) or color not in (2,6):
+                    raise ValueError('Prepare covers as native 96x120 RGB/RGBA PNGs: ' + str(path))
             elif tag == b'IDAT':
                 compressed.extend(chunk)
             elif tag == b'IEND':
@@ -321,15 +321,15 @@ def validate_media(path):
             pos += n+12
         if color not in (2,6) or not ended:
             raise ValueError('Incomplete PNG')
-        stride = 84*(3 if color == 2 else 4)+1
-        raw = inflate_exact(bytes(compressed), stride*105)
+        stride = w*(3 if color == 2 else 4)+1
+        raw = inflate_exact(bytes(compressed), stride*h)
         if any(raw[i] > 4 for i in range(0,len(raw),stride)):
             raise ValueError('Invalid PNG filter')
         return
     if len(data) < 24:
         raise ValueError('Truncated media')
     w,h,n,crc = struct.unpack_from('>HHII',data,8)
-    if (w,h) != (64,80):
+    if (w,h) not in ((64,80),(160,120)) or (data[:8] != b'OM3DVID2' and (w,h) != (64,80)):
         raise ValueError('Invalid legacy cover/preview dimensions')
     if data[:8] == b'OM3DCOV1' and path.suffix.lower() == '.3dc':
         if n != 10240 or len(data) != 24+n or data[20:24] != bytes(4) or binascii.crc32(data[24:]) != crc:
@@ -361,7 +361,7 @@ def validate_media(path):
     for begin,end in zip(offsets, offsets[1:]):
         if begin >= end or end > video:
             raise ValueError('Invalid preview frame offset')
-        inflate_exact(payload[begin:end],10240)
+        inflate_exact(payload[begin:end],w*h*2)
 
 
 def validate_config(path):

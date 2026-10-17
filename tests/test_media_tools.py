@@ -84,8 +84,8 @@ def main():
         # Covers preserve every native pixel; old 64x80 covers gain interpolated shades.
         native=folder/'native.png'; expected_native=folder/'native.rgb555'
         sample_native=lambda x,y: ((x*3)%256,(y*2)%256,(x+y)%256)
-        native.write_bytes(png(84,105,2,8,b''.join(b'\0'+b''.join(bytes(sample_native(x,y)) for x in range(84)) for y in range(105))))
-        expected_native.write_bytes(b''.join(rgb555((*sample_native(x,y),255)) for y in range(105) for x in range(84)))
+        native.write_bytes(png(96,120,2,8,b''.join(b'\0'+b''.join(bytes(sample_native(x,y)) for x in range(96)) for y in range(120))))
+        expected_native.write_bytes(b''.join(rgb555((*sample_native(x,y),255)) for y in range(120) for x in range(96)))
         run(binary,'cover',native,expected_native)
         checker=folder/'checker.png'
         checker.write_bytes(png(64,80,2,8,b''.join(b'\0'+b''.join(b'\xff\xff\xff' if (x+y)%2==0 else b'\0\0\0' for x in range(64)) for y in range(80))))

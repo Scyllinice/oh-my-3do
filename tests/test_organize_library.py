@@ -512,7 +512,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         index=organizer.index_tools.existing_index(self.root/'covers')
         self.assertEqual(len(index),2);self.assertEqual(len(set(index.values())),1)
         with Image.open(self.root/'covers'/next(iter(index.values()))) as image:
-            self.assertEqual(image.size,(84,105));self.assertEqual(image.mode,'RGB');self.assertEqual(image.format,'PNG')
+            self.assertEqual(image.size,(96,120));self.assertEqual(image.mode,'RGB');self.assertEqual(image.format,'PNG')
         records=json.loads((self.root/'.ohmy3do/library.json').read_text())['games']
         self.assertTrue(all(r['cover_source']=='Box - Front/Example (USA).jpg' for r in records))
         self.assertEqual(original.read_bytes(),original_bytes)
@@ -1355,7 +1355,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         tx=organizer.apply_plan(self.root,plan,self.cache,covers=True,offline=True)
         covers=list((self.root/'covers').glob('*.png'))
         self.assertEqual(len(covers),1)
-        with Image.open(covers[0]) as im:self.assertEqual(im.size,(84,105));self.assertEqual(im.mode,'RGB')
+        with Image.open(covers[0]) as im:self.assertEqual(im.size,(96,120));self.assertEqual(im.mode,'RGB')
         tx.undo();self.assertEqual(before,snapshot(self.root))
 
     def test_different_disc_cover_scans_do_not_overwrite_each_other(self):
@@ -1369,7 +1369,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
             self.catalog['games'].append(game(title,[data]))
             name=title+'.png';key=hashlib.sha1(name.encode()).hexdigest()
             path=self.cache/'artwork'/f'{key}.png';path.parent.mkdir(exist_ok=True)
-            Image.new('RGB',(84,105),(disc*80,20,30)).save(path)
+            Image.new('RGB',(96,120),(disc*80,20,30)).save(path)
             links.append('<a href="'+organizer.catalog_tools.urllib.parse.quote(name)+'">Cover</a>')
         (self.cache/'cover-list.html').write_text(''.join(links))
         before=snapshot(self.root)

@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.16.0-rc9)
+Oh My 3DO media tools (scanner v0.16.0-rc10)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -182,7 +182,7 @@ with undo support and updates CUE-based favorites and media links to the ISO.
 BIN/CUE, audio/multiple tracks, gaps, extra indexes, unknown directives and
 broken/shared sets remain intact. Separate ISO copies are not merged.
 Existing artwork links are preserved; downloaded covers are native
-84x105 PNGs. Favorites, recent games, saved selection and media/search indices
+96x120 PNGs. Favorites, recent games, saved selection and media/search indices
 are updated. boot.iso, settings, NVRAM backups and music stay in place.
 Menu-written text is read up to its first NUL terminator, ignoring stale tails.
 Invalid saved positions reset to the USB root with a warning; undo restores
@@ -203,7 +203,7 @@ To import EmuMovies covers instead of downloading covers, add:
 Replace the placeholder with the actual front-box image folder. Avoid a parent
 folder containing back covers, screenshots and logos. Subfolders are included.
 Install Pillow: py -m pip install Pillow
-PNG/JPEG/WebP/BMP/GIF/TIFF images are converted to native 84x105 RGB PNGs and
+PNG/JPEG/WebP/BMP/GIF/TIFF images are converted to native 96x120 RGB PNGs and
 indexed automatically. Exact names are preferred, then unique title matches
 with compatible region/disc labels. A generic cover can serve all discs.
 Ambiguous, missing and unreadable images are skipped. Existing USB covers and
@@ -241,7 +241,7 @@ Install the image library once (Windows):
 Audit existing covers without changing files:
   py resize-covers.py "E:/.ohmy3do/covers" --check
 This reports dimensions, mode and size. Exit status 1 means some images would
-benefit from preparation; 0 means every image is already 84x105 RGB PNG.
+benefit from preparation; 0 means every image is already 96x120 RGB PNG.
 
 Resize one image and give it the game's basename:
   py resize-covers.py "Downloads/cover.jpg" "E:/.ohmy3do/covers/Road Rash.png"
@@ -249,7 +249,7 @@ Resize one image and give it the game's basename:
 Or convert a whole folder, keeping each image's basename:
   py resize-covers.py "Downloads/artwork" "E:/.ohmy3do/covers"
 
-The output is a 84x105 RGB PNG. Images are fitted without cropping, with dark
+The output is a 96x120 RGB PNG. Images are fitted without cropping, with dark
 padding, transparency composited, and EXIF orientation corrected. JPEG, PNG,
 WebP, BMP, TIFF and GIF inputs are supported when available in Pillow. Animated
 inputs use the first frame. Originals are never replaced. Existing output files
@@ -270,7 +270,7 @@ Copy unmodified PNGs into the USB covers folder, using the game's basename:
   USB/Games/Road Rash.iso
   USB/.ohmy3do/covers/Road Rash.png
 
-PNGs: up to 1024x1024 pixels and 512 KiB. Prepared 84x105 RGB PNGs avoid
+PNGs: up to 1024x1024 pixels and 512 KiB. Prepared 96x120 RGB PNGs avoid
 console-side resizing and alpha blending. The indexer warns about larger PNGs
 without changing them. The menu caches six decoded covers for repeat visits.
 Regenerate the index after adding, removing or renaming games/media.
@@ -285,7 +285,7 @@ The indexer writes index.3di in covers/ and previews/, plus library.3di at the
 USB root. Find uses library.3di instead of scanning folders on the console.
 Regenerate these indices after changing the games or media on the drive.
 Prepare covers from original artwork for the sharpest detail; previously reduced
-64x80 files cannot recover detail when enlarged. Video previews remain 64x80.
+64x80 files cannot recover detail when enlarged. New video previews use 160x120; old 64x80 clips remain playable.
 It preserves existing valid associations, including converted .3dc covers.
 It does not convert or modify PNGs. The same game basename in different folders
 shares its matching media. Cold boot or refresh at USB root reloads indices.
@@ -296,7 +296,7 @@ For a first test without FFmpeg, copy the included original moving test pattern
 "demo-preview.3dv" (moving pattern and quiet test tone) into USB .ohmy3do/previews/, rename it to match one game's basename
 (e.g. Road Rash.3dv), then run the indexer and enable previews as described below.
 
-Convert a local clip; the output is a small 64x80 RAM-playable animation:
+Convert a local clip; the output is a 160x120 RAM-playable animation:
   py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
   py index-media.py E:/
 
@@ -305,8 +305,9 @@ Shorter sources stay shorter. Complex footage may be trimmed further to fit the
 1 MiB video/audio RAM budget; frame rate is never lowered automatically.
 --duration can request less than 15 seconds. Older requests for longer clips are
 capped at 15, including "full". Conversion reports actual duration and RAM size.
-Install menu v0.16.0-rc2+ for 15 fps files. The cap is a PC-tool update; the RC2
-boot.iso is unchanged. Existing previews keep their old length until reconverted.
+Install menu v0.16.0-rc10+ before using new 160x120 previews. Existing
+previews keep their old resolution until reconverted from their original videos.
+The desktop app can do this with Covers & previews > Rebuild media quality.
 Video is losslessly compressed RGB555. Audio is signed 8-bit 11025 Hz mono PCM.
 FFmpeg and ffprobe must both be on PATH; no additional audio encoder is needed.
 

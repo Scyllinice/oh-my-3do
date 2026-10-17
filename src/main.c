@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc8"
+#define MENU_VERSION "0.16.0-rc10"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -199,7 +199,6 @@ static void record_launch(Menu *menu, const char *path);
 static int config_dirty(const Menu *menu);
 static size_t menu_rows(const Menu *menu)
 {
-    if (!menu->review && menu->metadata.count) return menu->config.large_titles ? 4 : 5;
     return menu->config.large_titles ? 6 : ROWS;
 }
 
@@ -379,7 +378,7 @@ static void game_label(Menu *menu,int x,int y,int room,const char *name,int dire
     int scale=320-2*menu->config.screen_margin;
     char title[65];
     size_t length=menu_title_length(name,directory), visible, offset=0;
-    if (kind) {
+    if (kind && room>140) {
         int badge_width=(ui_font_width(kind,UI_FONT_SMALL)*320+scale-1)/scale;
         int badge_y=y+(ui_font_height(style)-ui_font_height(UI_FONT_SMALL))/2;
         label_on(menu,x+room-badge_width,badge_y,kind,ink,UI_FONT_SMALL,background);
@@ -411,16 +410,16 @@ static void backdrop(Menu *menu)
             (menu->config.theme == 2 ? MakeRGB15(4,3,9-i/3) : MakeRGB15(2,4,9-i/2)));
         rectangle(menu,0,i*24,320,24,shade);
     }
-    rectangle(menu,0,210,320,30,BG);
+    rectangle(menu,0,223,320,17,BG);
     if (GECKO) {
         /* Casing details stay outside text and artwork: no scanline overlay. */
         for (i=0;i<5;++i) {
             rectangle(menu,3,61+i*26,5,12,LINE);
             rectangle(menu,312,72+i*26,5,12,LINE);
         }
-        rectangle(menu,14,208,292,1,LINE);
-        rectangle(menu,14,208,48,1,ACCENT);
-        rectangle(menu,64,208,18,1,TV_ORANGE);
+        rectangle(menu,14,223,292,1,LINE);
+        rectangle(menu,14,223,48,1,ACCENT);
+        rectangle(menu,64,223,18,1,TV_ORANGE);
     }
 }
 
@@ -489,7 +488,7 @@ static void draw_alphabet(Menu *menu)
         total+=(ui_font_width(letter,UI_FONT_SMALL)*320+scale-1)/scale+2;
     }
     x=14+(292-total)/2;
-    if (menu->alphabet_active) rounded(menu,14,189,292,17,PANEL);
+    if (menu->alphabet_active) rounded(menu,14,207,292,16,PANEL);
     for (i=0;i<27;++i) {
         char letter[2];
         int cell;
@@ -497,10 +496,10 @@ static void draw_alphabet(Menu *menu)
         letter[0]=i ? (char)('A'+i-1) : '#'; letter[1]=0;
         cell=(ui_font_width(letter,UI_FONT_SMALL)*320+scale-1)/scale+2;
         if (i==current) {
-            rounded(menu,x-1,190,cell,14,menu->alphabet_active ? ACCENT : SELECT);
+            rounded(menu,x-1,208,cell,14,menu->alphabet_active ? ACCENT : SELECT);
             ink=menu->alphabet_active ? MakeRGB15(1,2,4) : TEXT;
         }
-        label_on(menu,x,191,letter,ink,UI_FONT_SMALL,
+        label_on(menu,x,209,letter,ink,UI_FONT_SMALL,
             i==current ? (menu->alphabet_active ? ACCENT : SELECT) : (menu->alphabet_active ? PANEL : BG));
         x+=cell;
     }
@@ -523,47 +522,54 @@ static void brand(Menu *menu,const char *title)
     else label(menu,14,15,"Oh My 3DO",TEXT,UI_FONT_NORMAL);
     label(menu,118,8,title,TEXT,UI_FONT_HEADING);
 }
+/* Covers and legacy portrait previews fit inside the landscape viewport;
+ * new gameplay frames display at their native 160 by 120 size. */
 static void media_cel(Menu *menu,CCB *source)
 {
     CCB copy=*source;
-    copy.ccb_XPos=19<<16; copy.ccb_YPos=59<<16;
-    copy.ccb_HDX=(1<<20)*84/source->ccb_Width; copy.ccb_VDY=(1<<16)*105/source->ccb_Height;
+    int width=160, height=120;
+    if (source->ccb_Width*120<=source->ccb_Height*160)
+        width=source->ccb_Width*120/source->ccb_Height;
+    else height=source->ccb_Height*160/source->ccb_Width;
+    copy.ccb_XPos=(146+(160-width)/2)<<16;
+    copy.ccb_YPos=(50+(120-height)/2)<<16;
+    copy.ccb_HDX=(1<<20)*width/source->ccb_Width; copy.ccb_VDY=(1<<16)*height/source->ccb_Height;
     draw_cel(menu,&copy);
 }
 static void media_placeholder(Menu *menu,int folder)
 {
-    int y=91;
+    int y=83;
     if (GECKO) {
-        rounded(menu,29,87,59,46,LINE);
-        rounded(menu,33,91,48,34,SELECT);
+        rounded(menu,194,79,59,46,LINE);
+        rounded(menu,198,83,48,34,SELECT);
         if (folder) {
-            rounded(menu,40,100,16,6,ACCENT);
-            rounded(menu,39,104,33,15,ACCENT);
-            rectangle(menu,43,109,25,6,SELECT);
+            rounded(menu,205,92,16,6,ACCENT);
+            rounded(menu,204,96,33,15,ACCENT);
+            rectangle(menu,208,101,25,6,SELECT);
         } else {
             /* Original little lizard silhouette: no game sprites or logos. */
-            rounded(menu,43,98,23,23,ACCENT);
-            rounded(menu,57,105,20,12,ACCENT);
-            rectangle(menu,45,102,10,5,BG);
-            rectangle(menu,58,102,10,5,BG);
-            rectangle(menu,54,103,5,2,BG);
-            rectangle(menu,62,112,12,2,SELECT);
+            rounded(menu,208,90,23,23,ACCENT);
+            rounded(menu,222,97,20,12,ACCENT);
+            rectangle(menu,210,94,10,5,BG);
+            rectangle(menu,223,94,10,5,BG);
+            rectangle(menu,219,95,5,2,BG);
+            rectangle(menu,227,104,12,2,SELECT);
         }
-        rectangle(menu,82,96,3,3,TV_ORANGE);
-        rectangle(menu,82,103,3,3,ACCENT);
-        rectangle(menu,39,133,11,3,LINE);
-        rectangle(menu,68,133,11,3,LINE);
-        label(menu,folder ? 29 : 34,142,folder ? "Browse folder" : "No artwork",MUTED,UI_FONT_SMALL);
+        rectangle(menu,247,88,3,3,TV_ORANGE);
+        rectangle(menu,247,95,3,3,ACCENT);
+        rectangle(menu,204,125,11,3,LINE);
+        rectangle(menu,233,125,11,3,LINE);
+        label(menu,folder ? 194 : 199,134,folder ? "Browse folder" : "No artwork",MUTED,UI_FONT_SMALL);
     } else if (folder) {
-        rounded(menu,35,y+4,23,10,ACCENT);
-        rounded(menu,32,y+11,49,32,ACCENT);
-        rectangle(menu,36,y+17,41,20,SELECT);
-        label(menu,29,142,"Browse folder",MUTED,UI_FONT_SMALL);
+        rounded(menu,200,y+4,23,10,ACCENT);
+        rounded(menu,197,y+11,49,32,ACCENT);
+        rectangle(menu,201,y+17,41,20,SELECT);
+        label(menu,194,134,"Browse folder",MUTED,UI_FONT_SMALL);
     } else {
-        rounded(menu,34,y,45,44,LINE);
-        rounded(menu,38,y+4,37,36,SELECT);
-        rounded(menu,52,y+18,9,9,PANEL);
-        label(menu,34,142,"No artwork",MUTED,UI_FONT_SMALL);
+        rounded(menu,199,y,45,44,LINE);
+        rounded(menu,203,y+4,37,36,SELECT);
+        rounded(menu,217,y+18,9,9,PANEL);
+        label(menu,199,134,"No artwork",MUTED,UI_FONT_SMALL);
     }
 }
 
@@ -576,7 +582,7 @@ static void draw(Menu *menu)
     unsigned long now=now_ms(menu);
     const MenuEntry *chosen=NULL;
     const char *message=menu->message;
-    int left=menu->review ? 14 : 118, width=menu->review ? 292 : 190;
+    int left=menu->review ? 14 : 12, width=menu->review ? 292 : 126;
     int row_height=menu->config.large_titles ? 21 : 18;
     if (menu->booting) {
         menu->screen.sc_curScreen^=1;
@@ -596,7 +602,7 @@ static void draw(Menu *menu)
     if (*menu->filter && !menu->review) format(line,"Search: %s",menu->filter);
     else if (menu->review) strcpy(line,"Play order / first to last");
     else strcpy(line,menu->depth ? menu->breadcrumb : "All games");
-    line[ui_font_fit(line,strlen(line),130*(320-2*menu->config.screen_margin)/320,UI_FONT_SMALL)]=0;
+    line[ui_font_fit(line,strlen(line),(config_dirty(menu) ? 72 : 130)*(320-2*menu->config.screen_margin)/320,UI_FONT_SMALL)]=0;
     label(menu,118,32,line,MUTED,UI_FONT_SMALL);
     rounded(menu,246,9,60,21,menu->playlist.count ? ACCENT : LINE);
     format(line,"%lu discs",(unsigned long)menu->playlist.count);
@@ -643,8 +649,8 @@ static void draw(Menu *menu)
         }
     }
     if (!menu->review) {
-        if (GECKO) rounded(menu,12,50,98,136,LINE);
-        rounded(menu,14,54,94,132,BG); rounded(menu,14,52,94,132,PANEL);
+        if (GECKO) rounded(menu,142,46,168,128,LINE);
+        rounded(menu,144,48,164,124,PANEL);
         if (menu->preview_cel && menu->preview.pixels) {
             unsigned long elapsed=now-menu->preview_since;
             unsigned long tick=(elapsed/1000)*menu->preview.fps+((elapsed%1000)*menu->preview.fps)/1000;
@@ -664,14 +670,11 @@ static void draw(Menu *menu)
             if (menu->preview_cel) media_cel(menu,menu->preview_cel);
         } else if (menu->cover) media_cel(menu,menu->cover);
         else media_placeholder(menu,chosen ? chosen->is_directory : (menu->listing.has_parent && !selected));
-        label(menu,24,168,GECKO ? (menu->preview_cel ? "ON AIR" : "TV LIBRARY") : (menu->preview_cel ? "Playing preview" : (chosen && chosen->is_directory ? "Folder" : "Game library")),MUTED,UI_FONT_SMALL);
-        if (GECKO) {
-            rectangle(menu,22,180,26,1,LINE);
-            rectangle(menu,51,180,26,1,LINE);
-            rectangle(menu,96,177,4,4,menu->preview_cel ? ACCENT : TV_ORANGE);
-        }
+        label(menu,16,188,"C + Up  Letters",MUTED,UI_FONT_SMALL);
+        label(menu,16,199,"L + R  Tools",MUTED,UI_FONT_SMALL);
+        if (GECKO) rectangle(menu,303,49,3,3,menu->preview_cel ? ACCENT : TV_ORANGE);
         draw_alphabet(menu);
-        if (menu->metadata.count) {
+        {
             static char path[9217];
             const LibraryGameInfo *info=NULL;
             unsigned int part, first=menu->depth && !(menu->path_ids[0]&0xffffffUL) ? 1 : 0;
@@ -688,7 +691,7 @@ static void draw(Menu *menu)
                     info=library_metadata_find(&menu->metadata,path);
                 }
             }
-            rectangle(menu,124,150,178,1,LINE);
+            rectangle(menu,148,174,156,1,LINE);
             if (info) {
                 const char *values[3];
                 unsigned int field;
@@ -696,36 +699,39 @@ static void draw(Menu *menu)
                 for (field=0;field<3;++field) {
                     const char *prefix=field==0 ? "Genre: " : (field==1 ? "Publisher: " : "Released: ");
                     format(line,"%s%.80s",prefix,*values[field] ? values[field] : "Unknown");
-                    line[ui_font_fit(line,strlen(line),178*(320-2*menu->config.screen_margin)/320,UI_FONT_SMALL)]=0;
-                    label(menu,124,154+(int)field*10,line,MUTED,UI_FONT_SMALL);
+                    line[ui_font_fit(line,strlen(line),156*(320-2*menu->config.screen_margin)/320,UI_FONT_SMALL)]=0;
+                    label(menu,148,177+(int)field*10,line,MUTED,UI_FONT_SMALL);
                 }
-            } else label(menu,124,163,chosen && !chosen->is_directory ? "No game information" : "Select a game for details",MUTED,UI_FONT_SMALL);
+            } else label(menu,148,187,chosen && !chosen->is_directory ? "No game information" : "Select a game",MUTED,UI_FONT_SMALL);
         }
     } else label(menu,18,191,"Advance discs when the game asks",MUTED,UI_FONT_SMALL);
     if (total) {
-        int bar=menu->review ? 190 : 117;
+        int bar=menu->review ? 190 : 118;
         int fill=(int)(bar*(selected/rows+1)/((total+rows-1)/rows));
-        int bar_y=!menu->review && menu->metadata.count ? 146 : 184;
+        int bar_y=184;
         rectangle(menu,left+4,bar_y,bar,2,LINE); if (fill) rectangle(menu,left+4,bar_y,fill,2,ACCENT);
         format(line,"%lu / %lu",(unsigned long)(selected+1),(unsigned long)total);
         label(menu,304-ui_font_width(line,UI_FONT_SMALL),33,line,MUTED,UI_FONT_SMALL);
     }
     if (menu->loading) { strcpy(line,"Reading folder..."); message=line; }
     if (menu->alphabet_active && !menu->notice_active) message="Choose a letter. A to jump, B to cancel.";
-    if (message) label(menu,16,213,message,AMBER,UI_FONT_NORMAL);
-    else {
-        button(menu,14,212,"A",menu->review ? "Play" : "Open",ACCENT);
-        button(menu,77,212,"B","Back",MUTED);
-        button(menu,140,212,"C",menu->review ? "Move" : "Queue",MUTED);
-        button(menu,223,212,"Start","Discs",MUTED);
+    if (!menu->ready && menu->bus.last_error<0) { format(line,"Connection error: %08lx",(unsigned long)menu->bus.last_error); message=line; }
+    if (message) {
+        label(menu,16,menu->review ? 213 : 225,message,AMBER,UI_FONT_SMALL);
     }
-    if (!menu->ready && menu->bus.last_error<0) { format(line,"Connection error: %08lx",(unsigned long)menu->bus.last_error); label(menu,16,229,line,MUTED,UI_FONT_SMALL); }
     else {
+        button(menu,14,menu->review ? 212 : 225,"A",menu->review ? "Play" : "Open",ACCENT);
+        button(menu,77,menu->review ? 212 : 225,"B","Back",MUTED);
+        button(menu,140,menu->review ? 212 : 225,"C",menu->review ? "Move" : "Queue",MUTED);
+        button(menu,223,menu->review ? 212 : 225,"Start","Discs",MUTED);
+    }
+    if (menu->review) {
         label(menu,16,229,menu->review ? "C + X  Clear queue" : "C + Up  Letters",MUTED,UI_FONT_SMALL);
         label(menu,145,229,"L + R  Tools",MUTED,UI_FONT_SMALL);
         if (menu->config.folder_workaround || config_dirty(menu))
             label(menu,244,229,config_dirty(menu) ? "Unsaved" : "Compat on",AMBER,UI_FONT_SMALL);
     }
+    if (!menu->review && config_dirty(menu)) label(menu,196,33,"Unsaved",AMBER,UI_FONT_SMALL);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
 }
 
@@ -995,12 +1001,12 @@ static void update_preview(Menu *menu)
     menu->preview_result=result ? -1 : 1;
     if (!result && menu->media_cancelled) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-1; }
     if (!result) {
-        menu->preview_cel=CreateCel(64,80,16,CREATECEL_UNCODED,NULL);
+        menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,NULL);
         if (menu->preview_cel) {
             menu->preview_cel->ccb_XPos=236<<16; menu->preview_cel->ccb_YPos=86<<16;
             menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;
             if (menu->preview.version==2 && menu->preview.frame_buffer)
-                memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.frame_buffer,USB_ART_PIXELS);
+                memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.frame_buffer,(size_t)menu->preview.frame_bytes);
             else if (usb_preview_frame(&menu->preview,0,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) {
                 stop_preview(menu); menu->preview_result=-1; goto preview_done;
             }

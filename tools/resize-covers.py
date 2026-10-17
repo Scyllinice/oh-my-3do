@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Resize local artwork into 84x105 PNG covers for Oh My 3DO."""
+"""Resize local artwork into 96x120 PNG covers for Oh My 3DO."""
 import argparse
 from pathlib import Path
 import os
 import tempfile
 
 EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff'}
-SIZE = (84, 105)
+SIZE = (96, 120)
 BACKGROUND = (8, 16, 33, 255)
 
 
@@ -105,7 +105,7 @@ def check(source, recursive=False):
             if not ready:
                 needs_resize += 1
             print(f'{path}: {image.width}x{image.height} {image.mode}, {path.stat().st_size:,} bytes - '
-                  + ('ready' if ready else 'prepare as 84x105 RGB PNG'))
+                  + ('ready' if ready else 'prepare as 96x120 RGB PNG'))
     print(f'{len(paths)} image(s) checked; {needs_resize} need preparation. No files changed.')
     return needs_resize
 
@@ -128,7 +128,7 @@ def main():
         jobs = plan(args.source, args.output, args.recursive, args.overwrite)
         for source, target in jobs:
             convert(source, target)
-            print(f'Created {target}: 84x105 RGB PNG')
+            print(f'Created {target}: 96x120 RGB PNG')
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(f'Prepared {len(jobs)} cover(s). Match game basenames, then run index-media.py against the USB root.')

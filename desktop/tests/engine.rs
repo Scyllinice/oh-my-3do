@@ -419,7 +419,7 @@ fn cover_conversion_outputs_native_png_with_valid_chunks() {
     media::cover(&source, &target).unwrap();
     media::validate(&target).unwrap();
     let im = image::open(&target).unwrap();
-    assert_eq!((im.width(), im.height()), (84, 105));
+    assert_eq!((im.width(), im.height()), (96, 120));
     let mut bytes = fs::read(&target).unwrap();
     bytes[30] ^= 1;
     fs::write(&target, bytes).unwrap();
@@ -632,16 +632,20 @@ fn cancellation_mid_import_restores_all_already_copied_files() {
     assert!(snapshot(&root).is_empty());
 }
 fn synthetic_preview() -> Vec<u8> {
+    synthetic_preview_size(64, 80)
+}
+fn synthetic_preview_size(width: u16, height: u16) -> Vec<u8> {
     use std::io::Write;
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-    z.write_all(&vec![0; 10240]).unwrap();
+    z.write_all(&vec![0; width as usize * height as usize * 2])
+        .unwrap();
     let block = z.finish().unwrap();
     let mut video = 8u32.to_be_bytes().to_vec();
     video.extend_from_slice(&((8 + block.len()) as u32).to_be_bytes());
     video.extend(block);
     let mut data = b"OM3DVID2".to_vec();
-    data.extend_from_slice(&64u16.to_be_bytes());
-    data.extend_from_slice(&80u16.to_be_bytes());
+    data.extend_from_slice(&width.to_be_bytes());
+    data.extend_from_slice(&height.to_be_bytes());
     for n in [video.len() as u32, crc32fast::hash(&video)] {
         data.extend_from_slice(&n.to_be_bytes());
     }
@@ -816,7 +820,7 @@ fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existin
     let hash = f::sha256(&source, &Job::default()).unwrap();
     let key = format!(
         "{:x}",
-        Sha256::digest(format!("{hash}:preview:native-v1-15fps-cap15").as_bytes())
+        Sha256::digest(format!("{hash}:preview:native-v2-160x120-cover96x120-cap15").as_bytes())
     );
     put(
         &cache,
@@ -846,6 +850,83 @@ fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existin
     );
     library::update_media(&root, &prefs, &cache, None, &Job::default()).unwrap();
     assert_eq!(library::database(&root).unwrap()["games"], db["games"]);
+    library::undo(&journal).unwrap();
+    assert_eq!(snapshot(&root), before);
+}
+
+#[test]
+fn landscape_preview_validation_checks_dimensions_and_decompressed_length() {
+    let t = tempfile::tempdir().unwrap();
+    let path = put(t.path(), "preview.3dv", &synthetic_preview_size(160, 120));
+    media::validate(&path).unwrap();
+    for (width, height) in [(0u16, 120u16), (161, 120), (160, 121), (65535, 65535)] {
+        fs::write(&path, synthetic_preview_size(160, 120)).unwrap();
+        let mut data = fs::read(&path).unwrap();
+        data[8..10].copy_from_slice(&width.to_be_bytes());
+        data[10..12].copy_from_slice(&height.to_be_bytes());
+        fs::write(&path, data).unwrap();
+        assert!(media::validate(&path).is_err());
+    }
+    let mut short = synthetic_preview();
+    short[8..12].copy_from_slice(&[0, 160, 0, 120]);
+    fs::write(&path, short).unwrap();
+    assert!(media::validate(&path).is_err());
+}
+#[test]
+fn rebuild_media_preserves_original_associations_unavailable_sources_and_undo() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("library");
+    fs::create_dir(&root).unwrap();
+    put(&root, "Game.iso", b"fictional");
+    put(
+        &root,
+        ".ohmy3do/ohmy3do.ini",
+        include_bytes!("../../ohmy3do.ini"),
+    );
+    let source = t.path().join("original.jpg");
+    image::RgbImage::from_pixel(200, 300, image::Rgb([30, 80, 180]))
+        .save(&source)
+        .unwrap();
+    let old = root.join(".ohmy3do/covers/old.png");
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    image::RgbImage::from_pixel(84, 105, image::Rgb([30, 80, 180]))
+        .save(&old)
+        .unwrap();
+    put(&root, ".ohmy3do/previews/old.3dv", &synthetic_preview());
+    let record = json!({"path":"Game.iso","title":"Example (USA)","region":"USA","category":"Games","cover":"old.png","cover_source":source,"preview":"old.3dv","preview_source":t.path().join("unavailable.mp4"),"metadata":{"publisher":"Café"},"registration":{"sha1":"preserve"}});
+    put(
+        &root,
+        ".ohmy3do/library.json",
+        &serde_json::to_vec(&json!({"schema":1,"sources":[],"games":[record]})).unwrap(),
+    );
+    let before = snapshot(&root);
+    let journal = library::rebuild_media(
+        &root,
+        &Preferences::default(),
+        &t.path().join("cache"),
+        &Job::default(),
+    )
+    .unwrap();
+    let db = library::database(&root).unwrap();
+    let updated = &db["games"][0];
+    assert_ne!(updated["cover"], record["cover"]);
+    for key in [
+        "cover_source",
+        "preview",
+        "preview_source",
+        "metadata",
+        "registration",
+        "path",
+        "region",
+    ] {
+        assert_eq!(updated[key], record[key]);
+    }
+    let cover = root
+        .join(".ohmy3do/covers")
+        .join(updated["cover"].as_str().unwrap());
+    let image = image::open(cover).unwrap();
+    assert_eq!((image.width(), image.height()), (96, 120));
+    assert!(old.is_file());
     library::undo(&journal).unwrap();
     assert_eq!(snapshot(&root), before);
 }

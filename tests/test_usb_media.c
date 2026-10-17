@@ -63,7 +63,7 @@ static unsigned char *load(const char *name,size_t *size)
 }
 int main(int argc,char **argv)
 {
-    Fake f; Ode ode; UsbPreview preview; unsigned char pixels[USB_COVER_PIXELS], *expected;
+    Fake f; Ode ode; UsbPreview preview; unsigned char pixels[USB_PREVIEW_FRAME_BYTES], *expected;
     size_t bytes, original; int calls, i;
     int (*decode)(Ode *,OdeReadBuffer,const char *,unsigned char *,MediaCancel,void *)=usb_png_pixels;
     assert(argc >= 3); memset(&f,0,sizeof(f)); memset(&preview,0,sizeof(preview));
@@ -95,7 +95,7 @@ int main(int argc,char **argv)
     } else if (!strcmp(argv[1],"smooth")) {
         unsigned int center;
         assert(!usb_png_cover(&ode,reader,"Game.png",pixels,cancel,&f));
-        center=((unsigned int)pixels[(52*84+42)*2]<<8)|pixels[(52*84+42)*2+1];
+        center=((unsigned int)pixels[((USB_COVER_HEIGHT/2)*USB_COVER_WIDTH+USB_COVER_WIDTH/2)*2]<<8)|pixels[((USB_COVER_HEIGHT/2)*USB_COVER_WIDTH+USB_COVER_WIDTH/2)*2+1];
         assert(center && center!=0x7fff && (center&31)==((center>>5)&31) && (center&31)==((center>>10)&31));
     } else if (!strcmp(argv[1],"badpng")) {
         assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
@@ -112,9 +112,9 @@ int main(int argc,char **argv)
         assert(read_phase==1 && check_phase==1);
         assert(preview.version==2 && preview.frames && preview.fps && preview.decoder);
         assert(!usb_preview_frame(&preview,0,pixels));
-        assert(!memcmp(preview.frame_buffer,pixels,USB_ART_PIXELS));
+        assert(!memcmp(preview.frame_buffer,pixels,(size_t)preview.frame_bytes));
         if (argc==4) {
-            expected=load(argv[3],&bytes);assert(bytes==USB_ART_PIXELS && !memcmp(pixels,expected,bytes));free(expected);
+            expected=load(argv[3],&bytes);assert(bytes==preview.frame_bytes && !memcmp(pixels,expected,bytes));free(expected);
         }
         if (preview.audio_bytes) assert(preview.audio && preview.audio_rate==11025 && preview.audio_frames==preview.audio_bytes);
         calls=f.calls;usb_preview_free(&preview);

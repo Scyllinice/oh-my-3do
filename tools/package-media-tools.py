@@ -36,13 +36,13 @@ for name in ('sector-codec-win64.dll','sector-codec.so','sector-codec.dylib'):
 # Original moving test pattern lets the first console test skip FFmpeg setup.
 pixels=bytearray()
 for frame in range(60):
-    for y in range(80):
-        for x in range(64):
-            if (x-frame)%64 < 12: color=(7<<10)|(26<<5)|22
+    for y in range(120):
+        for x in range(160):
+            if (x-frame)%160 < 12: color=(7<<10)|(26<<5)|22
             elif ((x//8)+(y//8))%2: color=(3<<10)|(5<<5)|9
             else: color=(1<<10)|(2<<5)|4
             pixels+=struct.pack('>H',color)
-blocks=[zlib.compress(pixels[i:i+10240],9) for i in range(0,len(pixels),10240)]
+blocks=[zlib.compress(pixels[i:i+38400],9) for i in range(0,len(pixels),38400)]
 offset=61*4; offsets=[offset]
 for block in blocks:
     offset+=len(block); offsets.append(offset)
@@ -50,7 +50,7 @@ video=b''.join(struct.pack('>I',n) for n in offsets)+b''.join(blocks)
 # Original quiet test tone, not background music or downloaded audio.
 audio=bytes(int(10*math.sin(2*math.pi*440*i/11025)*min(1,i/220,(44099-i)/220))&255 for i in range(44100))
 payload=video+audio
-sample=b'OM3DVID2'+struct.pack('>HHIIHHIIII',64,80,len(payload),binascii.crc32(payload),60,15,len(video),len(audio),11025,len(audio))+payload+b'END3DV02'
+sample=b'OM3DVID2'+struct.pack('>HHIIHHIIII',160,120,len(payload),binascii.crc32(payload),60,15,len(video),len(audio),11025,len(audio))+payload+b'END3DV02'
 with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED) as archive:
     for name,source in files.items():
         entry=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0))

@@ -669,6 +669,15 @@ impl App {
                     Err(e) => self.error(e),
                 }
             }
+            if ui.button("Rebuild media quality").on_hover_text("Reconvert the original covers and videos for menu v0.16.0-rc10+. Existing media stays available for undo. Unavailable originals are skipped.").clicked() {
+                let (root, prefs, cache) = (self.root(), self.prefs.clone(), self.cache.clone());
+                match root {
+                    Ok(root) => self.start("Rebuilding media from originals", move |job| {
+                        Ok(Outcome::Updated(library::rebuild_media(&root, &prefs, &cache, &job)?))
+                    }),
+                    Err(e) => self.error(e),
+                }
+            }
             if ui.button("Artwork review page").clicked() {
                 let (root, cache) = (self.root(), self.cache.clone());
                 match root {
@@ -975,10 +984,7 @@ impl App {
             }
         }
         ui.separator();
-        ui.label(concat!(
-            "Oh My 3DO Library ",
-            env!("CARGO_PKG_VERSION")
-        ));
+        ui.label(concat!("Oh My 3DO Library ", env!("CARGO_PKG_VERSION")));
         ui.label("Catalogs, media conversion cache and undo journals stay on the PC.");
         if ui.button("Open app data / reports").clicked() {
             open(&self.cache)

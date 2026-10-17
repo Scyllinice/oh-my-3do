@@ -33,12 +33,13 @@ void usb_preview_free(UsbPreview *preview)
 int usb_preview_frame(UsbPreview *preview,unsigned int frame,unsigned char *pixels)
 {
     unsigned long begin,end;
-    size_t in_bytes,out_bytes=USB_ART_PIXELS;
+    size_t in_bytes,out_bytes=(size_t)preview->frame_bytes;
     tinfl_status status;
     tinfl_decompressor *decoder=(tinfl_decompressor *)preview->decoder;
-    if (!preview->pixels || frame>=preview->frames || !pixels) return -1;
+    if (!preview->pixels || frame>=preview->frames || !pixels ||
+        !preview->frame_bytes || preview->frame_bytes>USB_PREVIEW_FRAME_BYTES) return -1;
     if (preview->version==1) {
-        memcpy(pixels,preview->pixels+frame*USB_ART_PIXELS,USB_ART_PIXELS); return 0;
+        memcpy(pixels,preview->pixels+frame*preview->frame_bytes,(size_t)preview->frame_bytes); return 0;
     }
     if (preview->version!=2 || !decoder) return -1;
     begin=word(preview->pixels+frame*4); end=word(preview->pixels+(frame+1)*4);
@@ -46,7 +47,7 @@ int usb_preview_frame(UsbPreview *preview,unsigned int frame,unsigned char *pixe
     in_bytes=(size_t)(end-begin); tinfl_init(decoder);
     status=tinfl_decompress(decoder,preview->pixels+begin,&in_bytes,pixels,pixels,&out_bytes,
                             TINFL_FLAG_PARSE_ZLIB_HEADER|TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-    return status==TINFL_STATUS_DONE && out_bytes==USB_ART_PIXELS && in_bytes==(size_t)(end-begin) ? 0 : -1;
+    return status==TINFL_STATUS_DONE && out_bytes==preview->frame_bytes && in_bytes==(size_t)(end-begin) ? 0 : -1;
 }
 static int preview_bytes(Ode *ode,OdeReadBuffer reader,unsigned char *data,unsigned long bytes,
                          unsigned long *crc,MediaCancel cancel,void *context)
@@ -73,9 +74,12 @@ int usb_preview_load_profiled(Ode *ode, OdeReadBuffer reader, const char *filena
     strcpy(path,"previews/"); strcat(path,filename);
     if (usb_file_open(ode,path)<0) return -1;
     if (usb_file_read(ode,reader,header,24,1)<0 ||
-        (memcmp(header,"OM3DVID1",8) && memcmp(header,"OM3DVID2",8)) ||
-        header[8] || header[9]!=64 || header[10] || header[11]!=80) goto done;
+        (memcmp(header,"OM3DVID1",8) && memcmp(header,"OM3DVID2",8))) goto done;
     next.version=header[7]=='2' ? 2 : 1;
+    next.width=header[8]*256U+header[9]; next.height=header[10]*256U+header[11];
+    if (!((next.width==64 && next.height==80) ||
+        (next.version==2 && next.width==USB_PREVIEW_WIDTH && next.height==USB_PREVIEW_HEIGHT))) goto done;
+    next.frame_bytes=next.width*(unsigned long)next.height*2;
     next.frames=header[20]*256U+header[21]; next.fps=header[22]*256U+header[23];
     bytes=word(header+12);
     if (!next.frames || !next.fps || next.fps>15) goto done;
@@ -93,7 +97,7 @@ int usb_preview_load_profiled(Ode *ode, OdeReadBuffer reader, const char *filena
             expected=(((next.frames*11025UL+next.fps-1)/next.fps)+3)&~3UL;
             if (next.audio_rate!=11025 || next.audio_bytes!=next.audio_frames || next.audio_frames!=expected) goto done;
         } else if (next.audio_rate || next.audio_frames) goto done;
-        next.decoder=malloc(sizeof(tinfl_decompressor)); next.frame_buffer=(unsigned char *)malloc(USB_ART_PIXELS);
+        next.decoder=malloc(sizeof(tinfl_decompressor)); next.frame_buffer=(unsigned char *)malloc((size_t)next.frame_bytes);
         if (!next.decoder || !next.frame_buffer) goto done;
     }
     next.pixels=(unsigned char *)malloc((size_t)next.video_bytes);

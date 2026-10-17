@@ -43,25 +43,25 @@ with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
     assert audit.returncode==0 and '0 need preparation' in audit.stdout
     for path in output.iterdir():
         with Image.open(path) as image:
-            assert image.format == 'PNG' and image.mode == 'RGB' and image.size == (84, 105)
+            assert image.format == 'PNG' and image.mode == 'RGB' and image.size == (96, 120)
             assert path.stat().st_size < 512*1024
             expected = root/'pixels.bin'
             expected.write_bytes(b''.join(struct.pack('>H',((r>>3)<<10)|((g>>3)<<5)|(b>>3))
                                           for r,g,b in image.getdata()))
             subprocess.run([str(ROOT/'build/test_usb_media'), 'cover', str(path), str(expected)], check=True)
     with Image.open(output/'Wide.png') as image:
-        assert image.getpixel((42, 0)) == (8,16,33)
-        assert image.getpixel((42, 31)) == (255,0,0)
-        assert image.getpixel((42, 72)) == (255,0,0)
-        assert image.getpixel((42, 73)) == (8,16,33)
+        assert image.getpixel((48, 0)) == (8,16,33)
+        assert image.getpixel((48, 36)) == (255,0,0)
+        assert image.getpixel((48, 83)) == (255,0,0)
+        assert image.getpixel((48, 84)) == (8,16,33)
     with Image.open(output/'Alpha.png') as image:
-        assert image.getpixel((0, 52)) == (8,16,33)
-        assert image.getpixel((42, 52)) == (4,136,16)
+        assert image.getpixel((0, 60)) == (8,16,33)
+        assert image.getpixel((48, 60)) == (4,136,16)
     with Image.open(output/'Rotate.png') as image:
-        assert image.getpixel((0, 52)) == (8,16,33)  # Portrait after EXIF rotation.
-        assert image.getpixel((42, 0))[2] > 240
+        assert image.getpixel((0, 60)) == (8,16,33)  # Portrait after EXIF rotation.
+        assert image.getpixel((48, 0))[2] > 240
     with Image.open(output/'Still.png') as image:
-        assert image.getpixel((42, 52)) == (255,0,255)
+        assert image.getpixel((48, 60)) == (255,0,255)
     # Indexing reports oversized PNGs without rewriting artwork.
     index_spec=importlib.util.spec_from_file_location('index_media',ROOT/'tools/index-media.py')
     indexer=importlib.util.module_from_spec(index_spec); index_spec.loader.exec_module(indexer)

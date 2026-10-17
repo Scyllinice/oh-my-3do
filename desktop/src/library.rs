@@ -1418,6 +1418,19 @@ pub fn update_media(
     provided: Option<(&str, Option<PathBuf>, Option<PathBuf>)>,
     job: &Job,
 ) -> Result<PathBuf> {
+    update_media_mode(root, prefs, cache, provided, false, job)
+}
+pub fn rebuild_media(root: &Path, prefs: &Preferences, cache: &Path, job: &Job) -> Result<PathBuf> {
+    update_media_mode(root, prefs, cache, None, true, job)
+}
+fn update_media_mode(
+    root: &Path,
+    prefs: &Preferences,
+    cache: &Path,
+    provided: Option<(&str, Option<PathBuf>, Option<PathBuf>)>,
+    rebuild: bool,
+    job: &Job,
+) -> Result<PathBuf> {
     let root = f::root(root)?;
     let _lock = lock_library(&root, cache)?;
     let mut db = database(&root)?;
@@ -1454,6 +1467,33 @@ pub fn update_media(
             category_reason: String::new(),
             blocked: false,
         };
+        if rebuild {
+            for (kind, destination) in
+                [("cover", &mut entry.cover), ("preview", &mut entry.preview)]
+            {
+                if let Some(origin) = record[format!("{kind}_source")]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                {
+                    match media::original_source(kind, origin, prefs, cache, job) {
+                        Ok(source) => {
+                            if source.is_none() {
+                                job.say(format!(
+                                    "Original {kind} unavailable; kept existing: {path}"
+                                ));
+                            }
+                            *destination = source;
+                        }
+                        Err(e) => {
+                            job.check()?;
+                            job.say(format!(
+                                "Original {kind} unavailable; kept existing: {path}: {e:#}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let existing =
             |kind: &str, map: &std::collections::BTreeMap<String, String>| -> Result<bool> {
                 let name = map
@@ -1477,8 +1517,9 @@ pub fn update_media(
                     false
                 })
             };
-        let want_cover = entry.cover.is_some() || !existing("cover", &covers)?;
-        let want_preview = entry.preview.is_some() || !existing("preview", &previews)?;
+        let want_cover = entry.cover.is_some() || (!rebuild && !existing("cover", &covers)?);
+        let want_preview =
+            entry.preview.is_some() || (!rebuild && !existing("preview", &previews)?);
         media::prepare_missing(
             &mut entry,
             prefs,
@@ -1494,7 +1535,11 @@ pub fn update_media(
             if let Some(asset) = outputs.get(&(path.into(), kind.into())) {
                 map.insert(f::fold(path), asset.name.clone());
                 changed[kind] = json!(asset.name);
-                changed[format!("{kind}_source")] = json!(asset.source);
+                changed[format!("{kind}_source")] = if rebuild {
+                    record[format!("{kind}_source")].clone()
+                } else {
+                    json!(asset.source)
+                };
                 dirty = true;
             }
         }

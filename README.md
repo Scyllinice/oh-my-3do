@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc8**; media tools are **0.16.0-rc9**.
+menu version is **0.16.0-rc10**; media tools are **0.16.0-rc10**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -25,9 +25,9 @@ existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
 For the current preview-audio menu and game information panel, use the
-[v0.16.0-rc8 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc8).
+[v0.16.0-rc10 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc10).
 The updated GUI and media tools are in the
-[desktop v0.1.4 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.4).
+[desktop v0.1.5 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.5).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -427,7 +427,7 @@ covers/previews, download missing covers, and prepare a USB copy. Disc sources
 are preserved. The app runs standalone without Python or Docker.
 
 Portable builds are available in the
-[desktop v0.1.4 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.4).
+[desktop v0.1.5 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.5).
 Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
 Windows x64 and Linux x64 builds are provided; macOS can be built from source
 but has not been packaged here. Preview conversion uses separate native
@@ -766,7 +766,7 @@ The standalone indexer also omits verified redundant wrappers. This does not
 merge separate ISO copies or resolve their destination collisions.
 
 Apply downloads available [Libretro box scans](https://github.com/libretro-thumbnails/libretro-thumbnails),
-prepares 84×105 RGB PNGs, and links them to the correct game paths. Existing
+prepares 96×120 RGB PNGs, and links them to the correct game paths. Existing
 cover and preview associations are preserved. Missing or ambiguous artwork is
 reported without blocking other games. `--no-covers` skips cover downloads and
 imports. Use
@@ -783,7 +783,7 @@ py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches 
 
 Replace `<front-cover-folder>` with the actual folder name. Subfolders are
 searched. PNG, JPEG, WebP, BMP, GIF, and TIFF are supported; install Pillow with
-`py -m pip install Pillow`. Images are resized to native 84×105 RGB PNGs, indexed
+`py -m pip install Pillow`. Images are resized to native 96×120 RGB PNGs, indexed
 automatically, and included in the undo journal. Originals and existing USB
 covers are retained. Local imports work offline and do not fall back to network
 downloads. Missing, ambiguous, or unreadable images are reported and skipped.
@@ -852,10 +852,10 @@ Game media belongs in `.ohmy3do/covers` and `.ohmy3do/previews` on USB, outside 
 covers can be copied directly: no image conversion or ISO rebuild is needed. The
 menu decodes them into the cover area and preserves their aspect ratio.
 Transparency is blended against the artwork background. PNGs can be up to
-1024×1024 pixels and 512 KiB. For faster loading, prepare opaque 84×105 RGB
+1024×1024 pixels and 512 KiB. For faster loading, prepare opaque 96×120 RGB
 PNGs with the tool below; these match the artwork panel at native size and
 avoid resizing and alpha blending on the console. Earlier versions reduced
-covers to 64×80 and then stretched them; native PNG covers now retain all 84×105
+covers to 64×80 and then stretched them; native PNG covers now retain all 96×120
 pixels. Smaller PNGs and legacy 64×80 converted covers use smooth enlargement.
 For sharper detail, prepare covers again from the original artwork, since an
 already reduced image cannot recover discarded detail.
@@ -884,7 +884,7 @@ py resize-covers.py "Downloads/artwork" "E:/.ohmy3do/covers"
 py index-media.py E:/
 ```
 
-The tool creates 84×105 RGB PNGs, matching the cover texture used by the menu.
+The tool creates 96×120 RGB PNGs, matching the cover texture used by the menu.
 It preserves aspect ratio with dark padding, applies EXIF rotation, and blends
 transparency against the artwork background. JPEG, PNG, WebP, BMP, TIFF, and GIF
 are supported through Pillow; animated inputs use the first frame. Originals
@@ -903,7 +903,7 @@ in `tools/`. Docker includes its dependencies after rebuilding the image:
 Copy the prepared covers to USB and regenerate its media index. Existing valid
 PNGs can still be copied directly; resizing is optional. `--check` reports each
 image's dimensions, mode, and size, and exits with status 1 if preparation is
-recommended. `index-media.py` also warns about PNGs different from 84×105 without
+recommended. `index-media.py` also warns about PNGs different from 96×120 without
 changing the artwork. Prepare replacements in a separate folder, then copy the
 prepared PNGs into `covers/` and regenerate the index. Diagnostic exports include
 the last cover load's milliseconds, ODE command count, and cache-hit flag.
@@ -950,10 +950,18 @@ with the same basename share the matching artwork. Each index supports up to
 footage is downloaded by these tools. The organizer can download covers and
 import clips already saved on the PC.
 
-Video previews are **64×80 RGB555 loops with optional game audio**, fitted
-into the artwork area. The PC converts MP4/AVI/MKV/MOV/WebM sources; the console
-plays the prepared `.3dv` file from RAM. Install **v0.16.0 or newer** for the new
-compressed-video/audio format. Older silent previews remain supported.
+![Gameplay preview layout with original test artwork](docs/images/gameplay-preview.png)
+
+Layout render with original test artwork; actual console output depends on the video connection.
+
+The library uses a left-hand game list and a fixed right-hand media panel.
+Portrait covers display at **96×120**; gameplay previews display at **160×120**,
+with genre, publisher and release date below. Long game names scroll when selected.
+
+Video previews are **160×120 RGB555 loops with optional game audio**, fitted
+into the same artwork area without stretching their aspect ratio. The PC converts MP4/AVI/MKV/MOV/WebM sources; the console
+plays the prepared `.3dv` file from RAM. Install **v0.16.0-rc10 or newer** before copying the new landscape previews.
+Older 64×80 silent and compressed previews remain supported.
 
 New previews are capped at **15 seconds at 15 fps**, including source audio.
 Shorter sources stay shorter. Complex footage is shortened further when needed
@@ -962,9 +970,11 @@ automatically. `--duration` can request a shorter clip, and older commands askin
 for more than 15 seconds are capped automatically. Conversion decodes the source
 once and reports the actual duration, frame rate and RAM size.
 
-**15 fps files require v0.16.0-rc2 or newer.** The 15-second policy is a PC-tool
-update; RC2 `boot.iso` does not need replacement. Existing previews are unchanged
-until reconverted. The player still accepts older longer files within its format
+**160×120 files require v0.16.0-rc10 or newer.** Existing previews keep their
+old resolution until reconverted from the original videos. In the desktop app,
+use **Covers & previews → Rebuild media quality** to reconvert recorded originals.
+Old media files are retained, unavailable originals are skipped, and the update
+has an undo journal. Install the new `boot.iso` before using rebuilt media. The player still accepts older longer files within its format
 limits. Lower frame rates can be requested explicitly with `--fps`.
 
 Video frames use lossless zlib compression of RGB555 pixels. Audio is signed

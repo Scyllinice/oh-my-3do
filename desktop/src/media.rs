@@ -137,10 +137,10 @@ pub fn cover(source: &Path, target: &Path) -> Result<()> {
         }
     }
     let fitted = image
-        .resize(84, 105, image::imageops::FilterType::Lanczos3)
+        .resize(96, 120, image::imageops::FilterType::Lanczos3)
         .to_rgba8();
-    let mut canvas = image::RgbImage::from_pixel(84, 105, image::Rgb([8, 16, 33]));
-    let (left, top) = ((84 - fitted.width()) / 2, (105 - fitted.height()) / 2);
+    let mut canvas = image::RgbImage::from_pixel(96, 120, image::Rgb([8, 16, 33]));
+    let (left, top) = ((96 - fitted.width()) / 2, (120 - fitted.height()) / 2);
     for (x, y, p) in fitted.enumerate_pixels() {
         let a = p[3] as u32;
         let bg = [8, 16, 33];
@@ -186,16 +186,16 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
         .min(15.);
     let mut a = args(&["-v", "error", "-nostdin", "-i"]);
     a.push(source.to_string_lossy().into_owned());
-    a.extend(args(&["-map","0:v:0","-an","-sn","-t",&seconds.to_string(),"-vf","fps=15,scale=64:80:force_original_aspect_ratio=decrease:flags=area,pad=64:80:(ow-iw)/2:(oh-ih)/2:color=0x081021","-frames:v","225","-pix_fmt","rgb24","-f","rawvideo","pipe:1"]));
-    let raw = capture(&ffmpeg, &a, 225 * 64 * 80 * 3, job)?;
-    if raw.is_empty() || raw.len() % (64 * 80 * 3) != 0 {
+    a.extend(args(&["-map","0:v:0","-an","-sn","-t",&seconds.to_string(),"-vf","fps=15,scale=160:120:force_original_aspect_ratio=decrease:flags=area,pad=160:120:(ow-iw)/2:(oh-ih)/2:color=0x081021","-frames:v","225","-pix_fmt","rgb24","-f","rawvideo","pipe:1"]));
+    let raw = capture(&ffmpeg, &a, 225 * 160 * 120 * 3, job)?;
+    if raw.is_empty() || raw.len() % (160 * 120 * 3) != 0 {
         bail!("Incomplete video frames")
     }
     let mut blocks = vec![];
     let mut compressed = 0;
-    for frame in raw.chunks(64 * 80 * 3) {
+    for frame in raw.chunks(160 * 120 * 3) {
         job.check()?;
-        let mut pixels = Vec::with_capacity(10240);
+        let mut pixels = Vec::with_capacity(38400);
         for rgb in frame.chunks_exact(3) {
             let word =
                 ((rgb[0] as u16 >> 3) << 10) | ((rgb[1] as u16 >> 3) << 5) | (rgb[2] as u16 >> 3);
@@ -266,8 +266,8 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
         video.extend(audio);
     }
     let mut data = b"OM3DVID2".to_vec();
-    data.extend_from_slice(&64u16.to_be_bytes());
-    data.extend_from_slice(&80u16.to_be_bytes());
+    data.extend_from_slice(&160u16.to_be_bytes());
+    data.extend_from_slice(&120u16.to_be_bytes());
     data.extend_from_slice(&(video.len() as u32).to_be_bytes());
     data.extend_from_slice(&crc32fast::hash(&video).to_be_bytes());
     data.extend_from_slice(&(count as u16).to_be_bytes());
@@ -482,6 +482,46 @@ pub fn prepare_entry(
 ) -> Result<()> {
     prepare_missing(entry, prefs, cache, out, true, true, job)
 }
+pub fn original_source(
+    kind: &str,
+    origin: &str,
+    prefs: &Preferences,
+    cache: &Path,
+    job: &Job,
+) -> Result<Option<PathBuf>> {
+    if kind == "cover" && origin.starts_with("https://") {
+        let key = format!("{:x}", Sha256::digest(origin.as_bytes()));
+        let path = cache.join("artwork").join(format!("{key}.png"));
+        if !path.is_file() && !prefs.offline {
+            catalog::download(origin, &path, 32 * 1024 * 1024, job)?;
+        }
+        return Ok(path.is_file().then_some(path));
+    }
+    let path = PathBuf::from(origin);
+    if path.is_absolute() {
+        return Ok((path.is_file() && !f::is_link(&path)).then_some(path));
+    }
+    if !prefs.emumovies.is_empty() {
+        // Older tools saved paths relative to the selected media folder.
+        let root = PathBuf::from(&prefs.emumovies);
+        for base in [&root, &root.join("Panasonic_3DO")] {
+            for path in [
+                base.join(origin),
+                base.join(if kind == "cover" {
+                    "Box"
+                } else {
+                    "Video_MP4_HI_QUAL"
+                })
+                .join(origin),
+            ] {
+                if path.is_file() && !f::is_link(&path) {
+                    return Ok(Some(path));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
 pub fn prepare_missing(
     entry: &mut Entry,
     prefs: &Preferences,
@@ -536,8 +576,11 @@ pub fn prepare_missing(
                 let key = format!(
                     "{:x}",
                     Sha256::digest(
-                        format!("{}:{kind}:native-v1-15fps-cap15", f::sha256(&source, job)?)
-                            .as_bytes()
+                        format!(
+                            "{}:{kind}:native-v2-160x120-cover96x120-cap15",
+                            f::sha256(&source, job)?
+                        )
+                        .as_bytes()
                     )
                 );
                 let ext = if kind == "cover" { "png" } else { "3dv" };
@@ -623,14 +666,21 @@ pub fn validate(path: &Path) -> Result<()> {
             pos += n + 12;
         }
         let image = image::load_from_memory_with_format(&data, image::ImageFormat::Png)?;
-        if !ended || image.width() != 84 || image.height() != 105 {
-            bail!("Resize covers to 84x105 PNG")
+        if !ended || ![(84, 105), (96, 120)].contains(&(image.width(), image.height())) {
+            bail!("Resize covers to 96x120 PNG")
         };
         return Ok(());
     }
-    if data.len() < 24 || data[8..12] != [0, 64, 0, 80] {
+    if data.len() < 24 {
         bail!("Invalid media dimensions")
     };
+    let width = u16::from_be_bytes(data[8..10].try_into()?) as usize;
+    let height = u16::from_be_bytes(data[10..12].try_into()?) as usize;
+    if (width, height) != (64, 80)
+        && !(data.starts_with(b"OM3DVID2") && (width, height) == (160, 120))
+    {
+        bail!("Invalid media dimensions")
+    }
     let bytes = be(&data, 12)? as usize;
     let crc = be(&data, 16)?;
     if data.starts_with(b"OM3DCOV1") {
@@ -690,7 +740,7 @@ pub fn validate(path: &Path) -> Result<()> {
         if a >= b || b > video {
             bail!("Invalid frame offset")
         };
-        inflate(&payload[a..b], 10240)?;
+        inflate(&payload[a..b], width * height * 2)?;
     }
     Ok(())
 }

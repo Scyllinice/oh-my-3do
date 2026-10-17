@@ -55,18 +55,20 @@ and IEND checks. The IEND CRC is verified with a poisoned read buffer to reject
 stale EOF data. Limits are 1024×1024 pixels and 524288 bytes. The streaming
 decoder retains a 32 KiB inflate dictionary, decoder state, a scanline buffer and
 small scaling tables, rather than an entire source-size bitmap. Area
-sampling fits covers into 84×105, with letterboxing and alpha compositing over
+sampling fits covers into 96×120, with letterboxing and alpha compositing over
 RGB `(8,16,33)`. Optional gamma and background-color metadata do not change this.
 
 ## Compressed preview with audio (menu v0.16.0+)
 
-All integers are big-endian. `previews/Title.3dv` uses:
+All integers are big-endian. New converters produce 160×120 landscape frames,
+requiring menu v0.16.0-rc10+. Only the pairs 160×120 and legacy 64×80 are
+accepted; version 1 remains 64×80 only. `previews/Title.3dv` uses:
 
 | Offset | Bytes | Meaning |
 | --- | --- | --- |
 | 0 | 8 | `OM3DVID2` |
-| 8 | 2 | Width, 64 |
-| 10 | 2 | Height, 80 |
+| 8 | 2 | Width, 160 (legacy: 64) |
+| 10 | 2 | Height, 120 (legacy: 80) |
 | 12 | 4 | Combined video/audio payload bytes, at most 1048576 |
 | 16 | 4 | Standard CRC32 of video followed by audio |
 | 20 | 2 | Frame count, 1–720, no more than fps × 120 |
@@ -82,7 +84,7 @@ All integers are big-endian. `previews/Title.3dv` uses:
 The video starts with frame_count + 1 unsigned 32-bit offsets, relative to the
 start of the video payload. The first equals the table length; the last equals
 the video byte count. Offsets strictly increase. Each independent zlib stream
-must consume its exact interval and decode to exactly 10240 RGB555 bytes, with
+must consume its exact interval and decode to exactly width × height × 2 RGB555 bytes (38400 for 160×120), with
 the same pixel layout as version 1. A reusable heap-allocated inflater and one
 frame buffer avoid storing expanded frames or large decoder state on the stack.
 

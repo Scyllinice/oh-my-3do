@@ -93,15 +93,15 @@ def convert(source, target, fps=None, frames=None, start=0, duration=None, sound
     limit = min(MAX_FRAMES, math.ceil(requested * fps))
     raw = subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-ss', str(start), '-i', str(source),
         '-map', '0:v:0', '-an', '-sn', '-t', str(requested), '-vf',
-        f'fps={fps},scale=64:80:force_original_aspect_ratio=decrease:flags=area,pad=64:80:(ow-iw)/2:(oh-ih)/2:color=0x081021',
+        f'fps={fps},scale=160:120:force_original_aspect_ratio=decrease:flags=area,pad=160:120:(ow-iw)/2:(oh-ih)/2:color=0x081021',
         '-frames:v', str(limit), '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'],
         check=True, stdout=subprocess.PIPE).stdout
-    if not raw or len(raw) % (64*80*3) or len(raw) > limit*64*80*3:
+    if not raw or len(raw) % (160*120*3) or len(raw) > limit*160*120*3:
         raise ValueError('Video did not produce complete bounded frames')
-    source_count = len(raw)//(64*80*3)
+    source_count = len(raw)//(160*120*3)
     blocks, compressed_bytes = [], 0
     for i in range(source_count):
-        block = zlib.compress(rgb555(raw[i*64*80*3:(i+1)*64*80*3]), 9)
+        block = zlib.compress(rgb555(raw[i*160*120*3:(i+1)*160*120*3]), 9)
         count = len(blocks)+1
         audio_size = ((math.ceil(count*11025/fps)+3)//4)*4 if has_audio else 0
         if (count+1)*4 + compressed_bytes + len(block) + audio_size > MAX_BYTES:
@@ -129,7 +129,7 @@ def convert(source, target, fps=None, frames=None, start=0, duration=None, sound
             '-f', 's8', 'pipe:1'], check=True, stdout=subprocess.PIPE).stdout
         audio = audio[:audio_size].ljust(audio_size, b'\0')
     payload = video + audio
-    header = b'OM3DVID2'+struct.pack('>HHIIHHIIII',64,80,len(payload),binascii.crc32(payload),count,rate,
+    header = b'OM3DVID2'+struct.pack('>HHIIHHIIII',160,120,len(payload),binascii.crc32(payload),count,rate,
                                   len(video),len(audio),11025 if audio else 0,len(audio))
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(target.name+'.tmp')
@@ -140,7 +140,7 @@ def convert(source, target, fps=None, frames=None, start=0, duration=None, sound
         temporary.unlink(missing_ok=True)
     print(f'Created {target}: {seconds:.2f} seconds, {count} frames at {rate} fps, '
           f'{len(payload)/1024:.1f} KiB RAM; ' + ('11025 Hz mono audio' if audio else 'silent'))
-    print('15 fps requires the v0.16.0-rc2+ menu. Playback is entirely from RAM; original source unchanged.')
+    print('15 fps requires the v0.16.0-rc10+ menu. Playback is entirely from RAM; original source unchanged.')
     return dict(seconds=seconds, frames=count, fps=rate, bytes=len(payload), audio_bytes=len(audio))
 
 

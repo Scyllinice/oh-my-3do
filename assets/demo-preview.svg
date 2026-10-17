@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120" viewBox="0 0 160 120">
+<rect width="160" height="120" fill="#173e67"/><path d="M0 44L30 25 57 44 94 20 135 44 160 29V68H0Z" fill="#305c74"/>
+<rect y="60" width="160" height="60" fill="#45885a"/><path d="M70 60H90L143 120H17Z" fill="#273343"/>
+<path d="M79 64H81L82 75H78ZM77 83H83L85 104H75Z" fill="#ead897"/>
+<path d="M69 60H71L20 120H15ZM89 60H91L145 120H140Z" fill="#f5f0d4"/>
+<rect x="8" y="9" width="52" height="11" rx="2" fill="#081021"/><path d="M13 12H15V17H13ZM18 12H20V17H18Z" fill="#b9f23e"/>
+<text x="25" y="17" fill="#f2f5ea" font-family="sans-serif" font-size="6">TEST CLIP</text>
+<path d="M49 92L54 83H67L72 92V108H49Z" fill="#e88832"/><rect x="55" y="86" width="11" height="7" fill="#16344c"/>
+<rect x="46" y="94" width="4" height="12" fill="#0b1621"/><rect x="71" y="94" width="4" height="12" fill="#0b1621"/>
+<rect x="5" y="111" width="30" height="3" fill="#b9f23e"/>
+</svg>
