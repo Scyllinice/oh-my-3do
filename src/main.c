@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc10"
+#define MENU_VERSION "0.16.0-rc11"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -77,6 +77,7 @@ typedef struct Menu {
     size_t search_matches[LIBRARY_CATALOG_MAX], search_count;
     unsigned long search_redraw;
     u32 suppress_buttons;
+    int tools_chord_down, tools_requested;
     UiText text_cache[UI_TEXT_CACHE];
     unsigned int text_cursor;
     int text_style, text_failed;
@@ -125,6 +126,8 @@ typedef struct Menu {
     int cover_cached;
     UsbArtIndex usb_art;
     UsbArtIndex usb_previews;
+    int art_indexes_valid;
+    unsigned long art_index_volume;
     LibraryMetadata metadata;
     UsbPreview preview;
     CCB *preview_cel;
@@ -135,6 +138,7 @@ typedef struct Menu {
     unsigned long preview_read_ms, preview_check_ms, preview_navigation_ms, preview_setup_ms;
     unsigned long preview_bytes, preview_commands;
     unsigned int preview_frames, preview_fps;
+    unsigned long preview_free_bytes, preview_largest_bytes;
     int preview_result;
     CCB *logo;
     CCB *cover;
@@ -234,6 +238,17 @@ static void stop_preview(Menu *menu)
     if (menu->preview_cel) UnloadCel(menu->preview_cel);
     menu->preview_cel = NULL;
     usb_preview_free(&menu->preview);
+}
+/* Media reads also poll the pad. Keep a chord seen there until the main
+ * loop can act on it, even if both buttons have already been released. */
+static void observe_tools_chord(Menu *menu,u32 buttons)
+{
+    u32 shoulders=buttons&(ControlLeftShift|ControlRightShift);
+    if (!shoulders) menu->tools_chord_down=0;
+    else if (shoulders==(ControlLeftShift|ControlRightShift) && !menu->tools_chord_down) {
+        menu->tools_chord_down=1;
+        menu->tools_requested=1;
+    }
 }
 
 static void selection_changed(Menu *menu)
@@ -774,24 +789,30 @@ static void refresh_usb_art(Menu *menu)
     unsigned int root = menu->depth && !(menu->path_ids[0] & 0xffffffUL) ? 1 : 0;
     size_t i;
     const char *message;
+    unsigned long volume;
     if (menu->demo || menu->depth != root) return;
     if (!menu->depth) {
         for (i = 0; i < menu->listing.count; ++i)
             if (!(menu->listing.entries[i]->toc_id & 0xffffffUL)) {
-                usb_art_index_free(&menu->usb_art);
-                usb_art_index_free(&menu->usb_previews);
-                library_metadata_free(&menu->metadata);
                 menu->covers_enabled = 0;
                 return; /* virtual device list is not a filesystem root */
             }
+    }
+    volume=root ? menu->path_ids[0]&0xff000000UL :
+        (menu->listing.count ? menu->listing.entries[0]->toc_id&0xff000000UL : 0);
+    if (menu->art_indexes_valid && menu->art_index_volume==volume) {
+        menu->covers_enabled=menu->config.usb_covers && menu->usb_art.count!=0;
+        return;
     }
     usb_art_index_free(&menu->usb_art);
     usb_art_index_free(&menu->usb_previews);
     library_metadata_free(&menu->metadata);
     menu->covers_enabled = 0;
     if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE")) return;
+    menu->art_index_volume=volume;
+    menu->art_indexes_valid=1; /* Missing indexes also wait for explicit refresh. */
     message = menu->message;
-    menu->message = "Reading cover index...";
+    menu->message = "Reading media indexes...";
     draw(menu);
     if (menu->config.usb_covers) usb_art_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_art);
     if (menu->config.video_previews && !menu->bus.timed_out && !menu->ode.navigation_failed)
@@ -832,7 +853,14 @@ static int media_cancel(void *context)
 {
     Menu *menu = (Menu *)context;
     ControlPadEventData pad;
-    if (GetControlPad(1,0,&pad) >= 0 && pad.cped_ButtonBits) menu->media_cancelled=1;
+    if (GetControlPad(1,0,&pad) >= 0) {
+        u32 shoulders=pad.cped_ButtonBits&(ControlLeftShift|ControlRightShift);
+        observe_tools_chord(menu,pad.cped_ButtonBits);
+        /* The first shoulder is often followed by the second a few polls
+         * later. Keep polling the read until the complete chord is seen. */
+        if ((pad.cped_ButtonBits&~(ControlLeftShift|ControlRightShift)) ||
+            shoulders==(ControlLeftShift|ControlRightShift)) menu->media_cancelled=1;
+    }
     return menu->media_cancelled;
 }
 
@@ -850,7 +878,7 @@ static void update_cover(Menu *menu)
     const char *file;
     char path[9218];
     const char *lookup;
-    if (menu->tools || !menu->covers_enabled || menu->review || !menu->ready || menu->loading ||
+    if (menu->tools || menu->tools_requested || !menu->covers_enabled || menu->review || !menu->ready || menu->loading ||
         menu->cover_attempted || menu->bus.timed_out || menu->ode.navigation_failed) return;
     if (!row_count(menu) || (menu->listing.has_parent && !menu->selected)) return;
     entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
@@ -971,7 +999,7 @@ static void update_preview(Menu *menu)
     unsigned int i;
     int result;
     unsigned long started, commands, setup_started;
-    if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE") || !menu->config.video_previews || menu->preview_attempted || menu->demo || menu->tools ||
+    if (menu->config_result != 0 || strcmp(menu->ode.identity,"LOCODE") || !menu->config.video_previews || menu->preview_attempted || menu->demo || menu->tools || menu->tools_requested ||
         menu->review || menu->alphabet_active || !menu->ready || menu->loading || menu->bus.timed_out ||
         menu->ode.navigation_failed || !menu->usb_previews.count || now_ms(menu)-menu->selection_since < 1200UL) return;
     menu->preview_attempted = 1;
@@ -986,6 +1014,18 @@ static void update_preview(Menu *menu)
     file = menu_cover_find(menu->usb_previews.entries,menu->usb_previews.count,lookup);
     free(path);
     if (!file) return;
+    /* Decoded covers are optional cache entries. Leave room for the compressed
+     * clip, audio and drawable frame on the console's constrained heap. */
+    cover_cache_clear(&menu->cover_cache);
+    menu->preview_free_bytes=menu->preview_largest_bytes=0;
+#ifdef OH3DO_SDK
+    {
+        MemInfo memory;
+        AvailMem(&memory,MEMTYPE_DRAM);
+        menu->preview_free_bytes=memory.minfo_SysFree+memory.minfo_TaskFree;
+        menu->preview_largest_bytes=memory.minfo_SysLargest>memory.minfo_TaskLargest ? memory.minfo_SysLargest : memory.minfo_TaskLargest;
+    }
+#endif
     for (i=0;i<menu->depth;++i) { route[i].id=menu->path_ids[i]; route[i].name=menu->path[i]; }
     memset(&read,0,sizeof(read));
     read.menu=menu; read.file=file; message=menu->message;
@@ -998,16 +1038,14 @@ static void update_preview(Menu *menu)
     menu->message=message;
     setup_started=now_ms(menu);
     menu->preview_navigation_ms=setup_started-started-(read.finished-read.started);
-    menu->preview_result=result ? -1 : 1;
-    if (!result && menu->media_cancelled) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-1; }
+    menu->preview_result=result==USB_PREVIEW_NO_MEMORY ? -4 : (result ? -1 : 1);
+    if (menu->media_cancelled && result!=-2) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-5; }
     if (!result) {
-        menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,NULL);
+        menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,menu->preview.frame_buffer);
         if (menu->preview_cel) {
             menu->preview_cel->ccb_XPos=236<<16; menu->preview_cel->ccb_YPos=86<<16;
             menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;
-            if (menu->preview.version==2 && menu->preview.frame_buffer)
-                memcpy(menu->preview_cel->ccb_SourcePtr,menu->preview.frame_buffer,(size_t)menu->preview.frame_bytes);
-            else if (usb_preview_frame(&menu->preview,0,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) {
+            if (menu->preview.version!=2 && usb_preview_frame(&menu->preview,0,(unsigned char *)menu->preview_cel->ccb_SourcePtr)<0) {
                 stop_preview(menu); menu->preview_result=-1; goto preview_done;
             }
             if (menu->config.preview_sound && menu->preview.audio)
@@ -1015,12 +1053,14 @@ static void update_preview(Menu *menu)
             menu->preview_frame=0; menu->preview_since=now_ms(menu);
             menu->preview_bytes=menu->preview.video_bytes+menu->preview.audio_bytes;
             menu->preview_frames=menu->preview.frames; menu->preview_fps=menu->preview.fps;
-        } else { usb_preview_free(&menu->preview); menu->preview_result=-1; }
+        } else { usb_preview_free(&menu->preview); menu->preview_result=-4; }
     }
 preview_done:
     menu->preview_setup_ms=now_ms(menu)-setup_started;
     menu->preview_load_ms=now_ms(menu)-started;
     menu->preview_commands=menu->bus.commands-commands;
+    if (menu->preview_result==-4) notify(menu,"Preview needs more free memory.");
+    else if (menu->preview_result==-1) notify(menu,"Preview failed. Check diagnostics.");
     if (result == -2 || menu->bus.timed_out || menu->ode.navigation_failed) {
         stop_preview(menu); menu->ode.navigation_failed=1; menu->ready=menu->view_valid=0;
         menu->message="Preview I/O failed. Restart console.";
@@ -1042,6 +1082,7 @@ static void show_demo(Menu *menu)
         return;
     }
     menu->review = 0;
+    menu->art_indexes_valid=0;
     usb_art_index_free(&menu->usb_art);
     usb_art_index_free(&menu->usb_previews);
     library_metadata_free(&menu->metadata);
@@ -1077,6 +1118,7 @@ static void connect_ode(Menu *menu)
     int config_result;
     ControlPadEventData pad;
     menu->booting=1;
+    menu->art_indexes_valid=0;
     library_catalog_free(&menu->catalog);
     ode_playlist_dispose(&menu->playlist);
     menu->review = 0;
@@ -1603,6 +1645,7 @@ static void export_diagnostics(Menu *menu)
     format(line,"preview_result=%d\npreview_load_ms=%lu\n",menu->preview_result,menu->preview_load_ms); strcat(data,line);
     format(line,"preview_read_ms=%lu\npreview_check_ms=%lu\npreview_navigation_ms=%lu\npreview_setup_ms=%lu\n",menu->preview_read_ms,menu->preview_check_ms,menu->preview_navigation_ms,menu->preview_setup_ms); strcat(data,line);
     format(line,"preview_bytes=%lu\npreview_commands=%lu\npreview_frames=%u\npreview_fps=%u\n",menu->preview_bytes,menu->preview_commands,menu->preview_frames,menu->preview_fps); strcat(data,line);
+    format(line,"preview_free_bytes=%lu\npreview_largest_bytes=%lu\n",menu->preview_free_bytes,menu->preview_largest_bytes); strcat(data,line);
     strcat(data,"Identity/revision may be hard-coded; exact firmware build is unknown.\nSnapshot taken before export file I/O.\n");
     /* Fixed report extent replaces previous reports without firmware truncate. */
     i = strlen(data); memset(data+i,'\n',sizeof(data)-1-i); data[sizeof(data)-1] = 0;
@@ -2132,7 +2175,10 @@ static void draw_tools(Menu *menu)
             format(line,"Payload: %lu KiB",(menu->preview_bytes+1023)/1024); tool_line(menu,6,line,MUTED);
             format(line,"Frames: %u at %u fps",menu->preview_frames,menu->preview_fps); tool_line(menu,7,line,MUTED);
             format(line,"Commands: %lu",menu->preview_commands); tool_line(menu,8,line,MUTED);
-            tool_line(menu,9,"Playback checks frames as shown.",MUTED);
+            if (menu->preview_result==-4) tool_line(menu,9,"Not enough preview memory.",AMBER);
+            else if (menu->preview_result==-5) tool_line(menu,9,"Cancelled by controller input.",MUTED);
+            else if (menu->preview_result<0) tool_line(menu,9,"Preview file / read failed.",AMBER);
+            else tool_line(menu,9,"Playback checks frames as shown.",MUTED);
         }
     } else if (menu->tools == TOOL_CONFIRM_BACKUP) {
         slot_path(line, menu->backup_slot); tool_line(menu, 0, line, TEXT);
@@ -2446,6 +2492,13 @@ static void toggle_tools(Menu *menu)
     menu->tool_selected=0; menu->tool_message=NULL;
     menu->c_pending=menu->alphabet_active=0;
 }
+static int dispatch_tools_request(Menu *menu)
+{
+    if (!menu->tools_requested) return 0;
+    menu->tools_requested=0;
+    toggle_tools(menu);
+    return 1;
+}
 
 int main(int argc, char **argv)
 {
@@ -2525,10 +2578,8 @@ int main(int argc, char **argv)
         } else held = 0;
         previous = buttons;
         if (pressed) { stop_preview(&menu); }
-        if ((buttons & (ControlLeftShift | ControlRightShift)) ==
-                (ControlLeftShift | ControlRightShift) &&
-                (pressed & (ControlLeftShift | ControlRightShift))) {
-            toggle_tools(&menu);
+        observe_tools_chord(&menu,buttons);
+        if (dispatch_tools_request(&menu)) {
             pressed = 0;
         }
         if (menu.tools) {
@@ -2593,6 +2644,7 @@ int main(int argc, char **argv)
             else queue_selected_disc(&menu);
         } else if (pressed & ControlX) {
             cover_cache_clear(&menu.cover_cache);
+            menu.art_indexes_valid=0;
             if (*menu.filter) { menu.filter[0] = 0; menu.selected = 0; menu.message = NULL; selection_changed(&menu); }
             else if (menu.demo) show_demo(&menu);
             else if (menu.ode.identity[0]) load_directory(&menu, menu.selected);
@@ -2602,8 +2654,12 @@ int main(int argc, char **argv)
         if (old_review != menu.review || old_selection !=
             (menu.review ? menu.queue_selected : menu.selected)) selection_changed(&menu);
         remember_position(&menu,0);
-        update_cover(&menu);
-        update_preview(&menu);
+        /* A shoulder may be the first half of L+R. Do not start blocking
+         * media I/O while it is held and the other shoulder is on its way. */
+        if (!(buttons&(ControlLeftShift|ControlRightShift)) && !menu.tools_requested) {
+            update_cover(&menu);
+            update_preview(&menu);
+        }
         draw(&menu);
         WaitVBL(menu.vbl, 1);
     }

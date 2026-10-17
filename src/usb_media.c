@@ -20,14 +20,24 @@ static unsigned char *audio_memory(unsigned long bytes)
     return (unsigned char *)malloc((size_t)bytes);
 #endif
 }
+static unsigned char *frame_memory(unsigned long bytes)
+{
+#ifdef OH3DO_SDK
+    return (unsigned char *)AllocMem((int32)bytes,MEMTYPE_CEL);
+#else
+    return (unsigned char *)malloc((size_t)bytes);
+#endif
+}
 void usb_preview_free(UsbPreview *preview)
 {
 #ifdef OH3DO_SDK
     if (preview->audio) FreeMem(preview->audio,(int32)preview->audio_bytes);
+    if (preview->frame_buffer) FreeMem(preview->frame_buffer,(int32)preview->frame_bytes);
 #else
     free(preview->audio);
+    free(preview->frame_buffer);
 #endif
-    free(preview->pixels); free(preview->frame_buffer); free(preview->decoder);
+    free(preview->pixels); free(preview->decoder);
     memset(preview,0,sizeof(*preview));
 }
 int usb_preview_frame(UsbPreview *preview,unsigned int frame,unsigned char *pixels)
@@ -97,15 +107,16 @@ int usb_preview_load_profiled(Ode *ode, OdeReadBuffer reader, const char *filena
             expected=(((next.frames*11025UL+next.fps-1)/next.fps)+3)&~3UL;
             if (next.audio_rate!=11025 || next.audio_bytes!=next.audio_frames || next.audio_frames!=expected) goto done;
         } else if (next.audio_rate || next.audio_frames) goto done;
-        next.decoder=malloc(sizeof(tinfl_decompressor)); next.frame_buffer=(unsigned char *)malloc((size_t)next.frame_bytes);
-        if (!next.decoder || !next.frame_buffer) goto done;
+        next.decoder=malloc(sizeof(tinfl_decompressor)); next.frame_buffer=frame_memory(next.frame_bytes);
+        if (!next.decoder || !next.frame_buffer) { result=USB_PREVIEW_NO_MEMORY; goto done; }
     }
     next.pixels=(unsigned char *)malloc((size_t)next.video_bytes);
-    if (!next.pixels) goto done;
+    if (!next.pixels) { result=USB_PREVIEW_NO_MEMORY; goto done; }
     if (preview_bytes(ode,reader,next.pixels,next.video_bytes,&crc,cancel,context)<0) goto done;
     if (next.audio_bytes) {
         next.audio=audio_memory(next.audio_bytes);
-        if (!next.audio || preview_bytes(ode,reader,next.audio,next.audio_bytes,&crc,cancel,context)<0) goto done;
+        if (!next.audio) { result=USB_PREVIEW_NO_MEMORY; goto done; }
+        if (preview_bytes(ode,reader,next.audio,next.audio_bytes,&crc,cancel,context)<0) goto done;
     }
     if (phase) phase(phase_context,1);
     if ((cancel && cancel(context)) || (crc^0xffffffffUL)!=word(header+16) ||

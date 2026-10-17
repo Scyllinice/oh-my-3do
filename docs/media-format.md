@@ -87,6 +87,11 @@ the video byte count. Offsets strictly increase. Each independent zlib stream
 must consume its exact interval and decode to exactly width × height × 2 RGB555 bytes (38400 for 160×120), with
 the same pixel layout as version 1. A reusable heap-allocated inflater and one
 frame buffer avoid storing expanded frames or large decoder state on the stack.
+The frame buffer is allocated in CEL-accessible memory and borrowed by the
+preview CEL. It is the decode destination as well as the displayed texture;
+there is no second frame copy. The CEL is destroyed before its borrowed frame
+buffer is freed. Optional decoded cover-cache entries are released before
+loading a matched preview, leaving the currently displayed cover available.
 
 Audio length is `align4(ceil(frame_count * 11025 / fps))`. The converter pads
 short audio with silence and applies short fades at the endpoints. Audio lives

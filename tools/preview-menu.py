@@ -86,17 +86,17 @@ static int preview_text_write(Ode *ode, OdeReadBuffer reader, const char *name, 
     ((OdeBus *)ode->context)->last_command=0xe4;
     return 0;
 }
-#define ControlUp 1
-#define ControlDown 2
-#define ControlLeft 4
-#define ControlRight 8
-#define ControlRightShift 1024
-#define ControlLeftShift 512
-#define ControlA 16
-#define ControlB 32
-#define ControlC 64
-#define ControlX 128
-#define ControlStart 256
+#define ControlUp 0x40000000UL
+#define ControlDown 0x80000000UL
+#define ControlLeft 0x10000000UL
+#define ControlRight 0x20000000UL
+#define ControlRightShift 0x00400000UL
+#define ControlLeftShift 0x00200000UL
+#define ControlA 0x08000000UL
+#define ControlB 0x04000000UL
+#define ControlC 0x02000000UL
+#define ControlX 0x00800000UL
+#define ControlStart 0x01000000UL
 
 static int preview_png_loads, preview_png_fail;
 static int preview_png_load(Ode *ode,OdeReadBuffer reader,const char *file,unsigned char *pixels,MediaCancel cancel,void *context) {
@@ -104,6 +104,16 @@ static int preview_png_load(Ode *ode,OdeReadBuffer reader,const char *file,unsig
     ++preview_png_loads;
     if (preview_png_fail || (cancel && cancel(context))) return -1;
     memset(pixels,preview_png_loads,USB_COVER_PIXELS); return 0;
+}
+static int preview_index_reads;
+static int preview_art_index(Ode *ode,OdeReadBuffer read,UsbArtIndex *index) {
+    (void)ode;(void)read;usb_art_index_free(index);++preview_index_reads;return 0;
+}
+static int preview_video_index(Ode *ode,OdeReadBuffer read,UsbArtIndex *index,const char *folder) {
+    (void)folder;return preview_art_index(ode,read,index);
+}
+static int preview_metadata_index(Ode *ode,OdeReadBuffer read,LibraryMetadata *index) {
+    (void)ode;(void)read;library_metadata_free(index);++preview_index_reads;return 0;
 }
 static unsigned long preview_buttons;
 typedef struct { unsigned long cped_ButtonBits; } ControlPadEventData;
@@ -127,6 +137,7 @@ static int preview_video_enabled, preview_video_loads;
 static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, UsbPreview *preview, MediaCancel cancel, void *context) {
     (void)ode; (void)reader; (void)file;
     ++preview_video_loads;
+    if (preview_video_enabled<0) return preview_video_enabled;
     if (!preview_video_enabled || (cancel && cancel(context))) return -1;
     preview->pixels=(unsigned char *)malloc(2*USB_ART_PIXELS);
     if (!preview->pixels) return -1;
@@ -134,7 +145,16 @@ static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, 
     preview->audio=(unsigned char *)malloc(4); if (!preview->audio) return -1;
     preview->audio_bytes=preview->audio_frames=4; preview->audio_rate=11025;
     preview->width=64; preview->height=80; preview->frame_bytes=USB_ART_PIXELS;
-    preview->version=1; preview->frames=2; preview->fps=6; preview->video_bytes=2*USB_ART_PIXELS; return 0;
+    preview->version=1; preview->frames=2; preview->fps=6; preview->video_bytes=2*USB_ART_PIXELS;
+    if (preview_video_enabled==2) {
+        preview->width=USB_PREVIEW_WIDTH;preview->height=USB_PREVIEW_HEIGHT;
+        preview->frame_bytes=USB_PREVIEW_FRAME_BYTES;
+        preview->frame_buffer=(unsigned char *)malloc(USB_PREVIEW_FRAME_BYTES);
+        if (!preview->frame_buffer) abort();
+        memset(preview->frame_buffer,0x55,USB_PREVIEW_FRAME_BYTES);
+        preview->version=2;
+    }
+    return 0;
 }
 static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context) {
     int result=preview_video_load(ode,reader,file,preview,cancel,context);
@@ -165,7 +185,7 @@ static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
         cel->ccb_PLUTPtr=palettes[count++]; cel->ccb_HDX=1<<20; cel->ccb_VDY=1<<16;
         cel->ccb_Width=w; cel->ccb_Height=h; return cel;
     }
-    preview_loaded.ccb_SourcePtr=pixels; preview_loaded.ccb_Width=w; preview_loaded.ccb_Height=h;
+    preview_loaded.ccb_SourcePtr=data ? data : pixels; preview_loaded.ccb_Width=w; preview_loaded.ccb_Height=h;
     ++preview_cel_calls;
     return preview_cel_fail ? NULL : &preview_loaded;
 }
@@ -353,6 +373,7 @@ int main(int argc, char **argv) {
         if (preview_video_loads || menu.preview_attempted) abort();
         ++preview_now;
         menu.tools=TOOL_HOME; update_preview(&menu); menu.tools=0;
+        menu.tools_requested=1;update_preview(&menu);menu.tools_requested=0;
         menu.alphabet_active=1; update_preview(&menu); menu.alphabet_active=0;
         menu.review=1; update_preview(&menu); menu.review=0;
         menu.config.video_previews=0; update_preview(&menu);
@@ -369,10 +390,10 @@ int main(int argc, char **argv) {
         if (menu.preview.pixels || menu.preview.audio || menu.preview_cel || menu.preview_audio.status || preview_video_loads != 1) abort();
         selection_changed(&menu); preview_now+=1200; preview_buttons=ControlB;
         update_preview(&menu); preview_buttons=0;
-        if (menu.preview.pixels || menu.preview_cel || !menu.preview_attempted || preview_video_loads != 2) abort();
+        if (menu.preview.pixels || menu.preview_cel || !menu.preview_attempted || preview_video_loads != 2 || menu.preview_result!=-5) abort();
         selection_changed(&menu); preview_now+=1200; preview_cel_fail=1;
         update_preview(&menu); preview_cel_fail=0;
-        if (menu.preview.pixels || menu.preview_cel) abort();
+        if (menu.preview.pixels || menu.preview_cel || menu.preview_result!=-4) abort();
         menu.config.preview_sound=0; selection_changed(&menu); preview_now+=1200;
         update_preview(&menu);
         if (!menu.preview_cel || menu.preview_audio.status || audio_starts!=1) abort();
@@ -380,8 +401,70 @@ int main(int argc, char **argv) {
         update_preview(&menu); audio_fail=0;
         if (!menu.preview_cel || menu.preview_audio.status!=-1) abort();
         stop_preview(&menu);
+        selection_changed(&menu);preview_now+=1200;preview_video_enabled=2;
+        {
+            unsigned char cache_pixels[USB_COVER_PIXELS];
+            memset(cache_pixels,0,sizeof(cache_pixels));
+            cover_cache_put(&menu.cover_cache,0,"Cached.png",cache_pixels,sizeof(cache_pixels));
+            update_preview(&menu);
+            if (!menu.preview_cel || menu.preview_cel->ccb_SourcePtr!=menu.preview.frame_buffer ||
+                ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0]!=0x55 || menu.cover_cache.clock) abort();
+        }
+        stop_preview(&menu);
+        selection_changed(&menu);preview_now+=1200;preview_video_enabled=USB_PREVIEW_NO_MEMORY;
+        update_preview(&menu);
+        if (menu.preview_result!=-4 || menu.ode.navigation_failed || !menu.ready ||
+            strcmp(menu.notice,"Preview needs more free memory.")) abort();
+        selection_changed(&menu);preview_now+=1200;preview_video_enabled=-1;
+        update_preview(&menu);
+        if (menu.preview_result!=-1 || strcmp(menu.notice,"Preview failed. Check diagnostics.")) abort();
         usb_art_index_free(&menu.usb_previews); preview_video_enabled=0;
         menu.config.video_previews=0; menu.demo=1;
+        /* A complete L+R press during a media cancellation poll survives
+         * release before the next main-loop iteration. It fires only once. */
+        menu.tools=0; menu.tools_requested=menu.tools_chord_down=0;
+        menu.media_cancelled=0;preview_buttons=ControlLeftShift;
+        if (media_cancel(&menu)) abort();
+        preview_buttons=ControlLeftShift|ControlRightShift;
+        if (!media_cancel(&menu)) abort();
+        preview_buttons=0; media_cancel(&menu);
+        if (!dispatch_tools_request(&menu) || menu.tools!=TOOL_HOME) abort();
+        if (dispatch_tools_request(&menu)) abort();
+        observe_tools_chord(&menu,ControlLeftShift);
+        observe_tools_chord(&menu,ControlLeftShift|ControlRightShift);
+        if (!dispatch_tools_request(&menu) || menu.tools) abort();
+        observe_tools_chord(&menu,ControlRightShift);
+        observe_tools_chord(&menu,ControlLeftShift|ControlRightShift);
+        if (dispatch_tools_request(&menu)) abort();
+        observe_tools_chord(&menu,0);
+        observe_tools_chord(&menu,ControlLeftShift|ControlRightShift);
+        if (!dispatch_tools_request(&menu) || menu.tools!=TOOL_HOME) abort();
+        observe_tools_chord(&menu,0); menu.tools=0;menu.media_cancelled=0;
+        /* Root index reads are cached even when empty/missing. Virtual roots
+         * retain the cache; changing volume or explicit refresh reloads it. */
+        show_demo(&menu);menu.demo=0;menu.config_result=0;
+        strcpy(menu.ode.identity,"LOCODE");menu.config.usb_covers=menu.config.video_previews=1;
+        menu.depth=1;menu.path_ids[0]=0x01000000UL;
+        preview_index_reads=0;
+        refresh_usb_art(&menu);refresh_usb_art(&menu);
+        menu.depth=2;refresh_usb_art(&menu);menu.depth=1;refresh_usb_art(&menu);
+        if (preview_index_reads!=3) abort();
+        {
+            const MenuEntry volume={0x01000000UL,1,"USB"};
+            const MenuEntry *volumes[1];
+            const MenuEntry **saved=menu.listing.entries;
+            size_t count=menu.listing.count;
+            volumes[0]=&volume;menu.listing.entries=volumes;menu.listing.count=1;menu.depth=0;
+            refresh_usb_art(&menu);
+            menu.listing.entries=saved;menu.listing.count=count;menu.depth=1;
+            refresh_usb_art(&menu);
+            if (preview_index_reads!=3) abort();
+        }
+        menu.path_ids[0]=0x02000000UL;refresh_usb_art(&menu);
+        if (preview_index_reads!=6) abort();
+        menu.art_indexes_valid=0;refresh_usb_art(&menu);
+        if (preview_index_reads!=9) abort();
+        show_demo(&menu);
         /* Tools wraps across eight entries; viewing Help/Diagnostics is read-only. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlUp);
@@ -835,7 +918,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        loading + '\n#undef ode_read_directory\n#define usb_preview_load_profiled preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_profiled\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_profiled preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_profiled\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),

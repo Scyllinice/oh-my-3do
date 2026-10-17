@@ -4,6 +4,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef OH3DO_SDK
+#include "mem.h"
+static struct { void *data; int32 bytes; unsigned long flags; } sdk_memory[4];
+static int sdk_calls,sdk_fail;
+void *AllocMem(int32 bytes,unsigned long flags)
+{
+    int i;
+    assert(bytes>0 && (flags==MEMTYPE_CEL || flags==MEMTYPE_AUDIO));
+    if (++sdk_calls==sdk_fail) return NULL;
+    for (i=0;i<4;++i) if (!sdk_memory[i].data) {
+        sdk_memory[i].data=malloc((size_t)bytes);
+        sdk_memory[i].bytes=bytes; sdk_memory[i].flags=flags;
+        return sdk_memory[i].data;
+    }
+    assert(0); return NULL;
+}
+void FreeMem(void *data,int32 bytes)
+{
+    int i;
+    for (i=0;i<4;++i) if (sdk_memory[i].data==data) {
+        assert(bytes==sdk_memory[i].bytes);
+        free(data);sdk_memory[i].data=NULL;return;
+    }
+    assert(0);
+}
+static void sdk_empty(void)
+{
+    int i;
+    for (i=0;i<4;++i) assert(!sdk_memory[i].data);
+}
+#endif
 typedef struct Fake {
     unsigned char *data, buffer[2048];
     size_t size, pos;
@@ -107,7 +138,7 @@ int main(int argc,char **argv)
         assert(!usb_preview_frame(&preview,0,pixels));
         assert(usb_preview_frame(&preview,1,pixels)<0);
         usb_preview_free(&preview);
-    } else if (!strcmp(argv[1],"video2") || !strcmp(argv[1],"video2large")) {
+    } else if (!strcmp(argv[1],"video2") || !strcmp(argv[1],"video2large") || !strcmp(argv[1],"video2sdk")) {
         assert(!usb_preview_load_profiled(&ode,reader,"Game.3dv",&preview,cancel,&f,phase,&f));
         assert(read_phase==1 && check_phase==1);
         assert(preview.version==2 && preview.frames && preview.fps && preview.decoder);
@@ -119,6 +150,18 @@ int main(int argc,char **argv)
         if (preview.audio_bytes) assert(preview.audio && preview.audio_rate==11025 && preview.audio_frames==preview.audio_bytes);
         calls=f.calls;usb_preview_free(&preview);
         assert(!preview.pixels && !preview.audio && !preview.decoder);
+#ifdef OH3DO_SDK
+        sdk_empty();
+        if (!strcmp(argv[1],"video2sdk")) {
+            for (i=1;i<=2;++i) {
+                reset(&f,&ode);sdk_calls=0;sdk_fail=i;
+                assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)==USB_PREVIEW_NO_MEMORY);
+                assert(f.closed && !ode.navigation_failed && !preview.pixels && !preview.frame_buffer && !preview.audio);
+                sdk_empty();
+            }
+            sdk_fail=0;
+        }
+#endif
         if (!strcmp(argv[1],"video2")) {
             for (i=1;i<=calls;++i) {
                 reset(&f,&ode); f.fail_at=i;

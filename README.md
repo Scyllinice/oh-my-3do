@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc10**; media tools are **0.16.0-rc10**.
+menu version is **0.16.0-rc11**; media tools are **0.16.0-rc10**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -25,7 +25,7 @@ existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
 For the current preview-audio menu and game information panel, use the
-[v0.16.0-rc10 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc10).
+[v0.16.0-rc11 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc11).
 The updated GUI and media tools are in the
 [desktop v0.1.5 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.5).
 
@@ -124,7 +124,7 @@ not mounted.
 | Hold C + Left / Right | Jump to the previous/next initial letter without adding a disc |
 | Start | Review the disc queue |
 | X | Clear an active find filter; otherwise refresh / retry connection |
-| L + R together | Tools: saves, backups, favorites, recent games, find, configuration, help, diagnostics |
+| L + R together | Tools: saves, backups, favorites, recent games, find, configuration, help, diagnostics; also cancels a cover/preview load |
 | Hold X at startup | Skip USB configuration, artwork, favorites and settings writes |
 
 The browser uses a proportional, mixed-case font, a dedicated artwork panel,
@@ -862,8 +862,13 @@ already reduced image cannot recover discarded detail.
 RGB, RGBA, grayscale, indexed, 1/2/4/8/16-bit and interlaced PNGs
 are supported where valid for their color type. JPEGs still need conversion.
 
-The menu keeps six decoded covers in RAM (about 104 KiB of pixel data). Returning
+The menu caches up to six decoded covers (135 KiB of pixel data). Returning
 to a cached cover skips USB access, PNG decoding, and the normal selection wait.
+The cache is released before loading a preview; the displayed cover stays available.
+Media and game-information indexes are read once per USB volume during a
+session. Returning to the root reuses them, including an empty or missing index.
+Press **X** at the filesystem root or cold boot to reload changed indexes.
+
 Cache entries are separated by USB volume. Press **X** in the browser to refresh
 after replacing cover files; reconnecting clears the cache as well. Cache
 allocation is optional, so a memory shortage does not prevent a cover loading.
@@ -1058,8 +1063,9 @@ Downloaded footage is not included in this repository or its releases.
 Covers start loading after 350 ms without a selection change; previews wait 1.2
 seconds. A whole clip is loaded into RAM before playback, so looping
 needs no USB reads. The new payload cap is 1 MiB, plus a frame buffer and decoder
-state. Longer clips may take longer to load and can be cancelled. Pressing a button
-cancels an in-progress media load or stops playback. Selecting another game
+state. Longer clips may take longer to load and can be cancelled. During loading,
+a D-pad or face-button press cancels; L+R cancels and opens Tools. A single
+shoulder leaves time to complete L+R. Any button stops active playback. Selecting another game
 releases the clip; a stopped clip waits for a new selection before retrying.
 The menu verifies the payload CRC, footer, every frame boundary and the first
 frame before starting. Later frames are decompressed and checked as they play;
@@ -1069,7 +1075,11 @@ Missing or cancelled previews leave the static cover available. Actual
 USB loading time depends on the firmware and folder navigation. The diagnostics
 export includes total load time, read/CRC time, checks/first-frame time,
 folder-navigation time, audio/display setup time, payload size and command count
-for the last attempt. `preview_result=-3` means a later frame failed to decode.
+for the last attempt. `preview_result=-3` means a later frame failed to decode,
+`-4` means an allocation failed, and `-5` means controller input cancelled the
+load. `-1` means a file/read check failed. Allocation and file failures also show
+a brief message in the library. Exports include free DRAM and the largest
+reported free block immediately before loading.
 Existing preview files work without reconversion. The
 binary layouts are documented in [docs/media-format.md](docs/media-format.md).
 

@@ -28,7 +28,7 @@ typedef struct Menu {
     struct { int request,timed_out; } bus;
     int booting,review,demo,ready,view_valid,selected,depth,notice_active;
     int usb_tested,backup_result,restore_result,position_result;
-    int recent_result,diagnostics_result,recent_valid,config_result,skip_usb_art,covers_enabled;
+    int recent_result,diagnostics_result,recent_valid,config_result,skip_usb_art,covers_enabled,art_indexes_valid;
     int settings_folder_workaround,settings_usb_covers,settings_remember_position;
     int settings_recent_games,settings_video_previews;
     void *splash; const char *message;

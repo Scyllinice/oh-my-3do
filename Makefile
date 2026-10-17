@@ -2,7 +2,7 @@ CC = cc
 CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 
 .PHONY: test test-firmware test-covers test-sdk test-media clean
-test: build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+test: build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
 	python3 tools/build-sector-codec.py
 	python3 tests/test_sector_codec.py
 	python3 tests/test_organize_library.py
@@ -59,7 +59,7 @@ build/test_usb_art: src/usb_art.c src/usb_art.h src/menu_config.h src/ode.h src/
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_usb_art.c $(LDFLAGS) -o $@
 
 clean:
-	rm -f build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
+	rm -f build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art
 
 build/test_saves: src/save_archive.c src/save_archive.h src/save_usb.c src/save_usb.h src/usb_art.c src/usb_file.h src/menu_ui.c src/menu_ui.h src/cover_catalog.c src/menu_settings.c src/menu_settings.h src/menu_config.c tests/test_saves.c
 	mkdir -p build
@@ -94,7 +94,11 @@ build/test_usb_media: src/library_index.c src/library_index.h tests/test_usb_med
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/usb_art.c src/menu_ui.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
 
-test-media: build/test_usb_media
+build/test_usb_media_sdk: src/library_index.c src/library_index.h tests/test_usb_media.c tests/media_sdk/mem.h src/usb_media.c src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DOH3DO_SDK=1 -Itests/media_sdk -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/usb_art.c src/menu_ui.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
+
+test-media: build/test_usb_media build/test_usb_media_sdk
 	python3 tests/test_media_tools.py
 
 build/test_ui_font: src/ui_font.c src/ui_font.h src/ui_font_data.h tests/test_ui_font.c

@@ -7,6 +7,7 @@
 #define USB_PREVIEW_WIDTH 160
 #define USB_PREVIEW_HEIGHT 120
 #define USB_PREVIEW_FRAME_BYTES (USB_PREVIEW_WIDTH * USB_PREVIEW_HEIGHT * 2UL)
+#define USB_PREVIEW_NO_MEMORY (-3)
 #define USB_PNG_MAX_BYTES (512UL * 1024UL)
 typedef int (*MediaCancel)(void *context);
 typedef void (*MediaLoadPhase)(void *context,int checking);
@@ -31,7 +32,8 @@ int usb_legacy_cover(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels, MediaCancel cancel, void *context);
 int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
                      UsbPreview *preview, MediaCancel cancel, void *context);
-/* Optional timing hook: 1 after payload reads, 2 after checks/close. */
+/* Returns USB_PREVIEW_NO_MEMORY for failed frame/video/audio allocations.
+ * Optional timing hook: 1 after payload reads, 2 after checks/close. */
 int usb_preview_load_profiled(Ode *ode,OdeReadBuffer reader,const char *filename,
     UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context);
 int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder);

@@ -55,6 +55,12 @@ class PreviewToolsTest(unittest.TestCase):
             old=bytearray(container(2));struct.pack_into('>HH',old,8,160,120);path.write_bytes(old)
             self.run_loader('badvideo2',path)
 
+    def test_sdk_drawable_frame_audio_allocations_and_failure_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'landscape.3dv'
+            path.write_bytes(container(2,15,True,160,120))
+            subprocess.run([str(ROOT/'build/test_usb_media_sdk'),'video2sdk',str(path)],check=True)
+
     def test_c_player_rejects_bad_metadata_indexes_zlib_and_checksums(self):
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'bad.3dv';valid=container(2)
