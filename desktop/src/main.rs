@@ -977,10 +977,9 @@ impl App {
         ui.separator();
         ui.label(concat!(
             "Oh My 3DO Library ",
-            env!("CARGO_PKG_VERSION"),
-            " · native Rust desktop app"
+            env!("CARGO_PKG_VERSION")
         ));
-        ui.label("No Python runtime is required. Catalogs, media conversion cache and undo journals stay on the PC.");
+        ui.label("Catalogs, media conversion cache and undo journals stay on the PC.");
         if ui.button("Open app data / reports").clicked() {
             open(&self.cache)
         }

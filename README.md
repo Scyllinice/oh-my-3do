@@ -425,7 +425,7 @@ covers/previews, download missing covers, and prepare a USB copy. Disc sources
 are preserved. The app runs standalone without Python or Docker.
 
 Portable builds are available in the
-[desktop v0.1.2 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.2).
+[desktop v0.1.3 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.3).
 Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
 Windows x64 and Linux x64 builds are provided; macOS can be built from source
 but has not been packaged here. Preview conversion uses separate native
