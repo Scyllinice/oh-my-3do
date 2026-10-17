@@ -51,8 +51,10 @@ Audio-only discs are kept out of automatic game identification.
 Set the EmuMovies download directory on **Covers & previews**. It can point at
 `D:\EmuMovies` or its `Panasonic_3DO` directory. Front covers come from `Box`.
 Video selection prefers `Video_MP4_HD`, then `Video_MP4_HI_QUAL`, then
-`Video_MP4`, once per exact title. Ambiguous and incompatible regional matches
-are left alone. Files can also be provided for a selected import or an existing
+`Video_MP4`, once per exact title. Previews prefer the matching region, then
+fall back to a unique clip of the same game from another region. Disc numbers
+and demo/full-game labels must agree. Covers stay region-specific, and
+ambiguous matches are left alone. Files can also be provided for a selected import or an existing
 library entry. Supplied media is converted locally.
 
 Missing covers can be downloaded from the Libretro thumbnail collection when

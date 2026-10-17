@@ -120,6 +120,29 @@ class MaintenanceTest(unittest.TestCase):
         self.assertEqual(rows[0]['cover']['status'],'missing')
         self.assertFalse((self.root/'.ohmy3do/transactions').exists())
 
+    def test_foreign_preview_import_preserves_cover_and_identity_and_undoes(self):
+        clip=self.put('clips/Example (Japan).mp4',b'synthetic source',self.base)
+        art=self.art(self.base/'Box','Example (Japan).jpg')
+        before=snapshot(self.root)
+        with mock.patch.object(m,'cached_conversion',return_value=('preview-test.3dv',preview())) as convert:
+            rows=self.run_update({'cover':[art],'preview':[clip]},True)
+        self.assertEqual(rows[0]['cover']['status'],'missing')
+        self.assertEqual(rows[0]['preview']['status'],'added')
+        installed=json.loads((self.root/'.ohmy3do/library.json').read_text())['games'][0]
+        for key in self.record:
+            if not key.startswith('preview'):
+                self.assertEqual(installed[key],self.record[key])
+        self.assertTrue(installed['preview'])
+        convert.assert_called_once()
+        # Existing previews survive reruns even if a matching-region source appears later.
+        us=self.put('clips/Example (USA).mp4',b'new source',self.base)
+        with mock.patch.object(m,'cached_conversion',side_effect=AssertionError('Keep existing preview')):
+            rows=self.run_update({'cover':[],'preview':[us,clip]},True)
+        self.assertEqual(rows[0]['preview']['status'],'existing')
+        journal=next((self.root/'.ohmy3do/transactions').glob('*.json'))
+        m.o.Transaction(self.root,path=journal.relative_to(self.root).as_posix()).undo()
+        self.assertEqual(before,snapshot(self.root))
+
     def test_emumovies_chooses_one_video_quality_per_title(self):
         emu=self.base/'EmuMovies/Panasonic_3DO';self.art(emu/'Box')
         for folder in ('Video_MP4','Video_MP4_HI_QUAL','Video_MP4_HD'):

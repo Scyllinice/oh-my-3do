@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc8**; media tools are **0.16.0-rc6**.
+menu version is **0.16.0-rc8**; media tools are **0.16.0-rc9**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -24,8 +24,10 @@ release](https://github.com/Scyllinice/oh-my-3do/releases/latest). Back up the
 existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
-For the current preview-audio menu, game information panel, and maintenance tools, use the
+For the current preview-audio menu and game information panel, use the
 [v0.16.0-rc8 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc8).
+The updated GUI and media tools are in the
+[desktop v0.1.4 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.4).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -425,7 +427,7 @@ covers/previews, download missing covers, and prepare a USB copy. Disc sources
 are preserved. The app runs standalone without Python or Docker.
 
 Portable builds are available in the
-[desktop v0.1.3 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.3).
+[desktop v0.1.4 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.4).
 Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
 Windows x64 and Linux x64 builds are provided; macOS can be built from source
 but has not been packaged here. Preview conversion uses separate native
@@ -466,8 +468,9 @@ folder locations. New discs first need to be organized or registered and
 indexed. The command uses the current database and never hashes game images.
 EmuMovies front covers come from `Box`; videos prefer `Video_MP4_HD`, then
 `Video_MP4_HI_QUAL`, then `Video_MP4`, selecting one quality per title. Exact
-matches are preferred; ambiguous or incompatible regional matches stay
-unselected. `--cover-dir` and `--preview-dir` select other local sources.
+matches are preferred, then compatible regions. When none are available, a
+unique preview of the same game from another region can be used. Covers stay
+region-specific; ambiguous matches stay unselected. `--cover-dir` and `--preview-dir` select other local sources.
 Conversions are cached by source content and settings; imports are undoable
 with the organizer. New previews use 15 fps, a 15-second cap, and source audio.
 
@@ -1012,8 +1015,10 @@ py organize-library.py apply M:/ --plan library-plan.json --accept-name-matches 
 ```
 
 The organizer prefers exact catalog/source names, then a unique normalized
-game-title match. Known region and disc labels must agree. A generic clip
-without a disc label can serve all discs of a game; duplicate clips or uncertain
+game-title match. Matching regions are preferred; if none are available, a
+unique clip from another region can be used. Disc labels and demo/full-game
+labels must still agree. A generic clip without a disc label can serve all
+discs of a game; duplicate clips or uncertain
 matches are reported and skipped. It does not infer the edition of an ISO from
 the clip. Rename or remove duplicate source clips before running a new scan and
 apply if a match needs attention.

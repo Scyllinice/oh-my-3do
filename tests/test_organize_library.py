@@ -617,6 +617,24 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertEqual(source.read_bytes(),b'fake clip')
         tx.undo();self.assertEqual(before,snapshot(self.root))
 
+    def test_preview_foreign_fallback_is_preview_only_and_keeps_disc_checks(self):
+        clips=self.preview_fixture(discs=2)
+        clip=clips/'Example (Japan).mp4';clip.write_bytes(b'fake foreign clip')
+        rows=self.scan()['entries']
+        self.assertFalse(organizer.local_media_matches(rows[0],[clip]))
+        converter=organizer.module('prepare-preview')
+        with mock.patch.object(converter,'convert',side_effect=lambda s,t,**k:t.write_bytes(b'clip')), mock.patch.object(organizer,'module',return_value=converter):
+            prepared,warnings=organizer.prepare_previews(rows,clips)
+        self.assertEqual(len(prepared),1);self.assertFalse(warnings)
+        self.assertTrue(all(r['preview_source']==clip.name for r in rows))
+        row=dict(rows[0],preview=None)
+        us=clips/'Example (USA).mp4'
+        self.assertEqual(organizer.local_media_matches(row,[clip,us],other_regions=True),[us])
+        other=clips/'Example (Europe).mp4'
+        self.assertEqual(len(organizer.local_media_matches(row,[clip,other],other_regions=True)),2)
+        for name in ('Example (Japan) (Demo).mp4','Example (Japan) (Disc 9).mp4','Different (Japan).mp4'):
+            self.assertFalse(organizer.local_media_matches(row,[clips/name],other_regions=True))
+
     def test_preview_ambiguous_region_demo_and_disc_filtering(self):
         clips=self.preview_fixture(discs=2)
         for name in ('Example.mp4','Example.avi','Example (Japan).mp4','Example (Demo).mp4'):

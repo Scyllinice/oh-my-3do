@@ -318,6 +318,17 @@ fn files(root: &Path, extensions: &[&str]) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 pub fn matches(title: &str, source: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    media_matches(title, source, paths, false)
+}
+pub fn preview_matches(title: &str, source: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    media_matches(title, source, paths, true)
+}
+fn media_matches(
+    title: &str,
+    source: &Path,
+    paths: &[PathBuf],
+    other_regions: bool,
+) -> Vec<PathBuf> {
     for name in [
         title.to_owned(),
         source
@@ -346,19 +357,31 @@ pub fn matches(title: &str, source: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
             .map(|c| c[1].to_lowercase())
             .unwrap_or_else(|| "game".into())
     };
-    paths
+    let candidates: Vec<_> = paths
         .iter()
         .filter(|p| {
             let name = p.file_stem().unwrap_or_default().to_string_lossy();
             d::title_key(&name) == d::title_key(title)
                 && kind(&name) == kind(title)
-                && (d::regions(&name).is_empty()
-                    || !d::regions(&name).is_disjoint(&d::regions(title)))
                 && (d::disc_number(&name).is_none()
                     || d::disc_number(&name) == d::disc_number(title))
         })
         .cloned()
-        .collect()
+        .collect();
+    let compatible: Vec<_> = candidates
+        .iter()
+        .filter(|p| {
+            let name = p.file_stem().unwrap_or_default().to_string_lossy();
+            d::regions(&name).is_empty() || !d::regions(&name).is_disjoint(&d::regions(title))
+        })
+        .cloned()
+        .collect();
+    // A regional fallback never resolves ambiguity among compatible clips.
+    if compatible.is_empty() && other_regions {
+        candidates
+    } else {
+        compatible
+    }
 }
 fn read_sources(prefs: &Preferences, kind: &str) -> Result<Vec<PathBuf>> {
     if prefs.emumovies.is_empty() {
@@ -481,7 +504,12 @@ pub fn prepare_missing(
         let source = if let Some(p) = provided {
             Some((p.clone(), p.to_string_lossy().into_owned()))
         } else {
-            let candidates = matches(&entry.title, &entry.source, &sources(prefs, kind, job)?);
+            let paths = sources(prefs, kind, job)?;
+            let candidates = if kind == "preview" {
+                preview_matches(&entry.title, &entry.source, &paths)
+            } else {
+                matches(&entry.title, &entry.source, &paths)
+            };
             if candidates.len() == 1 {
                 Some((
                     candidates[0].clone(),

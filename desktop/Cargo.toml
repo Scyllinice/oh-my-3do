@@ -1,6 +1,6 @@
 [package]
 name = "oh-my-3do-library"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT"
 rust-version = "1.88"

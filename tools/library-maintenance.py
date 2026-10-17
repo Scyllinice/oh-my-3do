@@ -139,7 +139,7 @@ def media_plan(root, sources):
                 item[kind] = {'status': 'existing', 'file': name,
                               'repair_index': maps[kind].get(FOLD(record['path'])) != name}
                 continue
-            candidates = o.local_media_matches(row, sources[kind]) if sources[kind] else []
+            candidates = o.local_media_matches(row, sources[kind], other_regions=kind == 'preview') if sources[kind] else []
             item[kind] = {'status': 'matched' if len(candidates) == 1 else 'ambiguous' if candidates else 'missing',
                           'candidates': [str(p) for p in candidates]}
         rows.append(item)

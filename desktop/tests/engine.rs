@@ -438,6 +438,50 @@ fn media_matching_does_not_cross_regions_or_demo_types() {
     );
 }
 #[test]
+fn preview_matching_prefers_region_before_unique_fallback() {
+    let source = Path::new("Gex (USA, Europe).iso");
+    let jp = PathBuf::from("Gex (Japan, Korea).mp4");
+    let us = PathBuf::from("Gex (USA).mp4");
+    let exact = PathBuf::from("Gex (USA, Europe).mp4");
+    let title = "Gex (USA, Europe)";
+    assert_eq!(
+        media::preview_matches(title, source, &[jp.clone()]),
+        vec![jp.clone()]
+    );
+    assert!(media::matches(title, source, &[jp.clone()]).is_empty());
+    assert_eq!(
+        media::preview_matches(title, source, &[jp.clone(), us.clone()]),
+        vec![us.clone()]
+    );
+    assert_eq!(
+        media::preview_matches(title, source, &[jp.clone(), us, exact.clone()]),
+        vec![exact]
+    );
+    // Multiple foreign clips remain ambiguous; demo and wrong-disc clips never qualify.
+    let candidates = vec![jp.clone(), PathBuf::from("Gex (Japan).avi")];
+    assert_eq!(media::preview_matches(title, source, &candidates).len(), 2);
+    for bad in [
+        "Gex (Japan) (Demo).mp4",
+        "Gex (Japan) (Disc 2).mp4",
+        "Other (Japan).mp4",
+    ] {
+        assert!(media::preview_matches(title, source, &[PathBuf::from(bad)]).is_empty());
+    }
+    let disc = PathBuf::from("D (Japan) (Disc 1).mp4");
+    assert_eq!(
+        media::preview_matches("D (USA) (Disc 1)", Path::new("D.iso"), &[disc.clone()]),
+        vec![disc]
+    );
+    // Ambiguous compatible files must not be replaced with a foreign fallback.
+    let candidates = vec![
+        PathBuf::from("Gex (USA).mp4"),
+        PathBuf::from("Gex (USA).avi"),
+        jp,
+    ];
+    let selected = media::preview_matches(title, source, &candidates);
+    assert_eq!(selected, candidates[..2]);
+}
+#[test]
 fn usb_preview_excludes_databases_reports_recovery_and_unindexed_art() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("library");
@@ -587,8 +631,7 @@ fn cancellation_mid_import_restores_all_already_copied_files() {
     .is_err());
     assert!(snapshot(&root).is_empty());
 }
-#[test]
-fn corrupt_preview_checksum_or_frame_data_is_rejected() {
+fn synthetic_preview() -> Vec<u8> {
     use std::io::Write;
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
     z.write_all(&vec![0; 10240]).unwrap();
@@ -609,6 +652,11 @@ fn corrupt_preview_checksum_or_frame_data_is_rejected() {
     }
     data.extend(video);
     data.extend_from_slice(b"END3DV02");
+    data
+}
+#[test]
+fn corrupt_preview_checksum_or_frame_data_is_rejected() {
+    let mut data = synthetic_preview();
     let t = tempfile::tempdir().unwrap();
     let path = put(t.path(), "clip.3dv", &data);
     media::validate(&path).unwrap();
@@ -727,4 +775,77 @@ fn native_library_lock_prevents_overlapping_writers() {
     assert!(library::lock_library(&root, &cache).is_err());
     drop(lock);
     assert!(library::lock_library(&root, &cache).is_ok());
+}
+
+#[test]
+fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existing() {
+    use sha2::Sha256;
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("library");
+    fs::create_dir(&root).unwrap();
+    put(&root, "Gex.iso", b"fictional");
+    put(
+        &root,
+        ".ohmy3do/ohmy3do.ini",
+        include_bytes!("../../ohmy3do.ini"),
+    );
+    let record = json!({"path":"Gex.iso","title":"Gex (USA, Europe)","region":"USA","category":"Games","metadata":{"developer":"Café"},"identification":"checksum","cover":null,"preview":null});
+    put(
+        &root,
+        ".ohmy3do/library.json",
+        &serde_json::to_vec(&json!({"schema":1,"sources":[],"games":[record]})).unwrap(),
+    );
+    let emu = t.path().join("EmuMovies");
+    let source = put(
+        &emu,
+        "Video_MP4_HI_QUAL/Gex (Japan, Korea).mp4",
+        b"higher quality source",
+    );
+    put(
+        &emu,
+        "Video_MP4/Gex (Japan, Korea).mp4",
+        b"lower quality source",
+    );
+    put(
+        &emu,
+        "Box/Gex (Japan, Korea).jpg",
+        b"must not import foreign cover",
+    );
+    let cache = t.path().join("cache");
+    // Seed a validated conversion so the integration test needs no FFmpeg.
+    let hash = f::sha256(&source, &Job::default()).unwrap();
+    let key = format!(
+        "{:x}",
+        Sha256::digest(format!("{hash}:preview:native-v1-15fps-cap15").as_bytes())
+    );
+    put(
+        &cache,
+        &format!("converted-native/{key}.3dv"),
+        &synthetic_preview(),
+    );
+    let prefs = Preferences {
+        emumovies: emu.to_string_lossy().into_owned(),
+        offline: true,
+        ..Default::default()
+    };
+    let before = snapshot(&root);
+    let journal = library::update_media(&root, &prefs, &cache, None, &Job::default()).unwrap();
+    let db = library::database(&root).unwrap();
+    assert!(db["games"][0]["preview"].is_string());
+    assert_eq!(
+        Path::new(db["games"][0]["preview_source"].as_str().unwrap()),
+        source.as_path()
+    );
+    assert!(db["games"][0]["cover"].is_null());
+    assert_eq!(db["games"][0]["metadata"], record["metadata"]);
+    assert_eq!(db["games"][0]["identification"], record["identification"]);
+    put(
+        &emu,
+        "Video_MP4_HD/Gex (USA, Europe).mp4",
+        b"new source must not replace preview",
+    );
+    library::update_media(&root, &prefs, &cache, None, &Job::default()).unwrap();
+    assert_eq!(library::database(&root).unwrap()["games"], db["games"]);
+    library::undo(&journal).unwrap();
+    assert_eq!(snapshot(&root), before);
 }

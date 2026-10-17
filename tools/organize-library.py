@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.16.0-rc6'
+SCANNER_VERSION = '0.16.0-rc9'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di', 'metadata.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -1012,8 +1012,8 @@ def local_media_files(directory, extensions):
     return paths
 
 
-def local_media_matches(row, paths):
-    """Prefer exact names; only fall back to compatible, normalized titles."""
+def local_media_matches(row, paths, *, other_regions=False):
+    """Prefer exact/compatible names; previews may fall back across regions."""
     def kind(name):
         match = re.search(r'\b(demo|demonstration|trial|sampler)\b', name, re.I)
         return match[1].casefold() if match else 'game'
@@ -1022,11 +1022,13 @@ def local_media_matches(row, paths):
         if exact:
             return exact
     # Demo/sampler media must not become full-game art via title_key.
-    return [p for p in paths
+    candidates = [p for p in paths
         if identification_title(p.stem) == identification_title(row['canonical'])
         and kind(p.stem) == kind(row['canonical'])
-        and (not region_of(p.stem) or bool(region_of(p.stem) & region_of(row['canonical'])))
         and (disc_of(p.stem) is None or disc_of(p.stem) == row.get('disc'))]
+    compatible = [p for p in candidates
+        if not region_of(p.stem) or bool(region_of(p.stem) & region_of(row['canonical']))]
+    return candidates if other_regions and not compatible else compatible
 
 
 def prepare_local_covers(rows, directory):
@@ -1071,7 +1073,7 @@ def prepare_previews(rows, directory, start=0, duration=None, sound=True, replac
     for row in rows:
         if row.get('preview') and not replace:
             continue
-        candidates = local_media_matches(row, clips)
+        candidates = local_media_matches(row, clips, other_regions=True)
         if len(candidates) != 1:
             warnings.append(f'{"Ambiguous" if candidates else "No"} preview found: {row["canonical"]}')
             continue
