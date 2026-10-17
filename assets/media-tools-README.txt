@@ -1,4 +1,4 @@
-Oh My 3DO media tools (scanner v0.16.0-rc10)
+Oh My 3DO media tools (scanner v0.16.0-rc12)
 
 Indexing existing PNG covers needs Python 3 only. Resizing/conversion needs
 Python 3.9+ and Pillow. Video conversion also needs FFmpeg on PATH.
@@ -182,7 +182,7 @@ with undo support and updates CUE-based favorites and media links to the ISO.
 BIN/CUE, audio/multiple tracks, gaps, extra indexes, unknown directives and
 broken/shared sets remain intact. Separate ISO copies are not merged.
 Existing artwork links are preserved; downloaded covers are native
-96x120 PNGs. Favorites, recent games, saved selection and media/search indices
+96x120 RGB555 .3dc files (menu v0.16.0-rc12+). Favorites, recent games, saved selection and media/search indices
 are updated. boot.iso, settings, NVRAM backups and music stay in place.
 Menu-written text is read up to its first NUL terminator, ignoring stale tails.
 Invalid saved positions reset to the USB root with a warning; undo restores
@@ -203,7 +203,7 @@ To import EmuMovies covers instead of downloading covers, add:
 Replace the placeholder with the actual front-box image folder. Avoid a parent
 folder containing back covers, screenshots and logos. Subfolders are included.
 Install Pillow: py -m pip install Pillow
-PNG/JPEG/WebP/BMP/GIF/TIFF images are converted to native 96x120 RGB PNGs and
+PNG/JPEG/WebP/BMP/GIF/TIFF images are converted to native 96x120 RGB555 .3dc covers and
 indexed automatically. Exact names are preferred, then unique title matches
 with compatible region/disc labels. A generic cover can serve all discs.
 Ambiguous, missing and unreadable images are skipped. Existing USB covers and
@@ -302,7 +302,7 @@ Convert a local clip; the output is a 160x120 RAM-playable animation:
 
 New conversions have a 15-second overall cap at 15 fps with source audio.
 Shorter sources stay shorter. Complex footage may be trimmed further to fit the
-1 MiB video/audio RAM budget; frame rate is never lowered automatically.
+512 KiB video/audio RAM budget; frame rate is never lowered automatically.
 --duration can request less than 15 seconds. Older requests for longer clips are
 capped at 15, including "full". Conversion reports actual duration and RAM size.
 Install menu v0.16.0-rc10+ before using new 160x120 previews. Existing
@@ -446,3 +446,13 @@ entire matching destination library and can take a long time. Non-disc runtime
 files are compared by content. The tool does not remove old games or stale
 files from the USB drive. Reports, conversion cache and update backups must
 stay outside both roots.
+
+FAST PREPARED COVERS
+
+Library imports and media updates prepare compressed native .3dc covers.
+Install menu v0.16.0-rc12 or newer before applying these files. Resolution
+stays 96x120; the console skips PNG filtering and color conversion. The
+standalone resize-covers.py command still produces PNGs, which remain supported.
+Preview conversion now caps payloads at 512 KiB, retaining 160x120 at 15 fps.
+The menu caches video in 4 KiB blocks and shortens older larger clips as needed.
+Playback remains entirely in RAM; sound-off skips allocating audio.

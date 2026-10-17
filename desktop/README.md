@@ -64,15 +64,15 @@ game artwork and footage are not included in the app download.
 
 **Update missing media** preserves existing associations. **Rebuild media quality**
 reconverts recorded original images and videos for the larger console panel.
-Install menu v0.16.0-rc10+ first. Missing originals are skipped, prior media files
+Install menu v0.16.0-rc12+ first. Missing originals are skipped, prior media files
 are retained, and the changes can be undone. **Apply supplied
 media** deliberately replaces the association for the selected entry while
 retaining the former media file. **Artwork review page** produces a searchable
 HTML contact sheet. Library identity and registration fields are preserved.
 
-Covers are 96×120 PNGs. Previews are 160×120 at 15 fps, capped at 15 seconds, with mono
+Covers are compressed native 96×120 RGB555 files. Previews are 160×120 at 15 fps, capped at 15 seconds, with mono
 source audio when present; complex clips shorten further to fit the menu's
-1 MiB RAM payload budget. New previews require the v0.16.0-rc10 or newer menu. Enable video previews in the
+512 KiB RAM payload budget. New previews require the v0.16.0-rc10 or newer menu. Enable video previews in the
 console configuration; existing console settings are preserved.
 
 Imports and **Rebuild Find index** also create `.ohmy3do/metadata.3di` from the
@@ -145,3 +145,8 @@ Packaging is performed locally with `tools/package-desktop.py` (Python is used
 only by this build-time packaging script). Dependency license texts and a
 manifest are included with each portable download. GitHub Actions stays
 disabled.
+
+Prepared covers use compressed native 96×120 RGB555 `.3dc` files, requiring
+menu v0.16.0-rc12 or newer. Install the new menu before rebuilding media.
+Raw PNG covers remain supported. Smaller preview caches preserve 160×120 at
+15 fps and shorten busy clips to fit; playback stays entirely in RAM.

@@ -511,8 +511,8 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
             tx=organizer.apply_plan(self.root,self.scan(),self.cache,cover_dir=images,offline=True)
         index=organizer.index_tools.existing_index(self.root/'covers')
         self.assertEqual(len(index),2);self.assertEqual(len(set(index.values())),1)
-        with Image.open(self.root/'covers'/next(iter(index.values()))) as image:
-            self.assertEqual(image.size,(96,120));self.assertEqual(image.mode,'RGB');self.assertEqual(image.format,'PNG')
+        with organizer.module('resize-covers').read_cover(self.root/'covers'/next(iter(index.values()))) as image:
+            self.assertEqual(image.size,(96,120));self.assertEqual(image.mode,'RGB')
         records=json.loads((self.root/'.ohmy3do/library.json').read_text())['games']
         self.assertTrue(all(r['cover_source']=='Box - Front/Example (USA).jpg' for r in records))
         self.assertEqual(original.read_bytes(),original_bytes)
@@ -1353,9 +1353,9 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         (self.cache/'cover-list.html').write_text('<a href="Example%20%28USA%29.png">Example</a>')
         before=snapshot(self.root)
         tx=organizer.apply_plan(self.root,plan,self.cache,covers=True,offline=True)
-        covers=list((self.root/'covers').glob('*.png'))
+        covers=list((self.root/'covers').glob('*.3dc'))
         self.assertEqual(len(covers),1)
-        with Image.open(covers[0]) as im:self.assertEqual(im.size,(96,120));self.assertEqual(im.mode,'RGB')
+        with organizer.module('resize-covers').read_cover(covers[0]) as im:self.assertEqual(im.size,(96,120));self.assertEqual(im.mode,'RGB')
         tx.undo();self.assertEqual(before,snapshot(self.root))
 
     def test_different_disc_cover_scans_do_not_overwrite_each_other(self):

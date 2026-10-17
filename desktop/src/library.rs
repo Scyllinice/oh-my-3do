@@ -1610,12 +1610,12 @@ pub fn review(root: &Path, cache: &Path) -> Result<PathBuf> {
         let mut thumbnail = String::from("Missing cover");
         if let Some(name) = image {
             let file = f::safe(root, &format!(".ohmy3do/covers/{name}"))?;
-            if file.extension().is_some_and(|s| s == "png")
-                && fs::metadata(&file)?.len() < 512 * 1024
-            {
+            if fs::metadata(&file)?.len() < 512 * 1024 {
+                let mut png = std::io::Cursor::new(Vec::new());
+                media::cover_display(&file)?.write_to(&mut png, image::ImageFormat::Png)?;
                 thumbnail = format!(
                     "<img alt=\"Cover\" src=\"data:image/png;base64,{}\">",
-                    base64::engine::general_purpose::STANDARD.encode(fs::read(file)?)
+                    base64::engine::general_purpose::STANDARD.encode(png.get_ref())
                 );
             }
         }

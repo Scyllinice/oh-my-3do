@@ -163,11 +163,11 @@ class MaintenanceTest(unittest.TestCase):
         real=m.o.module
         def module(name):
             result=real(name)
-            if name=='resize-covers':result.convert=mock.Mock(side_effect=AssertionError('Cache must be used'))
+            if name=='resize-covers':result.fast_convert=mock.Mock(side_effect=AssertionError('Cache must be used'))
             return result
         with mock.patch.object(m.o,'module',side_effect=module):
             self.assertEqual(first,m.cached_conversion('cover',source,self.cache))
-        next(self.cache.glob('*.png')).write_bytes(b'broken')
+        next(self.cache.glob('*.3dc')).write_bytes(b'broken')
         self.assertEqual(first,m.cached_conversion('cover',source,self.cache))
 
     def test_database_failure_rolls_back_new_media_and_index(self):

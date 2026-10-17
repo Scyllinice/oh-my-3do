@@ -24,7 +24,7 @@ _spec = importlib.util.spec_from_file_location('organizer', Path(__file__).with_
 o = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(o)
 FOLD = o.index_tools.fold
-KINDS = {'cover': ('covers', '.png'), 'preview': ('previews', '.3dv')}
+KINDS = {'cover': ('covers', '.3dc'), 'preview': ('previews', '.3dv')}
 PERSONAL = {'ohmy3do.ini', 'favorites.txt', 'recent.txt', 'last-position.txt'}
 
 
@@ -148,7 +148,7 @@ def media_plan(root, sources):
 
 def cached_conversion(kind, source, cache):
     before = source.stat()
-    policy = 'cover-96x120-v2' if kind == 'cover' else 'preview-v2-160x120-15fps-15sec-sound-v2'
+    policy = 'cover-fast96x120-v3' if kind == 'cover' else 'preview-v2-160x120-512k-v3'
     converter_file = Path(__file__).with_name('resize-covers.py' if kind == 'cover' else 'prepare-preview.py')
     key = hashlib.sha256((sha256(source) + policy + sha256(converter_file)).encode()).hexdigest()
     target = cache / (key + KINDS[kind][1])
@@ -162,7 +162,7 @@ def cached_conversion(kind, source, cache):
     if not valid:
         cache.mkdir(parents=True, exist_ok=True)
         if kind == 'cover':
-            o.module('resize-covers').convert(source, target)
+            o.module('resize-covers').fast_convert(source, target)
         else:
             o.module('prepare-preview').convert(source, target, duration=15, fps=15, sound=True)
         o.atomic_write(receipt, o.json_bytes({'sha256': sha256(target)}))
@@ -194,10 +194,10 @@ def review_page(root, rows):
                     image = checked_path(root, '.ohmy3do/' + folder + '/' + item['file'])
                 elif status == 'matched':
                     image = Path(source)
-                if image and image.suffix.lower() != '.3dc':
+                if image:
                     try:
                         from PIL import Image, ImageOps
-                        with Image.open(image) as art:
+                        with o.module('resize-covers').read_cover(image) as art:
                             thumb = ImageOps.exif_transpose(art).convert('RGB')
                             thumb.thumbnail((168, 210), Image.Resampling.LANCZOS)
                             stream = io.BytesIO(); thumb.save(stream, format='PNG')
@@ -325,6 +325,13 @@ def validate_media(path):
         raw = inflate_exact(bytes(compressed), stride*h)
         if any(raw[i] > 4 for i in range(0,len(raw),stride)):
             raise ValueError('Invalid PNG filter')
+        return
+    if data[:8] == b'OM3DCOV2':
+        if len(data)<32:raise ValueError('Truncated native cover')
+        w,h,n,crc,decoded=struct.unpack_from('>HHIII',data,8)
+        if (w,h)!=(96,120) or not 0<n<=32768 or decoded!=23040 or len(data)!=n+32 or data[-8:]!=b'END3DC02' or binascii.crc32(data[24:-8])!=crc:
+            raise ValueError('Invalid native cover')
+        inflate_exact(data[24:-8],23040)
         return
     if len(data) < 24:
         raise ValueError('Truncated media')

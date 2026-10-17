@@ -11,7 +11,7 @@ Features include disc queues, automatic multi-disc grouping, favorites, letter
 navigation, saved settings, PNG covers, video previews, and NVRAM backup and
 restore. Previews can include game audio. PC tools can identify and organize a USB
 library, download covers, and build a game information database. The current
-menu version is **0.16.0-rc11**; media tools are **0.16.0-rc10**.
+menu version is **0.16.0-rc12**; media tools are **0.16.0-rc12**.
 
 ![Browser layout preview](docs/images/browser.png)
 
@@ -25,9 +25,9 @@ existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
 For the current preview-audio menu and game information panel, use the
-[v0.16.0-rc11 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc11).
+[v0.16.0-rc12 prerelease](https://github.com/Scyllinice/oh-my-3do/releases/tag/v0.16.0-rc12).
 The updated GUI and media tools are in the
-[desktop v0.1.5 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.5).
+[desktop v0.1.6 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.6).
 
 Keep existing settings when upgrading. Version 0.15.0 supports both the legacy
 root layout and the consolidated `.ohmy3do/` layout described below. Favorites,
@@ -427,7 +427,7 @@ covers/previews, download missing covers, and prepare a USB copy. Disc sources
 are preserved. The app runs standalone without Python or Docker.
 
 Portable builds are available in the
-[desktop v0.1.5 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.5).
+[desktop v0.1.6 preview release](https://github.com/Scyllinice/oh-my-3do/releases/tag/desktop-v0.1.6).
 Extract the download, launch `OhMy3DOLibrary`, and choose the staging library.
 Windows x64 and Linux x64 builds are provided; macOS can be built from source
 but has not been packaged here. Preview conversion uses separate native
@@ -859,6 +859,12 @@ covers to 64×80 and then stretched them; native PNG covers now retain all 96×1
 pixels. Smaller PNGs and legacy 64×80 converted covers use smooth enlargement.
 For sharper detail, prepare covers again from the original artwork, since an
 already reduced image cannot recover discarded detail.
+The desktop app and library organizer now prepare compressed native `.3dc`
+covers automatically. These keep the same 96×120 RGB555 display pixels while
+skipping PNG filters, scaling and per-pixel conversion on the console.
+**Prepared covers require menu v0.16.0-rc12 or newer.** Install the new `boot.iso`
+before rebuilding media. Raw PNGs and older covers remain supported.
+
 RGB, RGBA, grayscale, indexed, 1/2/4/8/16-bit and interlaced PNGs
 are supported where valid for their color type. JPEGs still need conversion.
 
@@ -970,7 +976,7 @@ Older 64×80 silent and compressed previews remain supported.
 
 New previews are capped at **15 seconds at 15 fps**, including source audio.
 Shorter sources stay shorter. Complex footage is shortened further when needed
-to fit the **1 MiB combined video/audio payload**; frame rate is never reduced
+to fit the **512 KiB combined video/audio payload**; frame rate is never reduced
 automatically. `--duration` can request a shorter clip, and older commands asking
 for more than 15 seconds are capped automatically. Conversion decodes the source
 once and reports the actual duration, frame rate and RAM size.
@@ -1062,8 +1068,11 @@ Downloaded footage is not included in this repository or its releases.
 
 Covers start loading after 350 ms without a selection change; previews wait 1.2
 seconds. A whole clip is loaded into RAM before playback, so looping
-needs no USB reads. The new payload cap is 1 MiB, plus a frame buffer and decoder
-state. Longer clips may take longer to load and can be cancelled. During loading,
+needs no USB reads. The cache uses 4 KiB video blocks with a 512 KiB combined
+video/audio limit, plus a frame buffer and decoder state. Older clips are cached
+as a shorter loop when needed; the complete source CRC is still checked. The
+cache shrinks further when free DRAM is low. Turning preview sound off also
+skips allocating PCM. Longer clips may take longer to load and can be cancelled. During loading,
 a D-pad or face-button press cancels; L+R cancels and opens Tools. A single
 shoulder leaves time to complete L+R. Any button stops active playback. Selecting another game
 releases the clip; a stopped clip waits for a new selection before retrying.

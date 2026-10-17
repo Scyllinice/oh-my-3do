@@ -62,6 +62,27 @@ with tempfile.TemporaryDirectory(prefix='oh3do-resize-') as temporary:
         assert image.getpixel((48, 0))[2] > 240
     with Image.open(output/'Still.png') as image:
         assert image.getpixel((48, 60)) == (255,0,255)
+    # Prepared RGB555 covers must render exactly like the PNG console path.
+    import binascii, zlib
+    for name in ('Wide','Alpha','Rotate','Photo','Still'):
+        png=output/(name+'.png');fast=output/(name+'.3dc')
+        resize.fast_convert(png,fast)
+        with Image.open(png) as image:
+            raw=b''.join(struct.pack('>H',((r>>3)<<10)|((g>>3)<<5)|(b>>3)) for r,g,b in image.convert('RGB').getdata())
+        expected=root/'expected.rgb555';expected.write_bytes(raw)
+        subprocess.run([str(ROOT/'build/test_usb_media'),'fastcover',str(fast),str(expected)],check=True)
+        assert resize.read_cover(fast).size==(96,120)
+        valid=fast.read_bytes()
+        for pos in (8,12,16,20,24,len(valid)-1):
+            bad=bytearray(valid);bad[pos]^=1;fast.write_bytes(bad)
+            subprocess.run([str(ROOT/'build/test_usb_media'),'badfastcover',str(fast)],check=True)
+        fast.write_bytes(valid)
+    # The new format also participates in basename associations.
+    fastusb=root/'fast-usb';(fastusb/'covers').mkdir(parents=True)
+    (fastusb/'Game.iso').write_bytes(b'synthetic disc')
+    resize.fast_convert(output/'Wide.png',fastusb/'covers/Game.3dc')
+    subprocess.run(['python3',str(ROOT/'tools/index-media.py'),str(fastusb)],check=True)
+    subprocess.run([str(ROOT/'build/test_usb_media'),'index',str(fastusb/'covers/index.3di'),'Game.3dc'],check=True)
     # Indexing reports oversized PNGs without rewriting artwork.
     index_spec=importlib.util.spec_from_file_location('index_media',ROOT/'tools/index-media.py')
     indexer=importlib.util.module_from_spec(index_spec); index_spec.loader.exec_module(indexer)

@@ -105,7 +105,7 @@ pub fn video_exes(prefs: &Preferences) -> Result<(PathBuf, PathBuf)> {
     }
     bail!("Video tools are missing. Use Get video tools or choose their folder under Tools & settings.")
 }
-pub fn cover(source: &Path, target: &Path) -> Result<()> {
+fn cover_image(source: &Path) -> Result<image::RgbImage> {
     if fs::metadata(source)?.len() > 32 * 1024 * 1024 {
         bail!("Oversized cover input")
     }
@@ -149,9 +149,67 @@ pub fn cover(source: &Path, target: &Path) -> Result<()> {
         });
         canvas.put_pixel(left + x, top + y, image::Rgb(rgb));
     }
+    Ok(canvas)
+}
+pub fn cover(source: &Path, target: &Path) -> Result<()> {
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgb8(canvas).write_to(&mut bytes, image::ImageFormat::Png)?;
+    image::DynamicImage::ImageRgb8(cover_image(source)?)
+        .write_to(&mut bytes, image::ImageFormat::Png)?;
     f::atomic(target, bytes.get_ref())
+}
+pub fn fast_cover(source: &Path, target: &Path) -> Result<()> {
+    let canvas = cover_image(source)?;
+    let mut raw = Vec::with_capacity(23040);
+    for p in canvas.pixels() {
+        let pixel = ((p[0] as u16 >> 3) << 10) | ((p[1] as u16 >> 3) << 5) | (p[2] as u16 >> 3);
+        raw.extend_from_slice(&pixel.to_be_bytes());
+    }
+    let mut z = ZlibEncoder::new(Vec::new(), Compression::best());
+    z.write_all(&raw)?;
+    let payload = z.finish()?;
+    let mut bytes = b"OM3DCOV2".to_vec();
+    bytes.extend_from_slice(&96u16.to_be_bytes());
+    bytes.extend_from_slice(&120u16.to_be_bytes());
+    bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&crc32fast::hash(&payload).to_be_bytes());
+    bytes.extend_from_slice(&23040u32.to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    bytes.extend_from_slice(b"END3DC02");
+    f::atomic(target, &bytes)
+}
+pub fn cover_display(path: &Path) -> Result<image::DynamicImage> {
+    if !path
+        .extension()
+        .is_some_and(|s| s.eq_ignore_ascii_case("3dc"))
+    {
+        let mut reader = image::ImageReader::open(path)?.with_guessed_format()?;
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(64 * 1024 * 1024);
+        reader.limits(limits);
+        return Ok(reader.decode()?);
+    }
+    validate(path)?;
+    let data = fs::read(path)?;
+    let width = u16::from_be_bytes(data[8..10].try_into()?);
+    let height = u16::from_be_bytes(data[10..12].try_into()?);
+    let raw = if data.starts_with(b"OM3DCOV2") {
+        let mut z = flate2::read::ZlibDecoder::new(&data[24..data.len() - 8]);
+        let mut raw = Vec::new();
+        z.read_to_end(&mut raw)?;
+        raw
+    } else {
+        data[24..].to_vec()
+    };
+    let mut image = image::RgbImage::new(width as u32, height as u32);
+    for (p, bytes) in image.pixels_mut().zip(raw.chunks_exact(2)) {
+        let value = u16::from_be_bytes([bytes[0], bytes[1]]);
+        *p = image::Rgb([
+            (((value >> 10) & 31) * 255 / 31) as u8,
+            (((value >> 5) & 31) * 255 / 31) as u8,
+            ((value & 31) * 255 / 31) as u8,
+        ]);
+    }
+    Ok(image::DynamicImage::ImageRgb8(image))
 }
 pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> Result<()> {
     let (ffmpeg, ffprobe) = video_exes(prefs)?;
@@ -210,7 +268,7 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
         } else {
             0
         };
-        if (count + 1) * 4 + compressed + block.len() + audio > 1024 * 1024 {
+        if (count + 1) * 4 + compressed + block.len() + audio > 512 * 1024 {
             break;
         }
         compressed += block.len();
@@ -577,17 +635,17 @@ pub fn prepare_missing(
                     "{:x}",
                     Sha256::digest(
                         format!(
-                            "{}:{kind}:native-v2-160x120-cover96x120-cap15",
+                            "{}:{kind}:native-v3-160x120-fast96-cap15-512k",
                             f::sha256(&source, job)?
                         )
                         .as_bytes()
                     )
                 );
-                let ext = if kind == "cover" { "png" } else { "3dv" };
+                let ext = if kind == "cover" { "3dc" } else { "3dv" };
                 let target = cache.join("converted-native").join(format!("{key}.{ext}"));
                 if !target.exists() {
                     if kind == "cover" {
-                        cover(&source, &target)?
+                        fast_cover(&source, &target)?
                     } else {
                         preview(&source, &target, prefs, job)?
                     }
@@ -676,6 +734,20 @@ pub fn validate(path: &Path) -> Result<()> {
     };
     let width = u16::from_be_bytes(data[8..10].try_into()?) as usize;
     let height = u16::from_be_bytes(data[10..12].try_into()?) as usize;
+    if data.starts_with(b"OM3DCOV2") {
+        let bytes = be(&data, 12)? as usize;
+        if (width, height) != (96, 120)
+            || bytes == 0
+            || bytes > 32768
+            || data.len() != 32 + bytes
+            || be(&data, 20)? != 23040
+            || &data[24 + bytes..] != b"END3DC02"
+            || crc32fast::hash(&data[24..24 + bytes]) != be(&data, 16)?
+        {
+            bail!("Invalid prepared cover")
+        }
+        return inflate(&data[24..24 + bytes], 23040);
+    }
     if (width, height) != (64, 80)
         && !(data.starts_with(b"OM3DVID2") && (width, height) == (160, 120))
     {

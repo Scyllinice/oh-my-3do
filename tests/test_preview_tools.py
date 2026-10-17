@@ -41,6 +41,20 @@ class PreviewToolsTest(unittest.TestCase):
                 path=root/'clip.3dv';path.write_bytes(container(frames,fps,sound))
                 self.run_loader('video2' if frames==2 else 'video2large',path,expected)
 
+    def test_fragmented_cache_truncates_old_clips_checks_tail_and_disables_sound(self):
+        raw=bytes((i*73+i//17)&255 for i in range(160*120*2))
+        # A frame crosses the 4 KiB cache boundary; the source exceeds 512 KiB.
+        block=zlib.compress(raw,0);frames=24;fps=15
+        table=[(frames+1)*4+i*len(block) for i in range(frames+1)]
+        video=b''.join(struct.pack('>I',n) for n in table)+block*frames
+        pcm=bytes(((frames*11025+fps-1)//fps+3)&~3)
+        payload=video+pcm
+        data=b'OM3DVID2'+struct.pack('>HHIIHHIIII',160,120,len(payload),binascii.crc32(payload),frames,fps,len(video),len(pcm),11025,len(pcm))+payload+b'END3DV02'
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'clip.3dv';path.write_bytes(data)
+            for binary in ('test_usb_media','test_usb_media_sdk'):
+                subprocess.run([str(ROOT/'build'/binary),'budgetvideo2',str(path)],check=True)
+
     def test_landscape_resolution_and_wrong_frame_sizes(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);path=root/'landscape.3dv';expected=root/'red.rgb555'

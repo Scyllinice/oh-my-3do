@@ -254,12 +254,12 @@ def index(root):
         previous=existing_index(directory)
         assets = {}
         for path in directory.iterdir():
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() != suffix:
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in (('.png','.3dc') if folder=='covers' else (suffix,)):
                 continue
             name = path.name
             if len(name.encode()) > 96 or name.startswith(".") or any(ord(c) < 32 or ord(c) == 127 or c in "\\:|" for c in name):
                 raise ValueError(f"Unsupported media basename: {name}")
-            if suffix == '.png':
+            if path.suffix.lower() == '.png':
                 with path.open('rb') as stream:
                     header = stream.read(24)
                 if len(header) == 24 and header[:8] == b'\x89PNG\r\n\x1a\n' and header[12:16] == b'IHDR':
@@ -269,7 +269,7 @@ def index(root):
             key = fold(path.stem)
             if key in assets:
                 raise ValueError(f"Media filenames collide: {name}")
-            if suffix == ".png" and path.stat().st_size > 512*1024:
+            if path.suffix.lower() == ".png" and path.stat().st_size > 512*1024:
                 raise ValueError(f"PNG exceeds 512 KiB: {name}")
             assets[key] = name
         rows = []

@@ -156,8 +156,10 @@ static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, 
     }
     return 0;
 }
-static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context) {
-    int result=preview_video_load(ode,reader,file,preview,cancel,context);
+static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound) {
+    int result;
+    (void)sound;
+    result=preview_video_load(ode,reader,file,preview,cancel,context);
     if (phase) { phase(phase_context,1); phase(phase_context,2); }
     return result;
 }
@@ -175,15 +177,15 @@ static CCB *CreateCel(int w, int h, int bpp, int flags, void *data) {
     static unsigned char pixels[USB_PREVIEW_FRAME_BYTES];
     (void)flags; (void)data;
     if (bpp==4) {
-        static CCB fonts[128];
-        static unsigned char bitmaps[128][UI_FONT_STRIDE*UI_FONT_HEIGHT];
-        static unsigned short palettes[128][32];
-        static int count;
-        CCB *cel;
-        if (count>=128) abort();
-        cel=&fonts[count]; cel->tag=3; cel->ccb_SourcePtr=bitmaps[count];
-        cel->ccb_PLUTPtr=palettes[count++]; cel->ccb_HDX=1<<20; cel->ccb_VDY=1<<16;
-        cel->ccb_Width=w; cel->ccb_Height=h; return cel;
+        int stride=w/2;
+        CCB *cel=(CCB *)calloc(1,sizeof(CCB));
+        if (stride<8) stride=8;
+        if (!cel) abort();
+        cel->tag=3;cel->ccb_SourcePtr=calloc((size_t)stride,h);cel->ccb_PLUTPtr=calloc(32,2);
+        if (!cel->ccb_SourcePtr || !cel->ccb_PLUTPtr) abort();
+        cel->ccb_PRE1=(unsigned long)(stride/4-2)<<24;
+        cel->ccb_HDX=1<<20;cel->ccb_VDY=1<<16;
+        cel->ccb_Width=w;cel->ccb_Height=h;return cel;
     }
     preview_loaded.ccb_SourcePtr=data ? data : pixels; preview_loaded.ccb_Width=w; preview_loaded.ccb_Height=h;
     ++preview_cel_calls;
@@ -193,7 +195,7 @@ static int ode_bus_read_buffer(void *context, unsigned char *data, size_t size) 
     (void)context; (void)data; (void)size; return -1;
 }
 static long GetMSecTime(Item item) { (void)item; return (long)preview_now; }
-static void UnloadCel(CCB *cel) { (void)cel; ++preview_unloads; }
+static void UnloadCel(CCB *cel) { if(cel->tag==3) {free(cel->ccb_SourcePtr);free(cel->ccb_PLUTPtr);free(cel);} else ++preview_unloads; }
 static int GetVBLTime(Item item, u32 *hi, u32 *frame) {
     (void)item; *hi=0; *frame=0; return 0;
 }
@@ -205,7 +207,11 @@ static void DrawCels(Item item, CCB *cel) {
         printf("B %.6f %.6f %.6f %.6f ",cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy);
         for (i=0;i<16;++i) printf("%s%u",i ? "," : "",((unsigned short *)cel->ccb_PLUTPtr)[i]);
         printf(" %d %d ",cel->ccb_Width,cel->ccb_Height);
-        for (i=0;i<UI_FONT_STRIDE*cel->ccb_Height;++i) printf("%02x",((unsigned char *)cel->ccb_SourcePtr)[i]);
+        for (i=0;i<UI_FONT_STRIDE*cel->ccb_Height;++i) {
+            int stride=(int)(((cel->ccb_PRE1>>24)&255)+2)*4;
+            int row=i/UI_FONT_STRIDE,col=i%UI_FONT_STRIDE;
+            printf("%02x",col<stride ? ((unsigned char *)cel->ccb_SourcePtr)[row*stride+col] : 0);
+        }
         printf("\n"); return;
     }
     (void)item; printf("I %d %.6f %.6f %.6f %.6f\n",cel->tag==2 && cel->ccb_Width==160 ? 4 : cel->tag,cel->ccb_XPos/65536.0,cel->ccb_YPos/65536.0,sx,sy);
@@ -882,6 +888,16 @@ int main(int argc, char **argv) {
         }
     }
     draw(&menu);
+    if (argc>1 && !strcmp(argv[1],"font-memory")) {
+        unsigned long compact=0,baseline=0;
+        int slot;
+        for (slot=0;slot<UI_TEXT_CACHE;++slot) if(menu.text_cache[slot].cel) {
+            compact+=(unsigned long)menu.text_cache[slot].capacity_width/2*UI_FONT_HEIGHT;
+            baseline+=UI_FONT_STRIDE*UI_FONT_HEIGHT;
+        }
+        if (!baseline || compact>=baseline/2) abort();
+        fprintf(stderr,"Font texture storage: %lu bytes; previously %lu bytes\n",compact,baseline);
+    }
     menu_favorites_free(&menu.favorites);
     save_archive_free(&menu.nvram); save_archive_free(&menu.backup);
     ode_listing_free(&menu.listing);
@@ -918,7 +934,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_profiled preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_profiled\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_options preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_options\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
@@ -930,6 +946,7 @@ def main():
                         "-o", str(binary)], check=True)
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
+        subprocess.run([str(binary),"font-memory"],stdout=subprocess.DEVNULL,check=True)
         timing_lines=subprocess.check_output([str(binary),"diagnostics-preview"],text=True).splitlines()
         assert "L Last preview load" in timing_lines and "L Read + CRC: 24100ms" in timing_lines
         assert "L Folder navigation: 7100ms" in timing_lines and "L Frames: 225 at 15 fps" in timing_lines

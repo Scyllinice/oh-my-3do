@@ -4,6 +4,8 @@
 #define USB_PREVIEW_MAX_FRAMES 32
 #define USB_PREVIEW_V2_MAX_FRAMES 720
 #define USB_PREVIEW_MAX_BYTES (1024UL * 1024UL)
+#define USB_PREVIEW_CACHE_BYTES (512UL * 1024UL)
+#define USB_PREVIEW_BLOCK_BYTES 4096UL
 #define USB_PREVIEW_WIDTH 160
 #define USB_PREVIEW_HEIGHT 120
 #define USB_PREVIEW_FRAME_BYTES (USB_PREVIEW_WIDTH * USB_PREVIEW_HEIGHT * 2UL)
@@ -13,6 +15,9 @@ typedef int (*MediaCancel)(void *context);
 typedef void (*MediaLoadPhase)(void *context,int checking);
 typedef struct UsbPreview {
     unsigned char *pixels;
+    unsigned char **blocks;
+    unsigned int block_count, source_frames;
+    unsigned long table_bytes;
     unsigned int frames, fps;
     unsigned int width, height;
     unsigned long frame_bytes;
@@ -30,12 +35,15 @@ int usb_png_cover(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels, MediaCancel cancel, void *context);
 int usb_legacy_cover(Ode *ode, OdeReadBuffer reader, const char *filename,
                    unsigned char *pixels, MediaCancel cancel, void *context);
+int usb_fast_cover(Ode *ode,OdeReadBuffer reader,const char *filename,unsigned char *pixels,MediaCancel cancel,void *context);
 int usb_preview_load(Ode *ode, OdeReadBuffer reader, const char *filename,
                      UsbPreview *preview, MediaCancel cancel, void *context);
 /* Returns USB_PREVIEW_NO_MEMORY for failed frame/video/audio allocations.
  * Optional timing hook: 1 after payload reads, 2 after checks/close. */
 int usb_preview_load_profiled(Ode *ode,OdeReadBuffer reader,const char *filename,
     UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context);
+int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,
+    UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound);
 int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder);
 int usb_media_filename(const char *name);
 #endif

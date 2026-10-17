@@ -24,7 +24,7 @@ Each payload row is two 16-bit lengths followed by a NUL-terminated USB-relative
 game path and media basename. Lengths include terminators. Rows sort by ASCII
 case-insensitive path, with no duplicate paths. A media basename is at most 96
 UTF-8 bytes, has no path separators/control characters, and ends in `.png`,
-`.3dc` or `.3dv`. Covers accept PNG or legacy 3DC; previews accept 3DV.
+`.3dc` or `.3dv`. Covers accept PNG or prepared/legacy 3DC; previews accept 3DV.
 `tools/index-media.py` builds associations without converting media.
 
 ## Legacy silent preview (still supported)
@@ -57,6 +57,26 @@ decoder retains a 32 KiB inflate dictionary, decoder state, a scanline buffer an
 small scaling tables, rather than an entire source-size bitmap. Area
 sampling fits covers into 96×120, with letterboxing and alpha compositing over
 RGB `(8,16,33)`. Optional gamma and background-color metadata do not change this.
+
+## Prepared cover (menu v0.16.0-rc12+)
+
+The library tools produce `.3dc` files directly in the console's RGB555 format:
+
+| Offset | Bytes | Meaning |
+| --- | --- | --- |
+| 0 | 8 | `OM3DCOV2` |
+| 8 | 2 | Width, 96 |
+| 10 | 2 | Height, 120 |
+| 12 | 4 | Compressed payload bytes, 1–32768 |
+| 16 | 4 | CRC32 of compressed payload |
+| 20 | 4 | Decoded bytes, 23040 |
+| 24 | variable | One zlib stream, row-major big-endian RGB555 |
+| after payload | 8 | `END3DC02` |
+
+The decoder writes directly into the cover CEL. It checks the exact compressed
+and decoded lengths, CRC and poisoned footer. No PNG scanline filters, scaling
+or color callbacks run. The 96×120 display pixels match a prepared PNG after
+RGB555 conversion. PNG and legacy `OM3DCOV1` covers remain supported.
 
 ## Compressed preview with audio (menu v0.16.0+)
 
@@ -110,6 +130,13 @@ buffers incrementally, avoiding a second copy of the audio in general-purpose
 RAM. Original video sources and older `.3dv` files are never modified by loading.
 
 The converter caps new clips at 15 seconds at 15 fps, shortening further to fit
-the RAM budget without lowering frame rate. This is an authoring policy; the
+the 512 KiB RAM budget without lowering frame rate. This is an authoring policy; the
 player still accepts older longer clips within the format limits above.
 Older version-1 previews retain their 1–12 fps limit.
+
+Menu v0.16.0-rc12 caches compressed video in allocations of at most 4096 bytes,
+with a 512 KiB combined video/table/audio ceiling and a 64 KiB free-DRAM reserve.
+The inflater can read across block boundaries. Older files up to the 1 MiB
+format limit still load, retaining the longest complete frame/audio prefix that
+fits; the remaining source bytes are discarded while validating the full CRC.
+Sound-off skips PCM allocation. Playback never streams from USB.

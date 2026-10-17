@@ -38,7 +38,7 @@ def convert_legacy(source, target, fps=6, frames=24, start=0):
     print(f"Created {target}: {count} frames at {fps} fps, {len(pixels)//1024} KiB, silent")
 
 
-MAX_BYTES = 1024 * 1024
+MAX_BYTES = 512 * 1024
 MAX_FRAMES = 720
 CLIP_CAP_SECONDS = 15
 
@@ -112,7 +112,7 @@ def convert(source, target, fps=None, frames=None, start=0, duration=None, sound
     if not count:
         raise ValueError('Preview cannot fit a single frame and audio in the RAM budget')
     if count < source_count:
-        print(f'Shortened to {count/fps:.2f} seconds to keep {fps} fps within the 1 MiB RAM payload budget.')
+        print(f'Shortened to {count/fps:.2f} seconds to keep {fps} fps within the 512 KiB RAM payload budget.')
     offset = (count+1)*4
     offsets = [offset]
     for block in blocks:

@@ -426,6 +426,35 @@ fn cover_conversion_outputs_native_png_with_valid_chunks() {
     assert!(media::validate(&target).is_err());
 }
 #[test]
+fn prepared_cover_matches_png_console_pixels_and_rejects_damage() {
+    let t = tempfile::tempdir().unwrap();
+    let source = t.path().join("cover.png");
+    let mut image = image::RgbImage::new(96, 120);
+    for (x, y, p) in image.enumerate_pixels_mut() {
+        *p = image::Rgb([x as u8 * 2, y as u8 * 2, (x + y) as u8]);
+    }
+    image.save(&source).unwrap();
+    let png = t.path().join("prepared.png");
+    let fast = t.path().join("prepared.3dc");
+    media::cover(&source, &png).unwrap();
+    media::fast_cover(&source, &fast).unwrap();
+    media::validate(&fast).unwrap();
+    let original = image::open(png).unwrap().to_rgb8();
+    let decoded = media::cover_display(&fast).unwrap().to_rgb8();
+    for (a, b) in original.pixels().zip(decoded.pixels()) {
+        for n in 0..3 {
+            assert_eq!((a[n] >> 3) as u16 * 255 / 31, b[n] as u16);
+        }
+    }
+    let bytes = fs::read(&fast).unwrap();
+    for pos in [8, 12, 16, 20, 24, bytes.len() - 1] {
+        let mut bad = bytes.clone();
+        bad[pos] ^= 1;
+        fs::write(&fast, bad).unwrap();
+        assert!(media::validate(&fast).is_err());
+    }
+}
+#[test]
 fn media_matching_does_not_cross_regions_or_demo_types() {
     let paths = vec![
         PathBuf::from("Example (Japan).mp4"),
@@ -820,7 +849,7 @@ fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existin
     let hash = f::sha256(&source, &Job::default()).unwrap();
     let key = format!(
         "{:x}",
-        Sha256::digest(format!("{hash}:preview:native-v2-160x120-cover96x120-cap15").as_bytes())
+        Sha256::digest(format!("{hash}:preview:native-v3-160x120-fast96-cap15-512k").as_bytes())
     );
     put(
         &cache,
@@ -924,7 +953,7 @@ fn rebuild_media_preserves_original_associations_unavailable_sources_and_undo() 
     let cover = root
         .join(".ohmy3do/covers")
         .join(updated["cover"].as_str().unwrap());
-    let image = image::open(cover).unwrap();
+    let image = media::cover_display(&cover).unwrap();
     assert_eq!((image.width(), image.height()), (96, 120));
     assert!(old.is_file());
     library::undo(&journal).unwrap();

@@ -34,7 +34,7 @@ def module(name):
 catalog_tools = module('library-catalog')
 index_tools = module('index-media')
 sector_tools = module('sector-codec')
-SCANNER_VERSION = '0.16.0-rc10'
+SCANNER_VERSION = '0.16.0-rc12'
 SKIP = {'covers', 'previews', 'music', 'saves', '.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di', 'metadata.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
@@ -984,12 +984,12 @@ def prepare_covers(rows, cache, offline=False):
             warnings.append(f'Ambiguous cover: {canonical}')
             continue
         key = hashlib.sha1(chosen.encode()).hexdigest()
-        output = cache / 'prepared' / (key + '.png')
+        output = cache / 'prepared' / (key + '-fast96.3dc')
         try:
             original = catalog_tools.download(catalog_tools.cover_url(chosen), cache / 'artwork' / (key + '.png'), 16 * 1024 * 1024, offline)
             if not output.exists():
-                resizer.convert(original, output)
-            basename = safe_name(row['group'], 65) + '-' + key[:8] + '.png'
+                resizer.fast_convert(original, output)
+            basename = safe_name(row['group'], 65) + '-' + key[:8] + '.3dc'
             row['cover'] = basename
             row['cover_source'] = catalog_tools.cover_url(chosen)
             prepared[basename] = output.read_bytes()
@@ -1048,11 +1048,11 @@ def prepare_local_covers(rows, directory):
         try:
             if image not in converted:
                 with tempfile.TemporaryDirectory(prefix='oh3do-cover-') as temp:
-                    target = Path(temp)/'cover.png'
-                    resizer.convert(image, target)
+                    target = Path(temp)/'cover.3dc'
+                    resizer.fast_convert(image, target)
                     content = target.read_bytes()
                 key = hashlib.sha256(content).hexdigest()[:16]
-                converted[image] = ('cover-' + key + '.png', content)
+                converted[image] = ('cover-' + key + '.3dc', content)
             basename, content = converted[image]
             prepared[basename] = content
             row['cover'] = basename
@@ -1082,7 +1082,7 @@ def prepare_previews(rows, directory, start=0, duration=None, sound=True, replac
             if clip not in converted:
                 # Conversion happens on the PC before any USB changes. Include
                 # content and settings in the name so reruns never replace art.
-                key = hashlib.sha256((digest(clip) + f':{start}:15:{duration or "15"}:{int(sound)}:2:160x120:fixed-fps:cap15').encode()).hexdigest()[:16]
+                key = hashlib.sha256((digest(clip) + f':{start}:15:{duration or "15"}:{int(sound)}:2:160x120:512k:fixed-fps:cap15').encode()).hexdigest()[:16]
                 with tempfile.TemporaryDirectory(prefix='oh3do-preview-') as temp:
                     target = Path(temp)/'clip.3dv'
                     converter.convert(clip, target, start=start, duration=duration, sound=sound)

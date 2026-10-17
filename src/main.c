@@ -29,7 +29,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "0.16.0-rc11"
+#define MENU_VERSION "0.16.0-rc12"
 #define ROWS 7
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -62,7 +62,7 @@
 #define UI_TEXT_CACHE 64
 typedef struct UiText {
     CCB *cel;
-    int style, width, palette_valid;
+    int style, width, palette_valid, capacity_width;
     Color ink, background;
     char value[97];
 } UiText;
@@ -238,6 +238,7 @@ static void stop_preview(Menu *menu)
     if (menu->preview_cel) UnloadCel(menu->preview_cel);
     menu->preview_cel = NULL;
     usb_preview_free(&menu->preview);
+    menu->text_failed=0;
 }
 /* Media reads also poll the pad. Keep a chord seen there until the main
  * loop can act on it, even if both buttons have already been released. */
@@ -312,6 +313,7 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
 {
     UiText *cached;
     char safe[97];
+    static unsigned char bitmap[UI_FONT_STRIDE*UI_FONT_HEIGHT];
     size_t i;
     int style=menu->large_drawing ? UI_FONT_LARGE : menu->text_style;
     int margin=menu->config.screen_margin;
@@ -333,16 +335,30 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
     UI_PREVIEW_TEXT(safe);
 #endif
     cached=&menu->text_cache[menu->text_cursor<UI_TEXT_CACHE ? menu->text_cursor++ : UI_TEXT_CACHE-1];
-    if (!cached->cel && !menu->text_failed) {
-        cached->cel=CreateCel(UI_FONT_WIDTH,UI_FONT_HEIGHT,4,0,NULL);
-        if (!cached->cel) menu->text_failed=1;
-        else memset(cached->cel->ccb_PLUTPtr,0,64);
+    {
+        int needed=ui_font_width(safe,style),capacity;
+        if (needed>max_width) needed=max_width;
+        capacity=(needed+15)&~15;if (capacity<16) capacity=16;
+        if ((!cached->cel || cached->capacity_width<capacity) && !menu->text_failed) {
+            CCB *next=CreateCel(capacity,UI_FONT_HEIGHT,4,0,NULL);
+            if (!next) menu->text_failed=1;
+            else {
+                if (cached->cel) UnloadCel(cached->cel);
+                cached->cel=next;cached->capacity_width=capacity;
+                cached->width=-1;cached->palette_valid=0;
+                memset(next->ccb_PLUTPtr,0,64);
+            }
+        }
     }
     if (cached->cel) {
         CCB *cel=cached->cel;
         int width;
+        if (max_width>cached->capacity_width) max_width=cached->capacity_width;
         if (cached->style != style || strcmp(cached->value,safe) || cached->width != max_width) {
-            ui_font_render((unsigned char *)cel->ccb_SourcePtr,safe,style,max_width);
+            int row,stride=cached->capacity_width/2;
+            ui_font_render(bitmap,safe,style,max_width);
+            for (row=0;row<ui_font_height(style);++row)
+                memcpy((unsigned char *)cel->ccb_SourcePtr+row*stride,bitmap+row*UI_FONT_STRIDE,(size_t)stride);
             strcpy(cached->value,safe); cached->style=style; cached->width=max_width;
         }
         width=ui_font_width(safe,style); if (width>max_width) width=max_width;
@@ -869,7 +885,7 @@ static int read_usb_cover(void *context)
     UsbCoverRead *read = (UsbCoverRead *)context;
     if (!menu_path_compare(read->filename+strlen(read->filename)-4,".png"))
         return usb_png_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
-    return usb_legacy_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
+    return usb_fast_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
 }
 
 static void update_cover(Menu *menu)
@@ -983,8 +999,8 @@ static int read_usb_preview(void *context)
     PreviewRead *read = (PreviewRead *)context;
     int result;
     read->started=now_ms(read->menu);
-    result=usb_preview_load_profiled(&read->menu->ode,ode_bus_read_buffer,read->file,
-                            &read->menu->preview,media_cancel,read->menu,preview_phase,read);
+    result=usb_preview_load_options(&read->menu->ode,ode_bus_read_buffer,read->file,
+                            &read->menu->preview,media_cancel,read->menu,preview_phase,read,read->menu->config.preview_sound);
     read->finished=now_ms(read->menu);
     if (!read->checking) read->menu->preview_read_ms=read->finished-read->started;
     return result;

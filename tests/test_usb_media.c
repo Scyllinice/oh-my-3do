@@ -8,6 +8,8 @@
 #include "mem.h"
 static struct { void *data; int32 bytes; unsigned long flags; } sdk_memory[4];
 static int sdk_calls,sdk_fail;
+static unsigned long sdk_available=2UL*1024*1024;
+void availMem(MemInfo *memory,unsigned long flags) { assert(flags==MEMTYPE_DRAM);memset(memory,0,sizeof(*memory));memory->minfo_SysFree=sdk_available;memory->minfo_SysLargest=8192; }
 void *AllocMem(int32 bytes,unsigned long flags)
 {
     int i;
@@ -101,8 +103,9 @@ int main(int argc,char **argv)
     assert(usb_art_crc32((const unsigned char *)"123456789",9)==0xcbf43926UL);
     f.data=load(argv[2],&f.size); original=f.size; reset(&f,&ode);
     if (!strcmp(argv[1],"cover")) decode=usb_png_cover;
-    if (!strcmp(argv[1],"png") || !strcmp(argv[1],"cover")) {
-        assert(argc == 4); expected=load(argv[3],&bytes); assert(bytes == (!strcmp(argv[1],"cover") ? USB_COVER_PIXELS : USB_ART_PIXELS));
+    if (!strcmp(argv[1],"fastcover")) decode=usb_fast_cover;
+    if (!strcmp(argv[1],"png") || !strcmp(argv[1],"cover") || !strcmp(argv[1],"fastcover")) {
+        assert(argc == 4); expected=load(argv[3],&bytes); assert(bytes == (strcmp(argv[1],"png") ? USB_COVER_PIXELS : USB_ART_PIXELS));
         assert(!decode(&ode,reader,"Game.png",pixels,cancel,&f));
         assert(!memcmp(pixels,expected,bytes)); free(expected); calls=f.calls;
         for (i=1;i<=calls;++i) {
@@ -130,6 +133,31 @@ int main(int argc,char **argv)
         assert(center && center!=0x7fff && (center&31)==((center>>5)&31) && (center&31)==((center>>10)&31));
     } else if (!strcmp(argv[1],"badpng")) {
         assert(usb_png_pixels(&ode,reader,"Game.png",pixels,cancel,&f) < 0 && f.closed);
+    } else if (!strcmp(argv[1],"badfastcover")) {
+        assert(usb_fast_cover(&ode,reader,"Game.3dc",pixels,cancel,&f)<0 && f.closed);
+    } else if (!strcmp(argv[1],"budgetvideo2")) {
+        unsigned int frame;
+#ifdef OH3DO_SDK
+        sdk_available=192UL*1024;
+#endif
+        assert(!usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f));
+        assert(preview.frames<preview.source_frames && preview.frames>1 && preview.block_count>1);
+        assert(preview.video_bytes+preview.audio_bytes<=USB_PREVIEW_CACHE_BYTES);
+#ifdef OH3DO_SDK
+        assert(preview.video_bytes+preview.audio_bytes<=128UL*1024);
+#endif
+        for (frame=0;frame<preview.frames;++frame) {
+            assert(!usb_preview_frame(&preview,frame,pixels));
+            for (bytes=0;bytes<preview.frame_bytes;++bytes) assert(pixels[bytes]==(unsigned char)(bytes*73UL+bytes/17));
+        }
+        usb_preview_free(&preview);reset(&f,&ode);
+        assert(!usb_preview_load_options(&ode,reader,"Game.3dv",&preview,cancel,&f,NULL,NULL,0));
+        assert(!preview.audio && !preview.audio_bytes);usb_preview_free(&preview);
+        reset(&f,&ode);f.data[original-9]^=1;
+        assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !preview.blocks);
+#ifdef OH3DO_SDK
+        sdk_empty();
+#endif
     } else if (!strcmp(argv[1],"badvideo2")) {
         assert(usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f)<0 && f.closed && !preview.pixels && !preview.audio);
     } else if (!strcmp(argv[1],"latebadvideo2")) {
@@ -256,7 +284,7 @@ int main(int argc,char **argv)
     } else if (!strcmp(argv[1],"index")) {
         UsbArtIndex index; memset(&index,0,sizeof(index));
         assert(!usb_media_index_load(&ode,reader,&index,"covers"));
-        assert(index.count == 1 && !strcmp(index.entries[0].file,"Game.png"));
+        assert(index.count == 1 && !strcmp(index.entries[0].file,argc>3 ? argv[3] : "Game.png"));
         usb_art_index_free(&index);
     } else assert(0);
     free(f.data); return 0;

@@ -45,11 +45,7 @@ fn load_thumbnail(source: &ThumbnailSource) -> anyhow::Result<egui::ColorImage> 
     if fs::metadata(&path)?.len() > 32 * 1024 * 1024 {
         anyhow::bail!("Oversized thumbnail")
     }
-    let mut reader = image::ImageReader::open(path)?.with_guessed_format()?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let image = reader.decode()?.thumbnail(168, 210).to_rgba8();
+    let image = media::cover_display(&path)?.thumbnail(168, 210).to_rgba8();
     Ok(egui::ColorImage::from_rgba_unmultiplied(
         [image.width() as usize, image.height() as usize],
         image.as_raw(),

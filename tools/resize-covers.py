@@ -82,6 +82,50 @@ def convert(source, target):
             temporary.unlink(missing_ok=True)
 
 
+
+def fast_convert(source, target):
+    """Prepare a native RGB555 cover with bounded zlib payload and EOF marker."""
+    import binascii, struct, zlib
+    from PIL import Image
+    with tempfile.TemporaryDirectory(prefix='oh3do-fast-cover-') as temp:
+        png = Path(temp)/'cover.png'
+        convert(source, png)
+        with Image.open(png) as image:
+            raw = b''.join(struct.pack('>H',((r>>3)<<10)|((g>>3)<<5)|(b>>3)) for r,g,b in image.getdata())
+    payload = zlib.compress(raw,9)
+    data = b'OM3DCOV2'+struct.pack('>HHIII',96,120,len(payload),binascii.crc32(payload),len(raw))+payload+b'END3DC02'
+    target.parent.mkdir(parents=True,exist_ok=True)
+    temporary=target.with_name(target.name+'.tmp')
+    try:
+        temporary.write_bytes(data);os.replace(temporary,target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def read_cover(path):
+    """Open prepared covers for PC contact sheets without losing PNG support."""
+    import struct,zlib,binascii
+    from PIL import Image
+    if path.suffix.lower() != '.3dc':
+        return Image.open(path)
+    data=path.read_bytes()
+    if len(data)<24:raise ValueError('Truncated cover')
+    w,h,n,crc,decoded=struct.unpack_from('>HHIII',data,8)
+    if data[:8]==b'OM3DCOV2':
+        if (w,h)!=(96,120) or not 0<n<=32768 or decoded!=23040 or len(data)!=n+32 or data[-8:]!=b'END3DC02':raise ValueError('Invalid native cover')
+        payload=data[24:-8]
+        if binascii.crc32(payload)!=crc:raise ValueError('Invalid native cover CRC')
+        decoder=zlib.decompressobj();raw=decoder.decompress(payload,23041)
+        if len(raw)!=23040 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:raise ValueError('Invalid native cover pixels')
+    elif data[:8]==b'OM3DCOV1' and (w,h)==(64,80) and n==10240 and not decoded and len(data)==10264 and binascii.crc32(data[24:])==crc:
+        raw=data[24:]
+    else:raise ValueError('Invalid prepared cover')
+    rgb=bytearray()
+    for (pixel,) in struct.iter_unpack('>H',raw):
+        rgb.extend(((pixel>>10&31)*255//31,(pixel>>5&31)*255//31,(pixel&31)*255//31))
+    return Image.frombytes('RGB',(w,h),bytes(rgb))
+
+
 def check(source, recursive=False):
     try:
         from PIL import Image
