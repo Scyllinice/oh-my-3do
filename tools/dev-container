@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+image=${OH3DO_IMAGE:-oh-my-3do-dev:local}
+action=${1:-test}
+if [[ $# -gt 0 ]]; then shift; fi
+
+case "$action" in
+    build)
+        exec docker build --platform linux/amd64 \
+            --build-arg "DEVKIT_REF=${DEVKIT_REF:-4e370299bd273bb13089d41fa33c5e863dc6d405}" \
+            -t "$image" "$@" "$project_dir"
+        ;;
+    test) command_args=(make test "$@") ;;
+    menu) command_args=(bash /workspace/tools/build-menu menu "$@") ;;
+    demo) command_args=(bash /workspace/tools/build-menu demo "$@") ;;
+    cover) command_args=(python3 /workspace/tools/prepare-cover.py "$@") ;;
+    resize-covers) command_args=(python3 /workspace/tools/resize-covers.py "$@") ;;
+    preview) command_args=(python3 /workspace/tools/prepare-preview.py "$@") ;;
+    media-index) command_args=(python3 /workspace/tools/index-media.py "$@") ;;
+    covers) command_args=(python3 /workspace/tools/export-covers.py "$@") ;;
+    smoke) command_args=(devkit-smoke /workspace/build/devkit-smoke "$@") ;;
+    shell) command_args=(bash --noprofile --norc "$@") ;;
+    run)
+        if [[ $# -eq 0 ]]; then
+            echo 'Usage: tools/dev-container run COMMAND [ARGUMENTS...]' >&2
+            exit 2
+        fi
+        command_args=("$@")
+        ;;
+    *)
+        echo 'Usage: tools/dev-container {build|test|menu|demo|cover GAME IMAGE|covers|resize-covers INPUT OUTPUT|preview VIDEO OUTPUT|media-index USBROOT|smoke|shell|run COMMAND ...}' >&2
+        exit 2
+        ;;
+esac
+
+terminal_args=()
+if [[ "$action" == shell && -t 0 && -t 1 ]]; then
+    terminal_args=(-it)
+fi
+
+# Match host ownership for every generated artifact. No Docker socket or host
+# devices are mounted inside the development container.
+exec docker run --rm --init --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,source=$project_dir,target=/workspace" \
+    --workdir /workspace \
+    "${terminal_args[@]}" "$image" "${command_args[@]}"

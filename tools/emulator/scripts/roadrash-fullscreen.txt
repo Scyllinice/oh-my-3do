@@ -1,0 +1,105 @@
+# Road Rash, then held X for full screen, with shots f1-f3 at fixed times
+# (emulation is deterministic, so two builds can be compared frame for frame).
+wait 900
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press a 6
+wait 300
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press a 6
+wait 300
+press up 6
+wait 45
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press a 6
+wait 200
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+shot sel
+burst load 8 20
+wait 400
+hold x 90
+wait 46
+shot f1
+wait 120
+shot f2
+wait 150
+shot f3
+press b 6
+wait 60
+chord l+r 6
+wait 60
+press right 4
+wait 10
+press down 4
+wait 10
+press a 4
+wait 60
+shot diag
+press c 4
+wait 600
+shot saved

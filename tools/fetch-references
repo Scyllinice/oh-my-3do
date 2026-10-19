@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+mkdir -p "$project_dir/third_party"
+fetch() {
+    local name=$1 url=$2 revision=$3 destination
+    destination="$project_dir/third_party/$name"
+    if [[ -e "$destination" ]]; then
+        if [[ "$(git -C "$destination" rev-parse HEAD)" != "$revision" ]]; then
+            echo "Reference $name exists at a different revision; leaving it unchanged." >&2
+            return 1
+        fi
+        return
+    fi
+    git init "$destination"
+    git -C "$destination" remote add origin "$url"
+    git -C "$destination" fetch --depth=1 origin "$revision"
+    git -C "$destination" checkout --detach FETCH_HEAD
+}
+fetch SataTo3DO https://github.com/FCare/SataTo3DO.git 0c28fa484ce4b6537d32737f0e49566047e5a173
+fetch portfolio_os https://github.com/trapexit/portfolio_os.git bee7b0c8e4287083c73cb5497b658880c9e7af8e

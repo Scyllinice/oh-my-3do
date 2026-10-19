@@ -1,0 +1,105 @@
+# From a fresh start (run.sh clears the saved position): Games, USA, letter R,
+# Road Rash. Loads its preview, plays it in the TV picture and full screen,
+# then exports diagnostics (L+R, Diagnostics, C) to usb/.ohmy3do/diagnostics.txt.
+wait 900
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press a 6
+wait 300
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press a 6
+wait 300
+press up 6
+wait 45
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press a 6
+wait 200
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+shot sel
+burst load 8 20
+wait 400
+burst play 6 2
+wait 900
+hold x 90
+wait 30
+burst full 4 2
+wait 300
+press b 6
+wait 120
+chord l+r 6
+wait 60
+press right 4
+wait 10
+press down 4
+wait 10
+press a 4
+wait 60
+shot diag
+press c 4
+wait 600
+shot saved

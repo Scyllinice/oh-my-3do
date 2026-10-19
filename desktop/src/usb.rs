@@ -1,0 +1,643 @@
+use crate::{
+    disc as d, fsutil as f,
+    library::{self, Journal},
+    media,
+    model::CATEGORIES,
+    Job,
+};
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+};
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CopyItem {
+    /// Destination path; also the source path unless `source_path` is set.
+    pub path: String,
+    /// Media copied from the staging root's .ohmy3do/covers or previews to
+    /// the .ohmy3do folder beside its disc on the drive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    pub status: String,
+    pub size: u64,
+    pub source_stamp: u128,
+    pub destination_stamp: Option<u128>,
+    #[serde(default)]
+    pub verified: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CopyPlan {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    /// Game folders already on the drive under another category: (from, to).
+    #[serde(default)]
+    pub moves: Vec<(String, String)>,
+    pub files: Vec<CopyItem>,
+    pub games: usize,
+    pub bytes: u64,
+}
+fn word(data: &[u8], pos: usize) -> Result<usize> {
+    Ok(u32::from_be_bytes(
+        data.get(pos..pos + 4)
+            .context("Truncated index")?
+            .try_into()?,
+    ) as usize)
+}
+pub fn config(path: &Path) -> Result<()> {
+    if fs::metadata(path)?.len() > 512 {
+        bail!("Config exceeds 512 bytes")
+    }
+    crate::console_config::Settings::parse(&fs::read(path)?)?;
+    Ok(())
+}
+
+pub fn find(path: &Path) -> Result<Vec<String>> {
+    if fs::metadata(path)?.len() > 128 * 1024 + 32 {
+        bail!("Oversized Find index")
+    }
+    let data = fs::read(path)?;
+    if data.len() < 32 || &data[..8] != b"OM3DLIB1" || &data[data.len() - 8..] != b"END3DL01" {
+        bail!("Invalid Find index header/end")
+    }
+    let count = word(&data, 8)?;
+    let size = word(&data, 12)?;
+    if count > 2048
+        || size + 9 * count > 128 * 1024
+        || size + 32 != data.len()
+        || word(&data, 20)? != 0
+        || crc32fast::hash(&data[24..data.len() - 8]) as usize != word(&data, 16)?
+    {
+        bail!("Invalid Find index checksum/bounds")
+    }
+    let mut pos = 24;
+    let mut names = vec![];
+    for _ in 0..count {
+        let b = data.get(pos..pos + 2).context("Truncated Find path")?;
+        let n = u16::from_be_bytes(b.try_into()?) as usize;
+        pos += 2;
+        let s = data.get(pos..pos + n).context("Truncated Find path")?;
+        if n < 2 || s[n - 1] != 0 || s[..n - 1].contains(&0) {
+            bail!("Invalid Find path")
+        };
+        names.push(std::str::from_utf8(&s[..n - 1])?.to_owned());
+        pos += n;
+    }
+    if pos != data.len() - 8
+        || names
+            .iter()
+            .map(|s| f::fold(s))
+            .collect::<HashSet<_>>()
+            .len()
+            != names.len()
+    {
+        bail!("Duplicate/trailing Find paths")
+    };
+    Ok(names)
+}
+/// Runtime files as (USB path, staging path) pairs. Media moves beside its disc.
+pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize)> {
+    let boot = f::safe(root, "boot.iso")?;
+    d::issue(&boot)?;
+    if fs::metadata(&boot)?.len() > 16 * 1024 * 1024 {
+        bail!("Oversized menu boot image")
+    }
+    let raw = fs::read(&boot)?;
+    if raw.len() < 84
+        || raw[..7] != [1, 90, 90, 90, 90, 90, 1]
+        || word(&raw, 76)? != 2048
+        || word(&raw, 80)? * 2048 != raw.len()
+    {
+        bail!("Invalid boot volume header/size")
+    }
+    config(&f::safe(root, ".ohmy3do/ohmy3do.ini")?)?;
+    let indexed = find(&f::safe(root, ".ohmy3do/library.3di")?)?;
+    let sets = d::collect(&[root.to_owned()], None, job)?;
+    let games = sets
+        .iter()
+        .map(|(p, _)| library::relative(root, p))
+        .collect::<Result<BTreeSet<_>>>()?;
+    if indexed.iter().cloned().collect::<BTreeSet<_>>() != games {
+        bail!("Find index is stale. Rebuild indexes on the Library tab first.")
+    }
+    let mut files = BTreeSet::from([
+        "boot.iso".into(),
+        ".ohmy3do/ohmy3do.ini".into(),
+        ".ohmy3do/library.3di".into(),
+    ]);
+    for (_, set) in &sets {
+        for p in set {
+            files.insert(library::relative(root, p)?);
+        }
+    }
+    let folded = games.iter().map(|s| f::fold(s)).collect::<HashSet<_>>();
+    let homes = games
+        .iter()
+        .map(|g| (f::fold(g), g.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut beside = BTreeMap::new();
+    let mut checked = HashSet::new();
+    let metadata = f::safe(root, ".ohmy3do/metadata.3di")?;
+    if metadata.is_file() {
+        if fs::metadata(&metadata)?.len() > 192 * 1024 + 32 {
+            bail!("Oversized metadata index");
+        }
+        for path in library::metadata_paths(&fs::read(metadata)?)? {
+            if !folded.contains(&f::fold(&path)) {
+                bail!("Metadata index refers to a missing game; rebuild indexes");
+            }
+        }
+        files.insert(".ohmy3do/metadata.3di".into());
+    }
+    let cheats=f::safe(root,crate::save_cheats::JSON_PATH)?;
+    if cheats.is_file(){
+        let db=crate::save_cheats::Database::read(&cheats)?;
+        let binary=f::safe(root,crate::save_cheats::BINARY_PATH)?;
+        files.insert(crate::save_cheats::JSON_PATH.into());
+        if binary.is_file(){
+            if fs::metadata(&binary)?.len()>crate::save_cheats::MAX_BINARY as u64{bail!("Oversized console cheat database");}
+            if fs::read(&binary)?!=db.binary()?{bail!("Cheat database source and console file differ; reinstall them with the database editor");}
+            files.insert(crate::save_cheats::JSON_PATH.into());files.insert(crate::save_cheats::BINARY_PATH.into());
+        }
+    }
+    let names = f::safe(root, ".ohmy3do/save-names.txt")?;
+    if names.is_file() {
+        if fs::metadata(&names)?.len() as usize >= crate::saves::SAVE_NAMES_BYTES {
+            bail!("Oversized save names; rebuild indexes");
+        }
+        files.insert(".ohmy3do/save-names.txt".into());
+    }
+    for folder in ["covers", "previews"] {
+        let map = library::read_media_index(root, folder)?;
+        let index = format!(".ohmy3do/{folder}/index.3di");
+        if f::safe(root, &index)?.is_file() {
+            files.insert(index);
+        }
+        for (game, name) in map {
+            let Some(disc) = homes.get(&game) else {
+                bail!("Media index refers to a missing game")
+            };
+            let extension = Path::new(&name)
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            if !(if folder == "covers" {
+                ["png", "3dc"].contains(&extension.as_str())
+            } else {
+                extension == "3dv"
+            }) {
+                bail!("Indexed media type does not match its folder")
+            }
+            let path = format!(".ohmy3do/{folder}/{name}");
+            if checked.insert(path.clone()) {
+                job.check()?;
+                media::validate(&f::safe(root, &path)?)?;
+            }
+            let home = disc.rsplit_once('/').map_or("", |(home, _)| home);
+            let beside_path = |name: &str| {
+                if home.is_empty() {
+                    format!(".ohmy3do/{name}")
+                } else {
+                    format!("{home}/.ohmy3do/{name}")
+                }
+            };
+            if folder == "covers" {
+                let large = media::large_name(&name);
+                let source = format!(".ohmy3do/covers/{large}");
+                if f::safe(root, &source)?.is_file() {
+                    if checked.insert(source.clone()) {
+                        media::validate(&f::safe(root, &source)?)?;
+                    }
+                    beside.insert(beside_path(&large), source);
+                }
+            }
+            beside.insert(beside_path(&name), path);
+        }
+    }
+    for name in ["favorites.txt", "recent.txt", "last-position.txt"] {
+        let path = format!(".ohmy3do/{name}");
+        if f::safe(root, &path)?.is_file() {
+            files.insert(path);
+        }
+    }
+    let saves = f::safe(root, ".ohmy3do/saves")?;
+    if saves.exists() {
+        for e in walkdir::WalkDir::new(saves).follow_links(false) {
+            let e = e?;
+            if f::is_link(e.path()) {
+                bail!("Links in saves are unsupported")
+            };
+            if e.file_type().is_file() {
+                files.insert(library::relative(root, e.path())?);
+            }
+        }
+    }
+    for name in &files {
+        let path = f::safe(root, name)?;
+        if !path.is_file() || fs::metadata(path)?.len() >= 4 * 1024u64.pow(3) {
+            bail!("Missing or oversized FAT32 file: {name}")
+        }
+    }
+    let mut pairs = files
+        .into_iter()
+        .map(|n| (n.clone(), n))
+        .collect::<Vec<_>>();
+    for (dest, source) in beside {
+        if pairs.iter().any(|(d, _)| f::fold(d) == f::fold(&dest)) {
+            bail!("Media path collides with another file: {dest}")
+        }
+        pairs.push((dest, source));
+    }
+    pairs.sort();
+    Ok((pairs, games.len()))
+}
+fn media_index(name: &str) -> bool {
+    [".ohmy3do/covers/index.3di", ".ohmy3do/previews/index.3di"].contains(&name)
+}
+fn personal(name: &str) -> bool {
+    name.starts_with(".ohmy3do/saves/")
+        || [
+            ".ohmy3do/ohmy3do.ini",
+            ".ohmy3do/save-cheats.json",
+            ".ohmy3do/save-cheats.3db",
+            ".ohmy3do/favorites.txt",
+            ".ohmy3do/recent.txt",
+            ".ohmy3do/last-position.txt",
+        ]
+        .contains(&name)
+}
+/// Category/Region/Game folders that changed category in staging but are
+/// still at their old place on the drive. Staging's own folders are never moved.
+fn folder_moves(target: &Path, files: &[(String, String)]) -> Result<Vec<(String, String)>> {
+    let mut wanted = BTreeMap::new();
+    for (name, _) in files {
+        let parts: Vec<&str> = name.split('/').collect();
+        if parts.len() >= 4 && CATEGORIES.contains(&parts[0]) {
+            wanted.insert(f::fold(&parts[..3].join("/")), parts[..3].join("/"));
+        }
+    }
+    let mut found = HashMap::new();
+    for category in CATEGORIES {
+        let Ok(regions) = fs::read_dir(target.join(category)) else { continue };
+        for region in regions.flatten().filter(|e| e.path().is_dir() && !f::is_link(&e.path())) {
+            for game in fs::read_dir(region.path())?.flatten().filter(|e| e.path().is_dir() && !f::is_link(&e.path())) {
+                let folder = format!(
+                    "{category}/{}/{}",
+                    region.file_name().to_string_lossy(),
+                    game.file_name().to_string_lossy()
+                );
+                if !wanted.contains_key(&f::fold(&folder)) {
+                    let key = f::fold(folder.split_once('/').unwrap().1);
+                    found.entry(key).or_insert_with(Vec::new).push(folder);
+                }
+            }
+        }
+    }
+    let mut moves = vec![];
+    for folder in wanted.values() {
+        if target.join(folder).exists() {
+            continue;
+        }
+        // One unambiguous match only; anything else is copied as before.
+        if let Some([old]) = found.get(&f::fold(folder.split_once('/').unwrap().1)).map(Vec::as_slice) {
+            moves.push((old.clone(), folder.clone()));
+        }
+    }
+    Ok(moves)
+}
+/// Disc paths on the drive under moved folders, old → new (folded keys).
+fn moved_paths(target: &Path, moves: &[(String, String)]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (old, new) in moves {
+        for entry in walkdir::WalkDir::new(target.join(old)).follow_links(false).into_iter().flatten() {
+            if let Ok(rest) = entry.path().strip_prefix(target.join(old)) {
+                let rest = rest.to_string_lossy().replace('\\', "/");
+                if entry.file_type().is_file() {
+                    map.insert(f::fold(&format!("{old}/{rest}")), format!("{new}/{rest}"));
+                }
+            }
+        }
+    }
+    map
+}
+fn report_path(source: &Path, target: &Path, cache: &Path) -> PathBuf {
+    let key = format!(
+        "{:x}",
+        Sha256::digest(format!("{}\n{}", source.display(), target.display()).as_bytes())
+    );
+    cache.join("usb-copy").join(format!("{key}.json"))
+}
+fn plan_cheat_exists(root:&Path,name:&str)->bool {root.join(name).exists()}
+pub fn plan(
+    source: &Path,
+    target: &Path,
+    cache: &Path,
+    verify: bool,
+    job: &Job,
+) -> Result<CopyPlan> {
+    let source = f::root(source)?;
+    let target = f::root(target)?;
+    if source.starts_with(&target) || target.starts_with(&source) {
+        bail!("Choose separate, non-overlapping staging and USB roots")
+    }
+    let _source_lock = library::lock_library(&source, cache)?;
+    let _destination_lock = library::lock_library(&target, cache)?;
+    job.say("Validating staging and media");
+    let (files, games) = inventory(&source, job)?;
+    let report = report_path(&source, &target, cache);
+    let previous = fs::read(&report)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<CopyPlan>(&b).ok());
+    let moves = folder_moves(&target, &files)?;
+    let remaps = moved_paths(&target, &moves);
+    let mut items = vec![];
+    let mut bytes = 0;
+    for (name, source_name) in files {
+        job.check()?;
+        let src = f::safe(&source, &source_name)?;
+        // A file in a folder that will move is compared where it is now.
+        let current = moves
+            .iter()
+            .find(|(_, new)| name.starts_with(&format!("{new}/")))
+            .map(|(old, new)| format!("{old}{}", &name[new.len()..]))
+            .unwrap_or_else(|| name.clone());
+        let dest = f::safe(&target, &current)?;
+        let (mut size, source_stamp) = f::stamp(&src)?;
+        let index = media_index(&name);
+        let generated = if index {
+            Some(library::beside_index(&fs::read(&src)?)?)
+        } else {
+            None
+        };
+        if let Some(content) = &generated {
+            size = content.len() as u64;
+        }
+        let destination_stamp = if dest.is_file() {
+            Some(f::stamp(&dest)?.1)
+        } else {
+            None
+        };
+        if dest.exists() && !dest.is_file() {
+            bail!("Destination is occupied by a directory: {name}")
+        }
+        if name == ".ohmy3do/ohmy3do.ini" && dest.is_file() {
+            config(&dest)?
+        }
+        let mut trusted = false;
+        let cheat_file=[crate::save_cheats::JSON_PATH,crate::save_cheats::BINARY_PATH].contains(&name.as_str());
+        let preserve_cheats=cheat_file && [crate::save_cheats::JSON_PATH,crate::save_cheats::BINARY_PATH].iter().any(|path|plan_cheat_exists(&target,path));
+        let remapped = personal(&name) && !cheat_file
+            && dest.is_file()
+            && !moves.is_empty()
+            && if name == ".ohmy3do/last-position.txt" {
+                let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
+                library::remap_position(&fs::read(&dest)?, &remaps, &old).is_some()
+            } else {
+                library::remap_lines(&fs::read(&dest)?, &remaps).is_some()
+            };
+        let status = if remapped {
+            "remap"
+        } else if preserve_cheats || (personal(&name) && dest.exists()) {
+            "preserve"
+        } else if !dest.exists() {
+            "copy"
+        } else if !dest.is_file() {
+            bail!("Destination is occupied: {name}")
+        } else if let Some(content) = &generated {
+            if fs::read(&dest)? == *content {
+                trusted = true;
+                "unchanged"
+            } else {
+                "update"
+            }
+        } else {
+            let ds = f::stamp(&dest)?;
+            let disc = !name.starts_with(".ohmy3do/")
+                && !name.contains("/.ohmy3do/")
+                && name != "boot.iso";
+            let receipt = previous
+                .as_ref()
+                .and_then(|p| {
+                    p.files
+                        .iter()
+                        .find(|r| r.path == name && (r.verified || r.status == "verified"))
+                })
+                .is_some_and(|r| {
+                    r.size == size
+                        && r.source_stamp == source_stamp
+                        && r.destination_stamp == Some(ds.1)
+                        && ds.0 == size
+                });
+            if disc && !verify && size == ds.0 && (source_stamp == ds.1 || receipt) {
+                trusted = receipt;
+                "unchanged"
+            } else if size == ds.0 && f::sha256(&src, job)? == f::sha256(&dest, job)? {
+                trusted = true;
+                "unchanged"
+            } else if disc {
+                bail!("Different existing disc on destination: {name}")
+            } else {
+                "update"
+            }
+        };
+        if ["copy", "update"].contains(&status) {
+            bytes += size
+        }
+        items.push(CopyItem {
+            source_path: (source_name != name).then_some(source_name),
+            path: name,
+            status: status.into(),
+            size,
+            source_stamp,
+            destination_stamp,
+            verified: trusted,
+        });
+    }
+    // Menu-written lists on the drive follow moved folders even when staging has none.
+    let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
+    for name in [".ohmy3do/favorites.txt", ".ohmy3do/recent.txt", ".ohmy3do/last-position.txt"] {
+        let dest = f::safe(&target, name)?;
+        if moves.is_empty() || items.iter().any(|i| i.path == name) || !dest.is_file() {
+            continue;
+        }
+        let raw = fs::read(&dest)?;
+        let changed = if name.ends_with("last-position.txt") {
+            library::remap_position(&raw, &remaps, &old).is_some()
+        } else {
+            library::remap_lines(&raw, &remaps).is_some()
+        };
+        if changed {
+            let (size, stamp) = f::stamp(&dest)?;
+            items.push(CopyItem {
+                path: name.into(),
+                source_path: None,
+                status: "remap".into(),
+                size,
+                source_stamp: stamp,
+                destination_stamp: Some(stamp),
+                verified: false,
+            });
+        }
+    }
+    if fs2::available_space(&target)? < bytes {
+        bail!("Insufficient free space for the reviewed USB copy")
+    }
+    let plan = CopyPlan {
+        source,
+        destination: target,
+        moves,
+        files: items,
+        games,
+        bytes,
+    };
+    f::atomic(&report, &serde_json::to_vec_pretty(&plan)?)?;
+    job.say(format!(
+        "USB preview: {} files; {} folders to move; {} disc entries; {:.2} GiB to copy",
+        plan.files.len(),
+        plan.moves.len(),
+        games,
+        bytes as f64 / 1024f64.powi(3)
+    ));
+    Ok(plan)
+}
+pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
+    if f::root(&plan.source)? != plan.source || f::root(&plan.destination)? != plan.destination {
+        bail!("Copy roots changed since preview")
+    }
+    let _source_lock = library::lock_library(&plan.source, cache)?;
+    let _destination_lock = library::lock_library(&plan.destination, cache)?;
+    let mut tx = Journal::new(&plan.destination, cache)?;
+    let mut receipt = plan.clone();
+    let result = (|| -> Result<()> {
+        let remaps = moved_paths(&plan.destination, &plan.moves);
+        let moved: Vec<String> = plan.moves.iter().map(|(old, _)| old.clone()).collect();
+        for (old, new) in &plan.moves {
+            job.check()?;
+            if f::safe(&plan.destination, new)?.exists() {
+                bail!("Destination changed since preview: {new}")
+            }
+            job.say(format!("Moving {old} to {new}"));
+            tx.rename(old, new)?;
+        }
+        for file in plan.files.iter().filter(|file| file.status == "remap") {
+            let dest = f::safe(&plan.destination, &file.path)?;
+            let raw = fs::read(&dest)?;
+            let updated = if file.path == ".ohmy3do/last-position.txt" {
+                library::remap_position(&raw, &remaps, &moved)
+            } else {
+                library::remap_lines(&raw, &remaps)
+            };
+            if let Some(text) = updated {
+                tx.write(&file.path, &text)?;
+            }
+        }
+        let mut order = (0..plan.files.len()).collect::<Vec<_>>();
+        order.sort_by_key(|i| {
+            let name = &plan.files[*i].path;
+            (
+                if name == "boot.iso" {
+                    2
+                } else if name.ends_with(".3di") {
+                    1
+                } else {
+                    0
+                },
+                name.clone(),
+            )
+        });
+        for i in order {
+            let file = &plan.files[i];
+            if !["copy", "update"].contains(&file.status.as_str()) {
+                continue;
+            };
+            job.check()?;
+            let src = f::safe(
+                &plan.source,
+                file.source_path.as_deref().unwrap_or(&file.path),
+            )?;
+            let dest = f::safe(&plan.destination, &file.path)?;
+            if f::stamp(&src)? != (file.size, file.source_stamp) {
+                bail!("Staging changed since preview: {}", file.path)
+            }
+            job.say(format!("Copying {}", file.path));
+            if media_index(&file.path) {
+                if file.status == "update"
+                    && f::stamp(&dest)?.1
+                        != file
+                            .destination_stamp
+                            .context("Missing destination stamp")?
+                {
+                    bail!("Destination changed since preview")
+                };
+                let content = library::beside_index(&fs::read(&src)?)?;
+                tx.write(&file.path, &content)?;
+                if fs::read(&dest)? != content {
+                    bail!("Copy readback failed")
+                }
+            } else if file.status == "copy" {
+                tx.copy(&src, &file.path, None, job)?;
+            } else {
+                if f::stamp(&dest)?.1
+                    != file
+                        .destination_stamp
+                        .context("Missing destination stamp")?
+                {
+                    bail!("Destination changed since preview")
+                };
+                let bytes = fs::read(&src)?;
+                tx.write(&file.path, &bytes)?;
+                if f::sha256(&dest, job)? != f::sha256(&src, job)? {
+                    bail!("Copy readback failed")
+                }
+            }
+            receipt.files[i].status = "verified".into();
+            receipt.files[i].verified = true;
+            receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
+        }
+        for file in &mut receipt.files {
+            if file.status == "unchanged" && file.verified {
+                file.status = "verified".into();
+            }
+        }
+        tx.ensure_directory(".ohmy3do/saves")?;
+        crate::save_cheats::ensure_database(&plan.destination, &mut tx)?;
+        tx.finish()?;
+        f::atomic(
+            &report_path(&plan.source, &plan.destination, cache),
+            &serde_json::to_vec_pretty(&receipt)?,
+        )?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        if let Err(undo) = tx.undo() {
+            bail!(
+                "{error:#}; rollback needs attention: {undo:#}. Keep {}",
+                tx.path.display()
+            )
+        }
+        return Err(error);
+    }
+    job.say("USB copy complete; existing settings and saves preserved");
+    Ok(tx.path)
+}
+pub fn summary(plan: &CopyPlan) -> String {
+    let mut counts = std::collections::BTreeMap::new();
+    for f in &plan.files {
+        *counts.entry(&f.status).or_insert(0) += 1
+    }
+    format!(
+        "{} disc entries · {} files · {} game folders to move · {:.2} GiB to copy\n{}",
+        plan.games,
+        plan.files.len(),
+        plan.moves.len(),
+        plan.bytes as f64 / 1024f64.powi(3),
+        counts
+            .into_iter()
+            .map(|(s, n)| format!("{s}: {n}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    )
+}

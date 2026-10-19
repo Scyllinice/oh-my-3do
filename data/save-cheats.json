@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "doom3do-prefs-v1",
+      "game": "DOOM",
+      "filename": "DoomPrefs",
+      "size": 40,
+      "encoding": "u32be",
+      "signature": { "offset": 0, "value": 19543 },
+      "checksum": { "algorithm": "sum32be", "offset": 36, "seed": 12345 },
+      "source": "https://github.com/Olde-Skuul/doom3do/blob/8a5cdae476e09f2bedd2cc4dcd105dae4b35d4af/source/threedo.c#L395-L486",
+      "notes": "Source-verified preferences layout. No saved health, ammo or mid-level state. Campaign unlock value 23 is confirmed by source/data.c and source/game.c in the same revision.",
+      "fields": [
+        { "label": "Difficulty", "offset": 4, "min": 0, "max": 4 },
+        { "label": "Starting map", "offset": 8, "min": 1, "max": 26 },
+        { "label": "Sound volume", "offset": 12, "min": 0, "max": 15 },
+        { "label": "Music volume", "offset": 16, "min": 0, "max": 15 },
+        { "label": "Control layout", "offset": 20, "min": 0, "max": 5 },
+        { "label": "Unlocked level", "offset": 24, "min": 1, "max": 25 },
+        { "label": "Screen size", "offset": 28, "min": 0, "max": 5 },
+        { "label": "Low detail", "offset": 32, "min": 0, "max": 1 }
+      ],
+      "presets": [
+        { "label": "Unlock campaign levels", "field": 5, "value": 23 }
+      ]
+    }
+  ]
+}

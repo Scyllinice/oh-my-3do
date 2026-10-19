@@ -1,0 +1,84 @@
+# Generated images, signed executables, previews, audits and host tests
+/build/
+/iso/
+/third_party/
+/output/
+
+# Personal artwork and game/save data (project demo art under assets is tracked)
+/artwork/
+/assets/covers/*.cel
+/assets/covers/index.json
+*.iso
+*.cue
+*.bin
+*.srm
+*.3ds
+*.3dc
+*.3di
+*.3dv
+*.3dm
+*.mp4
+*.mov
+*.mkv
+*.avi
+
+# Local USB menu state and diagnostic reports
+/favorites.txt
+/recent.txt
+/last-position.txt
+/diagnostics.txt
+
+# Personal library reports, metadata caches and organizer journals
+/library-plan*.json
+/library-plan*.html
+/artwork-review*.html
+/artwork-review*.json
+/usb-copy-*.json
+/usb-copy-backup-*/
+/categories.json
+/overrides.json
+/library-cache/
+.ohmy3do/
+*.sqlite
+*.sqlite-*
+
+# Python, compiler and editor output
+__pycache__/
+*.py[cod]
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.d
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local agent/application state and credentials
+.agents/
+.codex/
+.aws/
+.tools/
+.env
+.env.*
+!.env.example
+
+# Personal music and Windows download metadata
+*.mp3
+*.wav
+*.aifc
+*:Zone.Identifier
+
+# Native desktop application builds
+/desktop/target/
+/desktop/build/
+*.pdb

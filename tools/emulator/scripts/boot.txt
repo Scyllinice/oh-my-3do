@@ -1,0 +1,7 @@
+# Boot only: screenshots at 5, 10 and 20 seconds.
+wait 300
+shot boot-05s
+wait 300
+shot boot-10s
+wait 600
+shot boot-20s

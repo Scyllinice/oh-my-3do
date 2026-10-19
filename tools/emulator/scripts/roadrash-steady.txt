@@ -1,0 +1,97 @@
+# Road Rash as in roadrash-preview.txt, then about 25 s of untouched TV-picture
+# playback before exporting diagnostics: skipped frames here are steady-state.
+wait 900
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press a 6
+wait 300
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press a 6
+wait 300
+press up 6
+wait 45
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press right 6
+wait 24
+press a 6
+wait 200
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+press down 6
+wait 45
+shot sel
+burst load 8 20
+wait 400
+wait 1500
+chord l+r 6
+wait 60
+press right 4
+wait 10
+press down 4
+wait 10
+press a 4
+wait 60
+shot diag
+press c 4
+wait 600
+shot saved

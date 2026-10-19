@@ -1,0 +1,93 @@
+diff --git a/libopera/opera_cdrom.c b/libopera/opera_cdrom.c
+index d33de65..939fcd0 100644
+--- a/libopera/opera_cdrom.c
++++ b/libopera/opera_cdrom.c
+@@ -45,6 +45,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/stat.h>
+ 
+ #define MSF_BIAS_IN_SECONDS 2
+ #define MSF_BIAS_IN_FRAMES  150
+@@ -1571,7 +1572,8 @@ ode_build_toc(uint32_t start_id_,
+       uint32_t flags;
+ 
+       id++;
+-      if((start != 0) && (id < start))
++      /* FCare continues after the given ID (seekTocTo skips that many). */
++      if((start != 0) && (id <= start))
+         continue;
+       if(emitted >= limit)
+         break;
+@@ -2952,18 +2954,32 @@ ode_change_toc(cdrom_device_t *cd_)
+   char path[PATH_MAX_LENGTH];
+   bool is_dir;
+ 
++  /* Test harness: with OPERA_FCARE_TOC_BUG set, mimic the FCare firmware's
++     setTocLevel(): it remembers the last ID it was given, ignores a request
++     for that same ID, only updates it for a file, and clears it going up. */
++  static uint32_t fcare_current_toc;
++  bool fcare_bug = getenv("OPERA_FCARE_TOC_BUG") != NULL;
++
+   toc_id = ode_cmd_be32(cd_->cmd);
+   if(toc_id == 0)
+     {
+       ode_str_copy(g_CDROM_STATE.ode.current,g_CDROM_STATE.ode.root,sizeof(g_CDROM_STATE.ode.current));
++      fcare_current_toc = 0;
+     }
+   else if((toc_id & ODE_TOC_ENTRY_MASK) == ODE_TOC_ENTRY_MASK)
+     {
+       ode_go_parent();
++      fcare_current_toc &= ~ODE_TOC_ENTRY_MASK;
++    }
++  else if(fcare_bug && (toc_id == fcare_current_toc))
++    {
++      fprintf(stderr,"[fcare] ignored change to %08x (same as last)\n",toc_id);
+     }
+-  else if(ode_find_toc_path(toc_id,path,sizeof(path),&is_dir) && is_dir)
++  else
+     {
+-      ode_str_copy(g_CDROM_STATE.ode.current,path,sizeof(g_CDROM_STATE.ode.current));
++      if(ode_find_toc_path(toc_id,path,sizeof(path),&is_dir) && is_dir)
++        ode_str_copy(g_CDROM_STATE.ode.current,path,sizeof(g_CDROM_STATE.ode.current));
++      fcare_current_toc = toc_id;
+     }
+ 
+   ode_status(cd_,cd_->cmd[0],NULL,0);
+@@ -3130,6 +3146,16 @@ ode_open_file(cdrom_device_t *cd_)
+         path[0] = 0;
+     }
+ 
++  /* FCare opens every file FA_WRITE|FA_READ|FA_OPEN_ALWAYS whatever the
++     mode byte says, and the menu writes after a plain open. Test harness:
++     symlinked library files stay read-only. */
++  if(path[0] != 0)
++    {
++      struct stat link;
++      if((lstat(path,&link) != 0) || !S_ISLNK(link.st_mode))
++        write = true;
++    }
++
+   if((path[0] != 0) && ode_path_is_under_root(path))
+     {
+       g_CDROM_STATE.ode.file = filestream_open(path,
+@@ -3143,6 +3169,8 @@ ode_open_file(cdrom_device_t *cd_)
+                                                  RETRO_VFS_FILE_ACCESS_READ_WRITE,
+                                                  RETRO_VFS_FILE_ACCESS_HINT_NONE);
+       payload[0] = (g_CDROM_STATE.ode.file != NULL);
++      if(getenv("OPERA_ODE_LOG"))
++        fprintf(stderr,"[ode] open %s -> %d\n",path,payload[0]);
+       if(g_CDROM_STATE.ode.file != NULL)
+         {
+           ode_str_copy(g_CDROM_STATE.ode.file_path,path,sizeof(g_CDROM_STATE.ode.file_path));
+@@ -3194,7 +3222,8 @@ ode_read_file(cdrom_device_t *cd_)
+       if(result < 0)
+         cd_->xbus_status |= CDROM_STATUS_ERROR;
+       else
+-        actual = (uint16_t)result;
++        /* FCare echoes the requested count on success, even at end of file. */
++        actual = len;
+     }
+ 
+   ode_file_buffer_write_reset();
