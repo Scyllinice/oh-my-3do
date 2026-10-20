@@ -1,6 +1,6 @@
 use crate::{
     disc::{self as d, rx},
-    fsutil as f, media,
+    fsutil as f, media, categories,
     model::*,
     Job,
 };
@@ -562,8 +562,22 @@ pub fn scan(
         catalog,
         entries,
     };
+    let config = categories::load(&plan.root)?;
+    for entry in &mut plan.entries { apply_category_defaults(entry, &config); }
     collisions(&mut plan)?;
     Ok(plan)
+}
+pub fn apply_category_defaults(entry: &mut Entry, config: &categories::Categories) {
+    if let Some(name) = config.destination(&entry.category) {
+        let name = name.to_owned();
+        if name != entry.category {
+            let old = format!("{}/", entry.category);
+            let new = format!("{name}/");
+            entry.target = entry.target.replacen(&old, &new, 1);
+            for file in &mut entry.files { file.target = file.target.replacen(&old, &new, 1); }
+            entry.category = name;
+        }
+    }
 }
 pub fn collisions(plan: &mut Plan) -> Result<()> {
     for entry in &mut plan.entries {
@@ -1371,10 +1385,13 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
         job.check()?;
         media::prepare_entry(entry, prefs, cache, &mut prepared, job)?;
     }
+    let category_config = categories::load(&root)?;
+    for entry in &entries { anyhow::ensure!(category_config.contains(&entry.category),"Unknown category: {}",entry.category); }
     let marker = f::safe(&root, ".ohmy3do/ohmy3do.ini")?;
     let mut tx = Journal::new(&root, cache)?;
     job.say(format!("Undo journal: {}", tx.path.display()));
     let result = (|| -> Result<()> {
+        if !root.join(categories::PATH).exists() { tx.write(categories::PATH,&category_config.encode()?)?; }
         if !marker.exists() {
             tx.write(".ohmy3do/ohmy3do.ini", include_bytes!("../../ohmy3do.ini"))?;
         }
@@ -1803,19 +1820,17 @@ pub fn recategorize(
     cache: &Path,
     job: &Job,
 ) -> Result<PathBuf> {
-    let category = CATEGORIES
-        .iter()
-        .find(|c| c.eq_ignore_ascii_case(category))
-        .context("Unknown category")?;
+    let config = categories::load(root)?;
+    let category = config.categories.iter().find(|c|c.name.eq_ignore_ascii_case(category)).context("Unknown category")?.name.as_str();
     let _lock = lock_library(root, cache)?;
-    let mut db = database(root)?;
+    let db = database(root)?;
     let mut folders = BTreeMap::new();
     for disc in discs {
         let parts: Vec<&str> = disc.split('/').collect();
-        if parts.len() < 4 || !CATEGORIES.iter().any(|c| c.eq_ignore_ascii_case(parts[0])) {
+        if parts.len() < 4 || !config.contains(parts[0]) {
             bail!("Not in a Category/Region/Game folder: {disc}")
         }
-        if parts[0] != *category {
+        if parts[0] != category {
             folders.insert(
                 parts[..3].join("/"),
                 format!("{category}/{}", parts[1..3].join("/")),
@@ -1825,6 +1840,25 @@ pub fn recategorize(
     if folders.is_empty() {
         bail!("Already in {category}")
     }
+    move_category_folders(root, db, folders, None, cache, job)
+}
+pub fn configure_categories(root:&Path, old:&categories::Categories, new:&categories::Categories, cache:&Path, job:&Job)->Result<PathBuf> {
+    let _lock=lock_library(root,cache)?;
+    anyhow::ensure!(&categories::load(root)?==old,"Categories changed on disk; reopen the editor");
+    let mut folders=BTreeMap::new();
+    for category in &old.categories {
+        let previous=f::safe(root,&category.name)?;
+        anyhow::ensure!(!previous.exists() || previous.is_dir(),"Category path is occupied by a file: {}",category.name);
+        if let Some(next)=new.categories.iter().find(|c|c.id==category.id) {
+            if next.name!=category.name && previous.exists() {
+                anyhow::ensure!(!f::safe(root,&next.name)?.exists(),"Destination category already exists: {}",next.name);
+                folders.insert(category.name.clone(),next.name.clone());
+            }
+        } else { anyhow::ensure!(!previous.exists() || (previous.is_dir() && fs::read_dir(&previous)?.next().is_none()),"Move games out of {} before removing it",category.name); if previous.exists() {folders.insert(category.name.clone(),format!(".ohmy3do/removed-categories/{}",uuid::Uuid::new_v4()));} }
+    }
+    move_category_folders(root,database(root)?,folders,Some(new),cache,job)
+}
+fn move_category_folders(root:&Path, mut db:Value, folders:BTreeMap<String,String>, config:Option<&categories::Categories>, cache:&Path, job:&Job)->Result<PathBuf> {
     let mut map = HashMap::new();
     for record in db["games"].as_array_mut().context("Invalid library records")? {
         let path = record["path"].as_str().unwrap_or("").to_owned();
@@ -1832,7 +1866,7 @@ pub fn recategorize(
             let moved = format!("{new}{}", &path[old.len()..]);
             map.insert(f::fold(&path), moved.clone());
             record["path"] = json!(moved);
-            record["category"] = json!(category);
+            record["category"] = json!(new.split('/').next().unwrap());
             record["category_reason"] = json!("Explicit category override");
             record["category_review"] = json!(false);
         }
@@ -1847,6 +1881,7 @@ pub fn recategorize(
             job.say(format!("Moving {old} to {new}"));
             tx.rename(old, new)?;
         }
+        if let Some(config)=config { tx.write(categories::PATH,&config.encode()?)?; }
         write_database(&mut tx, db, vec![], &[])?;
         for (folder, index) in [("covers", &mut covers), ("previews", &mut previews)] {
             let moved: Vec<(String, String)> = index

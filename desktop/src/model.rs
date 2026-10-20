@@ -88,7 +88,7 @@ pub struct Entry {
 }
 impl Entry {
     pub fn resolvable(&self) -> bool {
-        !self.blocked && !self.target.is_empty() && CATEGORIES.contains(&self.category.as_str())
+        !self.blocked && !self.target.is_empty() && !self.category.is_empty()
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

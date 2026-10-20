@@ -60,6 +60,7 @@
 #define TOOL_SLOT_JUMP 24
 #define TOOL_SLOT_FIND 25
 #define TOOL_SLOT_QUERY 26
+#define TOOL_CATEGORIES 27
 #define MAX_DEPTH 32
 #define DIRECTIONS (ControlUp | ControlDown | ControlLeft | ControlRight)
 #define COVER_IDLE_MS 700UL
@@ -287,6 +288,7 @@ typedef struct Menu {
     int backup_mode;
     unsigned int backup_slot;
     int usb_tested;
+    int categories_valid;
     int config_result;
     int backup_result;
     int restore_result;
@@ -1953,6 +1955,23 @@ static void refresh_usb_art(Menu *menu)
     if (menu->config_result == 2 || strcmp(menu->ode.identity,"LOCODE")) return;
     menu->art_index_volume=volume;
     menu->art_indexes_valid=1; /* Missing indexes also wait for explicit refresh. */
+    {
+        char *text=(char *)malloc(MENU_CATEGORIES_BYTES); size_t length=0;
+        int beside=menu->ode.media_beside; const char *folder=menu->ode.media_folder;
+        menu_categories_reset(); menu->categories_valid=0;
+        menu->ode.media_beside=0;menu->ode.media_folder=NULL;
+        if(text) {
+            int result=usb_file_text(&menu->ode,ode_bus_read_buffer,"categories.json",text,MENU_CATEGORIES_BYTES,&length);
+            if(!result && length) menu->categories_valid=menu_categories_parse(text,length)==0;
+            else if(!menu->bus.timed_out && !menu->ode.navigation_failed) {
+                menu->categories_valid=1;
+                if(menu->config.hide_adult) menu_category_toggle(7);
+            }
+            free(text);
+        }
+        menu->ode.media_beside=beside;menu->ode.media_folder=folder;
+        if(menu->categories_valid) {menu->config.hide_adult=menu->saved_config.hide_adult=0;menu_set_hide_adult(0);}
+    }
     message = menu->message;
     menu->message = "Reading media indexes...";
     draw(menu);
@@ -2508,6 +2527,7 @@ static void connect_ode(Menu *menu)
     memset(menu->ode.identity, 0, sizeof(menu->ode.identity));
     memset(menu->ode.revision, 0, sizeof(menu->ode.revision));
     memset(menu->ode.identity_reply, 0, sizeof(menu->ode.identity_reply));
+    menu_categories_reset();
     menu_config_defaults(&menu->config);
     usb_art_index_free(&menu->usb_art);
     cover_cache_clear(&menu->cover_cache);
@@ -2937,7 +2957,7 @@ static void load_position(Menu *menu)
         if (menu->bus.timed_out || menu->ode.navigation_failed) menu->ready = menu->view_valid = 0;
         return;
     }
-    if (!*menu->last_position.folder) return;
+    if (!*menu->last_position.folder || menu_categories_hidden_path(menu->last_position.folder)) return;
     location = (LibraryLocation *)malloc(sizeof(*location));
     if (!location) return;
     result = library_open_directory(&menu->ode,NULL,0,&menu->listing,folder_workaround(menu),menu->last_position.folder,location);
@@ -3053,10 +3073,10 @@ static void open_recent(Menu *menu)
     if (data && !text_at_root(menu,"recent.txt",NULL,data,FAVORITES_BYTES,&length) &&
         !menu_favorites_parse(&menu->recent,data,length) && menu->recent.count <= 10) {
         menu->recent_valid = 1;
-        if (menu->config.hide_adult) {
+        {
             size_t i, kept = 0;
             for (i = 0; i < menu->recent.count; ++i)
-                if (!menu_adult_path(menu->recent.paths[i])) menu->recent.paths[kept++] = menu->recent.paths[i];
+                if (!menu_categories_hidden_path(menu->recent.paths[i]) && (!menu->config.hide_adult || !menu_adult_path(menu->recent.paths[i]))) menu->recent.paths[kept++] = menu->recent.paths[i];
             /* The file still lists them: re-read it before the next launch rewrites it. */
             if (kept != menu->recent.count) { menu->recent.count = kept; menu->recent_valid = 0; }
         }
@@ -3308,10 +3328,8 @@ static void change_config(Menu *menu, int direction)
     if (menu->tool_selected == 11) { save_config(menu); return; }
     if (menu->tool_selected == 7) { menu->config.preview_sound = !menu->config.preview_sound; return; }
     if (menu->tool_selected == 8) {
-        menu->config.hide_adult = !menu->config.hide_adult;
-        menu_set_hide_adult(menu->config.hide_adult);
-        /* At the USB root the Adult folder appears or goes at once. */
-        if (!menu->depth || (menu->depth == 1 && !(menu->path_ids[0] & 0xffffffUL))) load_directory(menu, 0);
+        menu->tools=TOOL_CATEGORIES;menu->tool_selected=0;
+        menu->tool_message=menu->categories_valid ? NULL : "Invalid categories.json. Repair on PC.";
         return;
     }
     if (menu->tool_selected == 4) { menu->settings_video_previews = !menu->settings_video_previews; return; }
@@ -3435,7 +3453,7 @@ static void search_library(Menu *menu,int rebuild)
     menu->search_count=0;
     for (i=0;i<menu->catalog.count;++i) {
         const char *path=menu->catalog.paths[i], *name=strrchr(path,'/');
-        if (menu->config.hide_adult && menu_adult_path(path)) continue;
+        if (menu_categories_hidden_path(path) || (menu->config.hide_adult && menu_adult_path(path))) continue;
         if (menu_name_matches(name ? name+1 : path,menu->find_query)) menu->search_matches[menu->search_count++]=i;
     }
     menu->tool_message=NULL; menu->tools=TOOL_RESULTS; menu->tool_selected=0; menu->selection_since=now_ms(menu);
@@ -3764,6 +3782,7 @@ static void draw_tools(Menu *menu)
     if (menu->tools == TOOL_DIAG) title = "Diagnostics";
     if (menu->tools == TOOL_CONFIRM_BACKUP || menu->tools == TOOL_CONFIRM_RESTORE) title = "Confirm action";
     if (menu->tools == TOOL_FAVORITES) title = "Favorites";
+    if (menu->tools == TOOL_CATEGORIES) title = "Show / hide categories";
     if (menu->tools == TOOL_CONFIG) title = config_dirty(menu) ? "Settings / unsaved" : "Settings";
     if (menu->tools == TOOL_RECENT) title = "Recent games";
     if (menu->tools == TOOL_FIND) title = "Find a game";
@@ -3854,11 +3873,20 @@ static void draw_tools(Menu *menu)
             else format(line, "%lu / %lu", (unsigned long)(count ? menu->tool_selected + 1 : 0), (unsigned long)count);
             label(menu, 22, 188, line, OSD_GREEN, UI_FONT_SMALL);
         }
+    } else if (menu->tools == TOOL_CATEGORIES) {
+        count=menu_categories_count();start=menu->tool_selected/8*8;
+        for(i=start;i<count && i<start+8;++i) {
+            int y=82+(int)(i-start)*13,selected=i==menu->tool_selected;
+            Color ink=tool_row(menu,y,selected);
+            scroll_label(menu,24,y,222,menu_category_name(i),strlen(menu_category_name(i)),UI_FONT_SMALL,ink,selected?ACCENT:PANEL,selected);
+            label_on(menu,256,y,menu_category_hidden(i)?"HIDE":"SHOW",ink,UI_FONT_SMALL,selected?ACCENT:PANEL);
+        }
+        label(menu,24,194,"A toggles and saves immediately.",MUTED,UI_FONT_SMALL);
     } else if (menu->tools == TOOL_CONFIG) {
         start=menu->tool_selected/9*9;
         for (i = start; i < 12 && i < start+9; ++i) {
             static const char *names[12]={"Screen margin","Large game titles","Folder workaround","Show covers","Video previews",
-                "Remember position","Recent games","Preview sound","Hide adult games","Restore display defaults","Discard unsaved changes","Save changes to USB"};
+                "Remember position","Recent games","Preview sound","Categories...","Restore display defaults","Discard unsaved changes","Save changes to USB"};
             const char *value=NULL;
             int selected=i == menu->tool_selected, y=82+(int)(i-start)*12, flag=-1;
             Color ink;
@@ -3870,7 +3898,7 @@ static void draw_tools(Menu *menu)
             else if (i == 5) flag=menu->settings_remember_position;
             else if (i == 6) flag=menu->settings_recent_games;
             else if (i == 7) flag=menu->config.preview_sound;
-            else if (i == 8) flag=menu->config.hide_adult;
+
             if (flag >= 0) value=flag ? "ON" : "OFF";
             ink=tool_row(menu,y,selected);
             label(menu,24,y,names[i],selected ? INK : TEXT,UI_FONT_SMALL);
@@ -4079,6 +4107,7 @@ static void draw_tools(Menu *menu)
         else if (menu->tools == TOOL_COMPARE_BYTES) controls="Left/Right:Page B:Back";
         else if (menu->tools == TOOL_SLOTS && !menu->backup_mode) controls=menu->compare_choosing ? "A:Compare with this slot B:Cancel" : "A:Open C:Name X:Compare";
         else if (menu->tools == TOOL_FIND) controls = "Arrows:Choose A:Key B:Cancel";
+        else if (menu->tools == TOOL_CATEGORIES) controls = "A:Show/Hide B:Settings";
         else if (menu->tools == TOOL_CONFIG) controls = "Left/Right:Change C:Save B:Back";
         else if (menu->tools == TOOL_BACKUP_DETAILS) controls = "A:Continue C:Old/New B:Back";
         else if (menu->tools == TOOL_SAVES) controls = "A:Back up one C:All X:Refresh";
@@ -4498,6 +4527,7 @@ static void tools_input(Menu *menu, u32 pressed)
         return;
     }
     if (page == TOOL_FAVORITES && (pressed & ControlRightShift)) { begin_favorites_move(menu); return; }
+    if(page==TOOL_CATEGORIES && (pressed & ControlB)) {menu->tools=TOOL_CONFIG;menu->tool_selected=8;menu->tool_message=NULL;return;}
     if (pressed & ControlB) {
         menu->tool_message = NULL;
         if (page == TOOL_HOME) { menu->tools = 0; selection_changed(menu); }
@@ -4533,6 +4563,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if (page == TOOL_ARCHIVE) count = menu->backup.count;
     if (page == TOOL_SLOTS) count = slot_count(menu);
     if (page == TOOL_CONFIG) count = 12;
+    if (page == TOOL_CATEGORIES) count=menu_categories_count();
     if (page == TOOL_FAVORITES) count = menu_favorites_visible_count(&menu->favorites,menu->config.hide_adult);
     if (page == TOOL_RECENT) count = menu->recent.count;
     if (page == TOOL_BACKUP_DETAILS) count = menu->details_new ? menu->pending.count : menu->backup.count;
@@ -4548,6 +4579,19 @@ static void tools_input(Menu *menu, u32 pressed)
     }
     if (page == TOOL_HELP) {
         if (pressed & (ControlLeft | ControlRight)) menu->tool_selected = !menu->tool_selected;
+        return;
+    }
+    if(page==TOOL_CATEGORIES && (pressed & ControlA)) {
+        unsigned int root=menu->depth && !(menu->path_ids[0]&0xffffffUL)?1:0;
+        if(!menu->categories_valid) {menu->tool_message="Invalid categories.json. Repair on PC.";return;}
+        if(menu_category_toggle(menu->tool_selected)<0) {menu->tool_message="Invalid category data.";return;}
+        if(text_at_root(menu,"categories.json",menu_categories_text(),NULL,0,NULL)<0) {
+            menu_category_toggle(menu->tool_selected);menu->tool_message="Visibility save failed. Check USB.";return;
+        }
+        menu->tool_message="Visibility saved and verified.";
+        if(menu->depth>root && menu_categories_hidden_name(menu->path[root])) {
+            while(menu->ready && menu->depth>root) {unsigned int before=menu->depth;go_back(menu);if(menu->depth==before) break;}
+        } else if(menu->depth==root) load_directory(menu,menu->selected);
         return;
     }
     if (page == TOOL_CONFIG && (pressed & ControlX)) { discard_config(menu); return; }
@@ -4682,6 +4726,7 @@ int main(int argc, char **argv)
     unsigned long repeat_at = 0;
     (void)argc;
     (void)argv;
+    menu_categories_reset();
     menu_config_defaults(&menu.config);
     menu.settings_usb_covers = menu.config.usb_covers;
     menu.settings_remember_position = menu.config.remember_position;

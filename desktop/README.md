@@ -17,6 +17,27 @@ Preferences, catalogs, undo journals and update downloads live in the platform
 cache directory under `oh-my-3do`. The app continues to use
 `native-settings.json`. Changing the GUI does not change disc or save formats.
 
+## Categories and console visibility
+
+Open **Settings & tools → Manage categories…** to add or rename categories,
+mark any category **Hide on console**, and choose the destination for each detected
+disc type. **Choose library / drive…** edits another library or USB directly.
+The desktop continues to show hidden categories so you can manage and unhide them.
+
+The shared file is `.ohmy3do/categories.json`. The eight original categories are
+only defaults. Up to 32 categories are supported, with names up to 48 printable
+ASCII characters; filename punctuation and reserved names are rejected.
+Names must be unique ignoring case. Removing a populated category is blocked:
+move its games first. Renaming updates folders, the library database, media
+indexes, Favorites, Recent and saved position using one undo journal. Existing
+destination folders are never merged or overwritten implicitly.
+
+USB copying installs category names and import destinations while preserving
+visibility choices already saved on that drive. Console **Tools → Settings →
+Categories…** shows every configured category, including hidden ones. Press A to
+show/hide one and save it immediately. This also filters Find, Favorites and Recent;
+it does not delete games or backup saves. The updated boot.iso is required.
+
 ## Library and imports
 
 Choose your staging library with **Change folder…**. The Library groups discs

@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod save_catalog;
 pub mod catalog;
+pub mod categories;
 pub mod console_config;
 pub mod disc;
 pub mod fsutil;

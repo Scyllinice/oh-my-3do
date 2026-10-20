@@ -25,7 +25,7 @@ o = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(o)
 FOLD = o.index_tools.fold
 KINDS = {'cover': ('covers', '.3dc'), 'preview': ('previews', '.3dv')}
-PERSONAL = {'ohmy3do.ini', 'favorites.txt', 'recent.txt', 'last-position.txt'}
+PERSONAL = {'ohmy3do.ini', 'favorites.txt', 'recent.txt', 'last-position.txt', 'categories.json'}
 
 
 def real_root(path):
@@ -489,11 +489,20 @@ def usb_inventory(root):
     return sorted(files),games
 
 
-def folder_moves(target, files):
+def folder_moves(target, files, allowed=None, source_config=None):
+    category_moves=[]
+    if source_config:
+        previous=o.category_config(target)
+        for category in source_config['categories']:
+            old=next((c for c in previous['categories'] if c['id']==category['id'] and c['name']!=category['name']),None)
+            if old and checked_path(target,old['name']).exists():
+                if checked_path(target,category['name']).exists(): raise ValueError('Both old and new category folders exist; resolve them before copying')
+                category_moves.append((old['name'],category['name']))
     wanted = {'/'.join(Path(name).parts[:3])
-              for name in files if len(Path(name).parts) >= 4 and Path(name).parts[0] in o.CATEGORIES}
+              for name in files if len(Path(name).parts) >= 4 and Path(name).parts[0] in (allowed or o.CATEGORIES)}
     found = {}
-    for category in o.CATEGORIES:
+    for category in o.category_names(target):
+        if any(category==old for old,_ in category_moves): continue
         parent = checked_path(target, category)
         if not parent.is_dir(): continue
         for region in parent.iterdir():
@@ -504,9 +513,10 @@ def folder_moves(target, files):
                 checked_path(target, name)
                 if game.is_dir() and FOLD(name) not in {FOLD(p) for p in wanted}:
                     found.setdefault(FOLD('/'.join(name.split('/')[1:])), []).append(name)
-    moves = []
+    moves = list(category_moves)
     used = set()
     for new in sorted(wanted):
+        if any(new.startswith(prefix+'/') for _,prefix in category_moves): continue
         candidates = found.get(FOLD('/'.join(new.split('/')[1:])), [])
         if not checked_path(target, new).exists() and len(candidates) == 1:
             old = candidates[0]
@@ -532,7 +542,8 @@ def usb_plan(root,target,verify=False,receipts=None):
         raise ValueError('Staging and USB directories must be separate and non-overlapping')
     print('Validating staging library and indexed media...',flush=True)
     files,games=usb_inventory(root)
-    moves = folder_moves(target, files)
+    o.transfer_categories(root,target)
+    moves = folder_moves(target, files, o.category_names(root), o.category_config(root))
     remaps = move_remaps(target, moves)
     operations=[dict(path=new, source_path=old, status='move', size=0, mtime_ns=0) for old,new in moves]
     receipts=receipts or {}
@@ -551,7 +562,7 @@ def usb_plan(root,target,verify=False,receipts=None):
         elif personal and dest.exists():
             if name.endswith('/ohmy3do.ini'):
                 validate_config(dest)
-            status='preserve'
+            status='update' if name.endswith('/categories.json') else 'preserve'
         elif not dest.exists():
             status='copy'
         elif not dest.is_file():
@@ -635,6 +646,7 @@ def prepare_usb(root,target,report,apply=False,verify=False):
         result['journal'] = str(tx.path)
         o.atomic_write(report,o.json_bytes(result))
         try:
+            category_config=o.transfer_categories(root,target)
             moves = [(r['source_path'], r['path']) for r in operations if r['status'] == 'move']
             remaps = move_remaps(target, moves)
             for old, new in moves:
@@ -647,6 +659,8 @@ def prepare_usb(root,target,report,apply=False,verify=False):
                 stat=source.stat()
                 if (stat.st_size,stat.st_mtime_ns)!=(item['size'],item['mtime_ns']):
                     raise ValueError('Staging file changed since validation: '+name)
+                if item['status']=='copy' and name.endswith('/categories.json'):
+                    tx.write(name,o.json_bytes(category_config));continue
                 if item['status']=='copy' and dest.exists():
                     raise ValueError('Destination appeared during copying: '+name)
                 if item['status']=='update':
@@ -658,8 +672,11 @@ def prepare_usb(root,target,report,apply=False,verify=False):
                     tx.save()
                     item['verified_copy']=stream_copy(source,dest)
                 else:
-                    tx.write(name,source.read_bytes())
-                    if sha256(dest) != sha256(source):
+                    content=source.read_bytes()
+                    if name.endswith('/categories.json'):
+                        content=o.json_bytes(category_config)
+                    tx.write(name,content)
+                    if dest.read_bytes()!=content:
                         raise ValueError('USB update readback failed: ' + name)
                     ds=dest.stat()
                     item['verified_copy']=dict(source_size=stat.st_size,source_mtime_ns=stat.st_mtime_ns,

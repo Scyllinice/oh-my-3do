@@ -242,9 +242,14 @@ while an uncertain transport or failed folder restoration blocks it.
 
 ## Display preferences and configuration
 
-Tools → Settings exposes every INI setting: additional screen
+Tools → Settings exposes display and library preferences: additional screen
 margins (0–12 pixels), larger game/queue titles, the folder compatibility workaround, Show covers, Video previews,
-remembered position, recent games, preview sound, and hiding adult games. Left/Right or A changes the selected
+remembered position, recent games and preview sound. **Categories…** opens the
+show/hide list for every configured category. Press A to toggle one and save it
+immediately; B returns to Settings. Hidden categories are excluded from browsing,
+Find, Favorites and Recent, while their files and list entries remain on USB.
+Configure category names and import destinations in the desktop app; these are
+shared in `.ohmy3do/categories.json`. Left/Right or A changes the selected
 value. Preview sound, display and hiding changes take effect immediately. Save the remaining
 options and cold boot to apply them. The settings list spans two pages; keep
 pressing Down to reach the remaining actions, or press C to save from either page.
@@ -311,9 +316,9 @@ firmware ignores entering a folder whose ID matches the one it last entered.
 `0` (the default) is automatic: the workaround is used with the FCare ODE and
 costs nothing unless a collision would happen. `1` uses it with any ODE and `2`
 turns it off. Diagnostics shows whether it is in use. `usb_covers` and `video_previews` are 0/1; previews
-default off. Margin is 0–12; large titles is 0/1. The three library settings are 0/1. `hide_adult=1`
-hides the `Adult` category folder at the USB root, leaves its games out of Find,
-and hides them from Recent games and Favorites. Both files retain hidden games,
+default off. Margin is 0–12; large titles is 0/1. The three library settings are 0/1. `hide_adult` is a legacy fallback used only without a category configuration.
+When `.ohmy3do/categories.json` exists, its per-category visibility takes precedence.
+The desktop carries the old Adult visibility choice into a newly created category file. Both files retain hidden games,
 including when visible favorites are removed or reordered. Missing optional settings use their defaults. Unknown/duplicate
 settings or invalid values reject the config. Keep PC-edited text below 512
 bytes. A full 512-byte buffer is accepted only with the generated end comment

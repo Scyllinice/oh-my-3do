@@ -11,3 +11,11 @@ export function selectedDiscs(groups,selected){return groups.filter(g=>selected.
 export function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 export function formatBytes(n){if(n<1024)return `${n} B`;if(n<1024**2)return `${(n/1024).toFixed(1)} KB`;if(n<1024**3)return `${(n/1024**2).toFixed(1)} MB`;return `${(n/1024**3).toFixed(2)} GB`;}
 export function slotMatches(slot,query){const text=[slot.name,slot.games,slot.search,...(slot.files||[])].join(' ').toLowerCase();return query.trim().toLowerCase().split(/\s+/).every(q=>text.includes(q));}
+
+// Hide Windows extended-length syntax in labels; retain original paths for I/O.
+export function displayPath(value){
+ const path=String(value??'');
+ if(/^\\\\\?\\[a-z]:\\/i.test(path))return path.slice(4);
+ if(/^\\\\\?\\UNC\\/i.test(path))return '\\\\'+path.slice(8);
+ return path;
+}

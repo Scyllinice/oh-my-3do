@@ -165,6 +165,7 @@ pub fn ensure_support(
     if !ini.exists() || ini.metadata()?.len() == 0 {
         tx.write(console_config::PATH, &settings.encode()?)?;
     }
+    if !f::safe(root, crate::categories::PATH)?.exists() { tx.write(crate::categories::PATH,&crate::categories::load(root)?.encode()?)?; }
     library::build_missing_indexes(root, tx, job)?;
     let catalog = f::safe(root, ".ohmy3do/saves/slot-catalog.3di")?;
     ensure!(

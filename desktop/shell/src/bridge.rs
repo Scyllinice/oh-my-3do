@@ -1,7 +1,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use oh_my_3do_library::{
-    self as core, backup, catalog, console_config, fsutil as f, library, media,
+    self as core, backup, catalog, categories, console_config, fsutil as f, library, media,
     model::*,
     save_archive::{Archive, Entry},
     save_catalog, save_cheats, self_update, setup, updates, usb, Job,
@@ -268,7 +268,28 @@ fn dispatch(
         "library" => {
             let root = root(s)?;
             let db = library::database(&root)?;
-            Ok(json!({"root":root,"records":db["games"]}))
+            Ok(
+                json!({"root":root,"records":db["games"],"categories":categories::load(&root)?.names()}),
+            )
+        }
+        "categories_read" => {
+            let root = f::root(&path(a, "root")?)?;
+            Ok(json!({"root":root,"config":categories::load(&root)?}))
+        }
+        "categories_save" => {
+            let root = f::root(&path(a, "root")?)?;
+            let original = serde_json::from_value(a["original"].clone())?;
+            let config = serde_json::from_value(a["config"].clone())?;
+            s.last = Some(categories::save(
+                &root,
+                &original,
+                &config,
+                &state.cache,
+                job,
+            )?);
+            s.import = None;
+            s.copy = None;
+            Ok(json!({"journal":s.last}))
         }
         "scan" => {
             let inputs: Vec<PathBuf> = serde_json::from_value(a["paths"].clone())?;
@@ -279,6 +300,7 @@ fn dispatch(
             Ok(response)
         }
         "edit_import" => {
+            let config = categories::load(&root(s)?)?;
             let plan = s.import.as_mut().context("Scan discs first")?;
             let i = a["index"].as_u64().context("Choose an import")? as usize;
             let entry = plan.entries.get_mut(i).context("Import changed")?;
@@ -295,9 +317,10 @@ fn dispatch(
                     .get(n as usize)
                     .context("Release changed")?;
                 library::assign(entry, g, Some(n as usize), None);
+                library::apply_category_defaults(entry, &config);
             }
             if let Some(category) = a["category"].as_str() {
-                ensure!(CATEGORIES.contains(&category), "Invalid category");
+                ensure!(config.contains(category), "Invalid category");
                 if let Some(n) = entry.game {
                     library::assign(entry, &plan.catalog.games[n], Some(n), Some(category));
                 }
@@ -311,6 +334,7 @@ fn dispatch(
                     region: Some(text(a, "region")?.into()),
                     ..Default::default()
                 };
+                ensure!(config.contains(text(a, "category")?), "Invalid category");
                 entry.blocked = false;
                 entry.reason = "Explicit unverified import".into();
                 entry.confidence = "unverified".into();

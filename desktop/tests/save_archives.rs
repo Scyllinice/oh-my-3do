@@ -197,7 +197,7 @@ int main(int argc,char **argv) {
         .args([
             "src/save_archive.c",
             "src/usb_art.c",
-            "src/menu_ui.c",
+            "src/menu_ui.c", "src/menu_categories.c",
             "src/cover_catalog.c"
         ])
         .arg("-o")

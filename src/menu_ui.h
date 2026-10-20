@@ -1,5 +1,6 @@
 #ifndef OH_MY_3DO_MENU_UI_H
 #define OH_MY_3DO_MENU_UI_H
+#include "menu_categories.h"
 #include <stddef.h>
 
 typedef struct MenuCover {

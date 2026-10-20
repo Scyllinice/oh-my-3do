@@ -1548,7 +1548,7 @@ def main():
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
-                        str(ROOT / "src/menu_ui.c"), str(ROOT / "src/ui_font.c"),
+                        str(ROOT / "src/menu_ui.c"), str(ROOT / "src/menu_categories.c"), str(ROOT / "src/ui_font.c"),
                         str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/preview_v5.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_cheats.c"), str(ROOT / "src/save_cheats_usb.c"), str(ROOT / "src/save_usb.c"), str(ROOT / "src/save_names.c"), str(ROOT / "src/save_catalog.c"),
                         str(ROOT / "src/library_index.c"), str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),

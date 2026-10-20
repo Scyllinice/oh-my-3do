@@ -73,5 +73,5 @@ with tempfile.TemporaryDirectory(prefix="oh3do-favorites-") as directory:
     code.write_text(harness + read + edit + checks)
     subprocess.run([os.environ.get("CC", "cc"), "-std=c89", "-Wall", "-Wextra", "-Werror",
                     "-I", str(root / "src"), str(code), str(root / "src/library_features.c"),
-                    str(root / "src/menu_ui.c"), str(root / "src/cover_catalog.c"), "-o", str(binary)], check=True)
+                    str(root / "src/menu_ui.c"), str(root / "src/menu_categories.c"), str(root / "src/cover_catalog.c"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

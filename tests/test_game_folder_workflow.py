@@ -147,6 +147,6 @@ with tempfile.TemporaryDirectory(prefix='oh3do-game-folder-') as directory:
     # entries remain owned by this test, so only stub this allocation operation.
     code.write_text(stubs + '\n#define ode_listing_free(p) ((void)(p))\n' + controller + checks)
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c89', '-Wall', '-Wextra', '-Werror', '-Isrc', str(code),
-                    'src/ode.c', 'src/library_features.c', 'src/menu_ui.c', 'src/menu_position.c', 'src/menu_sort.c', 'src/cover_catalog.c',
+                    'src/ode.c', 'src/library_features.c', 'src/menu_ui.c', 'src/menu_categories.c', 'src/menu_position.c', 'src/menu_sort.c', 'src/cover_catalog.c',
                     '-o', str(binary)], cwd=root, check=True)
     subprocess.run([str(binary)], check=True)

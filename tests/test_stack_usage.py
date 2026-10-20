@@ -22,7 +22,7 @@ text = assembly.read_text()
 # Saved registers add at most 64 bytes per function. Prevent activate's frame
 # from overlapping queue_set's large buffers on a single call chain.
 limits = {'draw_game_details': 512, 'game_details_text': 256, 'search_library': 512, 'apply_queue': 1024, 'activate': 512, 'queue_set': 20000, 'remember_position': 512,
-          'record_launch': 512, 'export_diagnostics': 8192, 'update_cover': 13000, 'update_preview': 1024}
+          'record_launch': 512, 'export_diagnostics': 8192, 'update_cover': 13000, 'update_preview': 1024, 'tools_input': 4096}
 summary = []
 for name, limit in limits.items():
     body = text.split('\n' + name + '\n', 1)[1]
@@ -40,6 +40,7 @@ frames = {}
 for source, names in {
     'main.c': ['update_cover', 'update_preview', 'read_usb_preview', 'preview_phase'],
     'library_navigation.c': ['library_catalog_build'],
+    'menu_categories.c': ['menu_category_toggle', 'menu_categories_parse'],
     'usb_media.c': ['usb_png_cover', 'png_pixels', 'smooth_canvas', 'usb_preview_load', 'usb_preview_load_profiled', 'usb_preview_load_options', 'preview_stream', 'preview_store', 'preview_block', 'usb_fast_cover', 'usb_preview_frame'],
     'usb_art.c': ['usb_file_read'],
     'png_decode.c': ['pngle_feed'],
@@ -63,3 +64,5 @@ for source, names in {
 assert sum(frames.values())+4096 < 32768, frames
 (out/'media-frames.txt').write_text('\n'.join(f'{name}: {size}' for name,size in frames.items())+'\n')
 print('ARM media stack: conservative PNG/USB/inflate frame sum fits 32 KiB')
+
+assert frames['menu_category_toggle'] < 512 and frames['menu_categories_parse'] < 512, 'Category JSON must stay off the small console stack'

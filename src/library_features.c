@@ -7,7 +7,7 @@ size_t menu_favorites_visible_index(const MenuFavorites *f, int hide_adult, size
 {
     size_t i;
     for (i = 0; i < f->count; ++i)
-        if (!hide_adult || !menu_adult_path(f->paths[i])) {
+        if (!menu_categories_hidden_path(f->paths[i]) && (!hide_adult || !menu_adult_path(f->paths[i]))) {
             if (!visible) return i;
             --visible;
         }
@@ -17,7 +17,7 @@ size_t menu_favorites_visible_count(const MenuFavorites *f, int hide_adult)
 {
     size_t i, count = 0;
     for (i = 0; i < f->count; ++i)
-        if (!hide_adult || !menu_adult_path(f->paths[i])) ++count;
+        if (!menu_categories_hidden_path(f->paths[i]) && (!hide_adult || !menu_adult_path(f->paths[i]))) ++count;
     return count;
 }
 int menu_relative_path(const char *path)

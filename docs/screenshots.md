@@ -30,6 +30,10 @@ The [original 320×240 captures](images/native/) are also available.
 
 ![Tools menu with Save Manager, Game details, Favorites, Settings, Help, Diagnostics, Recent games and Find a game](images/tools.png)
 
+## Category visibility
+
+![Console category settings with Games visible and the other categories hidden](images/categories.png)
+
 ## Save Manager
 
 ![Save Manager showing console saves and the USB backups tab](images/save-manager.png)
@@ -68,6 +72,10 @@ the transfer and save screens use disposable test fixtures.
 Choose Light, Dark, or System under **Settings & tools → Appearance**.
 
 ![Desktop settings with the saved dark theme](images/desktop-dark.png)
+
+## Desktop categories
+
+![Desktop category editor with a renamed category hidden on the console](images/desktop-categories.png)
 
 ## Desktop drive setup
 

@@ -51,6 +51,7 @@ static void draw(Menu *m) {
         if (m->ready && !recovery) assert(configured && positioned && m->config.screen_margin==12 && m->depth==3);
     }
 }
+void menu_categories_reset(void) {}
 void menu_config_defaults(MenuConfig *p) { memset(p,0,sizeof(*p)); p->remember_position=1; }
 static int ode_bus_open(void *p) { (void)p; return fail_stage==1 ? -1 : 0; }
 int ode_identify(Ode *p) { strcpy(p->identity,"LOCODE"); return fail_stage==2 ? -1 : 0; }

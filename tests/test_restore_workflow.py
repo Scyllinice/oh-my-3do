@@ -83,5 +83,5 @@ with tempfile.TemporaryDirectory(prefix='oh3do-restore-') as directory:
     code, binary = Path(directory)/'test.c', Path(directory)/'test'
     code.write_text(stubs + controller + main)
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c89', '-Wall', '-Wextra', '-Werror', '-Isrc', str(code),
-                    'src/save_archive.c', 'src/usb_art.c', 'src/menu_ui.c', 'src/cover_catalog.c', '-o', str(binary)], cwd=root, check=True)
+                    'src/save_archive.c', 'src/usb_art.c', 'src/menu_ui.c', 'src/menu_categories.c', 'src/cover_catalog.c', '-o', str(binary)], cwd=root, check=True)
     subprocess.run([str(binary)], check=True)

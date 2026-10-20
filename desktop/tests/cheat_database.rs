@@ -177,6 +177,7 @@ int main(int argc,char **argv){unsigned char db[65536],data[40];FILE *f;size_t n
         "save_archive.c",
         "usb_art.c",
         "menu_ui.c",
+        "menu_categories.c",
         "cover_catalog.c",
     ] {
         cc.arg(root.join("src").join(name));

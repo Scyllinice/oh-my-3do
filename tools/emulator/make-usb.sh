@@ -35,6 +35,7 @@ fi
 for file in ohmy3do.ini library.3di metadata.3di; do
     cp "$library/.ohmy3do/$file" "$usb/.ohmy3do/$file"
 done
+if [[ -f "$library/.ohmy3do/categories.json" ]]; then cp "$library/.ohmy3do/categories.json" "$usb/.ohmy3do/categories.json"; fi
 cp -r "$library/.ohmy3do/covers" "$usb/.ohmy3do/covers"
 for clip in "$library/.ohmy3do/previews"/*; do
     # Link clips read-only; copy the index, which BESIDE=1 rewrites.

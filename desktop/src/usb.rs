@@ -2,7 +2,7 @@ use crate::{
     disc as d, fsutil as f,
     library::{self, Journal},
     media,
-    model::CATEGORIES,
+    categories,
     Job,
 };
 use anyhow::{bail, Context, Result};
@@ -274,6 +274,7 @@ fn personal(name: &str) -> bool {
     name.starts_with(".ohmy3do/saves/")
         || [
             ".ohmy3do/ohmy3do.ini",
+            categories::PATH,
             ".ohmy3do/save-cheats.json",
             ".ohmy3do/save-cheats.3db",
             ".ohmy3do/favorites.txt",
@@ -284,17 +285,29 @@ fn personal(name: &str) -> bool {
 }
 /// Category/Region/Game folders that changed category in staging but are
 /// still at their old place on the drive. Staging's own folders are never moved.
-fn folder_moves(target: &Path, files: &[(String, String)]) -> Result<Vec<(String, String)>> {
+fn folder_moves(target: &Path, files: &[(String, String)], source_config: &categories::Categories) -> Result<Vec<(String, String)>> {
+    let target_config=categories::load(target)?;
+    let mut moves=vec![];
+    for category in &source_config.categories {
+        if let Some(old)=target_config.categories.iter().find(|c|c.id==category.id && c.name!=category.name) {
+            if f::safe(target,&old.name)?.exists() {
+                if !f::safe(target,&old.name)?.is_dir() {bail!("Category path is occupied by a file: {}",old.name);}
+                if f::safe(target,&category.name)?.exists() {bail!("Both category folders exist on the drive: {} and {}. Resolve them before copying.",old.name,category.name);}
+                moves.push((old.name.clone(),category.name.clone()));
+            }
+        }
+    }
     let mut wanted = BTreeMap::new();
     for (name, _) in files {
         let parts: Vec<&str> = name.split('/').collect();
-        if parts.len() >= 4 && CATEGORIES.contains(&parts[0]) {
+        if parts.len() >= 4 && source_config.contains(parts[0]) {
             wanted.insert(f::fold(&parts[..3].join("/")), parts[..3].join("/"));
         }
     }
     let mut found = HashMap::new();
-    for category in CATEGORIES {
-        let Ok(regions) = fs::read_dir(target.join(category)) else { continue };
+    for category in target_config.names() {
+        if moves.iter().any(|(old,_)|old==&category) {continue;}
+        let Ok(regions) = fs::read_dir(target.join(&category)) else { continue };
         for region in regions.flatten().filter(|e| e.path().is_dir() && !f::is_link(&e.path())) {
             for game in fs::read_dir(region.path())?.flatten().filter(|e| e.path().is_dir() && !f::is_link(&e.path())) {
                 let folder = format!(
@@ -309,8 +322,8 @@ fn folder_moves(target: &Path, files: &[(String, String)]) -> Result<Vec<(String
             }
         }
     }
-    let mut moves = vec![];
     for folder in wanted.values() {
+        if moves.iter().any(|(_,new)|folder.starts_with(&format!("{new}/"))) {continue;}
         if target.join(folder).exists() {
             continue;
         }
@@ -357,8 +370,9 @@ pub fn plan(
 pub fn plan_selected(source: &Path, target: &Path, cache: &Path, verify: bool, selected: &[String], job: &Job) -> Result<CopyPlan> {
     let indexed = find(&f::safe(&f::root(source)?, ".ohmy3do/library.3di")?)?;
     if !selected.iter().all(|p| indexed.contains(p)) { bail!("Selected games changed; reload the game list"); }
-    let groups = selected.iter().map(|p| f::fold(&game_label(p))).collect::<BTreeSet<_>>();
-    let expanded = indexed.into_iter().filter(|p| groups.contains(&f::fold(&game_label(p)))).collect();
+    let config = categories::load(source)?;
+    let groups = selected.iter().map(|p| f::fold(&game_label(p,&config))).collect::<BTreeSet<_>>();
+    let expanded = indexed.into_iter().filter(|p| groups.contains(&f::fold(&game_label(p,&config)))).collect();
     plan_impl(source, target, cache, verify, Some(expanded), job)
 }
 fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected: Option<BTreeSet<String>>, job: &Job) -> Result<CopyPlan> {
@@ -375,7 +389,8 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
     let previous = fs::read(&report)
         .ok()
         .and_then(|b| serde_json::from_slice::<CopyPlan>(&b).ok());
-    let moves = folder_moves(&target, &files)?;
+    categories::for_transfer(&source,&target)?;
+    let moves = folder_moves(&target, &files, &categories::load(&source)?)?;
     let selection = selected.as_ref().map(|s| s.iter().cloned().collect::<Vec<_>>());
     let generated = if let Some(selected) = &selection {
         crate::usb_selection::indexes(&source, &target, selected, &moves, job)?
@@ -553,6 +568,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
             bail!("Library or USB indexes changed since preview; review the copy again");
         }
     }
+    let category_config=categories::for_transfer(&plan.source,&plan.destination)?;
     let mut tx = Journal::new(&plan.destination, cache)?;
     let mut receipt = plan.clone();
     let result = (|| -> Result<()> {
@@ -659,6 +675,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
             }
         }
         crate::setup::ensure_support(&plan.destination, &mut tx, &Default::default(), job)?;
+        tx.write(categories::PATH,&category_config.encode()?)?;
         let save_slots=crate::save_catalog::scan(&plan.destination.join(".ohmy3do/saves"),job)?;
         crate::save_catalog::write(&save_slots,&mut tx,".ohmy3do/saves/",job)?;
         tx.finish()?;
@@ -706,9 +723,9 @@ pub struct GameChoice {
     pub discs: Vec<String>,
     pub bytes: u64,
 }
-fn game_label(path: &str) -> String {
+fn game_label(path: &str, config: &categories::Categories) -> String {
     let parts = path.split('/').collect::<Vec<_>>();
-    if parts.len() >= 4 && CATEGORIES.contains(&parts[0]) { parts[..3].join("/") } else { path.into() }
+    if parts.len() >= 4 && config.contains(parts[0]) { parts[..3].join("/") } else { path.into() }
 }
 pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
     let root = f::root(root)?;
@@ -716,11 +733,12 @@ pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
     let sets = d::collect(&[root.clone()], None, job)?;
     let actual = sets.iter().map(|(p,_)| library::relative(&root,p)).collect::<Result<BTreeSet<_>>>()?;
     if indexed != actual { bail!("Find index is stale. Rebuild indexes on the Library tab first."); }
+    let config = categories::load(&root)?;
     let mut groups = BTreeMap::<String, GameChoice>::new();
     for (disc, files) in sets {
         job.check()?;
         let path = library::relative(&root,&disc)?;
-        let label = game_label(&path);
+        let label = game_label(&path,&config);
         let group = groups.entry(f::fold(&label)).or_insert_with(|| GameChoice { label, discs: vec![], bytes: 0 });
         group.discs.push(path);
         for file in files { group.bytes += fs::metadata(file)?.len(); }

@@ -39,6 +39,42 @@ SKIP = {'.ohmy3do', '$boot', 'system'}
 STATE_FILES = ['favorites.txt', 'recent.txt', 'last-position.txt', 'library.3di', 'metadata.3di',
                'covers/index.3di', 'previews/index.3di', '.ohmy3do/library.json', '.ohmy3do/library.sqlite']
 CATEGORIES = ('Games', 'Demos', 'Samplers', 'Applications', 'Multimedia', 'Educational', 'Bonus Discs', 'Adult')
+def category_config(root):
+    path = relative_path(root, '.ohmy3do/categories.json')
+    if not path.exists():
+        rows = [dict(id='category-'+str(i),name=name,hidden=False) for i,name in enumerate(CATEGORIES)]
+        return dict(schema=1,categories=rows,defaults={name:row['id'] for name,row in zip(CATEGORIES,rows)})
+    raw=path.read_bytes()
+    if len(raw)>8192: raise ValueError('Category configuration exceeds 8 KiB')
+    config=json.loads(raw.split(b'\0',1)[0]);rows=config.get('categories',[]);ids=set();names=set()
+    if config.get('schema')!=1 or not isinstance(rows,list) or not 1<=len(rows)<=32: raise ValueError('Invalid category configuration')
+    for row in rows:
+        name=row.get('name','');identifier=row.get('id','')
+        base=name.split('.')[0].upper()
+        if not isinstance(row.get('hidden'),bool) or not re.fullmatch(r'[A-Za-z0-9-]{1,40}',identifier) or identifier in ids: raise ValueError('Invalid category identifier or visibility')
+        if not name or len(name)>48 or name.strip()!=name or name.endswith('.') or any(ord(c)<32 or ord(c)>=127 or c in '<>:\"/\\|?*' for c in name) or name.casefold() in names or name.casefold()=='.ohmy3do' or base in ('CON','PRN','AUX','NUL') or re.fullmatch(r'(COM|LPT)[1-9]',base): raise ValueError('Invalid category name')
+        ids.add(identifier);names.add(name.casefold())
+    defaults=config.get('defaults',{})
+    if set(defaults)!=set(CATEGORIES) or any(identifier not in ids for identifier in defaults.values()): raise ValueError('Invalid import category destinations')
+    return config
+
+
+def transfer_categories(source,target):
+    config=category_config(source);previous=category_config(target);configured=relative_path(target,'.ohmy3do/categories.json').exists()
+    hidden={c['id']:c['hidden'] for c in previous['categories']}
+    for category in config['categories']:
+        if configured or hidden.get(category['id'],False): category['hidden']=hidden.get(category['id'],category['hidden'])
+    known={c['id'] for c in config['categories']}
+    for category in previous['categories']:
+        if category['id'] not in known and (configured or relative_path(target,category['name']).exists()): config['categories'].append(category)
+    if len(config['categories'])>32 or len({c['name'].casefold() for c in config['categories']})!=len(config['categories']): raise ValueError('Library and drive categories conflict; resolve them in Manage categories before copying')
+    return config
+
+
+def category_names(root):
+    return tuple(row['name'] for row in category_config(root)['categories'])
+
+
 REGIONS = {'us': 'USA', 'usa': 'USA', 'na': 'USA', 'europe': 'Europe', 'eu': 'Europe',
            'pal': 'Europe', 'uk': 'Europe', 'gb': 'Europe', 'jp': 'Japan', 'japan': 'Japan', 'j': 'Japan',
            'korea': 'Korea', 'kr': 'Korea', 'germany': 'Germany', 'france': 'France',
@@ -436,11 +472,11 @@ def row_asset(associations, row):
     return None
 
 
-def classify(game, override=None):
+def classify(game, override=None, allowed=None):
     if override is not None:
-        choices = {name.casefold(): name for name in CATEGORIES}
+        choices = {name.casefold(): name for name in (allowed or CATEGORIES)}
         if not isinstance(override,str) or override.casefold() not in choices:
-            raise ValueError('Category must be one of: ' + ', '.join(CATEGORIES))
+            raise ValueError('Category must be one of: ' + ', '.join(allowed or CATEGORIES))
         return choices[override.casefold()], 'Explicit category override'
     category = game.get('category', '').casefold()
     categories = {name.casefold(): name for name in CATEGORIES}
@@ -481,6 +517,7 @@ def classify(game, override=None):
 
 
 def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, categories=None):
+    config=category_config(root);allowed=tuple(row['name'] for row in config['categories']);destinations={role:next(row['name'] for row in config['categories'] if row['id']==identifier) for role,identifier in config['defaults'].items()}
     units = scan_units(root)
     def choice(mapping, unit):
         values = {mapping[key] for key in [unit['source']] + unit.get('aliases', []) if key in mapping}
@@ -495,7 +532,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
             raise ValueError(f'Category override does not name a scanned disc entry: {source}')
         if not isinstance(category,str):
             raise ValueError('Category overrides must contain category names')
-        classify({}, category)
+        classify({}, category, allowed)
     saved, registrations = {}, {}
     database = relative_path(root,'.ohmy3do/library.json')
     if database.exists():
@@ -504,7 +541,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         records = json.loads(database.read_text(encoding='utf-8')).get('games',[])
         registrations = {r['path']:r for r in records if r.get('identification') == 'unverified' and r.get('registration')}
         saved = {row['path']:row for row in records
-                 if row.get('category') in CATEGORIES and row.get('category_reason') == 'Explicit category override'}
+                 if row.get('category') in allowed and row.get('category_reason') == 'Explicit category override'}
     games = release_records(catalog['games'])
     raw_sizes = {int(r['size']) for g in games for r in g['roms']
                  if re.fullmatch(r'[0-9a-fA-F]{40}',r.get('sha1',''))}
@@ -588,14 +625,16 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         previous = next((saved[k] for k in [unit['source']] + unit.get('aliases', []) if k in saved),{})
         if override is None and previous.get('title') == canonical:
             override = previous['category']
-        category, category_reason = classify(game,override)
+        category, category_reason = classify(game,override,allowed)
         if override is None and any(re.sub(r'^\d+[\s._-]+','',part).casefold() == 'bonus discs'
                                     for part in PurePosixPath(unit['source']).parts[:-1]):
             category, category_reason = 'Bonus Discs', 'Source folder identifies a bonus disc'
+        bonus_category=category == 'Bonus Discs'
+        if override is None and category: category=destinations.get(category,category)
         directory = PurePosixPath(category) / safe_name(region) / safe_name(group) if category else None
         # An extra disc can share a base game's title but have its own audio or
         # pack-in labels. Keep those source labels instead of renaming it as the game.
-        output_title = Path(unit.get('name_source', unit['source'])).stem if category == 'Bonus Discs' else canonical
+        output_title = Path(unit.get('name_source', unit['source'])).stem if bonus_category else canonical
         main = str(directory / (disc_stem(output_title) + Path(unit['source']).suffix.lower())) if directory else None
         row.update(status='ready' if confidence in ('checksum', 'converted-checksum', 'manual') or accept_names else 'review',
                    canonical=canonical, region=region, disc=disc_of(canonical), target=main,
@@ -648,7 +687,7 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
                     row['duplicate_sources'] = [other['source'] for other in group if other is not row]
                     row['reason'] += '; identical data-file checksums also found at: ' + ', '.join(row['duplicate_sources']) + '; CUE layouts are not compared; no duplicate is deleted automatically'
     return dict(schema=2, root=str(root), created=time.time(), quick=quick,
-                sources=catalog['sources'], entries=entries)
+                sources=catalog['sources'], entries=entries, categories=allowed)
 
 
 def json_bytes(value):
@@ -681,7 +720,7 @@ def report_html(plan):
         controls = ''
         if row['status'] == 'category-review':
             controls = '<label>Category <select class="category"><option value="">Leave in place</option>' + ''.join(
-                '<option>' + escape(c) + '</option>' for c in CATEGORIES) + '</select></label>'
+                '<option>' + escape(c) + '</option>' for c in plan.get('categories',CATEGORIES)) + '</select></label>'
         elif suggestions and row['status'] == 'unmatched' and row.get('confidence'):
             controls = '<label>Release <select class="release"><option value="">Leave in place</option>' + ''.join(
                 '<option>' + escape(name) + '</option>' for name in suggestions) + '</select></label>'
@@ -1226,7 +1265,7 @@ def write_indexes(root, tx, media_outputs=None):
 def register_disc(root, source, title, category, region='Unknown', apply=False):
     """Register an existing uncatalogued disc without moving it or inventing a release."""
     relative_path(root, source)
-    category, category_reason = classify({}, category)
+    category, category_reason = classify({}, category, category_names(root))
     if not title.strip() or len(title.encode('utf-8')) >= 1024 or any(ord(c) < 32 or ord(c) == 127 for c in title):
         raise ValueError('Use a nonempty title shorter than 1024 UTF-8 bytes, without control characters')
     if region != 'Unknown':
@@ -1288,7 +1327,7 @@ def apply_plan(root, plan, cache, covers=True, offline=False, accept_names=False
                     raise ValueError('Registered disc changed since scan: ' + name)
     destinations, sources, cues = set(), set(), {}
     for row in rows:
-        if row.get('category_review') or row.get('category') not in CATEGORIES or not isinstance(row.get('target'),str) or PurePosixPath(row['target']).parts[0] != row['category']:
+        if row.get('category_review') or row.get('category') not in category_names(root) or not isinstance(row.get('target'),str) or PurePosixPath(row['target']).parts[0] != row['category']:
             raise ValueError('Category is unresolved or does not match the destination; scan again with a category override')
         if row['confidence'] not in ('checksum', 'converted-checksum', 'manual') and not accept_names:
             raise ValueError('Filename and partial data-track matches need --accept-name-matches after reviewing the plan')
@@ -1456,7 +1495,7 @@ def main():
     register.add_argument('usb_root', type=Path)
     register.add_argument('disc', help='volume-relative ISO/CUE path')
     register.add_argument('--title', required=True)
-    register.add_argument('--category', choices=CATEGORIES, required=True)
+    register.add_argument('--category', required=True)
     register.add_argument('--region', default='Unknown')
     register.add_argument('--apply', action='store_true')
     cleanup = commands.add_parser('clean-empty', help='preview empty directories; add --apply to remove them')

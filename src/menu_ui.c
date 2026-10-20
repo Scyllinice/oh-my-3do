@@ -166,7 +166,7 @@ int menu_support_entry(const char *name, int directory, int root)
     size_t length = strlen(name);
     if (!directory && length >= 4 && !menu_path_compare(name + length - 4, ".bin")) return 1;
     if (!root) return 0;
-    if (directory) return !menu_path_compare(name,".ohmy3do") || (hide_adult && !menu_path_compare(name,"Adult"));
+    if (directory) return !menu_path_compare(name,".ohmy3do") || menu_categories_hidden_name(name) || (hide_adult && !menu_path_compare(name,"Adult"));
     for (i = 0; i < sizeof(files) / sizeof(files[0]); ++i)
         if (!menu_path_compare(name, files[i])) return 1;
     return 0;

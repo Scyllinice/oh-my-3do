@@ -99,6 +99,7 @@ USB/
     Example.iso
   .ohmy3do/
     ohmy3do.ini
+    categories.json   # Created by desktop setup; controls category visibility
     saves/
 ```
 

@@ -70,6 +70,24 @@ class OrganizerTest(unittest.TestCase):
             self.catalog['games'].append(game(name,[data]))
         return clips
 
+    def test_shared_categories_rename_default_imports_and_allow_custom_overrides(self):
+        config=organizer.category_config(self.root)
+        config['categories'][0]['name']='My collection'
+        config['categories'].append(dict(id='custom',name='Arcade favorites',hidden=True))
+        self.put('.ohmy3do/categories.json',organizer.json_bytes(config))
+        data=b'fictional custom category disc'
+        self.put('Unsorted/Example (USA).iso',data)
+        self.catalog['games'].append(game('Example (USA)',[data]))
+        plan=self.scan()
+        self.assertEqual(plan['entries'][0]['category'],'My collection')
+        self.assertTrue(plan['entries'][0]['target'].startswith('My collection/'))
+        self.assertIn('Arcade favorites',plan['categories'])
+        self.assertEqual(organizer.classify({},'Arcade favorites',organizer.category_names(self.root))[0],'Arcade favorites')
+        self.catalog['games'][0]['metadata']['genre']='Music'
+        review=self.scan()
+        self.assertEqual(review['entries'][0]['status'],'category-review')
+        self.assertIn('Arcade favorites',organizer.report_html(review).decode())
+
     def test_registration_reads_real_disc_save_names_and_journals_both_outputs(self):
         data = bytearray(6144)
         data[:7] = b'\x01ZZZZZ\x01'

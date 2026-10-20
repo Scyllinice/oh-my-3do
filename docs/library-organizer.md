@@ -60,8 +60,11 @@ including audio tracks, remain part of checksum verification.
 
 Open the HTML preview before applying changes. The layout is
 `<category>/<region>/<title>/<disc image>`, with discs of the same edition in
-one folder. Categories are `Games`, `Demos`, `Samplers`, `Applications`,
-`Multimedia`, `Educational`, `Bonus Discs`, and `Adult`; Adult is only ever
+one folder. Default categories are `Games`, `Demos`, `Samplers`, `Applications`,
+`Multimedia`, `Educational`, `Bonus Discs`, and `Adult`. Additional categories and renamed defaults are read from
+`.ohmy3do/categories.json`, configured in the desktop app. Detected disc types
+use the import destinations in that file; manual overrides can choose any
+configured category. Adult is only ever
 chosen by hand (category overrides here, or the desktop app's Library page). Redump categories take precedence
 over title/genre heuristics; explicit category choices take precedence over both.
 `Video` maps to Multimedia, `Coverdiscs` to Samplers, and `Add-Ons` to Games.
@@ -337,7 +340,7 @@ The USB database lives in `.ohmy3do/library.sqlite`, with a readable
 `.ohmy3do/library.json` export. SQLite's `games` table contains paths, titles,
 regions, disc numbers, genre, publisher, year, developer, match type, and cover
 associations, plus category, classification evidence, and a category-review flag.
-The `games` table includes supported disc images from all eight categories.
+The `games` table includes supported disc images from all configured categories.
 The console uses the generated search, artwork and metadata indices rather
 than opening SQLite. Its selected-game panel displays genre, publisher and
 release date or year when those fields are available.
