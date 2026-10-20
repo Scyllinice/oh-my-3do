@@ -89,3 +89,179 @@ fn cancellation_and_failure_leave_library_unchanged() {
     assert!(root.path().join("boot.iso").is_dir());
     assert!(!root.path().join(".ohmy3do").exists());
 }
+
+#[test]
+fn local_iso_prepares_an_empty_drive_without_a_library_and_repairs_boot_only_drives() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let iso = source.path().join("downloaded.iso");
+    fs::write(&iso, image()).unwrap();
+    let journal = setup::install_local(
+        root.path(),
+        cache.path(),
+        &iso,
+        &Settings::default(),
+        &Job::default(),
+    )
+    .unwrap();
+    for dir in [".ohmy3do/saves", ".ohmy3do/covers", ".ohmy3do/previews"] {
+        assert!(root.path().join(dir).is_dir(), "{dir}");
+    }
+    for file in [
+        "boot.iso",
+        console_config::PATH,
+        ".ohmy3do/save-cheats.json",
+        ".ohmy3do/save-cheats.3db",
+        ".ohmy3do/library.3di",
+        ".ohmy3do/metadata.3di",
+        ".ohmy3do/save-names.txt",
+        ".ohmy3do/saves/slot-catalog.3di",
+    ] {
+        assert!(root.path().join(file).is_file(), "{file}");
+    }
+    let index = fs::read(root.path().join(".ohmy3do/library.3di")).unwrap();
+    assert_eq!(&index[8..12], &0u32.to_be_bytes());
+    assert!(!root.path().join("Games").exists());
+    assert!(!root.path().join(".ohmy3do/library.json").exists());
+    library::undo(&journal).unwrap();
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    // A drive with only boot.iso is the failure users hit with the previous installer.
+    let boot = root.path().join("boot.iso");
+    fs::write(&boot, image()).unwrap();
+    fs::create_dir_all(root.path().join(".ohmy3do/saves")).unwrap();
+    fs::write(root.path().join(".ohmy3do/library.3di"), b"").unwrap();
+    fs::write(root.path().join(".ohmy3do/ohmy3do.ini"), b"").unwrap();
+    fs::write(root.path().join(".ohmy3do/save-cheats.3db"), b"").unwrap();
+    fs::write(root.path().join(".ohmy3do/saves/slot-catalog.3di"), b"").unwrap();
+    setup::install_local(
+        root.path(),
+        cache.path(),
+        &boot,
+        &Settings::default(),
+        &Job::default(),
+    )
+    .unwrap();
+    assert!(root.path().join(".ohmy3do/saves").is_dir());
+    assert_eq!(fs::read(&boot).unwrap(), image());
+    assert!(
+        fs::metadata(root.path().join(".ohmy3do/library.3di"))
+            .unwrap()
+            .len()
+            > 0
+    );
+    assert_eq!(
+        fs::metadata(root.path().join(".ohmy3do/saves/slot-catalog.3di"))
+            .unwrap()
+            .len(),
+        28
+    );
+    assert_eq!(
+        console_config::load(root.path()).unwrap().settings,
+        Settings::default()
+    );
+    assert!(fs::read(root.path().join(".ohmy3do/save-cheats.3db"))
+        .unwrap()
+        .starts_with(b"OM3DCHT2"));
+}
+
+#[test]
+fn support_repair_preserves_custom_files_and_indexes_existing_backups() {
+    use oh_my_3do_library::save_archive::{Archive, Entry};
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("boot.iso"), image()).unwrap();
+    fs::create_dir_all(root.path().join(".ohmy3do/saves")).unwrap();
+    let backup = Archive {
+        entries: vec![Entry {
+            name: b"DoomPrefs".to_vec(),
+            file_type: 42,
+            data: vec![1, 2, 3],
+        }],
+    }
+    .encode()
+    .unwrap();
+    fs::write(root.path().join(".ohmy3do/saves/slot09.3ds"), &backup).unwrap();
+    let keep = [
+        (".ohmy3do/ohmy3do.ini", b"personal settings".as_slice()),
+        (".ohmy3do/library.3di", b"personal index"),
+        (".ohmy3do/metadata.3di", b"personal metadata"),
+        (".ohmy3do/save-names.txt", b"=DoomPrefs\tMy DOOM\n"),
+        (".ohmy3do/favorites.txt", b"Games/DOOM.iso\n"),
+    ];
+    for (path, data) in keep {
+        fs::write(root.path().join(path), data).unwrap();
+    }
+    fs::write(
+        root.path().join(".ohmy3do/saves/slot-catalog.3di"),
+        b"outdated catalog",
+    )
+    .unwrap();
+    // Existing runtime indexes must not trigger a whole-library rescan merely
+    // because this USB drive lacks the desktop's optional per-disc cache.
+    fs::create_dir(root.path().join("Games")).unwrap();
+    let cue = b"FILE \"missing.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n";
+    fs::write(root.path().join("Games/broken.cue"), cue).unwrap();
+    let boot = root.path().join("boot.iso");
+    let journal = setup::install_local(
+        root.path(),
+        cache.path(),
+        &boot,
+        &Settings::default(),
+        &Job::default(),
+    )
+    .unwrap();
+    for (path, data) in keep {
+        assert_eq!(fs::read(root.path().join(path)).unwrap(), data);
+    }
+    assert_eq!(
+        fs::read(root.path().join(".ohmy3do/saves/slot09.3ds")).unwrap(),
+        backup
+    );
+    assert!(root.path().join(".ohmy3do/saves/slot09.3si").is_file());
+    assert_eq!(fs::read(root.path().join("Games/broken.cue")).unwrap(), cue);
+    assert!(!root.path().join(".ohmy3do/save-names-cache.json").exists());
+    library::undo(&journal).unwrap();
+    assert_eq!(
+        fs::read(root.path().join(".ohmy3do/saves/slot-catalog.3di")).unwrap(),
+        b"outdated catalog"
+    );
+    assert_eq!(fs::read(&boot).unwrap(), image());
+    for (path, data) in keep {
+        assert_eq!(fs::read(root.path().join(path)).unwrap(), data);
+    }
+}
+
+#[test]
+fn setup_collision_rolls_back_support_and_invalid_local_images_leave_drive_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let iso = source.path().join("boot.iso");
+    fs::write(&iso, b"not a boot ISO").unwrap();
+    assert!(setup::install_local(
+        root.path(),
+        cache.path(),
+        &iso,
+        &Settings::default(),
+        &Job::default()
+    )
+    .is_err());
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    fs::write(&iso, image()).unwrap();
+    fs::create_dir(root.path().join(".ohmy3do")).unwrap();
+    fs::write(root.path().join(".ohmy3do/saves"), b"occupied").unwrap();
+    assert!(setup::install_local(
+        root.path(),
+        cache.path(),
+        &iso,
+        &Settings::default(),
+        &Job::default()
+    )
+    .is_err());
+    assert_eq!(
+        fs::read(root.path().join(".ohmy3do/saves")).unwrap(),
+        b"occupied"
+    );
+    assert!(!root.path().join("boot.iso").exists());
+}

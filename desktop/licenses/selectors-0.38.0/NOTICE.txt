@@ -1,0 +1,6 @@
+selectors 0.38.0 — The Servo Project Developers
+Mozilla Public License 2.0; unmodified dependency.
+Corresponding source: https://crates.io/api/v1/crates/selectors/0.38.0/download
+Upstream revision: https://github.com/servo/stylo/tree/572ecba2d1600e7c3d490586692a209faf703baa/selectors
+The source header refers to https://mozilla.org/MPL/2.0/.
+The license text is supplied from the SPDX license-list-data v3.27.0 MPL-2.0 record because the upstream crate omits it.

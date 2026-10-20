@@ -79,6 +79,12 @@ def opera_image(*programs):
     return b''.join(blocks)
 
 class SaveNameTests(unittest.TestCase):
+    def test_lowercase_paths_and_brackets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            game = Path(directory)/'Icebreaker.iso'
+            game.write_bytes(opera_image(b'x'*64+b"/nvram/icebreaker[levelchart]\0/NvRaM/Maps O'Death V1.0\0"))
+            self.assertEqual(m.disc_save_names(game), ["=Maps O'Death V1.0", '=icebreaker[levelchart]'])
+
     def test_disc_names_patterns_titles_and_cache(self):
         program = b'x' * 64 + b'/NVRAM/EA_RRX\0/NVRAM/SLOT%02d\0/NVRAM/%s\0/NVRAM/X\0/NVRAM/bad|name\0'
         with tempfile.TemporaryDirectory() as directory:

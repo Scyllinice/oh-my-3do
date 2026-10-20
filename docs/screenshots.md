@@ -38,29 +38,58 @@ The [original 320×240 captures](images/native/) are also available.
 
 ![Controller hex editor displaying a copy of a DOOM preferences backup](images/save-hex-editor.png)
 
-![Known values and cheats for a DOOM preferences backup](images/save-cheats.png)
+![Icebreaker completion presets loaded from the USB database](images/save-cheats.png)
+
+![Paged numbered slots with direct access to slot 1000](images/save-slots.png)
+
+![DOOM save search finding all three indexed matching slots](images/save-slot-search.png)
+
+![Copying one save into another slot while preserving its other entries](images/save-copy.png)
+
+![Read-only comparison of two USB backup slots](images/save-comparison.png)
+
+![Before and after byte differences in a save](images/save-byte-comparison.png)
 
 ## Game details
 
 ![Original game folder and disc filenames in the console details view](images/game-details.png)
 
-## Desktop guided setup
+## Desktop library and USB copying
 
-![Guided setup in the desktop app](images/desktop-setup.png)
+Actual 1280×900 captures of the Tauri desktop app. The Library uses real covers;
+the transfer and save screens use disposable test fixtures.
+
+![Tauri Library with real game covers](images/desktop-library.png)
+
+![Reviewing a selected multi-disc USB transfer](images/desktop-copy.png)
+
+## Desktop appearance
+
+Choose Light, Dark, or System under **Settings & tools → Appearance**.
+
+![Desktop settings with the saved dark theme](images/desktop-dark.png)
+
+## Desktop drive setup
+
+![Desktop drive setup installs menu and save support without copying games](images/desktop-setup.png)
 
 ## Desktop updates
 
 ![Boot-only update offer with verified download and installation, without desktop update information](images/desktop-updates.png)
 
+## Desktop slot search
+
+![Occupied backups searchable by game, raw filename or slot label](images/desktop-save-slots.png)
+
 ## Desktop save editors
 
-These are full-size 1220×850 captures of the desktop app using sample archives.
-The DOOM example contains documented default preferences; the hex example uses
-a 256-byte test pattern.
+These are full-size 1280×900 captures using sample archives. The DOOM example
+shows an edited starting map; the raw editor shows an unrelated seven-byte test
+save kept in the same archive.
 
 ![DOOM preferences editor in the desktop app](images/desktop-save-editor.png)
 
-![Raw hex editor with byte offsets and ASCII](images/desktop-hex-editor.png)
+![Raw hex editor for an unknown save](images/desktop-hex-editor.png)
 
 ## Root browser
 
@@ -72,3 +101,7 @@ and screenshot capture instructions.
 ## Desktop cheat database
 
 ![Desktop database editor for save offsets, ranges and presets](images/desktop-cheat-database.png)
+
+## Desktop backup comparison
+
+![Desktop Save Manager comparing changed and added saves](images/desktop-save-comparison.png)

@@ -1,0 +1,119 @@
+# Verified /nvram/ paths from disc programs; see docs/save-names.md.
+*BS_	BattleSport
+*BrainDead13	BrainDead 13
+*DeathKeep Game 	DeathKeep
+*EA_SkWv	Shock Wave / Shock Wave - Operation JumpGate
+*EA_SkWvMD	Shock Wave - Operation JumpGate
+*Hell Save Game 	Hell - A Cyberpunk Thriller
+*PG798694_	Perfect General, The
+*POed.	PO'ed
+*PZGEN1V1_0_	Panzer General
+*SYNDICATE.	Syndicate
+=1025NovaStormHiScores	Novastorm
+=3DOGames_Decathlon	Decathlon
+=BS_DONT_ERASE	BattleSport
+=CNBSIXTHCIRCUIT	Crash 'n Burn
+=CYBERIA	Cyberia
+=CYBERIAWORK	Cyberia
+=CannonFodder	Cannon Fodder
+=CorpseKillerSave	Corpse Killer
+=Creature Shock	Creature Shock
+=DemolitionManHighScores2	Demolition Man
+=DoomPrefs	DOOM
+=DragonLore.ChgDsk	Dragon Lore - The Legend Begins
+=DragonLore.S1	Dragon Lore - The Legend Begins
+=DragonLore.S2	Dragon Lore - The Legend Begins
+=DragonLore.S3	Dragon Lore - The Legend Begins
+=DragonLore.S4	Dragon Lore - The Legend Begins
+=Drive	Road & Track Presents - The Need for Speed
+=DriveHS	Road & Track Presents - The Need for Speed
+=DsDinner	D
+=EAHULK01.01BEST	Space Hulk - Vengeance of the Blood Angels
+=EA_JMFB94	John Madden Football
+=EA_JMFB94_GREATS	John Madden Football
+=EA_RRX	Road Rash
+=FAMILY_FEUD_GAME1	Family Feud
+=FAMILY_FEUD_GAME2	Family Feud
+=FAMILY_FEUD_GAME3	Family Feud
+=FAMILY_FEUD_GAME4	Family Feud
+=FAMILY_FEUD_HISCORES	Family Feud
+=FIFA2	FIFA International Soccer
+=FN3DO_STATE	Flying Nightmares
+=Foes of Ali - Career	Foes of Ali
+=Foes of Ali - Trnmnt	Foes of Ali
+=GA_CBRDT	Scramble Cobra
+=GEX_Videos	Gex
+=Gridders by Tetragon	Gridders
+=HN_DAEDALUS_0E	Daedalus Encounter, The
+=Holmes3DOGames	Lost Files of Sherlock Holmes, The
+=Holmes3DOSetup	Lost Files of Sherlock Holmes, The
+=KingdomsSave	Kingdom - The Far Reaches
+=LOSTEDEN.S1	Lost Eden
+=LOSTEDEN.S2	Lost Eden
+=LOSTEDEN.S3	Lost Eden
+=LOSTEDEN.S4	Lost Eden
+=MC_MYST_E1	Myst
+=MC_MYST_E2	Myst
+=MC_MYST_E3	Myst
+=MC_PKING_x	Guardian War
+=MC_S&S_J	Lucienne's Quest
+=MC_SS_J	Lucienne's Quest
+=ME_STRAHL_US	Strahl
+=Maps O'Death V1.0	Return Fire - Maps O' Death
+=MazerMan.NVRAM	Mazer
+=MegaRace.1	MegaRace
+=MegaRace.2	MegaRace
+=MegaRace.3	MegaRace
+=MonsterManorData	Escape from Monster Manor
+=OPTS.FIFA2.2	FIFA International Soccer
+=PHARAOH1	Seal of the Pharaoh
+=PHARAOH2	Seal of the Pharaoh
+=PHARAOH3	Seal of the Pharaoh
+=PHARAOH4	Seal of the Pharaoh
+=PHARAOH5	Seal of the Pharaoh
+=PaTaank_Hall_Of_Fame	PaTaank
+=PaTaank_High_Scores	PaTaank
+=Phoenix 3	Phoenix 3
+=PrefsForWolf3D	Wolfenstein 3D
+=QBAttackGames	Quarterback Attack
+=QBAttackPrefs	Quarterback Attack
+=QBAttackScores	Quarterback Attack
+=QUAR_SAVE_GAME	Quarantine
+=REALPinball.JDW	Real Pinball
+=Return Fire V1.0	Return Fire / Return Fire - Maps O' Death
+=SY-TETSU-1J	Iron Angel of the Apocalypse - Tetsujin
+=SY-TETSU2-1J	Iron Angel of the Apocalypse - The Return
+=SYNDICATE.LANGUAGE	Syndicate
+=SamuriaShodown	Samurai Shodown
+=ShWv2Save	Shockwave 2 - Beyond the Gate
+=Slam N Jam 95	Slam 'n Jam '95
+=Slayer Game	Slayer
+=SuprWarriorGames	Supreme Warrior
+=SuprWarriorPrefs	Supreme Warrior
+=SuprWarriorScores	Supreme Warrior
+=Twstd	Twisted - The Game Show
+=WARPDATA(DsDinner)	D
+=WCgolf-players	World Cup Golf - Hyatt Dorado Beach
+=WCgolf-tournament	World Cup Golf - Hyatt Dorado Beach
+=WayScores	Way of the Warrior
+=Wolf	Wolfenstein 3D
+=Zhadnost	Zhadnost - The People's Party
+=alon21.save	Alone in the Dark 2
+=alone1.save	Alone in the Dark
+=bc.save	Battle Chess
+=bladeforce	Blade Force
+=bs_123gosets	BattleSport
+=cyber.opt	CyberDillo
+=icebreaker2[levels]	Icebreaker II
+=icebreaker[levelchart]	Icebreaker
+=jpieasyhighscores	Jurassic Park Interactive
+=jpihardhighscores	Jurassic Park Interactive
+=jpimedhighscores	Jurassic Park Interactive
+=jpisavedgames	Jurassic Park Interactive
+=maddog	Mad Dog McCree
+=nitetrap.inf	Night Trap
+=sockid.hi	Soccer Kid
+=sockid.save	Soccer Kid
+=stellar7.fame	Stellar 7 - Draxon's Revenge
+=tim.cfg	Incredible Machine, The
+=wsjr	Who Shot Johnny Rock

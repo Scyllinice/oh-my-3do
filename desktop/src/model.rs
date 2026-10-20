@@ -109,4 +109,15 @@ pub struct Preferences {
     pub quick: bool,
     pub download_covers: bool,
     pub software_rendering: bool,
+    pub theme: Theme,
+}
+
+/// Desktop appearance; older preference files follow the operating system.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
 }

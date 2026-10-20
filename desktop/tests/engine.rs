@@ -1341,3 +1341,112 @@ fn usb_preserves_database_pairs_and_compiles_json_only_custom_sources() {
         library::undo(&journal).unwrap();assert_eq!(snapshot(&dest),before);
     }
 }
+
+#[test]
+fn save_name_scanner_handles_lowercase_paths_and_brackets() {
+    let tmp=tempfile::tempdir().unwrap();
+    let mut program=vec![b'x';64];program.extend_from_slice(b"/nvram/icebreaker[levelchart]\0/NvRaM/Maps O'Death V1.0\0");
+    let path=put(tmp.path(),"game.iso",&opera_image(&[&program]));
+    assert_eq!(oh_my_3do_library::saves::disc_save_names(&path).unwrap(),["=Maps O'Death V1.0","=icebreaker[levelchart]"]);
+}
+
+fn usb_selection_fixture(root: &Path, cache: &Path) {
+    fs::create_dir_all(root).unwrap();
+    put(root,"boot.iso",&boot());
+    put(root,".ohmy3do/ohmy3do.ini",include_bytes!("../../ohmy3do.ini"));
+    let mut tx = library::Journal::new(root,cache).unwrap();
+    library::build_indexes(root,&mut tx,&Job::default()).unwrap();
+    tx.finish().unwrap();
+}
+#[test]
+fn selected_usb_copy_keeps_multidisc_cue_tracks_media_and_undo() {
+    let t = tempfile::tempdir().unwrap(); let root=t.path().join("library"); let dest=t.path().join("usb"); let cache=t.path().join("cache");
+    fs::create_dir(&dest).unwrap();
+    let first="Games/USA/Example/disc1.iso"; let second="Games/USA/Example/disc2.cue";
+    put(&root,first,b"first disc");
+    put(&root,second,b"FILE \"track.bin\" BINARY\n TRACK 01 MODE1/2352\n INDEX 01 00:00:00\n");
+    put(&root,"Games/USA/Example/track.bin",&vec![0;2352]);
+    put(&root,"Games/USA/Unselected/other.iso",b"do not copy");
+    usb_selection_fixture(&root,&cache);
+    put(&root,".ohmy3do/previews/yes.3dv",&synthetic_preview());
+    // Unselected missing media must not prevent a small transfer.
+    put(&root,".ohmy3do/previews/index.3di",&library::media_index(&BTreeMap::from([
+        (f::fold(first),"yes.3dv".into()),(f::fold(second),"yes.3dv".into()),
+        ("games/usa/unselected/other.iso".into(),"missing.3dv".into())])).unwrap());
+    let (_,choices)=usb::choices(&root,&Job::default()).unwrap();
+    assert_eq!(choices.len(),2); assert_eq!(choices[0].discs.len(),2);
+    let before=snapshot(&dest);
+    let plan=usb::plan_selected(&root,&dest,&cache,false,&[first.into()],&Job::default()).unwrap();
+    assert_eq!(plan.games,2); assert!(!plan.files.iter().any(|p| p.path.contains("Unselected")));
+    let journal=usb::apply(&plan,&cache,&Job::default()).unwrap();
+    for name in [first,second,"Games/USA/Example/track.bin","Games/USA/Example/.ohmy3do/yes.3dv"] { assert!(dest.join(name).is_file(),"{name}"); }
+    assert!(!dest.join("Games/USA/Unselected").exists());
+    assert_eq!(usb::find(&dest.join(".ohmy3do/library.3di")).unwrap(),vec![first,second]);
+    let meta=fs::read(dest.join(".ohmy3do/metadata.3di")).unwrap();
+    assert_eq!(library::metadata_paths(&meta).unwrap(),vec![first,second]);
+    let raw=fs::read(dest.join(".ohmy3do/previews/index.3di")).unwrap();
+    assert_eq!(u32::from_be_bytes(raw[8..12].try_into().unwrap()),2);
+    library::undo(&journal).unwrap(); assert_eq!(snapshot(&dest),before);
+}
+#[test]
+fn selected_usb_copy_is_additive_and_preserves_existing_metadata_media_and_saves() {
+    let t=tempfile::tempdir().unwrap(); let root=t.path().join("library");let dest=t.path().join("usb");let cache=t.path().join("cache");
+    fs::create_dir(&dest).unwrap(); let first="Games/USA/First/first.iso";let second="Games/Japan/Second/second.iso";
+    put(&root,first,b"one");put(&root,second,b"two");
+    put(&root,".ohmy3do/library.json",&serde_json::to_vec(&json!({"schema":1,"sources":[],"games":[{"path":first,"metadata":{"genre":"Adventure"}},{"path":second,"metadata":{"genre":"Puzzle"}}]})).unwrap());
+    usb_selection_fixture(&root,&cache);
+    put(&root,".ohmy3do/previews/one.3dv",&synthetic_preview());
+    put(&root,".ohmy3do/previews/two.3dv",&synthetic_preview());
+    put(&root,".ohmy3do/previews/index.3di",&library::media_index(&BTreeMap::from([(f::fold(first),"one.3dv".into()),(f::fold(second),"two.3dv".into())])).unwrap());
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[first.into()],&Job::default()).unwrap();usb::apply(&p,&cache,&Job::default()).unwrap();
+    put(&dest,".ohmy3do/saves/personal.bin",b"keep");put(&dest,".ohmy3do/ohmy3do.ini",b"folder_workaround=1\n");
+    // The retained title no longer even exists in the staging library.
+    fs::remove_dir_all(root.join("Games/USA/First")).unwrap();
+    put(&root,".ohmy3do/previews/index.3di",&library::media_index(&BTreeMap::from([(f::fold(second),"two.3dv".into())])).unwrap());
+    usb_selection_fixture(&root,&cache);
+    let before=snapshot(&dest);
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[second.into()],&Job::default()).unwrap();let journal=usb::apply(&p,&cache,&Job::default()).unwrap();
+    assert_eq!(usb::find(&dest.join(".ohmy3do/library.3di")).unwrap(),vec![second,first]);
+    let raw=fs::read(dest.join(".ohmy3do/previews/index.3di")).unwrap();assert_eq!(u32::from_be_bytes(raw[8..12].try_into().unwrap()),2);
+    let meta=fs::read(dest.join(".ohmy3do/metadata.3di")).unwrap();assert!(meta.windows(9).any(|s|s==b"Adventure"));assert!(meta.windows(6).any(|s|s==b"Puzzle"));
+    assert_eq!(fs::read(dest.join(".ohmy3do/saves/personal.bin")).unwrap(),b"keep");assert_eq!(fs::read(dest.join(".ohmy3do/ohmy3do.ini")).unwrap(),b"folder_workaround=1\n");
+    library::undo(&journal).unwrap();assert_eq!(snapshot(&dest),before);
+}
+#[test]
+fn selected_usb_copy_rejects_changed_indexes_and_supports_empty_selection() {
+    let t=tempfile::tempdir().unwrap();let root=t.path().join("library");let dest=t.path().join("usb");let cache=t.path().join("cache");fs::create_dir(&dest).unwrap();
+    put(&root,"Games/one.iso",b"one");usb_selection_fixture(&root,&cache);
+    let p=usb::plan_selected(&root,&dest,&cache,false,&["Games/one.iso".into()],&Job::default()).unwrap();
+    put(&dest,"Games/new.iso",b"new after preview");
+    put(&dest,".ohmy3do/covers/index.3di",b"");put(&dest,".ohmy3do/previews/index.3di",b"");
+    let before=snapshot(&dest);
+    assert!(usb::apply(&p,&cache,&Job::default()).is_err());assert_eq!(snapshot(&dest),before);
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[],&Job::default()).unwrap();assert_eq!(p.games,0);
+    usb::apply(&p,&cache,&Job::default()).unwrap();assert!(!dest.join("Games/one.iso").exists());
+    assert_eq!(usb::find(&dest.join(".ohmy3do/library.3di")).unwrap(),vec!["Games/new.iso"]);
+    assert!(usb::plan_selected(&root,&dest,&cache,false,&["missing.iso".into()],&Job::default()).is_err());
+}
+#[test]
+fn selected_usb_moves_only_checked_titles_and_remaps_retained_media() {
+    let t=tempfile::tempdir().unwrap();let root=t.path().join("library");let dest=t.path().join("usb");let cache=t.path().join("cache");fs::create_dir(&dest).unwrap();
+    let old="Games/Japan/Moved/disc.iso";let new="Adult/Japan/Moved/disc.iso";let other_old="Games/Japan/Unchecked/disc.iso";let other_new="Adult/Japan/Unchecked/disc.iso";
+    put(&root,new,b"same");put(&root,other_new,b"other");usb_selection_fixture(&root,&cache);
+    put(&dest,old,b"same");put(&dest,other_old,b"other");put(&dest,"Games/Japan/Moved/.ohmy3do/keep.3dv",&synthetic_preview());
+    put(&dest,".ohmy3do/previews/index.3di",&library::beside_index(&library::media_index(&BTreeMap::from([(f::fold(old),"keep.3dv".into())])).unwrap()).unwrap());
+    put(&dest,".ohmy3do/favorites.txt",format!("{old}\n{other_old}\n").as_bytes());
+    let before=snapshot(&dest);
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[new.into()],&Job::default()).unwrap();assert_eq!(p.moves.len(),1);
+    let journal=usb::apply(&p,&cache,&Job::default()).unwrap();
+    assert!(dest.join(new).is_file());assert!(dest.join(other_old).is_file());assert!(!dest.join(other_new).exists());
+    let names=usb::find(&dest.join(".ohmy3do/library.3di")).unwrap();assert!(names.contains(&other_old.into()));assert!(names.contains(&new.into()));assert!(!names.contains(&old.into()));
+    let raw=fs::read(dest.join(".ohmy3do/previews/index.3di")).unwrap();assert!(raw.windows(new.len()).any(|s|s==f::fold(new).as_bytes()));assert!(dest.join("Adult/Japan/Moved/.ohmy3do/keep.3dv").is_file());
+    assert_eq!(fs::read_to_string(dest.join(".ohmy3do/favorites.txt")).unwrap(),format!("{new}\n{other_old}\n"));
+    library::undo(&journal).unwrap();assert_eq!(snapshot(&dest),before);
+}
+#[test]
+fn selected_usb_ignores_unchecked_disc_conflicts_but_blocks_checked_conflicts() {
+    let t=tempfile::tempdir().unwrap();let root=t.path().join("library");let dest=t.path().join("usb");let cache=t.path().join("cache");fs::create_dir(&dest).unwrap();
+    put(&root,"Games/one.iso",b"one");put(&root,"Games/two.iso",b"two");usb_selection_fixture(&root,&cache);put(&dest,"Games/two.iso",b"different disc");
+    assert!(usb::plan_selected(&root,&dest,&cache,true,&["Games/two.iso".into()],&Job::default()).is_err());
+    let p=usb::plan_selected(&root,&dest,&cache,true,&["Games/one.iso".into()],&Job::default()).unwrap();usb::apply(&p,&cache,&Job::default()).unwrap();assert_eq!(fs::read(dest.join("Games/two.iso")).unwrap(),b"different disc");
+}

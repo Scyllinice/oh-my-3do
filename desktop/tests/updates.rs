@@ -84,7 +84,7 @@ fn image(value: u8) -> Vec<u8> {
     bytes
 }
 #[test]
-fn boot_update_changes_only_the_image_and_undo_restores_it() {
+fn boot_update_preserves_existing_files_and_undo_restores_it() {
     let root = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
     let boot = root.path().join("boot.iso");
@@ -154,7 +154,15 @@ fn new_boot_install_can_be_undone_without_removing_other_files() {
     };
     let journal =
         updates::install_boot_bytes(&state, &image(0), cache.path(), &Job::default()).unwrap();
+    assert!(root.path().join(".ohmy3do/saves").is_dir());
+    assert!(root.path().join(".ohmy3do/ohmy3do.ini").is_file());
+    assert!(root.path().join(".ohmy3do/save-cheats.3db").is_file());
+    assert!(root
+        .path()
+        .join(".ohmy3do/saves/slot-catalog.3di")
+        .is_file());
     library::undo(&journal).unwrap();
+    assert!(!root.path().join(".ohmy3do").exists());
     assert!(!root.path().join("boot.iso").exists());
     assert_eq!(fs::read(root.path().join("keep")).unwrap(), b"keep");
 }

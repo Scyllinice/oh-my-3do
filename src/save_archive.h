@@ -1,6 +1,9 @@
 #ifndef OH_MY_3DO_SAVE_ARCHIVE_H
 #define OH_MY_3DO_SAVE_ARCHIVE_H
 #include <stddef.h>
+#define SAVE_SLOT_LIMIT 999999999UL
+#define SAVE_RECOVERY_SLOT 0xfffffffeUL
+#define SAVE_RECOVERY2_SLOT 0xffffffffUL
 #define SAVE_MAX_FILES 128
 #define SAVE_MAX_BYTES 65536UL
 #define SAVE_NAME_BYTES 32
@@ -30,4 +33,8 @@ int save_archive_build(SaveArchive *archive, const SaveEntry *entries, size_t co
 /* Add/replace one filename (case insensitive), preserving destination order
  * and every other entry. Failure leaves out unchanged; aliases are allowed. */
 int save_archive_merge(SaveArchive *out, const SaveArchive *destination, const SaveEntry *entry);
+enum { SAVE_DIFF_SAME, SAVE_DIFF_CHANGED, SAVE_DIFF_ADDED, SAVE_DIFF_REMOVED };
+typedef struct SaveDifference { size_t before,after,length,changed_bytes; int state,metadata_changed; } SaveDifference;
+size_t save_archive_diff_count(const SaveArchive *before, const SaveArchive *after);
+int save_archive_diff(const SaveArchive *before, const SaveArchive *after, size_t index, SaveDifference *out);
 #endif

@@ -38,39 +38,55 @@ their category, region and game folders.
 
 The optional `save-cheats.json` source and compact `save-cheats.3db` database
 also live in `.ohmy3do/`. Desktop setup and USB preparation install them when
-missing; use **CH5 Tools → Edit / update cheat database…** to edit and install
+missing; use **Settings & tools → Open database editor…** to edit and install
 changes independently of the boot ISO. See the [database guide](save-cheats.md).
 
 ## PC-assisted setup
 
-The [desktop app](../desktop/README.md) can import and organize discs, prepare covers
-and previews, edit console settings, and copy a staging library to a USB drive.
-On **Prepare USB**, enable **Guided setup for a new library / drive** (also
-available from the empty Library view):
+The [desktop app](../desktop/README.md) can prepare a drive **without copying a
+library or adding any games**:
 
-1. Choose an existing staging folder on the PC.
-2. Choose initial Adult filtering and video-preview preferences, then select
-   **Download & install matching menu**. The app downloads `boot.iso` and its
-   SHA-256 file from the GitHub release matching the desktop app's version,
-   verifies the image, creates settings if missing and builds the Find index.
-   Existing settings are preserved; installation has an undo journal.
-3. Use **Add discs** to import games, then return to **Prepare USB**, choose a
-   separate drive destination, validate, review and copy.
+1. Open **Drive setup** and select the USB drive root as **USB / SD destination**.
+2. Choose **Use library
+   boot.iso**, **Choose boot.iso…** for a local download/test build, or
+   **Download released menu**. Only the download option needs internet access.
+3. Wait for verification. The drive now has `boot.iso`, initial settings,
+   `.ohmy3do/saves/`, the cheat database, artwork/preview folders, and initial
+   search/catalog support. You can boot the menu and use Save Manager with no
+   games installed.
 
-Setup requires internet access. For offline use, install an already downloaded
-`boot.iso` through **Tools & settings → Install menu boot.iso…**. The app needs
-neither Python nor Docker at runtime. USB preparation creates the saves folder
-and preserves existing destination settings and saves.
+If the drive already has `boot.iso`, **Repair installed support** completes
+the layout without downloading an image or copying games. Empty files left by
+firmware probes are initialized. The save catalog is refreshed from existing backups. Existing nonempty settings,
+Find indexes, save
+backups, custom cheat definitions and media are preserved. Installations have
+an undo journal. Paths are under `.ohmy3do/`; the backup directory is
+`.ohmy3do/saves/`, not a top-level `/saves` folder.
+
+A staging library remains optional: under **Settings & tools**, use **Set up a PC staging library**, choose its folder, and download the matching released menu there.
+In **Library**, use **Add discs** to import games. Select the game tiles you
+want (or filter by title, category or region and **Select all shown**), then
+choose **Copy selected to USB…**. In the dialog, choose the USB destination,
+**Review copy**, and **Copy to USB**. Each game folder
+includes all its discs and referenced CUE tracks, with covers/previews copied
+automatically. Games already on the USB remain available when unselected; the
+menu indexes retain them. Selecting all library tiles copies the full library.
+Drive-only setup and repair remain under **Drive setup**. The app needs neither
+Python nor Docker at runtime.
 
 ## Keeping the app and menu current
 
-The desktop app checks for a newer stable release at startup. **Tools → Updates**
-can check manually and offers verified downloads of the desktop ZIP and
-`boot.iso`. Close the app and extract the ZIP to update the desktop program.
-For the console, download the image or install it directly into a checked library
-or USB root. Direct installation preserves support files and has an undo journal.
-See [desktop updates](../desktop/README.md#app-and-menu-updates) for details.
-Startup checks can be disabled; Offline mode disables checks and downloads.
+The desktop app checks GitHub's latest stable release at startup. **Updates**
+can check manually. **Update and restart** downloads the desktop package,
+verifies the published SHA-256 checksum, replaces the app after it exits and
+relaunches it. Settings and game/save files stay in place. A failed launch restores
+the previous executable and program support files. The portable app folder must
+be writable.
+
+Boot ISO updates are offered separately, with only relevant actions shown.
+Direct installation creates missing support files and preserves existing files,
+with an undo journal. Startup checks can be disabled; Offline mode disables
+checks and downloads. See [desktop updates](../desktop/README.md#app-and-menu-updates).
 
 ## Manual drive layout
 

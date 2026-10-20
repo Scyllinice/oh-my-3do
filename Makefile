@@ -2,7 +2,9 @@ CC = cc
 CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 
 .PHONY: test test-firmware test-covers test-sdk test-media clean
-test: build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
+test: build/test_save_catalog build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
+	python3 tools/build-save-names.py --check
+	./build/test_save_catalog
 	python3 tools/build-save-cheats.py --check --binary build/save-cheats.3db
 	./build/test_save_cheats build/save-cheats.3db
 	python3 tools/build-sector-codec.py
@@ -93,7 +95,7 @@ build/test_library_navigation: src/library_features.c src/library_navigation.c s
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/library_navigation.c src/library_features.c src/menu_sort.c src/menu_ui.c src/cover_catalog.c tests/test_library_navigation.c $(LDFLAGS) -o $@
 
-build/test_save_names: src/save_names.c src/save_names.h src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_save_names.c
+build/test_save_names: src/save_name_db.h src/save_names.c src/save_names.h src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_save_names.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/save_names.c src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_save_names.c $(LDFLAGS) -o $@
 
@@ -137,3 +139,7 @@ test-desktop:
 build/test_save_cheats: src/save_cheats.c src/save_cheats.h src/save_cheat_db.h tests/test_save_cheats.c src/save_archive.c src/save_archive.h src/usb_art.c src/menu_ui.c src/cover_catalog.c
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/save_cheats.c src/save_archive.c src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_save_cheats.c $(LDFLAGS) -o $@
+
+build/test_save_catalog: src/save_catalog.c src/save_catalog.h src/save_name_db.h src/save_names.c src/save_archive.c src/usb_art.c tests/test_save_catalog.c
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/save_catalog.c src/save_names.c src/save_archive.c src/usb_art.c src/menu_ui.c src/cover_catalog.c tests/test_save_catalog.c $(LDFLAGS) -o $@

@@ -1,3 +1,5 @@
+pub mod backup;
+pub mod save_catalog;
 pub mod catalog;
 pub mod console_config;
 pub mod disc;
@@ -11,7 +13,9 @@ pub mod save_editor;
 pub mod save_cheats;
 pub mod setup;
 pub mod usb;
+mod usb_selection;
 pub mod updates;
+pub mod self_update;
 use anyhow::{bail, Result};
 use std::sync::{
     atomic::{AtomicBool, Ordering},

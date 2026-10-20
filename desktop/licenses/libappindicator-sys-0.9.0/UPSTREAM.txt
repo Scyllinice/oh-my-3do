@@ -1,0 +1,2 @@
+License texts from https://github.com/tauri-apps/libappindicator-rs/tree/eafd1e3682a1247f595410266091e9684021cb6f
+The revision matches libappindicator-sys 0.9.0 .cargo_vcs_info.json (sys subdirectory).

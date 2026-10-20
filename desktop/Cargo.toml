@@ -5,10 +5,19 @@ edition = "2021"
 license = "MIT"
 rust-version = "1.88"
 
+[features]
+default = []
+legacy-ui = ["dep:eframe", "dep:wgpu", "dep:pollster", "dep:rfd"]
+
+[[bin]]
+name = "oh-my-3do-library"
+path = "src/main.rs"
+required-features = ["legacy-ui"]
+
 [dependencies]
-eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland"] }
-wgpu = { version = "27", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "metal", "gles"] }
-rfd = "0.15"
+eframe = { optional = true, version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland"] }
+wgpu = { optional = true, version = "27", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "metal", "gles"] }
+rfd = { version = "0.15", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
@@ -34,7 +43,7 @@ anyhow = "1"
 tempfile = "3"
 unicode-normalization = "0.1"
 urlencoding = "2"
-pollster = "0.4"
+pollster = { version = "0.4", optional = true }
 
 [build-dependencies]
 cc = "1.8"

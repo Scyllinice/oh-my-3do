@@ -2,6 +2,7 @@
 #include "usb_art.h"
 #include <stdlib.h>
 #include <string.h>
+#include "save_name_db.h"
 static int fold(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int same(const char *a, const char *b, size_t n)
 {
@@ -64,6 +65,13 @@ const char *save_names_find(const SaveNames *names, const char *file)
             if (e->learned) return e->title;
             if (!best || best->prefix) { best = e; longest = n + 1; }
         }
+    }
+    for (i=0;i<sizeof(builtin_save_names)/sizeof(builtin_save_names[0]);++i) {
+        const SaveNameEntry *e=&builtin_save_names[i];
+        size_t k=strlen(e->key);
+        if (!e->prefix && k==n && same(e->key,file,n)) {
+            if (!best || best->prefix) best=e;
+        } else if (e->prefix && k<=n && k>longest && same(e->key,file,k) && (!best || best->prefix)) {best=e;longest=k;}
     }
     return best ? best->title : NULL;
 }
@@ -137,4 +145,42 @@ int save_snapshot_learn(const char *snapshot, size_t length, const SaveArchive *
         ++added;
     }
     return added;
+}
+
+int save_slot_labels_parse(SaveSlotLabels *out, const char *text, size_t length)
+{
+    SaveSlotLabels next;
+    unsigned int seen=0;
+    size_t pos=0;
+    memset(&next,0,sizeof(next));
+    if (length>SAVE_SLOT_LABEL_FILE_BYTES) return -1;
+    while (pos<length && text[pos]) {
+        size_t start=pos,end,n,i;
+        unsigned int slot;
+        while (pos<length && text[pos] && text[pos]!='\n') ++pos;
+        end=pos;
+        if (end>start && text[end-1]=='\r') --end;
+        if (pos<length && text[pos]=='\n') ++pos;
+        if (end==start) continue;
+        if (end-start<2 || text[start]<'1' || text[start]>'8' || text[start+1]!='\t') return -1;
+        slot=(unsigned int)(text[start]-'1'); n=end-start-2;
+        if ((seen&(1U<<slot)) || n>=SAVE_SLOT_LABEL_BYTES) return -1;
+        for (i=0;i<n;++i) if ((unsigned char)text[start+2+i]<32 || (unsigned char)text[start+2+i]>126) return -1;
+        seen|=1U<<slot;
+        memcpy(next.labels[slot],text+start+2,n);
+    }
+    *out=next; return 0;
+}
+int save_slot_labels_format(const SaveSlotLabels *labels, char *out, size_t capacity)
+{
+    size_t used=0,i,j;
+    for (i=0;i<8;++i) if (labels->labels[i][0]) {
+        size_t n=0;
+        while (n<SAVE_SLOT_LABEL_BYTES && labels->labels[i][n]) ++n;
+        if (n==SAVE_SLOT_LABEL_BYTES || used+n+4>capacity) return -1;
+        for (j=0;j<n;++j) if ((unsigned char)labels->labels[i][j]<32 || (unsigned char)labels->labels[i][j]>126) return -1;
+        out[used++]=(char)('1'+i); out[used++]='\t'; memcpy(out+used,labels->labels[i],n); used+=n; out[used++]='\n';
+    }
+    if (used>=capacity) return -1;
+    out[used]=0; return 0;
 }

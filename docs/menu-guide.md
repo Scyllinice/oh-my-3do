@@ -35,7 +35,10 @@ columns of four cards; the arrows move between them. Cover images and video
 previews share the larger artwork panel.
 
 **Save Manager** contains **Console saves** and **USB backups** views; use
-Left/Right to switch. USB backup contents also offer a controller hex editor.
+Left/Right to switch. In the USB view, L/R changes slot pages, P opens Find slots for occupied backups,
+game/name search, the full numbered view, or a jump to a
+slot number, C names a slot, and X compares backups. Inside a backup, P copies
+one save to another slot; C opens the hex editor and X opens verified cheats.
 See the [Save Manager guide](saves.md) for backup, editing, and restore controls.
 
 Single **L/R** presses turn a page when released. Holding either shoulder and
@@ -326,7 +329,7 @@ complete fix. See [firmware/README.md](../firmware/README.md).
 ## Game information
 
 The console's selected-game panel shows genre, publisher, and release date from
-`.ohmy3do/metadata.3di`. Imports and **Rebuild Find index** export this file from
+`.ohmy3do/metadata.3di`. Imports and **Rebuild search indexes** export this file from
 the library database; the CLI `index-media.py` does the same. USB preparation
 includes it automatically. The menu reads the index at the USB root and keeps
 it in RAM, so browsing adds no metadata I/O. A missing genre shows **Unknown genre**;

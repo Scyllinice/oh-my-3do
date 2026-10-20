@@ -27,4 +27,9 @@ int save_snapshot_format(char *out, size_t capacity, const char *title, size_t t
  * since the snapshot and has no name yet. Returns the number added, or -1. */
 int save_snapshot_learn(const char *snapshot, size_t length, const SaveArchive *nvram, const SaveNames *names,
                         char *learned, size_t capacity);
+#define SAVE_SLOT_LABEL_BYTES 25
+#define SAVE_SLOT_LABEL_FILE_BYTES 512
+typedef struct SaveSlotLabels { char labels[8][SAVE_SLOT_LABEL_BYTES]; } SaveSlotLabels;
+int save_slot_labels_parse(SaveSlotLabels *out, const char *text, size_t length);
+int save_slot_labels_format(const SaveSlotLabels *labels, char *out, size_t capacity);
 #endif

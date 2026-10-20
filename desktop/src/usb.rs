@@ -38,6 +38,10 @@ pub struct CopyPlan {
     pub files: Vec<CopyItem>,
     pub games: usize,
     pub bytes: u64,
+    #[serde(default)]
+    pub selection: Option<Vec<String>>,
+    #[serde(default)]
+    pub generated: BTreeMap<String, Vec<u8>>,
 }
 fn word(data: &[u8], pos: usize) -> Result<usize> {
     Ok(u32::from_be_bytes(
@@ -99,6 +103,9 @@ pub fn find(path: &Path) -> Result<Vec<String>> {
 }
 /// Runtime files as (USB path, staging path) pairs. Media moves beside its disc.
 pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize)> {
+    inventory_selected(root, None, job)
+}
+fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Job) -> Result<(Vec<(String, String)>, usize)> {
     let boot = f::safe(root, "boot.iso")?;
     d::issue(&boot)?;
     if fs::metadata(&boot)?.len() > 16 * 1024 * 1024 {
@@ -122,12 +129,17 @@ pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize
     if indexed.iter().cloned().collect::<BTreeSet<_>>() != games {
         bail!("Find index is stale. Rebuild indexes on the Library tab first.")
     }
+    if let Some(selected) = selected {
+        if !selected.iter().all(|p| games.contains(p)) { bail!("Selected games changed; reload the game list"); }
+    }
+    let chosen = |path: &str| selected.is_none_or(|s| s.contains(path));
     let mut files = BTreeSet::from([
         "boot.iso".into(),
         ".ohmy3do/ohmy3do.ini".into(),
         ".ohmy3do/library.3di".into(),
     ]);
-    for (_, set) in &sets {
+    for (disc, set) in &sets {
+        if !chosen(&library::relative(root, disc)?) { continue; }
         for p in set {
             files.insert(library::relative(root, p)?);
         }
@@ -158,7 +170,7 @@ pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize
         files.insert(crate::save_cheats::JSON_PATH.into());
         if binary.is_file(){
             if fs::metadata(&binary)?.len()>crate::save_cheats::MAX_BINARY as u64{bail!("Oversized console cheat database");}
-            if fs::read(&binary)?!=db.binary()?{bail!("Cheat database source and console file differ; reinstall them with the database editor");}
+            if !db.matches_binary(&fs::read(&binary)?)?{bail!("Cheat database source and console file differ; reinstall them with the database editor");}
             files.insert(crate::save_cheats::JSON_PATH.into());files.insert(crate::save_cheats::BINARY_PATH.into());
         }
     }
@@ -179,6 +191,7 @@ pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize
             let Some(disc) = homes.get(&game) else {
                 bail!("Media index refers to a missing game")
             };
+            if !chosen(disc) { continue; }
             let extension = Path::new(&name)
                 .extension()
                 .unwrap_or_default()
@@ -252,7 +265,7 @@ pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize
         pairs.push((dest, source));
     }
     pairs.sort();
-    Ok((pairs, games.len()))
+    Ok((pairs, selected.map_or(games.len(), BTreeSet::len)))
 }
 fn media_index(name: &str) -> bool {
     [".ohmy3do/covers/index.3di", ".ohmy3do/previews/index.3di"].contains(&name)
@@ -338,6 +351,17 @@ pub fn plan(
     verify: bool,
     job: &Job,
 ) -> Result<CopyPlan> {
+    plan_impl(source, target, cache, verify, None, job)
+}
+/// Selection contains complete game groups from `choices`, never individual tracks.
+pub fn plan_selected(source: &Path, target: &Path, cache: &Path, verify: bool, selected: &[String], job: &Job) -> Result<CopyPlan> {
+    let indexed = find(&f::safe(&f::root(source)?, ".ohmy3do/library.3di")?)?;
+    if !selected.iter().all(|p| indexed.contains(p)) { bail!("Selected games changed; reload the game list"); }
+    let groups = selected.iter().map(|p| f::fold(&game_label(p))).collect::<BTreeSet<_>>();
+    let expanded = indexed.into_iter().filter(|p| groups.contains(&f::fold(&game_label(p)))).collect();
+    plan_impl(source, target, cache, verify, Some(expanded), job)
+}
+fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected: Option<BTreeSet<String>>, job: &Job) -> Result<CopyPlan> {
     let source = f::root(source)?;
     let target = f::root(target)?;
     if source.starts_with(&target) || target.starts_with(&source) {
@@ -346,12 +370,17 @@ pub fn plan(
     let _source_lock = library::lock_library(&source, cache)?;
     let _destination_lock = library::lock_library(&target, cache)?;
     job.say("Validating staging and media");
-    let (files, games) = inventory(&source, job)?;
+    let (mut files, games) = inventory_selected(&source, selected.as_ref(), job)?;
     let report = report_path(&source, &target, cache);
     let previous = fs::read(&report)
         .ok()
         .and_then(|b| serde_json::from_slice::<CopyPlan>(&b).ok());
     let moves = folder_moves(&target, &files)?;
+    let selection = selected.as_ref().map(|s| s.iter().cloned().collect::<Vec<_>>());
+    let generated = if let Some(selected) = &selection {
+        crate::usb_selection::indexes(&source, &target, selected, &moves, job)?
+    } else { BTreeMap::new() };
+    files.retain(|(name,_)| !generated.contains_key(name));
     let remaps = moved_paths(&target, &moves);
     let mut items = vec![];
     let mut bytes = 0;
@@ -456,6 +485,14 @@ pub fn plan(
             verified: trusted,
         });
     }
+    for (name, content) in &generated {
+        let dest = f::safe(&target, name)?;
+        if dest.exists() && !dest.is_file() { bail!("Destination is occupied: {name}"); }
+        let destination_stamp = if dest.is_file() { Some(f::stamp(&dest)?.1) } else { None };
+        let status = if destination_stamp.is_none() { "copy" } else if fs::read(&dest)? == *content { "unchanged" } else { "update" };
+        if status != "unchanged" { bytes += content.len() as u64; }
+        items.push(CopyItem { path: name.clone(), source_path: None, status: status.into(), size: content.len() as u64, source_stamp: 0, destination_stamp, verified: status == "unchanged" });
+    }
     // Menu-written lists on the drive follow moved folders even when staging has none.
     let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
     for name in [".ohmy3do/favorites.txt", ".ohmy3do/recent.txt", ".ohmy3do/last-position.txt"] {
@@ -492,6 +529,8 @@ pub fn plan(
         files: items,
         games,
         bytes,
+        selection,
+        generated,
     };
     f::atomic(&report, &serde_json::to_vec_pretty(&plan)?)?;
     job.say(format!(
@@ -509,6 +548,11 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
     }
     let _source_lock = library::lock_library(&plan.source, cache)?;
     let _destination_lock = library::lock_library(&plan.destination, cache)?;
+    if let Some(selected) = &plan.selection {
+        if crate::usb_selection::indexes(&plan.source, &plan.destination, selected, &plan.moves, job)? != plan.generated {
+            bail!("Library or USB indexes changed since preview; review the copy again");
+        }
+    }
     let mut tx = Journal::new(&plan.destination, cache)?;
     let mut receipt = plan.clone();
     let result = (|| -> Result<()> {
@@ -554,6 +598,18 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 continue;
             };
             job.check()?;
+            if let Some(content) = plan.generated.get(&file.path) {
+                let dest = f::safe(&plan.destination, &file.path)?;
+                let stamp = if dest.exists() { Some(f::stamp(&dest)?.1) } else { None };
+                if stamp != file.destination_stamp { bail!("Destination changed since preview: {}", file.path); }
+                job.check()?;
+                tx.write(&file.path, content)?;
+                if fs::read(&dest)? != *content { bail!("Index copy readback failed"); }
+                receipt.files[i].status = "verified".into();
+                receipt.files[i].verified = true;
+                receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
+                continue;
+            }
             let src = f::safe(
                 &plan.source,
                 file.source_path.as_deref().unwrap_or(&file.path),
@@ -602,8 +658,9 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 file.status = "verified".into();
             }
         }
-        tx.ensure_directory(".ohmy3do/saves")?;
-        crate::save_cheats::ensure_database(&plan.destination, &mut tx)?;
+        crate::setup::ensure_support(&plan.destination, &mut tx, &Default::default(), job)?;
+        let save_slots=crate::save_catalog::scan(&plan.destination.join(".ohmy3do/saves"),job)?;
+        crate::save_catalog::write(&save_slots,&mut tx,".ohmy3do/saves/",job)?;
         tx.finish()?;
         f::atomic(
             &report_path(&plan.source, &plan.destination, cache),
@@ -640,4 +697,33 @@ pub fn summary(plan: &CopyPlan) -> String {
             .collect::<Vec<_>>()
             .join(" · ")
     )
+}
+
+/// Whole game folders, keeping all discs and CUE data together. Sizes exclude media/support files.
+#[derive(Clone)]
+pub struct GameChoice {
+    pub label: String,
+    pub discs: Vec<String>,
+    pub bytes: u64,
+}
+fn game_label(path: &str) -> String {
+    let parts = path.split('/').collect::<Vec<_>>();
+    if parts.len() >= 4 && CATEGORIES.contains(&parts[0]) { parts[..3].join("/") } else { path.into() }
+}
+pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
+    let root = f::root(root)?;
+    let indexed = find(&f::safe(&root, ".ohmy3do/library.3di")?)?.into_iter().collect::<BTreeSet<_>>();
+    let sets = d::collect(&[root.clone()], None, job)?;
+    let actual = sets.iter().map(|(p,_)| library::relative(&root,p)).collect::<Result<BTreeSet<_>>>()?;
+    if indexed != actual { bail!("Find index is stale. Rebuild indexes on the Library tab first."); }
+    let mut groups = BTreeMap::<String, GameChoice>::new();
+    for (disc, files) in sets {
+        job.check()?;
+        let path = library::relative(&root,&disc)?;
+        let label = game_label(&path);
+        let group = groups.entry(f::fold(&label)).or_insert_with(|| GameChoice { label, discs: vec![], bytes: 0 });
+        group.discs.push(path);
+        for file in files { group.bytes += fs::metadata(file)?.len(); }
+    }
+    Ok((root, groups.into_values().collect()))
 }

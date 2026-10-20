@@ -260,7 +260,7 @@ pub fn install_boot(
     let bytes = menu_bytes(release, digest, job)?;
     install_boot_bytes(expected, &bytes, cache, job)
 }
-/// Only boot.iso changes; support files, settings, indexes and saves stay intact.
+/// Update the menu and create missing runtime support, preserving existing user files.
 pub fn install_boot_bytes(
     expected: &BootState,
     bytes: &[u8],
@@ -282,6 +282,7 @@ pub fn install_boot_bytes(
     let mut tx = library::Journal::new(&root, cache)?;
     let result = (|| -> Result<()> {
         job.check()?;
+        setup::ensure_support(&root, &mut tx, &Default::default(), job)?;
         tx.write("boot.iso", bytes)?;
         ensure!(
             fs::read(f::safe(&root, "boot.iso")?)? == bytes,

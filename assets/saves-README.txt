@@ -6,11 +6,20 @@ live in .ohmy3do/saves/. Keep ohmy3do.ini in .ohmy3do/ and boot.iso at the USB r
 On the console, press L+R together to open Tools.
 First open Save manager, then make and verify a backup.
 In Save manager, A prepares one save and C prepares all saves for backup.
-Choose a slot and confirm; an existing slot is replaced.
+Choose a slot and confirm. A single save merges into the slot; C:All replaces it.
+L/R changes pages of eight slots; P opens Find slots (occupied/search/jump/all).
+Find saves across slots in the desktop Save Manager refreshes the console catalog.
+Run it once for old backups and again after manually copying/deleting backups.
+Console searches match game names, raw filenames and slot labels.
+Jump accepts slot numbers 1-999999999.
+USB capacity and filesystem/firmware limits determine actual storage capacity.
+Inside a USB archive, P copies the selected save into another slot.
+In the slot list, C names a slot and X compares it with another slot.
 The menu automatically checks USB writing before the first backup or restore
 in a session. There is no standalone USB Write Test option.
 
-slot01.3ds ... slot08.3ds are custom, checksummed file archives.
+slot01.3ds, slot09.3ds, slot1000.3ds etc. are custom, checksummed archives.
+Labels are stored separately in slot-labels.txt and slot-labels-N.txt (page N).
 USB backups opens a slot and lets you restore a selected file.
 These are not raw NVRAM images or emulator .srm files.
 

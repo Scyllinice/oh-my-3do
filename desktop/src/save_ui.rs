@@ -1,5 +1,8 @@
 use eframe::egui::{self, RichText};
-use oh_my_3do_library::save_archive::{self, Archive};
+use oh_my_3do_library::{
+    backup::{self, Labels, State},
+    save_archive::{self, Archive},
+};
 use std::{
     fs,
     io::Read,
@@ -8,6 +11,25 @@ use std::{
 #[derive(Default)]
 pub struct SaveBrowser {
     open: bool,
+    catalog_directory: Option<PathBuf>,
+    catalog_pending: Option<PathBuf>,
+    catalog_query: String,
+    catalog_slots: Vec<oh_my_3do_library::save_catalog::Slot>,
+    catalog_worker:
+        Option<std::thread::JoinHandle<anyhow::Result<Vec<oh_my_3do_library::save_catalog::Slot>>>>,
+    catalog_status: String,
+    catalog_visible: bool,
+    has_document: bool,
+    pending_new: bool,
+    incoming: Option<(PathBuf, Archive, Vec<bool>)>,
+    labels: Labels,
+    labels_path: Option<PathBuf>,
+    labels_original: Option<Vec<u8>>,
+    label_slot: Option<usize>,
+    label_edit: String,
+    comparison: Option<(PathBuf, Archive)>,
+    difference_selected: usize,
+    difference_page: usize,
     path: Option<PathBuf>,
     original: Archive,
     original_bytes: Vec<u8>,
@@ -39,9 +61,14 @@ impl SaveBrowser {
         };
         self.original_bytes = bytes;
         self.pending_open = None;
+        self.pending_new = false;
+        self.incoming = None;
+        self.has_document = true;
         self.original = archive.clone();
         self.archive = archive;
         self.path = Some(path.to_owned());
+        self.comparison = None;
+        self.read_label();
         self.selected = 0;
         self.page = 0;
         self.refresh();
@@ -57,6 +84,9 @@ impl SaveBrowser {
         ui.label("Inspect .3ds backups, export individual saves, edit bytes or use a supported game editor.");
     }
     fn refresh(&mut self) {
+        self.selected = self
+            .selected
+            .min(self.archive.entries.len().saturating_sub(1));
         let bytes = self
             .archive
             .entries
@@ -112,6 +142,14 @@ impl SaveBrowser {
         self.path = Some(path.canonicalize()?);
         self.original_bytes = saved.bytes;
         self.original = self.archive.clone();
+        self.read_label();
+        if backup::slot(path).is_some()
+            || path
+                .file_name()
+                .is_some_and(|n| n == "recovery.3ds" || n == "recovery2.3ds")
+        {
+            self.start_catalog(path.parent().unwrap().to_path_buf());
+        }
         self.message_error = false;
         self.message = match saved.backup {
             Some(backup) => format!("Saved and verified. Recovery copy: {}", backup.display()),
@@ -120,11 +158,16 @@ impl SaveBrowser {
         Ok(())
     }
     fn save_current(&mut self) -> anyhow::Result<()> {
-        let path = self
-            .path
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Open a backup first"))?;
-        self.save_to(&path)
+        if let Some(path) = self.path.clone() {
+            self.save_to(&path)
+        } else {
+            let path = rfd::FileDialog::new()
+                .set_file_name("slot01.3ds")
+                .add_filter("Save backup", &["3ds"])
+                .save_file()
+                .ok_or_else(|| anyhow::anyhow!("Save cancelled; draft kept"))?;
+            self.save_to(&path)
+        }
     }
     fn save_as_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new().add_filter("Save backup", &["3ds"]);
@@ -136,12 +179,304 @@ impl SaveBrowser {
                 dialog = dialog.set_file_name(name.to_string_lossy());
             }
         } else {
-            dialog = dialog.set_file_name("edited-backup.3ds");
+            dialog = dialog.set_file_name("slot01.3ds");
         }
         if let Some(path) = dialog.save_file() {
             let result = self.save_to(&path);
             self.report_error(result);
         }
+    }
+    fn new_backup(&mut self) {
+        self.path = None;
+        self.archive = Archive::default();
+        self.original = Archive::default();
+        self.original_bytes.clear();
+        self.pending_open = None;
+        self.pending_new = false;
+        self.incoming = None;
+        self.has_document = true;
+        self.comparison = None;
+        self.selected = 0;
+        self.page = 0;
+        self.read_label();
+        self.refresh();
+        self.message = "Empty backup draft. Add saves from other backups, then Save as.".into();
+        self.message_error = false;
+    }
+    fn import_window(&mut self, ctx: &egui::Context) {
+        let Some((path, archive, checked)) = &mut self.incoming else {
+            return;
+        };
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Modal::new(egui::Id::new("copy_saves_from_backup")).show(ctx,|ui|{
+            ui.set_max_width(640.);ui.heading("Add saves to this backup");ui.label(path.display().to_string());
+            ui.label("Checked saves will add or replace matching filenames. Other destination saves stay intact. Nothing is written until you save the draft.");
+            ui.horizontal(|ui|{if ui.button("Select all").clicked(){checked.fill(true);}if ui.button("Clear selection").clicked(){checked.fill(false);}});
+            egui::ScrollArea::vertical().max_height(300.).show(ui,|ui|{for (i,e) in archive.entries.iter().enumerate(){
+                let exists=self.archive.entries.iter().any(|old|old.name.eq_ignore_ascii_case(&e.name));
+                ui.checkbox(&mut checked[i],format!("{} · {} bytes{}",e.label(),e.data.len(),if exists{" · replaces matching save"}else{" · adds save"}));
+            }});
+            if self.message_error{ui.colored_label(crate::theme::RED,&self.message);}
+            ui.horizontal(|ui|{apply=ui.add_enabled(checked.iter().any(|v|*v),egui::Button::new("Add / replace selected saves")).clicked();cancel=ui.button("Cancel").clicked();});
+        });
+        if cancel {
+            self.incoming = None;
+        } else if apply {
+            let selected = archive
+                .entries
+                .iter()
+                .zip(checked.iter())
+                .filter(|(_, yes)| **yes)
+                .map(|(e, _)| e.clone())
+                .collect::<Vec<_>>();
+            match self.archive.merge_entries(&selected) {
+                Ok(()) => {
+                    self.incoming = None;
+                    self.refresh();
+                    self.message_error = false;
+                    self.message = format!(
+                        "Added/replaced {} save(s) in the draft. Save to write the slot.",
+                        selected.len()
+                    );
+                }
+                Err(e) => {
+                    self.message_error = true;
+                    self.message = format!("Cannot merge saves: {e:#}");
+                }
+            }
+        }
+    }
+    fn read_label(&mut self) {
+        self.labels_path = None;
+        self.labels_original = None;
+        self.label_slot = None;
+        self.label_edit.clear();
+        let Some((path, slot)) = self.path.as_deref().and_then(backup::slot) else {
+            return;
+        };
+        match Labels::read(&path) {
+            Ok((labels, original)) => {
+                self.label_edit = labels.0[slot].clone();
+                self.labels = labels;
+                self.labels_original = original;
+                self.labels_path = Some(path);
+                self.label_slot = Some(slot);
+            }
+            Err(e) => {
+                self.message_error = true;
+                self.message = format!("Slot names unavailable: {e:#}");
+            }
+        }
+    }
+    fn save_label(&mut self) -> anyhow::Result<()> {
+        let slot = self
+            .label_slot
+            .ok_or_else(|| anyhow::anyhow!("Open a numbered backup slot first"))?;
+        let path = self.labels_path.as_ref().unwrap();
+        let mut labels = self.labels.clone();
+        labels.0[slot] = self.label_edit.clone();
+        labels.save(path, self.labels_original.as_deref())?;
+        let (labels, original) = Labels::read(path)?;
+        self.labels = labels;
+        self.labels_original = original;
+        if let Some(path) = self.path.clone() {
+            self.start_catalog(path.parent().unwrap().to_path_buf());
+        }
+        self.message = "Slot name saved and verified; save archive unchanged".into();
+        self.message_error = false;
+        Ok(())
+    }
+    pub fn compare_file(&mut self, path: &Path) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.has_document,
+            "Open or create a backup to compare first"
+        );
+        self.apply_hex_page()?;
+        self.comparison = Some((path.to_owned(), Archive::read(path)?));
+        self.difference_selected = 0;
+        self.difference_page = 0;
+        Ok(())
+    }
+    fn backup_tools(&mut self, ui: &mut egui::Ui) {
+        if self.label_slot.is_some() {
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "{} name",
+                    self.path
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .unwrap()
+                        .to_string_lossy()
+                ));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.label_edit)
+                        .char_limit(backup::LABEL_BYTES)
+                        .desired_width(280.),
+                );
+                if ui.button("Save slot name").clicked() {
+                    let r = self.save_label();
+                    self.report_error(r);
+                }
+            });
+            ui.small("24 printable ASCII characters; blank restores the slot filename. Names are stored separately from save data.");
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Add saves from backup…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Save backup", &["3ds"])
+                    .pick_file()
+                {
+                    let r = (|| -> anyhow::Result<()> {
+                        self.apply_hex_page()?;
+                        let archive = Archive::read(&path)?;
+                        let checked = vec![false; archive.entries.len()];
+                        self.incoming = Some((path, archive, checked));
+                        Ok(())
+                    })();
+                    self.report_error(r);
+                }
+            }
+            if ui
+                .add_enabled(
+                    !self.pending && !self.archive.entries.is_empty() && self.comparison.is_none(),
+                    egui::Button::new("Remove selected save"),
+                )
+                .clicked()
+            {
+                self.archive.entries.remove(self.selected);
+                self.refresh();
+                self.message = "Removed from draft; save the backup to write changes.".into();
+                self.message_error = false;
+            }
+            if ui.button("Compare with backup…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Save backup", &["3ds"])
+                    .pick_file()
+                {
+                    let r = self.compare_file(&path);
+                    self.report_error(r);
+                }
+            }
+            if self.comparison.is_some() && ui.button("Close comparison").clicked() {
+                self.comparison = None;
+            }
+        });
+        let dirty = self.dirty();
+        let Some((path, other)) = &self.comparison else {
+            return;
+        };
+        egui::CollapsingHeader::new("Backup comparison (read only)")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label(format!(
+                    "Before: current open backup{}",
+                    if dirty { " (including edits)" } else { "" }
+                ));
+                ui.label(format!("After: {}", path.display()));
+                let diffs = backup::compare(&self.archive, other);
+                let summary = [
+                    State::Added,
+                    State::Removed,
+                    State::Changed,
+                    State::Unchanged,
+                ]
+                .map(|state| diffs.iter().filter(|d| d.state == state).count());
+                ui.label(format!(
+                    "{} added · {} removed · {} changed · {} identical",
+                    summary[0], summary[1], summary[2], summary[3]
+                ));
+                if diffs.is_empty() {
+                    ui.label("Both backups are empty.");
+                    return;
+                }
+                self.difference_selected = self.difference_selected.min(diffs.len() - 1);
+                egui::ScrollArea::vertical()
+                    .id_salt("backup_compare_saves")
+                    .max_height(240.)
+                    .show(ui, |ui| {
+                        egui::Grid::new("backup_diff_table")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (i, d) in diffs.iter().enumerate() {
+                                    if ui
+                                        .selectable_label(
+                                            self.difference_selected == i,
+                                            RichText::new(d.name(&self.archive, other).label())
+                                                .color(if self.difference_selected == i {
+                                                    crate::theme::INK
+                                                } else {
+                                                    crate::theme::TEXT
+                                                }),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.difference_selected = i;
+                                        self.difference_page = 0;
+                                    }
+                                    ui.label(format!("{:?}", d.state));
+                                    ui.label(format!("{} bytes", d.changed_bytes));
+                                    ui.label(if d.type_changed {
+                                        "File type changed"
+                                    } else if d.name_changed {
+                                        "Filename case changed"
+                                    } else {
+                                        ""
+                                    });
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                let d = &diffs[self.difference_selected];
+                let bytes = d.byte_changes(&self.archive, other);
+                self.difference_page = self.difference_page.min(bytes.len().saturating_sub(1) / 32);
+                if bytes.is_empty() {
+                    ui.label(if d.type_changed || d.name_changed {
+                        "Only filename/type differs."
+                    } else {
+                        "Save bytes are identical."
+                    });
+                    return;
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.difference_page > 0,
+                            egui::Button::new("Previous differences"),
+                        )
+                        .clicked()
+                    {
+                        self.difference_page -= 1;
+                    }
+                    ui.label(format!(
+                        "Page {} / {}",
+                        self.difference_page + 1,
+                        bytes.len().div_ceil(32)
+                    ));
+                    if ui
+                        .add_enabled(
+                            (self.difference_page + 1) * 32 < bytes.len(),
+                            egui::Button::new("Next differences"),
+                        )
+                        .clicked()
+                    {
+                        self.difference_page += 1;
+                    }
+                });
+                let mut text = String::from("Offset  Before  After\n");
+                for &(offset, a, b) in bytes.iter().skip(self.difference_page * 32).take(32) {
+                    let hex = |v: Option<u8>| {
+                        v.map(|n| format!("{n:02X}")).unwrap_or_else(|| "--".into())
+                    };
+                    text.push_str(&format!("{offset:04X}      {}     {}\n", hex(a), hex(b)));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("backup_compare_bytes")
+                    .max_height(200.)
+                    .show(ui, |ui| {
+                        ui.monospace(text);
+                    });
+            });
     }
     fn report_error(&mut self, result: anyhow::Result<()>) {
         if let Err(error) = result {
@@ -158,6 +493,7 @@ impl SaveBrowser {
     }
     fn request_open(&mut self, path: PathBuf) -> anyhow::Result<()> {
         if self.dirty() {
+            self.pending_new = false;
             self.pending_open = Some(path);
             Ok(())
         } else {
@@ -165,21 +501,28 @@ impl SaveBrowser {
         }
     }
     fn finish_open(&mut self, save: Option<bool>) -> anyhow::Result<()> {
-        let Some(path) = self.pending_open.clone() else {
+        let path = self.pending_open.clone();
+        if path.is_none() && !self.pending_new {
             return Ok(());
-        };
+        }
         match save {
             None => {
                 self.pending_open = None;
+                self.pending_new = false;
                 return Ok(());
             }
             Some(true) => self.save_current()?,
             Some(false) => (),
         }
-        self.open_file(&path)
+        if let Some(path) = path {
+            self.open_file(&path)
+        } else {
+            self.new_backup();
+            Ok(())
+        }
     }
     fn confirm_open(&mut self, ctx: &egui::Context) {
-        if self.pending_open.is_none() {
+        if self.pending_open.is_none() && !self.pending_new {
             return;
         }
         let response = egui::Modal::new(egui::Id::new("save_unsaved_open")).show(ctx, |ui| {
@@ -232,8 +575,150 @@ impl SaveBrowser {
         // Keep unfinished changes available when this window is reopened.
         self.open = visible;
         self.confirm_open(ctx);
+        self.import_window(ctx);
+    }
+    pub fn browse_slots(&mut self, directory: PathBuf) {
+        self.open = true;
+        self.catalog_visible = true;
+        self.start_catalog(directory);
+    }
+    fn start_catalog(&mut self, directory: PathBuf) {
+        if self.catalog_worker.is_some() {
+            self.catalog_pending = Some(directory);
+            return;
+        }
+        self.catalog_directory = Some(directory.clone());
+        self.catalog_status = "Reading backups and refreshing console search catalog…".into();
+        self.catalog_worker = Some(std::thread::spawn(move || {
+            oh_my_3do_library::save_catalog::refresh(
+                &directory,
+                &oh_my_3do_library::cache_dir(),
+                &Default::default(),
+            )
+        }));
+    }
+    fn catalog_ui(&mut self, ui: &mut egui::Ui, directory: &str) {
+        if self
+            .catalog_worker
+            .as_ref()
+            .is_some_and(|w| w.is_finished())
+        {
+            match self.catalog_worker.take().unwrap().join() {
+                Ok(Ok(slots)) => {
+                    self.catalog_status = format!(
+                        "{} occupied backups indexed. Search game names, filenames or slot labels.",
+                        slots.len()
+                    );
+                    self.catalog_slots = slots;
+                }
+                Ok(Err(e)) => {
+                    self.catalog_slots.clear();
+                    self.catalog_status = format!("Catalog refresh failed: {e:#}");
+                }
+                Err(_) => {
+                    self.catalog_slots.clear();
+                    self.catalog_status = "Catalog refresh stopped unexpectedly".into();
+                }
+            }
+        }
+        if self.catalog_worker.is_none() {
+            if let Some(path) = self.catalog_pending.take() {
+                self.start_catalog(path)
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.catalog_worker.is_none(),
+                    egui::Button::new("Find saves across slots…"),
+                )
+                .clicked()
+            {
+                let start = self
+                    .catalog_directory
+                    .clone()
+                    .or_else(|| {
+                        self.path
+                            .as_ref()
+                            .and_then(|p| p.parent().map(Path::to_path_buf))
+                    })
+                    .unwrap_or_else(|| Path::new(directory).join(".ohmy3do/saves"));
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_directory(start)
+                    .set_title("Select the saves folder (.ohmy3do/saves)")
+                    .pick_folder()
+                {
+                    self.catalog_visible = true;
+                    self.start_catalog(path)
+                }
+            }
+            if self.catalog_directory.is_some()
+                && ui
+                    .add_enabled(
+                        self.catalog_worker.is_none(),
+                        egui::Button::new("Refresh slot catalog"),
+                    )
+                    .clicked()
+            {
+                self.start_catalog(self.catalog_directory.clone().unwrap())
+            }
+            if self.catalog_directory.is_some() {
+                ui.checkbox(&mut self.catalog_visible, "Show occupied slots");
+            }
+        });
+        if self.catalog_worker.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if !self.catalog_status.is_empty() {
+            ui.label(&self.catalog_status);
+        }
+        if !self.catalog_visible {
+            return;
+        }
+        if let Some(path) = &self.catalog_directory {
+            ui.small(path.display().to_string());
+        }
+        ui.horizontal(|ui| {
+            ui.label("Find game / slot:");
+            ui.text_edit_singleline(&mut self.catalog_query);
+            if ui.button("Clear").clicked() {
+                self.catalog_query.clear();
+            }
+        });
+        let mut open = None;
+        egui::ScrollArea::vertical()
+            .id_salt("occupied-save-slots")
+            .max_height(180.)
+            .show(ui, |ui| {
+                let mut matches = 0;
+                for slot in &self.catalog_slots {
+                    if !slot.matches(&self.catalog_query) {
+                        continue;
+                    }
+                    matches += 1;
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(slot.valid, egui::Button::new(slot.name()))
+                            .clicked()
+                        {
+                            open = Some(slot.path.clone())
+                        }
+                        ui.label(slot.games());
+                    });
+                }
+                if matches == 0 && self.catalog_worker.is_none() {
+                    ui.label("No matching occupied slots.");
+                }
+            });
+        if let Some(path) = open {
+            let r = self.request_open(path);
+            self.report_error(r);
+        }
+        ui.separator();
     }
     fn contents(&mut self, ui: &mut egui::Ui, directory: &str) {
+        self.catalog_ui(ui, directory);
         let dirty = self.dirty();
         ui.horizontal(|ui| {
             if ui.add(egui::Button::new("Open .3ds backup…")).clicked() {
@@ -252,7 +737,15 @@ impl SaveBrowser {
                     self.report_error(result);
                 }
             }
-            if self.path.is_some() {
+            if ui.button("New empty backup").clicked() {
+                if self.dirty() {
+                    self.pending_open = None;
+                    self.pending_new = true;
+                } else {
+                    self.new_backup();
+                }
+            }
+            if self.has_document {
                 if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
                     let result = self.save_current();
                     self.report_error(result);
@@ -269,24 +762,42 @@ impl SaveBrowser {
             }
             if dirty
                 && !self.pending
-                && self.original.entries.get(self.selected).is_some()
+                && self.archive.entries.get(self.selected).is_some_and(|e| {
+                    self.original
+                        .entries
+                        .iter()
+                        .any(|old| old.name.eq_ignore_ascii_case(&e.name))
+                })
                 && ui.button("Revert selected save").clicked()
             {
-                self.archive.entries[self.selected] = self.original.entries[self.selected].clone();
+                let name = &self.archive.entries[self.selected].name;
+                self.archive.entries[self.selected] = self
+                    .original
+                    .entries
+                    .iter()
+                    .find(|old| old.name.eq_ignore_ascii_case(name))
+                    .unwrap()
+                    .clone();
                 self.refresh();
             }
         });
         if let Some(path) = &self.path {
             ui.label(path.display().to_string());
+        } else if self.has_document {
+            ui.label("New backup (unsaved)");
         } else {
             return;
         }
+        self.backup_tools(ui);
         if !self.message.is_empty() {
             ui.label(RichText::new(&self.message).color(if self.message_error {
                 crate::theme::RED
             } else {
                 crate::theme::OSD
             }));
+        }
+        if self.comparison.is_some() {
+            return;
         }
         ui.label(format!(
             "{} saves · {} bytes{}",
@@ -297,15 +808,24 @@ impl SaveBrowser {
         let mut selected = self.selected;
         ui.add_enabled_ui(!self.pending, |ui| {
             egui::ComboBox::from_id_salt("save_entry")
-                .selected_text(
-                    self.archive
-                        .entries
-                        .get(selected)
-                        .map_or("Empty backup".into(), |e| e.label()),
-                )
+                .selected_text(self.archive.entries.get(selected).map_or(
+                    "Empty backup".into(),
+                    |e| {
+                        let raw = e.label();
+                        oh_my_3do_library::saves::known_title(&raw)
+                            .unwrap_or(&raw)
+                            .to_owned()
+                    },
+                ))
                 .show_ui(ui, |ui| {
                     for (i, entry) in self.archive.entries.iter().enumerate() {
-                        ui.selectable_value(&mut selected, i, entry.label());
+                        let raw = entry.label();
+                        let title = oh_my_3do_library::saves::known_title(&raw);
+                        ui.selectable_value(
+                            &mut selected,
+                            i,
+                            title.map_or(raw.clone(), |t| format!("{t} ({raw})")),
+                        );
                     }
                 });
         });
@@ -316,7 +836,8 @@ impl SaveBrowser {
         }
         if let Some(entry) = self.archive.entries.get(self.selected) {
             ui.label(format!(
-                "{} bytes · file type {:08X}",
+                "{} · {} bytes · file type {:08X}",
+                entry.label(),
                 entry.data.len(),
                 entry.file_type
             ));
@@ -354,36 +875,42 @@ impl SaveBrowser {
                             .strong()
                             .color(crate::theme::TEXT),
                     );
-                    ui.label("Save-file offsets · 32-bit big-endian values · game checksum updated automatically");
+                    ui.label(if profile.checksum.algorithm=="none" {"Save-file offsets · masked big-endian values · neighboring flags preserved"} else {"Save-file offsets · big-endian values · game checksum updated automatically"});
                     ui.hyperlink_to("Format source", &profile.source);
                     ui.small(&profile.notes);
                     let mut change = None;
                     let mut preset = None;
                     ui.add_enabled_ui(!self.pending, |ui| {
-                        egui::Grid::new("known_save_values")
-                            .num_columns(3)
-                            .show(ui, |ui| {
-                                for (i, field) in profile.fields.iter().enumerate() {
-                                    ui.label(&field.label);
-                                    ui.monospace(format!("0x{:04X}", field.offset));
-                                    let mut value = profile.value(entry, i).unwrap();
-                                    if ui
-                                        .add(
-                                            egui::DragValue::new(&mut value)
-                                                .range(field.min..=field.max),
-                                        )
-                                        .changed()
-                                    {
-                                        change = Some((i, value));
-                                    }
-                                    ui.end_row();
-                                }
-                            });
                         for (i, p) in profile.presets.iter().enumerate() {
                             if ui.button(&p.label).clicked() {
                                 preset = Some(i);
                             }
                         }
+                        egui::ScrollArea::vertical()
+                            .id_salt("game_editor_fields")
+                            .max_height(250.)
+                            .show(ui, |ui| {
+                                egui::Grid::new("known_save_values").num_columns(3).show(
+                                    ui,
+                                    |ui| {
+                                        for (i, field) in profile.fields.iter().enumerate() {
+                                            ui.label(&field.label);
+                                            ui.monospace(format!("0x{:04X}", field.offset));
+                                            let mut value = profile.value(entry, i).unwrap();
+                                            if ui
+                                                .add(
+                                                    egui::DragValue::new(&mut value)
+                                                        .range(field.min..=field.max),
+                                                )
+                                                .changed()
+                                            {
+                                                change = Some((i, value));
+                                            }
+                                            ui.end_row();
+                                        }
+                                    },
+                                );
+                            });
                     });
                     if let Some((field, value)) = change {
                         let result =
@@ -664,5 +1191,29 @@ mod tests {
         ui.request_open(second.clone()).unwrap();
         ui.finish_open(Some(false)).unwrap();
         assert_eq!(ui.archive, archive(2));
+    }
+    #[test]
+    fn new_draft_copy_and_comparison_leave_sources_unchanged_and_guard_discard() {
+        let (_dir, first, second) = files();
+        let first_before = fs::read(&first).unwrap();
+        let second_before = fs::read(&second).unwrap();
+        let mut ui = SaveBrowser::default();
+        ui.new_backup();
+        assert!(ui.has_document && ui.path.is_none());
+        let source = Archive::read(&first).unwrap();
+        ui.archive.merge_entries(&source.entries).unwrap();
+        ui.refresh();
+        assert!(ui.dirty());
+        ui.compare_file(&second).unwrap();
+        assert!(ui.comparison.is_some());
+        assert_eq!(ui.archive, source);
+        ui.pending_new = true;
+        ui.finish_open(None).unwrap();
+        assert!(ui.dirty());
+        ui.pending_new = true;
+        ui.finish_open(Some(false)).unwrap();
+        assert!(ui.archive.entries.is_empty() && !ui.dirty());
+        assert_eq!(fs::read(first).unwrap(), first_before);
+        assert_eq!(fs::read(second).unwrap(), second_before);
     }
 }

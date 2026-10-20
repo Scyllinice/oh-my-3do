@@ -4,9 +4,18 @@
 
 static int allowed(const char *path)
 {
-    size_t n = strlen(path);
-    return !strcmp(path, "saves/recovery.3ds") || !strcmp(path, "saves/recovery2.3ds") ||
-           (n == 16 && !strncmp(path, "saves/slot0", 11) && path[11] >= '1' && path[11] <= '8' && !strcmp(path + 12, ".3ds"));
+    const char *p;
+    unsigned long slot=0;
+    size_t digits=0;
+    if (!strcmp(path,"saves/recovery.3ds") || !strcmp(path,"saves/recovery2.3ds")) return 1;
+    if (strncmp(path,"saves/slot",10)) return 0;
+    p=path+10;
+    while (*p>='0' && *p<='9') {
+        if (++digits>9) return 0;
+        slot=slot*10+(unsigned long)(*p++-'0');
+    }
+    if (digits<2 || !slot || slot>SAVE_SLOT_LIMIT || strcmp(p,".3ds")) return 0;
+    return digits==2 || path[10]!='0';
 }
 static int load(Ode *ode, OdeReadBuffer reader, const char *path, SaveArchive *out, int allow_empty)
 {

@@ -106,8 +106,8 @@ def disc_data_issue(path):
 
 OPERA_BLOCK = 2048
 SAVE_NAMES_BYTES = 16384
-SAVE_PATH = re.compile(rb'/NVRAM/([\x21-\x7e][\x20-\x7e]{0,30})')
-SAVE_NAME = re.compile(r'[\w.\- ]+')
+SAVE_PATH = re.compile(rb'/nvram/([\x21-\x7e][\x20-\x7e]{0,30})', re.I)
+SAVE_NAME = re.compile(r"[A-Za-z0-9_.\- \[\]'&+!()]+")
 
 
 def opera_files(stream):
@@ -151,7 +151,7 @@ def disc_save_names(path):
                 continue
             stream.seek(offset)
             data = stream.read(size)
-            if b'/NVRAM/' not in data:
+            if b'/nvram/' not in data.lower():
                 continue
             for match in SAVE_PATH.finditer(data):
                 name = match[1].decode('ascii')
@@ -179,7 +179,7 @@ def save_names_text(root, support, games, titles, write_cache=True):
     cache_path = support / 'save-names-cache.json'
     try:
         cache = json.loads(cache_path.read_text(encoding='utf-8')) if cache_path.is_file() else {}
-        cache = cache if isinstance(cache, dict) and cache.get('schema') == 1 else {}
+        cache = cache if isinstance(cache, dict) and cache.get('schema') == 2 else {}
     except (OSError, ValueError):
         cache = {}
     discs, rows, scanned = {}, {}, 0
@@ -214,7 +214,7 @@ def save_names_text(root, support, games, titles, write_cache=True):
         text += line
     if dropped:
         print(f'Save names: {dropped} names left out to stay within {SAVE_NAMES_BYTES} bytes')
-    cache_data = json.dumps(dict(schema=1, discs=discs), sort_keys=True).encode('utf-8')
+    cache_data = json.dumps(dict(schema=2, discs=discs), sort_keys=True).encode('utf-8')
     if not write_cache:
         return text, len(rows), cache_data
     temporary = cache_path.with_name(cache_path.name + '.tmp')

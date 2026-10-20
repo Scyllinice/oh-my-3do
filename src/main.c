@@ -11,6 +11,7 @@
 #include "save_usb.h"
 #include "nvram_io.h"
 #include "save_names.h"
+#include "save_catalog.h"
 #include "save_cheats.h"
 #include "save_cheats_usb.h"
 #include "library_features.h"
@@ -53,6 +54,12 @@
 #define TOOL_HEX 18
 #define TOOL_HEX_DISCARD 19
 #define TOOL_CHEATS 20
+#define TOOL_SLOT_NAME 21
+#define TOOL_COMPARE 22
+#define TOOL_COMPARE_BYTES 23
+#define TOOL_SLOT_JUMP 24
+#define TOOL_SLOT_FIND 25
+#define TOOL_SLOT_QUERY 26
 #define MAX_DEPTH 32
 #define DIRECTIONS (ControlUp | ControlDown | ControlLeft | ControlRight)
 #define COVER_IDLE_MS 700UL
@@ -136,6 +143,22 @@ typedef struct Menu {
     int queue_move;
     int c_pending;
     int backup_slot_valid;
+    int backup_merge;
+    unsigned long slot_page,slot_labels_page;
+    int slot_filtered,slot_catalog_stale,slot_find_option;
+    unsigned int slot_name_slot;
+    char slot_query[25];
+    SaveCatalogResults slot_results;
+    char slot_jump[11];
+    SaveArchive copy_original;
+    unsigned int copy_source_slot;
+    SaveSlotLabels slot_labels, slot_labels_before;
+    int slot_labels_valid;
+    char slot_label_edit[SAVE_SLOT_LABEL_BYTES];
+    SaveArchive compare_archive;
+    int compare_choosing;
+    unsigned int compare_slot;
+    size_t compare_offset;
     int details_new;
     int jump_letter;
     int alphabet_active;
@@ -3473,10 +3496,58 @@ static void control_badges(Menu *menu, int x, int y, const char *controls, int l
 }
 static void slot_path(char *path, unsigned int slot)
 {
-    if (slot == 8) strcpy(path, "saves/recovery.3ds");
-    else if (slot == 9) strcpy(path, "saves/recovery2.3ds");
-    else format(path, "saves/slot%02u.3ds", slot + 1);
+    if (slot==SAVE_RECOVERY_SLOT) strcpy(path,"saves/recovery.3ds");
+    else if (slot==SAVE_RECOVERY2_SLOT) strcpy(path,"saves/recovery2.3ds");
+    else format(path,"saves/slot%02lu.3ds",(unsigned long)slot+1);
 }
+static size_t slot_count(const Menu *menu)
+{
+    unsigned long remaining=SAVE_SLOT_LIMIT-menu->slot_page*8;
+    if (menu->slot_filtered) return menu->slot_results.count;
+    return remaining<8 ? (size_t)remaining : !menu->backup_mode && !menu->slot_page ? 10 : 8;
+}
+static unsigned int slot_at(const Menu *menu, size_t row)
+{
+    if (menu->slot_filtered) return menu->slot_results.rows[row].slot;
+    return row==8 ? SAVE_RECOVERY_SLOT : row==9 ? SAVE_RECOVERY2_SLOT : (unsigned int)(menu->slot_page*8+row);
+}
+static void slot_select(Menu *menu, unsigned int slot)
+{
+    size_t i;
+    if (menu->slot_filtered) {
+        for (i=0;i<menu->slot_results.count;++i) if (menu->slot_results.rows[i].slot==slot) {menu->tool_selected=i;return;}
+        menu->slot_filtered=0;
+    }
+    if (slot==SAVE_RECOVERY_SLOT || slot==SAVE_RECOVERY2_SLOT) {menu->slot_page=0;menu->tool_selected=slot==SAVE_RECOVERY_SLOT ? 8 : 9;}
+    else {menu->slot_page=slot/8;menu->tool_selected=slot%8;}
+}
+static void slot_labels_path(const Menu *menu, char *path)
+{
+    if (!menu->slot_page) strcpy(path,"saves/slot-labels.txt");
+    else format(path,"saves/slot-labels-%lu.txt",menu->slot_page);
+}
+static void slot_search(Menu *menu)
+{
+    menu->tool_selected=0;
+    if (!save_root_operation(menu,8,NULL,NULL)) {
+        menu->slot_filtered=1;menu->tools=TOOL_SLOTS;
+        menu->tool_message=menu->slot_results.count ? NULL : "No matching indexed slots.";
+    } else {
+        menu->tools=TOOL_SLOT_FIND;
+    }
+}
+static const SaveEntry *backup_entry(const Menu *menu)
+{
+    return menu->hex_archive.bytes ? &menu->hex_archive.entries[menu->save_selected] :
+        menu->copy_original.bytes ? &menu->copy_original.entries[menu->save_selected] : &menu->nvram.entries[menu->save_selected];
+}
+static void finish_copy(Menu *menu)
+{
+    save_archive_free(&menu->backup);menu->backup=menu->copy_original;memset(&menu->copy_original,0,sizeof(menu->copy_original));
+    menu->backup_slot=menu->copy_source_slot;menu->tools=TOOL_ARCHIVE;menu->tool_selected=menu->save_selected;menu->backup_mode=0;
+    save_archive_free(&menu->pending);
+}
+
 /* Wrap the original strings into pages instead of truncating distinguishing
  * region/revision/disc suffixes. This view performs no ODE operations. */
 static void game_details_text(Menu *menu, const char *value, size_t *row, Color ink)
@@ -3603,7 +3674,7 @@ static void hex_input(Menu *menu, u32 pressed)
         if (save_archive_build(&menu->pending,entry,1)<0) {
             menu->tool_message="Cannot prepare edited backup."; return;
         }
-        menu->backup_mode=1; menu->tools=TOOL_SLOTS; menu->tool_selected=0; return;
+        menu->backup_merge=1; menu->backup_mode=1;menu->slot_filtered=0; menu->tools=TOOL_SLOTS; menu->tool_selected=0; return;
     }
     if (!entry->size) return;
     if (pressed & ControlLeft) { if (menu->hex_offset) --menu->hex_offset; }
@@ -3635,20 +3706,21 @@ static void draw_cheats(Menu *menu)
         if (i<p->preset_count) format(line,"%s",p->presets[i].label);
         else {
             const SaveCheatField *field=&p->fields[i-p->preset_count];
-            format(line,"%s: %lu",field->label,save_word(entry->data+field->offset));
+            format(line,"%s: %lu",field->label,save_cheats_value(entry,field));
         }
         label_on(menu,22,100+(int)(i-start)*12,line,ink,UI_FONT_SMALL,selected ? ACCENT : PANEL);
     }
     menu->text_background_set=0;
     if (menu->cheat_selected<p->preset_count) {
         const SaveCheatPreset *preset=&p->presets[menu->cheat_selected];
-        format(line,"Offset %04lx -> %lu",(unsigned long)p->fields[preset->field].offset,preset->value);
+        if (preset->additional_count) format(line,"%lu fields / first offset %04lx",(unsigned long)preset->additional_count+1,(unsigned long)p->fields[preset->field].offset);
+        else format(line,"Offset %04lx -> %lu",(unsigned long)p->fields[preset->field].offset,preset->value);
     } else {
         const SaveCheatField *field=&p->fields[menu->cheat_selected-p->preset_count];
         format(line,"Offset %04lx: %lu-%lu",(unsigned long)field->offset,field->min,field->max);
     }
     tool_line(menu,8,line,MUTED);
-    tool_line(menu,9,"Game checksum updated automatically.",ACCENT);
+    tool_line(menu,9,p->checksum_kind ? "Game checksum updated automatically." : "Other save bits stay unchanged.",ACCENT);
 }
 static void cheats_input(Menu *menu, u32 pressed)
 {
@@ -3666,7 +3738,7 @@ static void cheats_input(Menu *menu, u32 pressed)
         if (pressed & ControlA) result=save_cheats_preset(entry,p,menu->cheat_selected);
     } else if (pressed & (ControlLeft | ControlRight)) {
         size_t field=menu->cheat_selected-p->preset_count;
-        unsigned long value=save_word(entry->data+p->fields[field].offset);
+        unsigned long value=save_cheats_value(entry,&p->fields[field]);
         if (pressed & ControlLeft) { if (value>p->fields[field].min) --value; }
         else if (value<p->fields[field].max) ++value;
         result=save_cheats_set(entry,p,field,value);
@@ -3683,7 +3755,10 @@ static void draw_tools(Menu *menu)
     if (menu->tools == TOOL_HEX) title = "Hex editor / USB copy";
     if (menu->tools == TOOL_HEX_DISCARD) title = "Discard edits?";
     if (menu->tools == TOOL_SAVES) title = "Save Manager";
-    if (menu->tools == TOOL_SLOTS) title = menu->backup_mode ? "Choose backup slot" : "Save Manager";
+    if (menu->tools == TOOL_SLOTS) title = menu->compare_choosing ? "Compare: choose second slot" : menu->backup_mode ? "Choose backup slot" : "Save Manager";
+    if (menu->tools == TOOL_SLOT_NAME) title="Name backup slot";
+    if (menu->tools==TOOL_SLOT_FIND || menu->tools==TOOL_SLOT_QUERY) title="Find backup slots";
+    if (menu->tools == TOOL_COMPARE || menu->tools == TOOL_COMPARE_BYTES) title="Compare backups";
     if (menu->tools == TOOL_ARCHIVE) title = "Backup contents";
     if (menu->tools == TOOL_HELP) title = "Controls & help";
     if (menu->tools == TOOL_DIAG) title = "Diagnostics";
@@ -3725,9 +3800,10 @@ static void draw_tools(Menu *menu)
         draw_game_details(menu);
     } else if (menu->tools == TOOL_SAVES || menu->tools == TOOL_ARCHIVE || menu->tools == TOOL_SLOTS || menu->tools == TOOL_BACKUP_DETAILS || menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
         SaveArchive *archive = menu->tools == TOOL_SAVES ? &menu->nvram : (menu->tools == TOOL_BACKUP_DETAILS && menu->details_new ? &menu->pending : &menu->backup);
-        size_t rows = save_views ? 7 : 8;
+        size_t rows = menu->tools==TOOL_SLOTS ? 8 : save_views ? 7 : 8;
+        int gap=menu->tools==TOOL_SLOTS ? 11 : 12;
         int top = save_views ? 100 : 82;
-        count = menu->tools == TOOL_SLOTS ? (menu->backup_mode ? 8 : 10) : (menu->tools == TOOL_FAVORITES ? menu_favorites_visible_count(&menu->favorites,menu->config.hide_adult) : (menu->tools == TOOL_RECENT ? menu->recent.count : archive->count));
+        count = menu->tools == TOOL_SLOTS ? (slot_count(menu)) : (menu->tools == TOOL_FAVORITES ? menu_favorites_visible_count(&menu->favorites,menu->config.hide_adult) : (menu->tools == TOOL_RECENT ? menu->recent.count : archive->count));
         if (save_views) {
             int usb = menu->tools == TOOL_SLOTS;
             rectangle(menu,18,82,138,14,usb ? SELECT : ACCENT);
@@ -3738,14 +3814,16 @@ static void draw_tools(Menu *menu)
         start = menu->tool_selected / rows * rows;
         for (i = start; i < count && i < start + rows; ++i) {
             int selected = i == menu->tool_selected;
-            Color ink = tool_row(menu, top + (int)(i - start) * 12, selected);
+            Color ink = tool_row(menu, top + (int)(i - start) * gap, selected);
             if (menu->tools == TOOL_SLOTS) {
-                slot_path(line, (unsigned int)i);
-                label_on(menu,22,top+(int)(i-start)*12,line+6,selected ? INK : TEXT,UI_FONT_SMALL,selected ? ACCENT : PANEL);
+                if (menu->slot_filtered && menu->slot_results.rows[i].label[0]) format(line,"saves/%lu %s",(unsigned long)slot_at(menu,i)+1,menu->slot_results.rows[i].label);
+                else if (!menu->slot_filtered && i<8 && menu->slot_labels_page==menu->slot_page && menu->slot_labels.labels[i][0]) format(line,"saves/%lu %s",(unsigned long)slot_at(menu,i)+1,menu->slot_labels.labels[i]);
+                else slot_path(line, slot_at(menu,i));
+                label_on(menu,22,top+(int)(i-start)*gap,line+6,selected ? INK : TEXT,UI_FONT_SMALL,selected ? ACCENT : PANEL);
             } else if (menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
                 const char *name = menu->tools == TOOL_RECENT ? menu->recent.paths[i] : menu->favorites.paths[menu_favorites_visible_index(&menu->favorites,menu->config.hide_adult,i)];
                 if (!strncmp(name,"/Storage/",9)) name+=9;
-                game_label(menu,22,82+(int)(i-start)*12,276,name,0,UI_FONT_SMALL,
+                game_label(menu,22,82+(int)(i-start)*gap,276,name,0,UI_FONT_SMALL,
                     selected ? INK : TEXT,selected ? ACCENT : PANEL,selected);
             } else {
                 const SaveEntry *e = &archive->entries[i];
@@ -3753,9 +3831,9 @@ static void draw_tools(Menu *menu)
                 size_t n = strlen(game ? game : e->name);
                 if (n > 36) n = 36;
                 memcpy(line, game ? game : e->name, n); line[n] = 0;
-                label_on(menu,22,top+(int)(i-start)*12,line,selected ? INK : TEXT,UI_FONT_SMALL,selected ? ACCENT : PANEL);
+                label_on(menu,22,top+(int)(i-start)*gap,line,selected ? INK : TEXT,UI_FONT_SMALL,selected ? ACCENT : PANEL);
                 format(line, "%5lu", (unsigned long)e->size);
-                text(menu, 260, top + (i - start) * 12, line, ink);
+                text(menu, 260, top + (i - start) * gap, line, ink);
             }
         }
         menu->text_background_set=0;
@@ -3768,7 +3846,12 @@ static void draw_tools(Menu *menu)
             else format(line, "0 files");
             text(menu, 22, 188, line, MUTED);
         } else {
-            format(line, "%lu / %lu", (unsigned long)(count ? menu->tool_selected + 1 : 0), (unsigned long)count);
+            if (menu->tools==TOOL_SLOTS && menu->slot_filtered) {
+                format(line,"%lu matches / %lu-%lu",menu->slot_results.total,menu->slot_results.count ? menu->slot_results.offset+1 : 0,menu->slot_results.offset+(unsigned long)menu->slot_results.count);
+                if (menu->slot_results.count) {const char *hint=menu->slot_results.rows[menu->tool_selected].hint;scroll_label(menu,22,198,276,hint,strlen(hint),UI_FONT_SMALL,MUTED,PANEL,0);}
+            }
+            else if (menu->tools==TOOL_SLOTS) format(line,"Slots %lu-%lu / L R:page",menu->slot_page*8+1,menu->slot_page*8+(slot_count(menu)>8 ? 8 : (unsigned long)slot_count(menu)));
+            else format(line, "%lu / %lu", (unsigned long)(count ? menu->tool_selected + 1 : 0), (unsigned long)count);
             label(menu, 22, 188, line, OSD_GREEN, UI_FONT_SMALL);
         }
     } else if (menu->tools == TOOL_CONFIG) {
@@ -3823,9 +3906,26 @@ static void draw_tools(Menu *menu)
             memcpy(line,path+start,length); line[length]=0;
             label(menu,22,185,line,MUTED,UI_FONT_SMALL);
         }
-    } else if (menu->tools == TOOL_FIND) {
-        format(line,"Find: %s_",menu->find_query); tool_line(menu,0,line,TEXT);
-        tool_line(menu,1,"Drive-wide search / PC index.",MUTED);
+    } else if (menu->tools==TOOL_SLOT_FIND) {
+        static const char *options[4]={"Show occupied slots","Search games / slot names","Go to slot number","Show all slot numbers"};
+        for (i=0;i<4;++i) {
+            int y=90+(int)i*19,selected=(int)i==menu->slot_find_option;
+            tool_row(menu,y,selected);label_on(menu,22,y,options[i],selected ? INK : TEXT,UI_FONT_SMALL,selected ? ACCENT : PANEL);
+        }
+        tool_line(menu,8,"Older copies: refresh in desktop app.",MUTED);
+    } else if (menu->tools==TOOL_SLOT_JUMP) {
+        format(line,"Go to slot: %s_",menu->slot_jump);tool_line(menu,0,line,TEXT);
+        tool_line(menu,1,"1-999999999 / allocated when used",MUTED);
+        for (i=0;i<10;++i) {
+            char key[2];key[0]=(char)('0'+i);key[1]=0;
+            if (i==(size_t)menu->find_key) rectangle(menu,22+i*27,111,19,13,ACCENT);
+            label_on(menu,27+i*27,113,key,i==(size_t)menu->find_key ? INK : TEXT,UI_FONT_SMALL,i==(size_t)menu->find_key ? ACCENT : PANEL);
+        }
+        tool_line(menu,7,"P:Go X:Erase C:Clear B:Cancel",MUTED);
+    } else if (menu->tools == TOOL_FIND || menu->tools == TOOL_SLOT_NAME || menu->tools==TOOL_SLOT_QUERY) {
+        if (menu->tools==TOOL_SLOT_NAME) format(line,"Name: %s_",menu->slot_label_edit);
+        else format(line,"Find: %s_",menu->tools==TOOL_SLOT_QUERY ? menu->slot_query : menu->find_query); tool_line(menu,0,line,TEXT);
+        tool_line(menu,1,menu->tools==TOOL_SLOT_NAME ? "Blank name restores slot filename." : menu->tools==TOOL_SLOT_QUERY ? "Game, save filename or slot label." : "Drive-wide search / PC index.",MUTED);
         for (i = 0; i < 40; ++i) {
             char key[3]; key[0] = find_keys[i]; key[1] = 0;
             if (key[0] == ' ') strcpy(key,"SP");
@@ -3834,7 +3934,7 @@ static void draw_tools(Menu *menu)
                 label_on(menu,27+(i%10)*27,113+(i/10)*17,key,INK,UI_FONT_SMALL,ACCENT);
             } else text(menu,27+(i%10)*27,113+(i/10)*17,key,TEXT);
         }
-        text(menu,24,189,"P:Search X:Erase C:Clear",MUTED);
+        text(menu,24,189,menu->tools==TOOL_SLOT_NAME ? "P:Save X:Erase C:Clear" : "P:Search X:Erase C:Clear",MUTED);
     } else if (menu->tools == TOOL_HELP) {
         static const char *help[] = {
             "A: Open folder / launch game", "B: Parent folder / cancel", "Up/Down: Select (hold to repeat)",
@@ -3910,11 +4010,44 @@ static void draw_tools(Menu *menu)
             format(line,"Game metadata: %lu entries",(unsigned long)menu->metadata.count); tool_line(menu,8,line,MUTED);
             tool_line(menu,9,"Retained after a USB timeout.",MUTED);
         }
+    } else if (menu->tools == TOOL_COMPARE || menu->tools == TOOL_COMPARE_BYTES) {
+        SaveDifference diff;
+        size_t total=save_archive_diff_count(&menu->compare_archive,&menu->backup);
+        {char a[40],b[40];slot_path(a,menu->compare_slot);slot_path(b,menu->backup_slot);a[strlen(a)-4]=0;b[strlen(b)-4]=0;format(line,"%.13s > %.13s",a+6,b+6);tool_line(menu,0,line,MUTED);}
+        if (menu->tools==TOOL_COMPARE) {
+            static const char *states[]={"SAME","CHANGED","ADDED","REMOVED"};
+            size_t start=menu->tool_selected/8*8;
+            for (i=start;i<total && i<start+8;++i) if (!save_archive_diff(&menu->compare_archive,&menu->backup,i,&diff)) {
+                const SaveEntry *e=diff.after<menu->backup.count ? &menu->backup.entries[diff.after] : &menu->compare_archive.entries[diff.before];
+                Color ink=tool_row(menu,100+(int)(i-start)*11,i==menu->tool_selected);
+                format(line,"%-7s %.25s",states[diff.state],e->name);text(menu,22,100+(i-start)*11,line,ink);
+            }
+            if (!total) tool_line(menu,3,"Both slots are empty.",MUTED);
+            else if (!save_archive_diff(&menu->compare_archive,&menu->backup,menu->tool_selected,&diff)) {
+                format(line,"%lu byte(s) differ%s",(unsigned long)diff.changed_bytes,diff.metadata_changed ? " / metadata" : "");
+                tool_line(menu,9,line,MUTED);
+            }
+        } else if (!save_archive_diff(&menu->compare_archive,&menu->backup,menu->tool_selected,&diff)) {
+            const SaveEntry *a=diff.before<menu->compare_archive.count ? &menu->compare_archive.entries[diff.before] : NULL;
+            const SaveEntry *b=diff.after<menu->backup.count ? &menu->backup.entries[diff.after] : NULL;
+            size_t at,n=0,row=0;
+            tool_line(menu,1,a ? a->name : b->name,TEXT);
+            tool_line(menu,2,"Offset     Before  After",MUTED);
+            for (at=0;at<diff.length && row<7;++at) if (!a || !b || at>=a->size || at>=b->size || a->data[at]!=b->data[at]) {
+                char old[3],next[3];
+                if (n++<menu->compare_offset) continue;
+                if (a && at<a->size) format(old,"%02x",a->data[at]);else strcpy(old,"--");
+                if (b && at<b->size) format(next,"%02x",b->data[at]);else strcpy(next,"--");
+                format(line,"%04lx       %s      %s",(unsigned long)at,old,next);tool_line(menu,3+(int)row++,line,TEXT);
+            }
+            if (!diff.changed_bytes) tool_line(menu,4,diff.metadata_changed ? "Only filename/type differs." : "Save bytes are identical.",MUTED);
+        }
     } else if (menu->tools == TOOL_CONFIRM_BACKUP) {
         slot_path(line, menu->backup_slot); tool_line(menu, 0, line, TEXT);
-        if (menu->hex_archive.bytes) {
-            tool_line(menu,2,"Save edited file:",TEXT);
-            tool_line(menu,3,menu->hex_archive.entries[menu->save_selected].name,TEXT);
+        if (menu->backup_merge) {
+            const SaveEntry *entry=backup_entry(menu);
+            tool_line(menu,2,menu->hex_archive.bytes ? "Save edited file:" : menu->copy_original.bytes ? "Copy this save:" : "Back up this save:",TEXT);
+            tool_line(menu,3,entry->name,TEXT);
             tool_line(menu,5,"Other slot entries stay unchanged.",ACCENT);
             format(line,"Slot will contain %lu save(s).",(unsigned long)menu->pending.count);tool_line(menu,7,line,MUTED);
         } else {
@@ -3931,7 +4064,7 @@ static void draw_tools(Menu *menu)
         tool_line(menu, 3, "Restore this save to NVRAM?", AMBER);
         tool_line(menu, 4, "Replaces the matching save.", AMBER);
         tool_line(menu, 6, "First: verified recovery backup.", TEXT);
-        tool_line(menu, 7, menu->backup_slot == 8 ? "Replaces USB recovery2.3ds." : "Replaces USB recovery.3ds.", MUTED);
+        tool_line(menu, 7, menu->backup_slot == SAVE_RECOVERY_SLOT ? "Replaces USB recovery2.3ds." : "Replaces USB recovery.3ds.", MUTED);
         tool_line(menu, 9, "Keep power on until finished.", AMBER);
     }
     {
@@ -3940,6 +4073,11 @@ static void draw_tools(Menu *menu)
         if (menu->tools == TOOL_GAME_DETAILS) controls = "Left/Right:Page B:Back";
         if (menu->tools == TOOL_FAVORITES) controls = menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel" : "A:Open C:Add X:Remove B:Back";
         else if (menu->tools == TOOL_RESULTS) controls = "A:Open P:Edit X:Reload B:Back";
+        else if (menu->tools == TOOL_SLOT_JUMP) controls="Left/Right:Digit A:Add P:Go";
+        else if (menu->tools == TOOL_SLOT_NAME || menu->tools==TOOL_SLOT_QUERY) controls="Arrows:Choose A:Key B:Cancel";
+        else if (menu->tools == TOOL_COMPARE) controls="A:Byte differences B:Back";
+        else if (menu->tools == TOOL_COMPARE_BYTES) controls="Left/Right:Page B:Back";
+        else if (menu->tools == TOOL_SLOTS && !menu->backup_mode) controls=menu->compare_choosing ? "A:Compare with this slot B:Cancel" : "A:Open C:Name X:Compare";
         else if (menu->tools == TOOL_FIND) controls = "Arrows:Choose A:Key B:Cancel";
         else if (menu->tools == TOOL_CONFIG) controls = "Left/Right:Change C:Save B:Back";
         else if (menu->tools == TOOL_BACKUP_DETAILS) controls = "A:Continue C:Old/New B:Back";
@@ -3955,7 +4093,7 @@ static void draw_tools(Menu *menu)
         if (menu->tool_message) label(menu,16,211,menu->tool_message,AMBER,UI_FONT_SMALL);
         else control_badges(menu,16,210,controls,1);
     }
-    control_badges(menu,16,225,menu->tools == TOOL_CHEATS ? "C:Save as X:Hex B:Back" : menu->tools == TOOL_HEX ? "L/R:Page X:Cheats B:Back" : save_views ? "Left/Right:View B:Back" : menu->tools == TOOL_FAVORITES ? "R:Move order P:Reload" :
+    control_badges(menu,16,225,menu->tools==TOOL_SLOTS ? "L/R:Slot page P:Find slots" : menu->tools==TOOL_ARCHIVE ? "P:Copy to slot L+R:Library" : menu->tools == TOOL_CHEATS ? "C:Save as X:Hex B:Back" : menu->tools == TOOL_HEX ? "L/R:Page X:Cheats B:Back" : save_views ? "Left/Right:View B:Back" : menu->tools == TOOL_FAVORITES ? "R:Move order P:Reload" :
          ((menu->tools == TOOL_DIAG || menu->tools == TOOL_HELP) ? "Left/Right:More pages" : "L+R:Return to library"),0);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
@@ -3982,9 +4120,28 @@ static int save_root_callback(void *context)
     void *previous_context = ode->progress_context;
     int result;
     op->menu->read_count = 0;
+    if (op->action==1 || op->action==5 || op->action==7) op->menu->slot_catalog_stale=0;
     ode->progress = save_progress;
     ode->progress_context = op->menu;
-    if (op->action == 3) {
+    if (op->action==8) result=save_catalog_search(ode,ode_bus_read_buffer,&op->menu->save_names,op->menu->slot_query,!op->menu->backup_mode,&op->menu->slot_results);
+    else if (op->action==6 || op->action==7) {
+        char text[SAVE_SLOT_LABEL_FILE_BYTES],path[48];
+        size_t length;
+        SaveSlotLabels current;
+        slot_labels_path(op->menu,path);
+        result=usb_file_text(ode,ode_bus_read_buffer,path,text,sizeof(text),&length);
+        if (!result) result=save_slot_labels_parse(&current,text,length);
+        if (!result && op->action==6) { op->menu->slot_labels=current; op->menu->slot_labels_valid=1;op->menu->slot_labels_page=op->menu->slot_page; }
+        if (!result && op->action==7) {
+            if (memcmp(&current,&op->menu->slot_labels_before,sizeof(current))) result=-1;
+            else if (save_slot_labels_format(&op->menu->slot_labels,text,sizeof(text))<0) result=-1;
+            else {
+                result=usb_file_text_write(ode,ode_bus_read_buffer,path,text);
+                if (!result && save_catalog_relabel(ode,ode_bus_read_buffer,op->menu->slot_name_slot,op->menu->slot_label_edit)) op->menu->slot_catalog_stale=1;
+            }
+        }
+    }
+    else if (op->action == 3) {
         MenuConfig settings;
         settings_values(op->menu,&settings);
         result = menu_settings_save(ode,ode_bus_read_buffer,&settings);
@@ -3995,6 +4152,21 @@ static int save_root_callback(void *context)
     else if (op->action == 2) result = save_usb_test(ode, ode_bus_read_buffer);
     else if (op->action == 1) result = save_usb_store(ode, ode_bus_read_buffer, op->path, op->archive);
     else result = save_usb_load(ode, ode_bus_read_buffer, op->path, op->archive);
+    if (!result && (op->action==1 || op->action==5)) {
+        unsigned int slot;
+        char labels_path[48],text[SAVE_SLOT_LABEL_FILE_BYTES];size_t length;
+        SaveSlotLabels labels;const char *label="";
+        if (save_catalog_slot_from_path(op->path,&slot)<0) {
+            op->menu->slot_catalog_stale=1;
+            ode->progress=previous_progress;ode->progress_context=previous_context;return result;
+        }
+        if (slot<SAVE_SLOT_LIMIT) {
+            if (slot/8) format(labels_path,"saves/slot-labels-%lu.txt",(unsigned long)slot/8);
+            else strcpy(labels_path,"saves/slot-labels.txt");
+            if (!usb_file_text(ode,ode_bus_read_buffer,labels_path,text,sizeof(text),&length) && !save_slot_labels_parse(&labels,text,length)) label=labels.labels[slot%8];
+        }
+        if (save_catalog_update(ode,ode_bus_read_buffer,slot,op->archive,label)) op->menu->slot_catalog_stale=1;
+    }
     ode->progress = previous_progress;
     ode->progress_context = previous_context;
     return result;
@@ -4016,7 +4188,7 @@ static int save_root_operation(Menu *menu, int action, const char *path, SaveArc
         }
     for (i = 0; i < menu->depth; ++i) { route[i].id = menu->path_ids[i]; route[i].name = menu->path[i]; }
     op.menu = menu; op.action = action; op.path = path; op.archive = archive;
-    menu->tool_message = action && action!=4 ? "Writing / verifying USB..." : "Reading / validating backup...";
+    menu->tool_message = action && action!=4 && action!=6 && action!=8 ? "Writing / verifying USB..." : "Reading / validating backup...";
     draw(menu);
     result = art_at_root(&menu->ode, route, menu->depth, &menu->listing,
                          folder_workaround(menu), save_root_callback, &op);
@@ -4025,7 +4197,7 @@ static int save_root_operation(Menu *menu, int action, const char *path, SaveArc
         menu->tool_message = "USB I/O failed. Restart console.";
         return -1;
     }
-    menu->tool_message = result < 0 ? "USB failed. Check /saves folder." : NULL;
+    menu->tool_message = result < 0 ? action==8 ? "Refresh slot catalog in desktop app." : "USB failed. Check .ohmy3do/saves." : NULL;
     return result;
 }
 typedef struct SaveNamesRead {
@@ -4038,6 +4210,13 @@ static int save_names_at_root(void *context)
     SaveNamesRead *op = (SaveNamesRead *)context;
     Ode *ode = &op->menu->ode;
     save_cheats_usb_load(ode,ode_bus_read_buffer);
+    {
+        size_t length;
+        char path[48];
+        slot_labels_path(op->menu,path);
+        if (!usb_file_text(ode,ode_bus_read_buffer,path,op->disc,SAVE_SLOT_LABEL_FILE_BYTES,&length) &&
+            !save_slot_labels_parse(&op->menu->slot_labels,op->disc,length)) {op->menu->slot_labels_valid=1;op->menu->slot_labels_page=op->menu->slot_page;}
+    }
     if (usb_file_text(ode,ode_bus_read_buffer,"save-names.txt",op->disc,SAVE_NAMES_BYTES,&op->disc_length) < 0) op->disc_length = 0;
     if (usb_file_text(ode,ode_bus_read_buffer,"saves-learned.txt",op->learned,SAVE_NAMES_BYTES,&op->learned_length) < 0) op->learned_length = 0;
     return 0;
@@ -4115,7 +4294,7 @@ static void restore_selected(Menu *menu)
     SaveArchive verified;
     const SaveEntry *entry = &menu->backup.entries[menu->save_selected];
     NvramInfo info;
-    const char *recovery = menu->backup_slot == 8 ? "saves/recovery2.3ds" : "saves/recovery.3ds";
+    const char *recovery = menu->backup_slot == SAVE_RECOVERY_SLOT ? "saves/recovery2.3ds" : "saves/recovery.3ds";
     int result = -1;
     memset(&current, 0, sizeof(current)); memset(&verified, 0, sizeof(verified));
     menu->restore_result = -1;
@@ -4153,6 +4332,12 @@ static void tools_input(Menu *menu, u32 pressed)
         }
         return;
     }
+    if (page==TOOL_ARCHIVE && (pressed & ControlStart) && menu->backup.count) {
+        menu->save_selected=menu->tool_selected;save_archive_free(&menu->pending);
+        if (save_archive_build(&menu->pending,&menu->backup.entries[menu->save_selected],1)<0) {menu->tool_message="Cannot prepare copy.";return;}
+        save_archive_free(&menu->copy_original);menu->copy_original=menu->backup;memset(&menu->backup,0,sizeof(menu->backup));
+        menu->copy_source_slot=menu->backup_slot;menu->backup_merge=menu->backup_mode=1;menu->slot_filtered=0;menu->tools=TOOL_SLOTS;menu->tool_selected=0;return;
+    }
     if (page == TOOL_ARCHIVE && (pressed & ControlX) && menu->backup.count) {
         menu->save_selected=menu->tool_selected;
         if (!save_cheats_find(&menu->backup.entries[menu->save_selected])) {
@@ -4173,13 +4358,123 @@ static void tools_input(Menu *menu, u32 pressed)
         if ((pressed & ControlLeft) && menu->game_details_page) --menu->game_details_page;
         return;
     }
-    if ((page == TOOL_SAVES || (page == TOOL_SLOTS && !menu->backup_mode)) &&
+    if (page==TOOL_SLOT_FIND) {
+        if (pressed & ControlB) {menu->tools=TOOL_SLOTS;menu->tool_message=NULL;return;}
+        if (pressed & ControlUp) menu->slot_find_option=(menu->slot_find_option+3)%4;
+        if (pressed & ControlDown) menu->slot_find_option=(menu->slot_find_option+1)%4;
+        if (pressed & ControlA) {
+            if (!menu->slot_find_option) {menu->slot_query[0]=0;menu->slot_results.offset=0;slot_search(menu);}
+            else if (menu->slot_find_option==1) {menu->tools=TOOL_SLOT_QUERY;menu->find_key=0;menu->tool_message=NULL;}
+            else if (menu->slot_find_option==2) {menu->slot_jump[0]=0;menu->find_key=1;menu->tools=TOOL_SLOT_JUMP;menu->tool_message=NULL;}
+            else {menu->slot_filtered=0;menu->tools=TOOL_SLOTS;menu->tool_selected=0;save_root_operation(menu,6,NULL,NULL);}
+        }
+        return;
+    }
+    if (page==TOOL_SLOT_QUERY) {
+        size_t length=strlen(menu->slot_query);
+        if (pressed & ControlB) {menu->tools=TOOL_SLOT_FIND;menu->tool_message=NULL;return;}
+        if (pressed & ControlLeft) menu->find_key=menu->find_key/10*10+(menu->find_key+9)%10;
+        if (pressed & ControlRight) menu->find_key=menu->find_key/10*10+(menu->find_key+1)%10;
+        if (pressed & ControlUp) menu->find_key=(menu->find_key+30)%40;
+        if (pressed & ControlDown) menu->find_key=(menu->find_key+10)%40;
+        if ((pressed & ControlA) && length<sizeof(menu->slot_query)-1) {menu->slot_query[length++]=find_keys[menu->find_key];menu->slot_query[length]=0;}
+        if ((pressed & ControlX) && length) menu->slot_query[length-1]=0;
+        if (pressed & ControlC) menu->slot_query[0]=0;
+        if (pressed & ControlStart) {menu->slot_results.offset=0;slot_search(menu);}
+        return;
+    }
+    if (page==TOOL_SLOT_JUMP) {
+        size_t length=strlen(menu->slot_jump);
+        if (pressed & ControlB) {menu->tools=TOOL_SLOTS;return;}
+        if (pressed & ControlLeft) menu->find_key=(menu->find_key+9)%10;
+        if (pressed & ControlRight) menu->find_key=(menu->find_key+1)%10;
+        if ((pressed & ControlA) && length<9) {menu->slot_jump[length++]=(char)('0'+menu->find_key);menu->slot_jump[length]=0;}
+        if ((pressed & ControlX) && length) menu->slot_jump[length-1]=0;
+        if (pressed & ControlC) menu->slot_jump[0]=0;
+        if (pressed & ControlStart) {
+            unsigned long number=0;size_t i;
+            for (i=0;menu->slot_jump[i];++i) number=number*10+(unsigned long)(menu->slot_jump[i]-'0');
+            if (!number || number>SAVE_SLOT_LIMIT) menu->tool_message="Enter a slot number from 1-999999999.";
+            else {menu->slot_filtered=0;slot_select(menu,(unsigned int)(number-1));menu->tools=TOOL_SLOTS;memset(&menu->slot_labels,0,sizeof(menu->slot_labels));save_root_operation(menu,6,NULL,NULL);}
+        }
+        return;
+    }
+    if (page==TOOL_SLOTS && (pressed & (ControlLeftShift|ControlRightShift|ControlStart))) {
+        if (pressed & ControlStart) {menu->slot_find_option=0;menu->tools=TOOL_SLOT_FIND;menu->tool_message=NULL;return;}
+        if (menu->slot_filtered) {
+            if ((pressed & ControlLeftShift) && menu->slot_results.offset) menu->slot_results.offset-=8;
+            else if ((pressed & ControlRightShift) && menu->slot_results.offset+8<menu->slot_results.total) menu->slot_results.offset+=8;
+            else return;
+            slot_search(menu);return;
+        }
+        if ((pressed & ControlLeftShift) && menu->slot_page) --menu->slot_page;
+        if ((pressed & ControlRightShift) && menu->slot_page<(SAVE_SLOT_LIMIT-1)/8) ++menu->slot_page;
+        menu->tool_selected=0;memset(&menu->slot_labels,0,sizeof(menu->slot_labels));
+        save_root_operation(menu,6,NULL,NULL);return;
+    }
+    if ((page == TOOL_SAVES || (page == TOOL_SLOTS && !menu->backup_mode && !menu->compare_choosing)) &&
         (pressed & (ControlLeft | ControlRight))) {
         menu->tool_selected = 0; menu->tool_message = NULL;
         save_archive_free(&menu->pending);
         if (page == TOOL_SAVES) {
             menu->tools = TOOL_SLOTS; menu->backup_mode = 0; load_save_names(menu);
         } else { menu->tools = TOOL_SAVES; scan_nvram(menu); }
+        return;
+    }
+    if (page==TOOL_SLOT_NAME) {
+        size_t length=strlen(menu->slot_label_edit);
+        if (pressed & ControlB) {menu->tools=TOOL_SLOTS;menu->tool_message=NULL;return;}
+        if (pressed & ControlLeft) menu->find_key=menu->find_key/10*10+(menu->find_key+9)%10;
+        if (pressed & ControlRight) menu->find_key=menu->find_key/10*10+(menu->find_key+1)%10;
+        if (pressed & ControlUp) menu->find_key=(menu->find_key+30)%40;
+        if (pressed & ControlDown) menu->find_key=(menu->find_key+10)%40;
+        if ((pressed & ControlA) && length<SAVE_SLOT_LABEL_BYTES-1) {menu->slot_label_edit[length++]=find_keys[menu->find_key];menu->slot_label_edit[length]=0;}
+        if ((pressed & ControlX) && length) menu->slot_label_edit[length-1]=0;
+        if (pressed & ControlC) menu->slot_label_edit[0]=0;
+        if (pressed & ControlStart) {
+            menu->slot_labels_before=menu->slot_labels;
+            strcpy(menu->slot_labels.labels[menu->slot_name_slot%8],menu->slot_label_edit);
+            if (!save_root_operation(menu,7,NULL,NULL)) {menu->tools=TOOL_SLOTS;menu->tool_message="Slot name saved and verified.";if (menu->slot_filtered) {menu->slot_results.offset=0;slot_search(menu);}}
+            else {menu->slot_labels=menu->slot_labels_before;menu->tool_message="Name failed. Reload before retrying.";menu->tools=TOOL_SLOTS;}
+        }
+        return;
+    }
+    if (page==TOOL_COMPARE || page==TOOL_COMPARE_BYTES) {
+        size_t count=save_archive_diff_count(&menu->compare_archive,&menu->backup);
+        if (pressed & ControlB) {
+            if (page==TOOL_COMPARE_BYTES) menu->tools=TOOL_COMPARE;
+            else {save_archive_free(&menu->compare_archive);menu->tools=TOOL_SLOTS;slot_select(menu,menu->backup_slot);}
+        } else if (page==TOOL_COMPARE) {
+            if ((pressed & ControlUp) && count) menu->tool_selected=menu->tool_selected ? menu->tool_selected-1 : count-1;
+            if ((pressed & ControlDown) && count) menu->tool_selected=(menu->tool_selected+1)%count;
+            if ((pressed & ControlA) && count) {menu->tools=TOOL_COMPARE_BYTES;menu->compare_offset=0;}
+        } else {
+            SaveDifference diff;
+            if (!save_archive_diff(&menu->compare_archive,&menu->backup,menu->tool_selected,&diff)) {
+                if ((pressed & ControlLeft) && menu->compare_offset) menu->compare_offset-=7;
+                if ((pressed & ControlRight) && menu->compare_offset+7<diff.changed_bytes) menu->compare_offset+=7;
+            }
+        }
+        return;
+    }
+    if (page==TOOL_SLOTS && !menu->backup_mode && !menu->compare_choosing && (pressed & ControlC)) {
+        if (!slot_count(menu)) return;
+        menu->slot_name_slot=slot_at(menu,menu->tool_selected);
+        if (menu->slot_name_slot>=SAVE_SLOT_LIMIT) {menu->tool_message="Recovery backups keep their names.";return;}
+        menu->slot_page=menu->slot_name_slot/8;
+        if (!save_root_operation(menu,6,NULL,NULL)) {
+            strcpy(menu->slot_label_edit,menu->slot_labels.labels[menu->slot_name_slot%8]);menu->find_key=0;menu->tools=TOOL_SLOT_NAME;
+        }
+        return;
+    }
+    if (page==TOOL_SLOTS && !menu->backup_mode && !menu->compare_choosing && (pressed & ControlX)) {
+        char path[40];
+        if (!slot_count(menu)) return;
+        slot_path(path,slot_at(menu,menu->tool_selected));
+        save_archive_free(&menu->compare_archive);
+        if (save_root_operation(menu,4,path,&menu->compare_archive)>=0) {
+            menu->compare_slot=slot_at(menu,menu->tool_selected);menu->compare_choosing=1;menu->tool_message="Choose the second slot, then A.";
+        }
         return;
     }
     if (page == TOOL_FIND && !(pressed & ControlB)) { find_input(menu,pressed); return; }
@@ -4206,17 +4501,20 @@ static void tools_input(Menu *menu, u32 pressed)
     if (pressed & ControlB) {
         menu->tool_message = NULL;
         if (page == TOOL_HOME) { menu->tools = 0; selection_changed(menu); }
+        else if (page==TOOL_SLOTS && menu->compare_choosing) {menu->compare_choosing=0;save_archive_free(&menu->compare_archive);}
         else if (page == TOOL_SLOTS && menu->backup_mode) {
             save_archive_free(&menu->pending); menu->backup_mode = 0;
-            if (menu->hex_archive.bytes) menu->tools=menu->hex_view;
+            if (menu->copy_original.bytes) finish_copy(menu);
+            else if (menu->hex_archive.bytes) menu->tools=menu->hex_view;
             else { menu->tools = TOOL_SAVES; scan_nvram(menu); }
         }
         else if (page == TOOL_RESULTS) { menu->tools=TOOL_FIND; menu->tool_selected=0; }
-        else if (page == TOOL_BACKUP_DETAILS) { menu->tools = TOOL_SLOTS; menu->tool_selected = menu->backup_slot; }
-        else if (page == TOOL_ARCHIVE) { menu->tools = TOOL_SLOTS; menu->backup_mode = 0; menu->tool_selected = menu->backup_slot; }
+        else if (page == TOOL_BACKUP_DETAILS) { menu->tools = TOOL_SLOTS; slot_select(menu,menu->backup_slot); }
+        else if (page == TOOL_ARCHIVE) { menu->tools = TOOL_SLOTS; menu->backup_mode = 0; slot_select(menu,menu->backup_slot); }
         else if (page == TOOL_CONFIRM_RESTORE) { menu->tools = TOOL_ARCHIVE; menu->tool_selected = menu->save_selected; }
-        else if (page == TOOL_CONFIRM_BACKUP) { menu->tools = TOOL_SLOTS; menu->tool_selected = menu->backup_slot; }
+        else if (page == TOOL_CONFIRM_BACKUP) { menu->tools = TOOL_SLOTS; slot_select(menu,menu->backup_slot); }
         else { menu->tools = TOOL_HOME; menu->tool_selected = 0; save_archive_free(&menu->pending); }
+        if (menu->tools==TOOL_SLOTS && menu->slot_labels_page!=menu->slot_page) save_root_operation(menu,6,NULL,NULL);
         return;
     }
     if (page == TOOL_RESULTS) {
@@ -4233,7 +4531,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if (page == TOOL_HOME) count = 8;
     if (page == TOOL_SAVES) count = menu->nvram.count;
     if (page == TOOL_ARCHIVE) count = menu->backup.count;
-    if (page == TOOL_SLOTS) count = menu->backup_mode ? 8 : 10;
+    if (page == TOOL_SLOTS) count = slot_count(menu);
     if (page == TOOL_CONFIG) count = 12;
     if (page == TOOL_FAVORITES) count = menu_favorites_visible_count(&menu->favorites,menu->config.hide_adult);
     if (page == TOOL_RECENT) count = menu->recent.count;
@@ -4287,7 +4585,8 @@ static void tools_input(Menu *menu, u32 pressed)
         save_archive_free(&menu->pending);
         if (save_archive_build(&menu->pending, (pressed & ControlC) ? menu->nvram.entries : &menu->nvram.entries[selected],
                 (pressed & ControlC) ? menu->nvram.count : 1) < 0) { menu->tool_message = "Cannot prepare backup."; return; }
-        menu->backup_mode = 1; menu->tools = TOOL_SLOTS; menu->tool_selected = 0; return;
+        menu->backup_merge = !(pressed & ControlC); menu->save_selected=selected;
+        menu->backup_mode = 1;menu->slot_filtered=0; menu->tools = TOOL_SLOTS; menu->tool_selected = 0; return;
     }
     if (!(pressed & ControlA)) return;
     menu->tool_message = NULL;
@@ -4303,25 +4602,30 @@ static void tools_input(Menu *menu, u32 pressed)
         else { menu->tools = TOOL_FIND; menu->find_key = 0; }
     } else if (page == TOOL_SLOTS) {
         char path[40];
-        menu->backup_slot = (unsigned int)menu->tool_selected;
+        if (!slot_count(menu)) return;
+        menu->backup_slot = slot_at(menu,menu->tool_selected);
         if (menu->backup_mode) {
             slot_path(path,menu->backup_slot); save_archive_free(&menu->backup);
-            if (menu->hex_archive.bytes) {
+            if (menu->backup_merge) {
+                const SaveEntry *entry=backup_entry(menu);
                 int loaded=save_root_operation(menu,4,path,&menu->backup);
                 if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready) return;
                 if (loaded<0) { menu->tool_message="Slot unreadable. Choose another."; return; }
                 menu->backup_slot_valid=loaded==0;
-                if (save_archive_merge(&menu->pending,&menu->backup,&menu->hex_archive.entries[menu->save_selected])<0) {
+                if (save_archive_merge(&menu->pending,&menu->backup,entry)<0) {
                     menu->tool_message="Merged slot is full. Choose another."; return;
                 }
             } else menu->backup_slot_valid = !save_root_operation(menu,0,path,&menu->backup);
             if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready) return;
             menu->tools = TOOL_BACKUP_DETAILS; menu->tool_selected = 0; menu->details_new = 0; menu->tool_message = NULL;
+        } else if (menu->compare_choosing) {
+            slot_path(path,menu->backup_slot);save_archive_free(&menu->backup);
+            if (save_root_operation(menu,4,path,&menu->backup)>=0) {menu->compare_choosing=0;menu->tools=TOOL_COMPARE;menu->tool_selected=0;}
         } else {
             slot_path(path, menu->backup_slot); save_archive_free(&menu->backup);
             if (!save_root_operation(menu, 0, path, &menu->backup)) {
                 menu->tools = TOOL_ARCHIVE; menu->tool_selected = 0;
-            } else if (menu->tool_message && !strcmp(menu->tool_message, "USB failed. Check /saves folder."))
+            } else if (menu->tool_message && !strcmp(menu->tool_message, "USB failed. Check .ohmy3do/saves."))
                 menu->tool_message = "No valid backup in this slot.";
         }
     } else if (page == TOOL_RESULTS && count) {
@@ -4335,12 +4639,13 @@ static void tools_input(Menu *menu, u32 pressed)
         char path[40];
         slot_path(path, menu->backup_slot); menu->backup_result = -1;
         if ((menu->usb_tested == 1 || !test_save_usb(menu)) &&
-            !save_root_operation(menu, menu->hex_archive.bytes ? 5 : 1, path, &menu->pending)) {
-            menu->backup_result = 1; menu->tool_message = menu->hex_archive.bytes ? "Edited save merged and verified." : "Backup saved and verified.";
+            !save_root_operation(menu, menu->backup_merge ? 5 : 1, path, &menu->pending)) {
+            menu->backup_result = 1; menu->tool_message = menu->slot_catalog_stale ? "Saved. Refresh catalog in desktop app." : menu->backup_merge ? "Save merged and verified." : "Backup saved and verified.";
+            if (menu->copy_original.bytes) {finish_copy(menu);return;}
             if (menu->hex_archive.bytes) menu->backup_mode=0;
             save_archive_free(&menu->hex_archive); save_archive_free(&menu->hex_original); menu->hex_dirty=0;
         }
-        menu->tools = TOOL_SLOTS; menu->tool_selected = menu->backup_slot;
+        menu->tools = TOOL_SLOTS; slot_select(menu,menu->backup_slot);
     } else if (page == TOOL_CONFIRM_RESTORE) {
         restore_selected(menu); menu->tools = TOOL_ARCHIVE; menu->tool_selected = menu->save_selected;
     }
@@ -4354,6 +4659,8 @@ static void toggle_tools(Menu *menu)
     }
     if (menu->tools) {
         if (menu->hex_archive.bytes) close_hex(menu);
+        if (menu->copy_original.bytes) finish_copy(menu);
+        save_archive_free(&menu->compare_archive);menu->compare_choosing=0;
         save_archive_free(&menu->pending);
         menu->tools=menu->review=0; selection_changed(menu);
     } else menu->tools=TOOL_HOME;

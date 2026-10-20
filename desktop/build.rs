@@ -3,7 +3,7 @@ fn main() {
     // A precompiled resource keeps native and cargo-xwin builds independent
     // of the host's resource compiler. Regenerate it with prepare-branding.py.
     println!("cargo:rerun-if-changed=../assets/app-icon.res");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && std::env::var_os("CARGO_FEATURE_LEGACY_UI").is_some() {
         let icon = std::fs::canonicalize("../assets/app-icon.res")
             .expect("Missing Windows icon resource; run tools/prepare-branding.py --windows-resource");
         println!("cargo:rustc-link-arg-bin=oh-my-3do-library={}", icon.display());

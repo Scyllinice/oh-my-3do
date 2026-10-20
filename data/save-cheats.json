@@ -7,22 +7,3997 @@
       "filename": "DoomPrefs",
       "size": 40,
       "encoding": "u32be",
-      "signature": { "offset": 0, "value": 19543 },
-      "checksum": { "algorithm": "sum32be", "offset": 36, "seed": 12345 },
+      "signature": {
+        "offset": 0,
+        "value": 19543
+      },
+      "checksum": {
+        "algorithm": "sum32be",
+        "offset": 36,
+        "seed": 12345
+      },
       "source": "https://github.com/Olde-Skuul/doom3do/blob/8a5cdae476e09f2bedd2cc4dcd105dae4b35d4af/source/threedo.c#L395-L486",
       "notes": "Source-verified preferences layout. No saved health, ammo or mid-level state. Campaign unlock value 23 is confirmed by source/data.c and source/game.c in the same revision.",
       "fields": [
-        { "label": "Difficulty", "offset": 4, "min": 0, "max": 4 },
-        { "label": "Starting map", "offset": 8, "min": 1, "max": 26 },
-        { "label": "Sound volume", "offset": 12, "min": 0, "max": 15 },
-        { "label": "Music volume", "offset": 16, "min": 0, "max": 15 },
-        { "label": "Control layout", "offset": 20, "min": 0, "max": 5 },
-        { "label": "Unlocked level", "offset": 24, "min": 1, "max": 25 },
-        { "label": "Screen size", "offset": 28, "min": 0, "max": 5 },
-        { "label": "Low detail", "offset": 32, "min": 0, "max": 1 }
+        {
+          "label": "Difficulty",
+          "offset": 4,
+          "min": 0,
+          "max": 4
+        },
+        {
+          "label": "Starting map",
+          "offset": 8,
+          "min": 1,
+          "max": 26
+        },
+        {
+          "label": "Sound volume",
+          "offset": 12,
+          "min": 0,
+          "max": 15
+        },
+        {
+          "label": "Music volume",
+          "offset": 16,
+          "min": 0,
+          "max": 15
+        },
+        {
+          "label": "Control layout",
+          "offset": 20,
+          "min": 0,
+          "max": 5
+        },
+        {
+          "label": "Unlocked level",
+          "offset": 24,
+          "min": 1,
+          "max": 25
+        },
+        {
+          "label": "Screen size",
+          "offset": 28,
+          "min": 0,
+          "max": 5
+        },
+        {
+          "label": "Low detail",
+          "offset": 32,
+          "min": 0,
+          "max": 1
+        }
       ],
       "presets": [
-        { "label": "Unlock campaign levels", "field": 5, "value": 23 }
+        {
+          "label": "Unlock campaign levels",
+          "field": 5,
+          "value": 23
+        }
+      ]
+    },
+    {
+      "id": "icebreaker-levels-v1",
+      "game": "Icebreaker",
+      "filename": "icebreaker[levelchart]",
+      "size": 84,
+      "encoding": "be",
+      "signature": {
+        "offset": 0,
+        "value": 1365,
+        "width": 2
+      },
+      "checksum": {
+        "algorithm": "none",
+        "offset": 84,
+        "seed": 0
+      },
+      "source": "https://github.com/trapexit/icebreaker/blob/6f5eb235bf3edd95dec3ef72a0748bf5f76937c1/nvram.cp",
+      "notes": "Source-verified level chart. Completion values are bit flags: 1 easy, 2 medium, 4 hard, 8 insane; 15 marks all difficulties. A cleared level has any nonzero flag. Neighboring levels, padding and difficulty settings are preserved. This format has no game checksum. Not yet hardware-tested.",
+      "fields": [
+        {
+          "label": "Level 001 completion",
+          "offset": 2,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 002 completion",
+          "offset": 2,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 003 completion",
+          "offset": 3,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 004 completion",
+          "offset": 3,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 005 completion",
+          "offset": 4,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 006 completion",
+          "offset": 4,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 007 completion",
+          "offset": 5,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 008 completion",
+          "offset": 5,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 009 completion",
+          "offset": 6,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 010 completion",
+          "offset": 6,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 011 completion",
+          "offset": 7,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 012 completion",
+          "offset": 7,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 013 completion",
+          "offset": 8,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 014 completion",
+          "offset": 8,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 015 completion",
+          "offset": 9,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 016 completion",
+          "offset": 9,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 017 completion",
+          "offset": 10,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 018 completion",
+          "offset": 10,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 019 completion",
+          "offset": 11,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 020 completion",
+          "offset": 11,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 021 completion",
+          "offset": 12,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 022 completion",
+          "offset": 12,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 023 completion",
+          "offset": 13,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 024 completion",
+          "offset": 13,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 025 completion",
+          "offset": 14,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 026 completion",
+          "offset": 14,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 027 completion",
+          "offset": 15,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 028 completion",
+          "offset": 15,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 029 completion",
+          "offset": 16,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 030 completion",
+          "offset": 16,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 031 completion",
+          "offset": 17,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 032 completion",
+          "offset": 17,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 033 completion",
+          "offset": 18,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 034 completion",
+          "offset": 18,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 035 completion",
+          "offset": 19,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 036 completion",
+          "offset": 19,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 037 completion",
+          "offset": 20,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 038 completion",
+          "offset": 20,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 039 completion",
+          "offset": 21,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 040 completion",
+          "offset": 21,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 041 completion",
+          "offset": 22,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 042 completion",
+          "offset": 22,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 043 completion",
+          "offset": 23,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 044 completion",
+          "offset": 23,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 045 completion",
+          "offset": 24,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 046 completion",
+          "offset": 24,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 047 completion",
+          "offset": 25,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 048 completion",
+          "offset": 25,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 049 completion",
+          "offset": 26,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 050 completion",
+          "offset": 26,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 051 completion",
+          "offset": 27,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 052 completion",
+          "offset": 27,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 053 completion",
+          "offset": 28,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 054 completion",
+          "offset": 28,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 055 completion",
+          "offset": 29,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 056 completion",
+          "offset": 29,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 057 completion",
+          "offset": 30,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 058 completion",
+          "offset": 30,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 059 completion",
+          "offset": 31,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 060 completion",
+          "offset": 31,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 061 completion",
+          "offset": 32,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 062 completion",
+          "offset": 32,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 063 completion",
+          "offset": 33,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 064 completion",
+          "offset": 33,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 065 completion",
+          "offset": 34,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 066 completion",
+          "offset": 34,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 067 completion",
+          "offset": 35,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 068 completion",
+          "offset": 35,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 069 completion",
+          "offset": 36,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 070 completion",
+          "offset": 36,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 071 completion",
+          "offset": 37,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 072 completion",
+          "offset": 37,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 073 completion",
+          "offset": 38,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 074 completion",
+          "offset": 38,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 075 completion",
+          "offset": 39,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 076 completion",
+          "offset": 39,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 077 completion",
+          "offset": 40,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 078 completion",
+          "offset": 40,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 079 completion",
+          "offset": 41,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 080 completion",
+          "offset": 41,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 081 completion",
+          "offset": 42,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 082 completion",
+          "offset": 42,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 083 completion",
+          "offset": 43,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 084 completion",
+          "offset": 43,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 085 completion",
+          "offset": 44,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 086 completion",
+          "offset": 44,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 087 completion",
+          "offset": 45,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 088 completion",
+          "offset": 45,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 089 completion",
+          "offset": 46,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 090 completion",
+          "offset": 46,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 091 completion",
+          "offset": 47,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 092 completion",
+          "offset": 47,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 093 completion",
+          "offset": 48,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 094 completion",
+          "offset": 48,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 095 completion",
+          "offset": 49,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 096 completion",
+          "offset": 49,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 097 completion",
+          "offset": 50,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 098 completion",
+          "offset": 50,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 099 completion",
+          "offset": 51,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 100 completion",
+          "offset": 51,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 101 completion",
+          "offset": 52,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 102 completion",
+          "offset": 52,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 103 completion",
+          "offset": 53,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 104 completion",
+          "offset": 53,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 105 completion",
+          "offset": 54,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 106 completion",
+          "offset": 54,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 107 completion",
+          "offset": 55,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 108 completion",
+          "offset": 55,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 109 completion",
+          "offset": 56,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 110 completion",
+          "offset": 56,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 111 completion",
+          "offset": 57,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 112 completion",
+          "offset": 57,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 113 completion",
+          "offset": 58,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 114 completion",
+          "offset": 58,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 115 completion",
+          "offset": 59,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 116 completion",
+          "offset": 59,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 117 completion",
+          "offset": 60,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 118 completion",
+          "offset": 60,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 119 completion",
+          "offset": 61,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 120 completion",
+          "offset": 61,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 121 completion",
+          "offset": 62,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 122 completion",
+          "offset": 62,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 123 completion",
+          "offset": 63,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 124 completion",
+          "offset": 63,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 125 completion",
+          "offset": 64,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 126 completion",
+          "offset": 64,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 127 completion",
+          "offset": 65,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 128 completion",
+          "offset": 65,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 129 completion",
+          "offset": 66,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 130 completion",
+          "offset": 66,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 131 completion",
+          "offset": 67,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 132 completion",
+          "offset": 67,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 133 completion",
+          "offset": 68,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 134 completion",
+          "offset": 68,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 135 completion",
+          "offset": 69,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 136 completion",
+          "offset": 69,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 137 completion",
+          "offset": 70,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 138 completion",
+          "offset": 70,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 139 completion",
+          "offset": 71,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 140 completion",
+          "offset": 71,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 141 completion",
+          "offset": 72,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 142 completion",
+          "offset": 72,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 143 completion",
+          "offset": 73,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 144 completion",
+          "offset": 73,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 145 completion",
+          "offset": 74,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 146 completion",
+          "offset": 74,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 147 completion",
+          "offset": 75,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 148 completion",
+          "offset": 75,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 149 completion",
+          "offset": 76,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 150 completion",
+          "offset": 76,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Music track mask",
+          "offset": 80,
+          "min": 0,
+          "max": 262143,
+          "width": 4,
+          "mask": 262143
+        }
+      ],
+      "presets": [
+        {
+          "label": "Complete first 30 levels",
+          "field": 0,
+          "value": 15,
+          "additional": [
+            {
+              "field": 1,
+              "value": 15
+            },
+            {
+              "field": 2,
+              "value": 15
+            },
+            {
+              "field": 3,
+              "value": 15
+            },
+            {
+              "field": 4,
+              "value": 15
+            },
+            {
+              "field": 5,
+              "value": 15
+            },
+            {
+              "field": 6,
+              "value": 15
+            },
+            {
+              "field": 7,
+              "value": 15
+            },
+            {
+              "field": 8,
+              "value": 15
+            },
+            {
+              "field": 9,
+              "value": 15
+            },
+            {
+              "field": 10,
+              "value": 15
+            },
+            {
+              "field": 11,
+              "value": 15
+            },
+            {
+              "field": 12,
+              "value": 15
+            },
+            {
+              "field": 13,
+              "value": 15
+            },
+            {
+              "field": 14,
+              "value": 15
+            },
+            {
+              "field": 15,
+              "value": 15
+            },
+            {
+              "field": 16,
+              "value": 15
+            },
+            {
+              "field": 17,
+              "value": 15
+            },
+            {
+              "field": 18,
+              "value": 15
+            },
+            {
+              "field": 19,
+              "value": 15
+            },
+            {
+              "field": 20,
+              "value": 15
+            },
+            {
+              "field": 21,
+              "value": 15
+            },
+            {
+              "field": 22,
+              "value": 15
+            },
+            {
+              "field": 23,
+              "value": 15
+            },
+            {
+              "field": 24,
+              "value": 15
+            },
+            {
+              "field": 25,
+              "value": 15
+            },
+            {
+              "field": 26,
+              "value": 15
+            },
+            {
+              "field": 27,
+              "value": 15
+            },
+            {
+              "field": 28,
+              "value": 15
+            },
+            {
+              "field": 29,
+              "value": 15
+            }
+          ]
+        },
+        {
+          "label": "Complete all 150 levels",
+          "field": 0,
+          "value": 15,
+          "additional": [
+            {
+              "field": 1,
+              "value": 15
+            },
+            {
+              "field": 2,
+              "value": 15
+            },
+            {
+              "field": 3,
+              "value": 15
+            },
+            {
+              "field": 4,
+              "value": 15
+            },
+            {
+              "field": 5,
+              "value": 15
+            },
+            {
+              "field": 6,
+              "value": 15
+            },
+            {
+              "field": 7,
+              "value": 15
+            },
+            {
+              "field": 8,
+              "value": 15
+            },
+            {
+              "field": 9,
+              "value": 15
+            },
+            {
+              "field": 10,
+              "value": 15
+            },
+            {
+              "field": 11,
+              "value": 15
+            },
+            {
+              "field": 12,
+              "value": 15
+            },
+            {
+              "field": 13,
+              "value": 15
+            },
+            {
+              "field": 14,
+              "value": 15
+            },
+            {
+              "field": 15,
+              "value": 15
+            },
+            {
+              "field": 16,
+              "value": 15
+            },
+            {
+              "field": 17,
+              "value": 15
+            },
+            {
+              "field": 18,
+              "value": 15
+            },
+            {
+              "field": 19,
+              "value": 15
+            },
+            {
+              "field": 20,
+              "value": 15
+            },
+            {
+              "field": 21,
+              "value": 15
+            },
+            {
+              "field": 22,
+              "value": 15
+            },
+            {
+              "field": 23,
+              "value": 15
+            },
+            {
+              "field": 24,
+              "value": 15
+            },
+            {
+              "field": 25,
+              "value": 15
+            },
+            {
+              "field": 26,
+              "value": 15
+            },
+            {
+              "field": 27,
+              "value": 15
+            },
+            {
+              "field": 28,
+              "value": 15
+            },
+            {
+              "field": 29,
+              "value": 15
+            },
+            {
+              "field": 30,
+              "value": 15
+            },
+            {
+              "field": 31,
+              "value": 15
+            },
+            {
+              "field": 32,
+              "value": 15
+            },
+            {
+              "field": 33,
+              "value": 15
+            },
+            {
+              "field": 34,
+              "value": 15
+            },
+            {
+              "field": 35,
+              "value": 15
+            },
+            {
+              "field": 36,
+              "value": 15
+            },
+            {
+              "field": 37,
+              "value": 15
+            },
+            {
+              "field": 38,
+              "value": 15
+            },
+            {
+              "field": 39,
+              "value": 15
+            },
+            {
+              "field": 40,
+              "value": 15
+            },
+            {
+              "field": 41,
+              "value": 15
+            },
+            {
+              "field": 42,
+              "value": 15
+            },
+            {
+              "field": 43,
+              "value": 15
+            },
+            {
+              "field": 44,
+              "value": 15
+            },
+            {
+              "field": 45,
+              "value": 15
+            },
+            {
+              "field": 46,
+              "value": 15
+            },
+            {
+              "field": 47,
+              "value": 15
+            },
+            {
+              "field": 48,
+              "value": 15
+            },
+            {
+              "field": 49,
+              "value": 15
+            },
+            {
+              "field": 50,
+              "value": 15
+            },
+            {
+              "field": 51,
+              "value": 15
+            },
+            {
+              "field": 52,
+              "value": 15
+            },
+            {
+              "field": 53,
+              "value": 15
+            },
+            {
+              "field": 54,
+              "value": 15
+            },
+            {
+              "field": 55,
+              "value": 15
+            },
+            {
+              "field": 56,
+              "value": 15
+            },
+            {
+              "field": 57,
+              "value": 15
+            },
+            {
+              "field": 58,
+              "value": 15
+            },
+            {
+              "field": 59,
+              "value": 15
+            },
+            {
+              "field": 60,
+              "value": 15
+            },
+            {
+              "field": 61,
+              "value": 15
+            },
+            {
+              "field": 62,
+              "value": 15
+            },
+            {
+              "field": 63,
+              "value": 15
+            },
+            {
+              "field": 64,
+              "value": 15
+            },
+            {
+              "field": 65,
+              "value": 15
+            },
+            {
+              "field": 66,
+              "value": 15
+            },
+            {
+              "field": 67,
+              "value": 15
+            },
+            {
+              "field": 68,
+              "value": 15
+            },
+            {
+              "field": 69,
+              "value": 15
+            },
+            {
+              "field": 70,
+              "value": 15
+            },
+            {
+              "field": 71,
+              "value": 15
+            },
+            {
+              "field": 72,
+              "value": 15
+            },
+            {
+              "field": 73,
+              "value": 15
+            },
+            {
+              "field": 74,
+              "value": 15
+            },
+            {
+              "field": 75,
+              "value": 15
+            },
+            {
+              "field": 76,
+              "value": 15
+            },
+            {
+              "field": 77,
+              "value": 15
+            },
+            {
+              "field": 78,
+              "value": 15
+            },
+            {
+              "field": 79,
+              "value": 15
+            },
+            {
+              "field": 80,
+              "value": 15
+            },
+            {
+              "field": 81,
+              "value": 15
+            },
+            {
+              "field": 82,
+              "value": 15
+            },
+            {
+              "field": 83,
+              "value": 15
+            },
+            {
+              "field": 84,
+              "value": 15
+            },
+            {
+              "field": 85,
+              "value": 15
+            },
+            {
+              "field": 86,
+              "value": 15
+            },
+            {
+              "field": 87,
+              "value": 15
+            },
+            {
+              "field": 88,
+              "value": 15
+            },
+            {
+              "field": 89,
+              "value": 15
+            },
+            {
+              "field": 90,
+              "value": 15
+            },
+            {
+              "field": 91,
+              "value": 15
+            },
+            {
+              "field": 92,
+              "value": 15
+            },
+            {
+              "field": 93,
+              "value": 15
+            },
+            {
+              "field": 94,
+              "value": 15
+            },
+            {
+              "field": 95,
+              "value": 15
+            },
+            {
+              "field": 96,
+              "value": 15
+            },
+            {
+              "field": 97,
+              "value": 15
+            },
+            {
+              "field": 98,
+              "value": 15
+            },
+            {
+              "field": 99,
+              "value": 15
+            },
+            {
+              "field": 100,
+              "value": 15
+            },
+            {
+              "field": 101,
+              "value": 15
+            },
+            {
+              "field": 102,
+              "value": 15
+            },
+            {
+              "field": 103,
+              "value": 15
+            },
+            {
+              "field": 104,
+              "value": 15
+            },
+            {
+              "field": 105,
+              "value": 15
+            },
+            {
+              "field": 106,
+              "value": 15
+            },
+            {
+              "field": 107,
+              "value": 15
+            },
+            {
+              "field": 108,
+              "value": 15
+            },
+            {
+              "field": 109,
+              "value": 15
+            },
+            {
+              "field": 110,
+              "value": 15
+            },
+            {
+              "field": 111,
+              "value": 15
+            },
+            {
+              "field": 112,
+              "value": 15
+            },
+            {
+              "field": 113,
+              "value": 15
+            },
+            {
+              "field": 114,
+              "value": 15
+            },
+            {
+              "field": 115,
+              "value": 15
+            },
+            {
+              "field": 116,
+              "value": 15
+            },
+            {
+              "field": 117,
+              "value": 15
+            },
+            {
+              "field": 118,
+              "value": 15
+            },
+            {
+              "field": 119,
+              "value": 15
+            },
+            {
+              "field": 120,
+              "value": 15
+            },
+            {
+              "field": 121,
+              "value": 15
+            },
+            {
+              "field": 122,
+              "value": 15
+            },
+            {
+              "field": 123,
+              "value": 15
+            },
+            {
+              "field": 124,
+              "value": 15
+            },
+            {
+              "field": 125,
+              "value": 15
+            },
+            {
+              "field": 126,
+              "value": 15
+            },
+            {
+              "field": 127,
+              "value": 15
+            },
+            {
+              "field": 128,
+              "value": 15
+            },
+            {
+              "field": 129,
+              "value": 15
+            },
+            {
+              "field": 130,
+              "value": 15
+            },
+            {
+              "field": 131,
+              "value": 15
+            },
+            {
+              "field": 132,
+              "value": 15
+            },
+            {
+              "field": 133,
+              "value": 15
+            },
+            {
+              "field": 134,
+              "value": 15
+            },
+            {
+              "field": 135,
+              "value": 15
+            },
+            {
+              "field": 136,
+              "value": 15
+            },
+            {
+              "field": 137,
+              "value": 15
+            },
+            {
+              "field": 138,
+              "value": 15
+            },
+            {
+              "field": 139,
+              "value": 15
+            },
+            {
+              "field": 140,
+              "value": 15
+            },
+            {
+              "field": 141,
+              "value": 15
+            },
+            {
+              "field": 142,
+              "value": 15
+            },
+            {
+              "field": 143,
+              "value": 15
+            },
+            {
+              "field": 144,
+              "value": 15
+            },
+            {
+              "field": 145,
+              "value": 15
+            },
+            {
+              "field": 146,
+              "value": 15
+            },
+            {
+              "field": 147,
+              "value": 15
+            },
+            {
+              "field": 148,
+              "value": 15
+            },
+            {
+              "field": 149,
+              "value": 15
+            }
+          ]
+        },
+        {
+          "label": "Enable all music tracks",
+          "field": 150,
+          "value": 262143
+        }
+      ]
+    },
+    {
+      "id": "icebreaker2-levels-v1",
+      "game": "Icebreaker 2",
+      "filename": "icebreaker2[levels]",
+      "size": 84,
+      "encoding": "be",
+      "signature": {
+        "offset": 0,
+        "value": 1365,
+        "width": 2
+      },
+      "checksum": {
+        "algorithm": "none",
+        "offset": 84,
+        "seed": 0
+      },
+      "source": "https://github.com/trapexit/icebreaker2/blob/155de349173878fe77e2f0ac9b043b0dc1b6749f/nvram.cp",
+      "notes": "Source-verified level chart. Completion values are bit flags: 1 easy, 2 medium, 4 hard, 8 insane; 15 marks all difficulties. A cleared level has any nonzero flag. Neighboring levels, padding and difficulty settings are preserved. This format has no game checksum. Not yet hardware-tested.",
+      "fields": [
+        {
+          "label": "Level 001 completion",
+          "offset": 2,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 002 completion",
+          "offset": 2,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 003 completion",
+          "offset": 3,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 004 completion",
+          "offset": 3,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 005 completion",
+          "offset": 4,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 006 completion",
+          "offset": 4,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 007 completion",
+          "offset": 5,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 008 completion",
+          "offset": 5,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 009 completion",
+          "offset": 6,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 010 completion",
+          "offset": 6,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 011 completion",
+          "offset": 7,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 012 completion",
+          "offset": 7,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 013 completion",
+          "offset": 8,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 014 completion",
+          "offset": 8,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 015 completion",
+          "offset": 9,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 016 completion",
+          "offset": 9,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 017 completion",
+          "offset": 10,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 018 completion",
+          "offset": 10,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 019 completion",
+          "offset": 11,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 020 completion",
+          "offset": 11,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 021 completion",
+          "offset": 12,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 022 completion",
+          "offset": 12,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 023 completion",
+          "offset": 13,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 024 completion",
+          "offset": 13,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 025 completion",
+          "offset": 14,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 026 completion",
+          "offset": 14,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 027 completion",
+          "offset": 15,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 028 completion",
+          "offset": 15,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 029 completion",
+          "offset": 16,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 030 completion",
+          "offset": 16,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 031 completion",
+          "offset": 17,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 032 completion",
+          "offset": 17,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 033 completion",
+          "offset": 18,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 034 completion",
+          "offset": 18,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 035 completion",
+          "offset": 19,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 036 completion",
+          "offset": 19,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 037 completion",
+          "offset": 20,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 038 completion",
+          "offset": 20,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 039 completion",
+          "offset": 21,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 040 completion",
+          "offset": 21,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 041 completion",
+          "offset": 22,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 042 completion",
+          "offset": 22,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 043 completion",
+          "offset": 23,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 044 completion",
+          "offset": 23,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 045 completion",
+          "offset": 24,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 046 completion",
+          "offset": 24,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 047 completion",
+          "offset": 25,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 048 completion",
+          "offset": 25,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 049 completion",
+          "offset": 26,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 050 completion",
+          "offset": 26,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 051 completion",
+          "offset": 27,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 052 completion",
+          "offset": 27,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 053 completion",
+          "offset": 28,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 054 completion",
+          "offset": 28,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 055 completion",
+          "offset": 29,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 056 completion",
+          "offset": 29,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 057 completion",
+          "offset": 30,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 058 completion",
+          "offset": 30,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 059 completion",
+          "offset": 31,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 060 completion",
+          "offset": 31,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 061 completion",
+          "offset": 32,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 062 completion",
+          "offset": 32,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 063 completion",
+          "offset": 33,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 064 completion",
+          "offset": 33,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 065 completion",
+          "offset": 34,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 066 completion",
+          "offset": 34,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 067 completion",
+          "offset": 35,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 068 completion",
+          "offset": 35,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 069 completion",
+          "offset": 36,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 070 completion",
+          "offset": 36,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 071 completion",
+          "offset": 37,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 072 completion",
+          "offset": 37,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 073 completion",
+          "offset": 38,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 074 completion",
+          "offset": 38,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 075 completion",
+          "offset": 39,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 076 completion",
+          "offset": 39,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 077 completion",
+          "offset": 40,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 078 completion",
+          "offset": 40,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 079 completion",
+          "offset": 41,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 080 completion",
+          "offset": 41,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 081 completion",
+          "offset": 42,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 082 completion",
+          "offset": 42,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 083 completion",
+          "offset": 43,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 084 completion",
+          "offset": 43,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 085 completion",
+          "offset": 44,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 086 completion",
+          "offset": 44,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 087 completion",
+          "offset": 45,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 088 completion",
+          "offset": 45,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 089 completion",
+          "offset": 46,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 090 completion",
+          "offset": 46,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 091 completion",
+          "offset": 47,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 092 completion",
+          "offset": 47,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 093 completion",
+          "offset": 48,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 094 completion",
+          "offset": 48,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 095 completion",
+          "offset": 49,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 096 completion",
+          "offset": 49,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 097 completion",
+          "offset": 50,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 098 completion",
+          "offset": 50,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 099 completion",
+          "offset": 51,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 100 completion",
+          "offset": 51,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 101 completion",
+          "offset": 52,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 102 completion",
+          "offset": 52,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 103 completion",
+          "offset": 53,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 104 completion",
+          "offset": 53,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 105 completion",
+          "offset": 54,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 106 completion",
+          "offset": 54,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 107 completion",
+          "offset": 55,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 108 completion",
+          "offset": 55,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 109 completion",
+          "offset": 56,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 110 completion",
+          "offset": 56,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 111 completion",
+          "offset": 57,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 112 completion",
+          "offset": 57,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 113 completion",
+          "offset": 58,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 114 completion",
+          "offset": 58,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 115 completion",
+          "offset": 59,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 116 completion",
+          "offset": 59,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 117 completion",
+          "offset": 60,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 118 completion",
+          "offset": 60,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 119 completion",
+          "offset": 61,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 120 completion",
+          "offset": 61,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 121 completion",
+          "offset": 62,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 122 completion",
+          "offset": 62,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 123 completion",
+          "offset": 63,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 124 completion",
+          "offset": 63,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 125 completion",
+          "offset": 64,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 126 completion",
+          "offset": 64,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 127 completion",
+          "offset": 65,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 128 completion",
+          "offset": 65,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 129 completion",
+          "offset": 66,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 130 completion",
+          "offset": 66,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 131 completion",
+          "offset": 67,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 132 completion",
+          "offset": 67,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 133 completion",
+          "offset": 68,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 134 completion",
+          "offset": 68,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 135 completion",
+          "offset": 69,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 136 completion",
+          "offset": 69,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 137 completion",
+          "offset": 70,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 138 completion",
+          "offset": 70,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 139 completion",
+          "offset": 71,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 140 completion",
+          "offset": 71,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 141 completion",
+          "offset": 72,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 142 completion",
+          "offset": 72,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 143 completion",
+          "offset": 73,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 144 completion",
+          "offset": 73,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 145 completion",
+          "offset": 74,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 146 completion",
+          "offset": 74,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 147 completion",
+          "offset": 75,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 148 completion",
+          "offset": 75,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Level 149 completion",
+          "offset": 76,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 240
+        },
+        {
+          "label": "Level 150 completion",
+          "offset": 76,
+          "min": 0,
+          "max": 15,
+          "width": 1,
+          "mask": 15
+        },
+        {
+          "label": "Music track mask",
+          "offset": 80,
+          "min": 0,
+          "max": 262143,
+          "width": 4,
+          "mask": 262143
+        }
+      ],
+      "presets": [
+        {
+          "label": "Complete first 30 levels",
+          "field": 0,
+          "value": 15,
+          "additional": [
+            {
+              "field": 1,
+              "value": 15
+            },
+            {
+              "field": 2,
+              "value": 15
+            },
+            {
+              "field": 3,
+              "value": 15
+            },
+            {
+              "field": 4,
+              "value": 15
+            },
+            {
+              "field": 5,
+              "value": 15
+            },
+            {
+              "field": 6,
+              "value": 15
+            },
+            {
+              "field": 7,
+              "value": 15
+            },
+            {
+              "field": 8,
+              "value": 15
+            },
+            {
+              "field": 9,
+              "value": 15
+            },
+            {
+              "field": 10,
+              "value": 15
+            },
+            {
+              "field": 11,
+              "value": 15
+            },
+            {
+              "field": 12,
+              "value": 15
+            },
+            {
+              "field": 13,
+              "value": 15
+            },
+            {
+              "field": 14,
+              "value": 15
+            },
+            {
+              "field": 15,
+              "value": 15
+            },
+            {
+              "field": 16,
+              "value": 15
+            },
+            {
+              "field": 17,
+              "value": 15
+            },
+            {
+              "field": 18,
+              "value": 15
+            },
+            {
+              "field": 19,
+              "value": 15
+            },
+            {
+              "field": 20,
+              "value": 15
+            },
+            {
+              "field": 21,
+              "value": 15
+            },
+            {
+              "field": 22,
+              "value": 15
+            },
+            {
+              "field": 23,
+              "value": 15
+            },
+            {
+              "field": 24,
+              "value": 15
+            },
+            {
+              "field": 25,
+              "value": 15
+            },
+            {
+              "field": 26,
+              "value": 15
+            },
+            {
+              "field": 27,
+              "value": 15
+            },
+            {
+              "field": 28,
+              "value": 15
+            },
+            {
+              "field": 29,
+              "value": 15
+            }
+          ]
+        },
+        {
+          "label": "Complete all 150 levels",
+          "field": 0,
+          "value": 15,
+          "additional": [
+            {
+              "field": 1,
+              "value": 15
+            },
+            {
+              "field": 2,
+              "value": 15
+            },
+            {
+              "field": 3,
+              "value": 15
+            },
+            {
+              "field": 4,
+              "value": 15
+            },
+            {
+              "field": 5,
+              "value": 15
+            },
+            {
+              "field": 6,
+              "value": 15
+            },
+            {
+              "field": 7,
+              "value": 15
+            },
+            {
+              "field": 8,
+              "value": 15
+            },
+            {
+              "field": 9,
+              "value": 15
+            },
+            {
+              "field": 10,
+              "value": 15
+            },
+            {
+              "field": 11,
+              "value": 15
+            },
+            {
+              "field": 12,
+              "value": 15
+            },
+            {
+              "field": 13,
+              "value": 15
+            },
+            {
+              "field": 14,
+              "value": 15
+            },
+            {
+              "field": 15,
+              "value": 15
+            },
+            {
+              "field": 16,
+              "value": 15
+            },
+            {
+              "field": 17,
+              "value": 15
+            },
+            {
+              "field": 18,
+              "value": 15
+            },
+            {
+              "field": 19,
+              "value": 15
+            },
+            {
+              "field": 20,
+              "value": 15
+            },
+            {
+              "field": 21,
+              "value": 15
+            },
+            {
+              "field": 22,
+              "value": 15
+            },
+            {
+              "field": 23,
+              "value": 15
+            },
+            {
+              "field": 24,
+              "value": 15
+            },
+            {
+              "field": 25,
+              "value": 15
+            },
+            {
+              "field": 26,
+              "value": 15
+            },
+            {
+              "field": 27,
+              "value": 15
+            },
+            {
+              "field": 28,
+              "value": 15
+            },
+            {
+              "field": 29,
+              "value": 15
+            },
+            {
+              "field": 30,
+              "value": 15
+            },
+            {
+              "field": 31,
+              "value": 15
+            },
+            {
+              "field": 32,
+              "value": 15
+            },
+            {
+              "field": 33,
+              "value": 15
+            },
+            {
+              "field": 34,
+              "value": 15
+            },
+            {
+              "field": 35,
+              "value": 15
+            },
+            {
+              "field": 36,
+              "value": 15
+            },
+            {
+              "field": 37,
+              "value": 15
+            },
+            {
+              "field": 38,
+              "value": 15
+            },
+            {
+              "field": 39,
+              "value": 15
+            },
+            {
+              "field": 40,
+              "value": 15
+            },
+            {
+              "field": 41,
+              "value": 15
+            },
+            {
+              "field": 42,
+              "value": 15
+            },
+            {
+              "field": 43,
+              "value": 15
+            },
+            {
+              "field": 44,
+              "value": 15
+            },
+            {
+              "field": 45,
+              "value": 15
+            },
+            {
+              "field": 46,
+              "value": 15
+            },
+            {
+              "field": 47,
+              "value": 15
+            },
+            {
+              "field": 48,
+              "value": 15
+            },
+            {
+              "field": 49,
+              "value": 15
+            },
+            {
+              "field": 50,
+              "value": 15
+            },
+            {
+              "field": 51,
+              "value": 15
+            },
+            {
+              "field": 52,
+              "value": 15
+            },
+            {
+              "field": 53,
+              "value": 15
+            },
+            {
+              "field": 54,
+              "value": 15
+            },
+            {
+              "field": 55,
+              "value": 15
+            },
+            {
+              "field": 56,
+              "value": 15
+            },
+            {
+              "field": 57,
+              "value": 15
+            },
+            {
+              "field": 58,
+              "value": 15
+            },
+            {
+              "field": 59,
+              "value": 15
+            },
+            {
+              "field": 60,
+              "value": 15
+            },
+            {
+              "field": 61,
+              "value": 15
+            },
+            {
+              "field": 62,
+              "value": 15
+            },
+            {
+              "field": 63,
+              "value": 15
+            },
+            {
+              "field": 64,
+              "value": 15
+            },
+            {
+              "field": 65,
+              "value": 15
+            },
+            {
+              "field": 66,
+              "value": 15
+            },
+            {
+              "field": 67,
+              "value": 15
+            },
+            {
+              "field": 68,
+              "value": 15
+            },
+            {
+              "field": 69,
+              "value": 15
+            },
+            {
+              "field": 70,
+              "value": 15
+            },
+            {
+              "field": 71,
+              "value": 15
+            },
+            {
+              "field": 72,
+              "value": 15
+            },
+            {
+              "field": 73,
+              "value": 15
+            },
+            {
+              "field": 74,
+              "value": 15
+            },
+            {
+              "field": 75,
+              "value": 15
+            },
+            {
+              "field": 76,
+              "value": 15
+            },
+            {
+              "field": 77,
+              "value": 15
+            },
+            {
+              "field": 78,
+              "value": 15
+            },
+            {
+              "field": 79,
+              "value": 15
+            },
+            {
+              "field": 80,
+              "value": 15
+            },
+            {
+              "field": 81,
+              "value": 15
+            },
+            {
+              "field": 82,
+              "value": 15
+            },
+            {
+              "field": 83,
+              "value": 15
+            },
+            {
+              "field": 84,
+              "value": 15
+            },
+            {
+              "field": 85,
+              "value": 15
+            },
+            {
+              "field": 86,
+              "value": 15
+            },
+            {
+              "field": 87,
+              "value": 15
+            },
+            {
+              "field": 88,
+              "value": 15
+            },
+            {
+              "field": 89,
+              "value": 15
+            },
+            {
+              "field": 90,
+              "value": 15
+            },
+            {
+              "field": 91,
+              "value": 15
+            },
+            {
+              "field": 92,
+              "value": 15
+            },
+            {
+              "field": 93,
+              "value": 15
+            },
+            {
+              "field": 94,
+              "value": 15
+            },
+            {
+              "field": 95,
+              "value": 15
+            },
+            {
+              "field": 96,
+              "value": 15
+            },
+            {
+              "field": 97,
+              "value": 15
+            },
+            {
+              "field": 98,
+              "value": 15
+            },
+            {
+              "field": 99,
+              "value": 15
+            },
+            {
+              "field": 100,
+              "value": 15
+            },
+            {
+              "field": 101,
+              "value": 15
+            },
+            {
+              "field": 102,
+              "value": 15
+            },
+            {
+              "field": 103,
+              "value": 15
+            },
+            {
+              "field": 104,
+              "value": 15
+            },
+            {
+              "field": 105,
+              "value": 15
+            },
+            {
+              "field": 106,
+              "value": 15
+            },
+            {
+              "field": 107,
+              "value": 15
+            },
+            {
+              "field": 108,
+              "value": 15
+            },
+            {
+              "field": 109,
+              "value": 15
+            },
+            {
+              "field": 110,
+              "value": 15
+            },
+            {
+              "field": 111,
+              "value": 15
+            },
+            {
+              "field": 112,
+              "value": 15
+            },
+            {
+              "field": 113,
+              "value": 15
+            },
+            {
+              "field": 114,
+              "value": 15
+            },
+            {
+              "field": 115,
+              "value": 15
+            },
+            {
+              "field": 116,
+              "value": 15
+            },
+            {
+              "field": 117,
+              "value": 15
+            },
+            {
+              "field": 118,
+              "value": 15
+            },
+            {
+              "field": 119,
+              "value": 15
+            },
+            {
+              "field": 120,
+              "value": 15
+            },
+            {
+              "field": 121,
+              "value": 15
+            },
+            {
+              "field": 122,
+              "value": 15
+            },
+            {
+              "field": 123,
+              "value": 15
+            },
+            {
+              "field": 124,
+              "value": 15
+            },
+            {
+              "field": 125,
+              "value": 15
+            },
+            {
+              "field": 126,
+              "value": 15
+            },
+            {
+              "field": 127,
+              "value": 15
+            },
+            {
+              "field": 128,
+              "value": 15
+            },
+            {
+              "field": 129,
+              "value": 15
+            },
+            {
+              "field": 130,
+              "value": 15
+            },
+            {
+              "field": 131,
+              "value": 15
+            },
+            {
+              "field": 132,
+              "value": 15
+            },
+            {
+              "field": 133,
+              "value": 15
+            },
+            {
+              "field": 134,
+              "value": 15
+            },
+            {
+              "field": 135,
+              "value": 15
+            },
+            {
+              "field": 136,
+              "value": 15
+            },
+            {
+              "field": 137,
+              "value": 15
+            },
+            {
+              "field": 138,
+              "value": 15
+            },
+            {
+              "field": 139,
+              "value": 15
+            },
+            {
+              "field": 140,
+              "value": 15
+            },
+            {
+              "field": 141,
+              "value": 15
+            },
+            {
+              "field": 142,
+              "value": 15
+            },
+            {
+              "field": 143,
+              "value": 15
+            },
+            {
+              "field": 144,
+              "value": 15
+            },
+            {
+              "field": 145,
+              "value": 15
+            },
+            {
+              "field": 146,
+              "value": 15
+            },
+            {
+              "field": 147,
+              "value": 15
+            },
+            {
+              "field": 148,
+              "value": 15
+            },
+            {
+              "field": 149,
+              "value": 15
+            }
+          ]
+        },
+        {
+          "label": "Enable all music tracks",
+          "field": 150,
+          "value": 262143
+        }
       ]
     }
   ]

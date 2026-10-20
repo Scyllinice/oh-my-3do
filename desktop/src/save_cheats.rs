@@ -14,6 +14,18 @@ pub const JSON_PATH: &str = ".ohmy3do/save-cheats.json";
 pub const BINARY_PATH: &str = ".ohmy3do/save-cheats.3db";
 pub const MAX_JSON: usize = 256 * 1024;
 pub const MAX_BINARY: usize = 65536;
+fn four() -> usize {
+    4
+}
+fn all_bits() -> u32 {
+    u32::MAX
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Change {
+    pub field: usize,
+    pub value: u32,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Field {
@@ -21,10 +33,16 @@ pub struct Field {
     pub offset: usize,
     pub min: u32,
     pub max: u32,
+    #[serde(default = "four")]
+    pub width: usize,
+    #[serde(default = "all_bits")]
+    pub mask: u32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preset {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional: Vec<Change>,
     pub label: String,
     pub field: usize,
     pub value: u32,
@@ -32,6 +50,8 @@ pub struct Preset {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Signature {
+    #[serde(default = "four")]
+    pub width: usize,
     pub offset: usize,
     pub value: u32,
 }
@@ -71,14 +91,20 @@ pub fn profiles() -> &'static [Profile] {
     })
     .profiles
 }
-fn word(entry: &Entry, offset: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(
+fn number(entry: &Entry, offset: usize, width: usize) -> Option<u32> {
+    if ![1, 2, 4].contains(&width) {
+        return None;
+    }
+    Some(
         entry
             .data
-            .get(offset..offset.checked_add(4)?)?
-            .try_into()
-            .ok()?,
-    ))
+            .get(offset..offset.checked_add(width)?)?
+            .iter()
+            .fold(0u32, |n, b| (n << 8) | *b as u32),
+    )
+}
+fn word(entry: &Entry, offset: usize) -> Option<u32> {
+    number(entry, offset, 4)
 }
 impl Profile {
     fn sum(&self, entry: &Entry) -> Option<u32> {
@@ -91,43 +117,71 @@ impl Profile {
     pub fn matches(&self, entry: &Entry) -> bool {
         entry.name == self.filename.as_bytes()
             && entry.data.len() == self.size
-            && word(entry, self.signature.offset) == Some(self.signature.value)
-            && self
-                .sum(entry)
-                .is_some_and(|sum| word(entry, self.checksum.offset) == Some(sum))
-            && self
-                .fields
-                .iter()
-                .all(|f| word(entry, f.offset).is_some_and(|v| (f.min..=f.max).contains(&v)))
+            && number(entry, self.signature.offset, self.signature.width)
+                == Some(self.signature.value)
+            && (self.checksum.algorithm == "none"
+                || self
+                    .sum(entry)
+                    .is_some_and(|sum| word(entry, self.checksum.offset) == Some(sum)))
+            && self.fields.iter().enumerate().all(|(i, f)| {
+                self.value(entry, i)
+                    .is_some_and(|v| (f.min..=f.max).contains(&v))
+            })
     }
     pub fn value(&self, entry: &Entry, field: usize) -> Option<u32> {
-        word(entry, self.fields.get(field)?.offset)
+        let f = self.fields.get(field)?;
+        Some((number(entry, f.offset, f.width)? & f.mask) >> f.mask.trailing_zeros())
+    }
+    fn change(&self, entry: &mut Entry, field: usize, value: u32) {
+        let f = &self.fields[field];
+        let current = number(entry, f.offset, f.width).unwrap();
+        let next = (current & !f.mask) | ((value << f.mask.trailing_zeros()) & f.mask);
+        let bytes = next.to_be_bytes();
+        entry.data[f.offset..f.offset + f.width].copy_from_slice(&bytes[4 - f.width..]);
+    }
+    fn repair(&self, entry: &mut Entry) {
+        if self.checksum.algorithm != "none" {
+            let sum = self.sum(entry).unwrap();
+            entry.data[self.checksum.offset..self.checksum.offset + 4]
+                .copy_from_slice(&sum.to_be_bytes());
+        }
     }
     pub fn set(&self, entry: &mut Entry, field: usize, value: u32) -> Result<()> {
         ensure!(
             self.matches(entry),
             "Unsupported save layout, value or checksum"
         );
-        let f = self
-            .fields
-            .get(field)
-            .ok_or_else(|| anyhow::anyhow!("Unknown save field"))?;
+        let f = self.fields.get(field).context("Unknown save field")?;
         ensure!(
             (f.min..=f.max).contains(&value),
             "Value is outside the verified range"
         );
-        entry.data[f.offset..f.offset + 4].copy_from_slice(&value.to_be_bytes());
-        let sum = self.sum(entry).unwrap();
-        entry.data[self.checksum.offset..self.checksum.offset + 4]
-            .copy_from_slice(&sum.to_be_bytes());
+        self.change(entry, field, value);
+        self.repair(entry);
         Ok(())
     }
     pub fn apply_preset(&self, entry: &mut Entry, preset: usize) -> Result<()> {
-        let p = self
-            .presets
-            .get(preset)
-            .ok_or_else(|| anyhow::anyhow!("Unknown save preset"))?;
-        self.set(entry, p.field, p.value)
+        ensure!(
+            self.matches(entry),
+            "Unsupported save layout, value or checksum"
+        );
+        let p = self.presets.get(preset).context("Unknown save preset")?;
+        let changes = std::iter::once((p.field, p.value))
+            .chain(p.additional.iter().map(|c| (c.field, c.value)))
+            .collect::<Vec<_>>();
+        for &(field, value) in &changes {
+            ensure!(
+                self.fields
+                    .get(field)
+                    .is_some_and(|f| (f.min..=f.max).contains(&value)),
+                "Invalid preset change"
+            );
+        }
+        for (field, value) in changes {
+            self.change(entry, field, value);
+        }
+        self.repair(entry);
+        Ok(())
     }
 }
 static ACTIVE: RwLock<Option<Database>> = RwLock::new(None);
@@ -184,15 +238,24 @@ impl Database {
                 "Invalid save filename"
             );
             ensure!(
-                (8..=32768).contains(&p.size) && p.size % 4 == 0 && p.encoding == "u32be",
+                (8..=32768).contains(&p.size)
+                    && p.size % 4 == 0
+                    && ["u32be", "be"].contains(&p.encoding.as_str()),
                 "Unsupported size or encoding"
             );
             ensure!(
-                p.checksum.algorithm == "sum32be"
-                    && p.checksum.offset == p.size - 4
-                    && p.signature.offset % 4 == 0
-                    && p.signature.offset < p.checksum.offset,
-                "Unsupported checksum or signature offset"
+                ((p.checksum.algorithm == "sum32be" && p.checksum.offset == p.size - 4)
+                    || (p.checksum.algorithm == "none"
+                        && p.checksum.offset == p.size
+                        && p.checksum.seed == 0))
+                    && [1, 2, 4].contains(&p.signature.width)
+                    && p.signature
+                        .offset
+                        .checked_add(p.signature.width)
+                        .is_some_and(|end| end <= p.checksum.offset)
+                    && (p.signature.width == 4
+                        || p.signature.value < (1u32 << (p.signature.width * 8))),
+                "Unsupported checksum or signature"
             );
             ensure!(
                 layouts.insert((&p.filename, p.size, p.signature.offset, p.signature.value)),
@@ -207,33 +270,58 @@ impl Database {
             );
             ensure!(
                 !p.fields.is_empty()
-                    && p.fields.len() <= 32
+                    && p.fields.len() <= 160
                     && !p.presets.is_empty()
                     && p.presets.len() <= 32,
-                "Each profile needs 1–32 fields and presets"
+                "Each profile needs 1–160 fields and 1–32 presets"
             );
-            let mut offsets = HashSet::new();
-            offsets.insert(p.signature.offset);
+            let mut occupied = vec![0u8; p.size];
+            occupied[p.signature.offset..p.signature.offset + p.signature.width].fill(255);
             for f in &p.fields {
                 ensure!(
                     ascii(&f.label, 25)
-                        && f.offset % 4 == 0
-                        && f.offset < p.checksum.offset
-                        && offsets.insert(f.offset)
+                        && [1, 2, 4].contains(&f.width)
+                        && f.offset
+                            .checked_add(f.width)
+                            .is_some_and(|end| end <= p.checksum.offset)
+                        && f.mask != 0
                         && f.min <= f.max,
-                    "Invalid field label, offset, overlap or range"
+                    "Invalid field label, width, offset or range"
                 );
+                let shifted = f.mask >> f.mask.trailing_zeros();
+                ensure!(
+                    shifted & shifted.wrapping_add(1) == 0
+                        && f.max <= shifted
+                        && (f.width == 4 || f.mask < (1u32 << (f.width * 8))),
+                    "Invalid field bit mask or range"
+                );
+                let mask = f.mask.to_be_bytes();
+                for (i, &bits) in mask[4 - f.width..].iter().enumerate() {
+                    ensure!(
+                        occupied[f.offset + i] & bits == 0,
+                        "Overlapping save fields"
+                    );
+                    occupied[f.offset + i] |= bits;
+                }
             }
             for preset in &p.presets {
-                ensure!(ascii(&preset.label, 34), "Invalid preset label");
-                let field = p
-                    .fields
-                    .get(preset.field)
-                    .context("Preset refers to an unknown field")?;
                 ensure!(
-                    (field.min..=field.max).contains(&preset.value),
-                    "Preset is outside its field range"
+                    ascii(&preset.label, 34) && preset.additional.len() < 160,
+                    "Invalid preset label or size"
                 );
+                let mut used = HashSet::new();
+                for (index, value) in std::iter::once((preset.field, preset.value))
+                    .chain(preset.additional.iter().map(|c| (c.field, c.value)))
+                {
+                    let field = p
+                        .fields
+                        .get(index)
+                        .context("Preset refers to an unknown field")?;
+                    ensure!(
+                        used.insert(index) && (field.min..=field.max).contains(&value),
+                        "Preset repeats a field or is outside its range"
+                    );
+                }
             }
         }
         ensure!(
@@ -246,7 +334,13 @@ impl Database {
         24 + self
             .profiles
             .iter()
-            .map(|p| 160 + p.fields.len() * 40 + p.presets.len() * 48)
+            .map(|p| {
+                176 + p.fields.len() * 48
+                    + p.presets
+                        .iter()
+                        .map(|x| 48 + x.additional.len() * 8)
+                        .sum::<usize>()
+            })
             .sum::<usize>()
     }
     pub fn json(&self) -> Result<Vec<u8>> {
@@ -255,10 +349,57 @@ impl Database {
         ensure!(bytes.len() <= MAX_JSON, "Database JSON exceeds 256 KiB");
         Ok(bytes)
     }
+    /// Accept a matching legacy database when preparing an existing 1.0 library.
+    pub fn matches_binary(&self, bytes: &[u8]) -> Result<bool> {
+        let modern = self.binary()?;
+        if bytes == modern {
+            return Ok(true);
+        }
+        if !bytes.starts_with(b"OM3DCHT1")
+            || self.profiles.iter().any(|p| {
+                p.signature.width != 4
+                    || p.signature.offset % 4 != 0
+                    || p.checksum.algorithm != "sum32be"
+                    || p.fields.len() > 32
+                    || p.fields
+                        .iter()
+                        .any(|f| f.width != 4 || f.mask != u32::MAX || f.offset % 4 != 0)
+                    || p.presets.iter().any(|p| !p.additional.is_empty())
+            })
+        {
+            return Ok(false);
+        }
+        let mut old = Vec::from(&b"OM3DCHT1"[..]);
+        old.extend_from_slice(&[0; 16]);
+        let mut pos = 24;
+        for p in &self.profiles {
+            let mut header = modern[pos..pos + 32].to_vec();
+            header[..4].copy_from_slice(
+                &((160 + p.fields.len() * 40 + p.presets.len() * 48) as u32).to_be_bytes(),
+            );
+            old.extend(header);
+            old.extend_from_slice(&modern[pos + 48..pos + 176]);
+            pos += 176;
+            for _ in &p.fields {
+                old.extend_from_slice(&modern[pos..pos + 40]);
+                pos += 48;
+            }
+            for _ in &p.presets {
+                old.extend_from_slice(&modern[pos..pos + 48]);
+                pos += 48;
+            }
+        }
+        let length = old.len() as u32;
+        let crc = crc32fast::hash(&old[24..]);
+        old[8..12].copy_from_slice(&length.to_be_bytes());
+        old[12..16].copy_from_slice(&(self.profiles.len() as u32).to_be_bytes());
+        old[16..20].copy_from_slice(&crc.to_be_bytes());
+        Ok(bytes == old)
+    }
     pub fn binary(&self) -> Result<Vec<u8>> {
         self.validate()?;
         let mut bytes = Vec::with_capacity(self.binary_size());
-        bytes.extend_from_slice(b"OM3DCHT1");
+        bytes.extend_from_slice(b"OM3DCHT2");
         bytes.extend_from_slice(&[0; 16]);
         fn num(out: &mut Vec<u8>, n: u32) {
             out.extend_from_slice(&n.to_be_bytes());
@@ -269,7 +410,11 @@ impl Database {
         }
         for p in &self.profiles {
             for n in [
-                160 + p.fields.len() * 40 + p.presets.len() * 48,
+                176 + p.fields.len() * 48
+                    + p.presets
+                        .iter()
+                        .map(|x| 48 + x.additional.len() * 8)
+                        .sum::<usize>(),
                 p.size,
                 p.signature.offset,
                 p.signature.value as usize,
@@ -277,6 +422,10 @@ impl Database {
                 p.checksum.seed as usize,
                 p.fields.len(),
                 p.presets.len(),
+                p.signature.width,
+                usize::from(p.checksum.algorithm != "none"),
+                0,
+                0,
             ] {
                 num(&mut bytes, n as u32);
             }
@@ -288,12 +437,18 @@ impl Database {
                 num(&mut bytes, f.offset as u32);
                 num(&mut bytes, f.min);
                 num(&mut bytes, f.max);
+                num(&mut bytes, f.width as u32);
+                num(&mut bytes, f.mask);
             }
             for p in &p.presets {
                 text(&mut bytes, &p.label, 36);
                 num(&mut bytes, p.field as u32);
                 num(&mut bytes, p.value);
-                num(&mut bytes, 0);
+                num(&mut bytes, p.additional.len() as u32);
+                for c in &p.additional {
+                    num(&mut bytes, c.field as u32);
+                    num(&mut bytes, c.value);
+                }
             }
         }
         let length = bytes.len() as u32;
@@ -330,15 +485,21 @@ pub fn install(root: &Path, db: &Database, cache: &Path) -> Result<PathBuf> {
 pub fn ensure_database(root: &Path, tx: &mut crate::library::Journal) -> Result<()> {
     let json = crate::fsutil::safe(root, JSON_PATH)?;
     let binary = crate::fsutil::safe(root, BINARY_PATH)?;
-    ensure!(!json.exists() || json.is_file(), "Database JSON path is occupied by a directory");
-    ensure!(!binary.exists() || binary.is_file(), "Console database path is occupied by a directory");
-    if !binary.exists() {
-        let db = if json.exists() {
+    ensure!(
+        !json.exists() || json.is_file(),
+        "Database JSON path is occupied by a directory"
+    );
+    ensure!(
+        !binary.exists() || binary.is_file(),
+        "Console database path is occupied by a directory"
+    );
+    if !binary.exists() || binary.metadata()?.len() == 0 {
+        let db = if json.exists() && json.metadata()?.len() > 0 {
             Database::read(&json)?
         } else {
             Database::bundled()
         };
-        if !json.exists() {
+        if !json.exists() || json.metadata()?.len() == 0 {
             tx.write(JSON_PATH, &db.json()?)?;
         }
         tx.write(BINARY_PATH, &db.binary()?)?;

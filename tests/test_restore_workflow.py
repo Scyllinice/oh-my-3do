@@ -72,7 +72,7 @@ int main(void) {
         if (fail <= 4) assert(!writes); /* test, preflight, capture, recovery */
         if (writes) assert(recovered);
     }
-    stage=writes=recovered=fail_stage=0; m.backup_slot=8;
+    stage=writes=recovered=fail_stage=0; m.backup_slot=SAVE_RECOVERY_SLOT;
     restore_selected(&m); assert(m.restore_result == 1 && !strcmp(recovery_path,"saves/recovery2.3ds"));
     save_archive_free(&m.backup);
     puts("Restore workflow: no NVRAM writes before verified recovery; all stage failures and recovery-source preservation passed");

@@ -11,8 +11,10 @@ sizes, and used/free space. Each save shows its game's name when the menu knows
 it; the selected save's real filename appears below the list. Viewing and X
 refresh are read-only.
 
-Names come from two places. The PC tools (`index-media.py`, desktop imports and
-**Rebuild Find index**) inspect ISO files for `/NVRAM/` filename strings and
+Names come from three places. A built-in database recognizes 118 verified filename
+patterns covering 77 game titles, even without a matching game on the USB drive.
+The PC tools (`index-media.py`, desktop imports and
+**Rebuild search indexes**) inspect ISO files for `/nvram/` filename strings (ignoring case) and
 write `.ohmy3do/save-names.txt`. This finds some games' save names; CUE/BIN
 images and dynamically constructed names are not covered by this scan. Later
 runs reuse a per-disc cache. The menu can learn other names: when
@@ -22,14 +24,24 @@ next startup it names any file that game created or changed in
 keeps its filename. **A** prepares
 a backup of one save; **C** prepares all files, including system settings.
 
-Choose one of eight USB slots. The menu reads and lists the **existing slot
-contents before replacement**. C switches between existing and proposed
-contents; A proceeds to a separate confirmation, and B returns. Missing/corrupt
-slots are identified as empty or invalid; their contents are not presented as
-valid saves. Confirming replaces the chosen slot and verifies the completed
-archive by closing/reopening and comparing every byte.
+Choose a numbered USB slot. **L/R** changes pages of eight. **P: Find slots**
+offers occupied slots, search by game or slot name, a numeric jump
+(1–999,999,999), and the full numbered view. Slots need no preallocation or in-memory master catalog;
+USB capacity and filesystem/firmware limits constrain how many you can actually
+store. The two recovery backups appear on the first page.
 
-The desktop setup and USB preparation create `.ohmy3do/saves/` automatically.
+**A: Back up one** adds or replaces only the matching game in the destination,
+preserving its other entries. An empty slot receives just that save; an invalid
+or unreadable destination is refused. **C: All** remains a full-slot replacement.
+The menu reads and lists the **existing destination** first; **C** switches
+between existing and proposed contents, **A** proceeds to confirmation, and **B**
+returns. Single-save merges recheck the reviewed destination before writing.
+Every successful write closes/reopens the file and verifies its bytes.
+
+The desktop **Drive setup** creates
+`.ohmy3do/saves/` and all other initial support automatically. A drive containing
+only `boot.iso` can be completed with **Repair installed menu support**; no game
+library copy is needed. Full USB library preparation also creates the folder.
 For a manually prepared drive, create it before using backups, or copy the build's `saves/`
 folder into `.ohmy3do/`. The firmware cannot create directories.
 Before the first backup or restore in a session, an automatic check writes two
@@ -41,7 +53,7 @@ to restore, review its filename/size/type and replacement warning, then confirm.
 **Before any NVRAM write**, the menu checks space, captures all current saves,
 writes them to `saves/recovery.3ds` and verifies that USB backup. Restoring from
 that archive uses `recovery2.3ds` to preserve its source. Both recovery files
-are listed alongside `slot01.3ds`–`slot08.3ds`.
+are listed on the first page alongside the numbered slots.
 
 Restore allocates space before overwriting, retains the exact length and file
 type, reads the file back, and takes a fresh snapshot to check that unrelated
@@ -68,10 +80,84 @@ between known values and the raw hex editor.
 The [DOOM weapons code](save-cheats.md#doom-weapons) is entered in-game; weapon
 inventory is not stored in its preferences save.
 
-The shared database currently supports **DOOM**: eight preferences fields and
-**Unlock campaign levels**. Unsupported save layouts or invalid game checksums
+The shared database supports **DOOM** preferences and campaign unlocking, plus
+**Icebreaker** and **Icebreaker 2** completion flags and music-track presets. Unsupported save layouts or invalid game checksums
 retain raw editing. The menu loads definitions from `.ohmy3do/save-cheats.3db`; the desktop app can
 edit and install them without another ISO update. See the [database guide](save-cheats.md).
+
+## Building, naming and comparing slots
+
+Build a slot one save at a time: **A: Back up one** in Console saves copies the
+selected NVRAM file; **P: Copy to slot** inside a USB backup copies its selected
+save to another slot. Both merge by filename, preserving unrelated destination
+saves. Review and confirm each copy. A USB copy keeps its source unchanged and
+returns to that source after saving or cancelling. An occupied slot cannot gain
+more than 128 saves or exceed the 64 KiB archive limit.
+
+In the USB slot list, **C: Name** opens the on-screen keyboard. **A** adds a
+character, **X** erases, **C** clears, **P** saves, and **B** cancels. Labels allow
+24 printable ASCII characters; a blank label restores the filename. Recovery
+backups keep their fixed names. Names live separately in
+`.ohmy3do/saves/slot-labels.txt` for slots 1–8, and `slot-labels-N.txt` for each
+subsequent page (page N starts at slot `8*N+1`). Renaming never edits save data.
+
+**X: Compare** selects the first slot; choose a second and press **A**. The list
+shows added, removed, changed and identical saves, paired by filename without
+regard to ASCII case. **A** on a save shows changed byte offsets and before/after
+values; **Left/Right** pages through differences. `--` means the byte is absent.
+Filename case and file type changes are reported even if payload bytes match.
+Comparison is read only; **B** returns.
+
+On the desktop, use **New backup**, then **Add saves from…**.
+Select entries, review which matching filenames they replace, and add them to
+the draft. Repeat with other source backups; **Remove from draft** removes
+an unwanted draft entry. **Save as…** writes the assembled slot. To include
+NVRAM saves, capture them on the console first. Open an existing slot to extend
+it instead. Sources stay unchanged, and a failed merge leaves the draft intact.
+The destination still has the same 128-file/64 KiB limit.
+
+The desktop **Compare with backup…** shows archive differences and paged byte
+values against the current draft, including applied edits. It never writes the
+comparison file. Numbered slots also have a **Save slot name** control using the
+same shared label files, with conflict checks and a recovery copy on replacement.
+
+## Finding saves across slots
+
+On the desktop, open **Save Manager → Find saves across slots** and select the
+USB drive's `.ohmy3do/saves` folder. The app scans all canonical numbered backups
+and both recovery archives, builds the console catalog, and shows occupied
+slots. Type a game title, raw NVRAM filename, backup filename, or slot label.
+Search ignores ASCII case; all space-separated words must match somewhere in
+the slot. Multiple games in one archive are all searchable. Opening a result
+uses the usual Save/Discard/Cancel protection for unfinished edits.
+
+On the console, open **USB backups → P: Find slots**. Choose **Show occupied
+slots**, or **Search games / slot names**, enter text and press **P**. **L/R**
+pages through results and **A** opens the selected backup. Choose **Go to slot
+number** to reach an unused destination, or **Show all slot numbers** to return
+to numbered browsing. The same picker is available when choosing a merge
+or backup destination; recovery archives are excluded from destinations.
+
+**Refresh the catalog with the desktop app once for existing backups**, and again
+after manually copying, deleting or renaming files. USB preparation also refreshes
+it. Console backup writes and slot-label changes maintain their catalog entries;
+desktop saves and label changes queue a refresh. The console cannot enumerate
+`.3ds` files through the firmware's ISO/CUE browser, so its search covers indexed
+backups. It keeps only eight results and one catalog record in memory. Search
+time grows with the number of indexed backups; there is no eight-slot catalog cap.
+
+The catalog consists of `saves/slot-catalog.3di` and small `slotNN.3si` /
+`recovery.3si` / `recovery2.3si` sidecars. Archives and label files remain
+authoritative. CRC checks protect the records and their links; a bad or missing
+catalog asks for a desktop refresh rather than showing partial matches. A
+verified backup remains saved if catalog maintenance fails. Nonempty damaged
+archives appear as invalid in the desktop list; zero-byte firmware probe files
+are omitted. A valid archive containing no saves is still an occupied slot.
+Desktop catalog rebuilding never writes save archives or NVRAM.
+
+Known names improve identification, not cheat support. Unknown saves keep their
+raw filenames and remain searchable. See [save-name sources](save-names.md) for
+coverage and how names are selected.
 
 ## Console hex editor
 
@@ -97,7 +183,7 @@ Restore the saved entry separately through the usual restore confirmation.
 
 ## Desktop backup browser and editors
 
-In the desktop app, open **CH5 Tools → Save Manager…** and choose
+In the desktop app, open **Save Manager → Open backup…** and choose
 an Oh My 3DO `.3ds` archive. The browser validates the complete archive before
 showing its filenames, sizes, four-byte file types and contents. You can export
 one raw save, export a single-save `.3ds` archive, or import replacement raw bytes
@@ -139,7 +225,7 @@ and level selection DOOM stores, rather than inventing a mid-level save feature.
 
 To restore an edited archive, keep the original on your PC. With the console
 off, connect its drive to the PC and put the edited copy into an unused
-`.ohmy3do/saves/slot01.3ds`–`slot08.3ds`. Back up an occupied slot before replacing
+a numbered `.ohmy3do/saves/slotNN.3ds` file. Back up an occupied slot before replacing
 it. Reinstall the drive, cold boot, then select the save in **Tools → Save Manager → USB backups**
 and follow the normal restore confirmation and recovery-backup procedure.
 

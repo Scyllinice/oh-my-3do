@@ -26,6 +26,7 @@ STUBS = r'''
 #include "art_navigation.h"
 #include "save_usb.h"
 #include "save_names.h"
+#include "save_catalog.h"
 #include "save_cheats.h"
 #include "save_cheats_usb.h"
 #include "nvram_io.h"
@@ -869,6 +870,28 @@ int main(int argc, char **argv) {
         tools_input(&menu, ControlLeft); if (menu.tool_selected != 0) abort();
         menu.tool_selected=4; tools_input(&menu, ControlA);
         if (menu.tools != TOOL_HELP || menu.usb_tested) abort();
+        {
+            Menu slots;char path[40];memset(&slots,0,sizeof(slots));
+            if (slot_count(&slots)!=10) abort();
+            slot_select(&slots,8);if (slots.slot_page!=1 || slots.tool_selected || slot_count(&slots)!=8) abort();
+            slot_path(path,slot_at(&slots,0));if (strcmp(path,"saves/slot09.3ds")) abort();
+            slot_select(&slots,999999998);if (slot_count(&slots)!=7 || slots.tool_selected!=6) abort();
+            slot_path(path,slot_at(&slots,6));if (strcmp(path,"saves/slot999999999.3ds")) abort();
+            slot_select(&slots,SAVE_RECOVERY_SLOT);if (slots.slot_page || slots.tool_selected!=8) abort();
+            slot_path(path,slot_at(&slots,8));if (strcmp(path,"saves/recovery.3ds")) abort();
+            slots.demo=slots.ready=1;slots.tools=TOOL_SLOTS;
+            tools_input(&slots,ControlStart);
+            if(slots.tools!=TOOL_SLOT_FIND) abort();
+            tools_input(&slots,ControlA);
+            if(slots.tools!=TOOL_SLOT_FIND || !slots.tool_message || strcmp(slots.tool_message,"USB save access unavailable.")) abort();
+            slots.demo=slots.ready=1;slots.tools=TOOL_ARCHIVE;slots.tool_selected=1;slots.backup_slot=12;
+            preview_nvram_fixture(&slots.backup);tools_input(&slots,ControlStart);
+            if (slots.tools!=TOOL_SLOTS || !slots.backup_merge || slots.pending.count!=1 || slots.copy_original.count!=3 || slots.backup.bytes) abort();
+            if (strcmp(slots.pending.entries[0].name,"NFS_Config")) abort();
+            tools_input(&slots,ControlB);
+            if (slots.tools!=TOOL_ARCHIVE || slots.backup.count!=3 || slots.backup_slot!=12 || slots.tool_selected!=1 || slots.copy_original.bytes) abort();
+            save_archive_free(&slots.backup);
+        }
         /* Actual tools/controller code: entering/cancelling never writes. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlA);
@@ -876,7 +899,9 @@ int main(int argc, char **argv) {
         tools_input(&menu, ControlA);
         if (menu.tools != TOOL_SLOTS || menu.pending.count != 1 || preview_nvram_writes) abort();
         tools_input(&menu, ControlA);
-        if (menu.tools != TOOL_BACKUP_DETAILS || preview_nvram_writes) abort();
+        if (menu.tools != TOOL_SLOTS || !menu.backup_merge || preview_nvram_writes) abort();
+        /* Demo I/O cannot read a merge destination. Simulate its reviewed page. */
+        menu.tools=TOOL_BACKUP_DETAILS;
         tools_input(&menu, ControlA);
         if (menu.tools != TOOL_CONFIRM_BACKUP || preview_nvram_writes) abort();
         tools_input(&menu, ControlB);
@@ -1525,7 +1550,7 @@ def main():
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
                         str(ROOT / "src/menu_ui.c"), str(ROOT / "src/ui_font.c"),
                         str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/preview_v5.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
-                        str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_cheats.c"), str(ROOT / "src/save_cheats_usb.c"), str(ROOT / "src/save_usb.c"), str(ROOT / "src/save_names.c"),
+                        str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_cheats.c"), str(ROOT / "src/save_cheats_usb.c"), str(ROOT / "src/save_usb.c"), str(ROOT / "src/save_names.c"), str(ROOT / "src/save_catalog.c"),
                         str(ROOT / "src/library_index.c"), str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
                         str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),
                         "-o", str(binary)], check=True)

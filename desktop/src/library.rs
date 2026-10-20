@@ -904,8 +904,14 @@ pub fn beside_index(data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 pub fn read_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, String>> {
+    read_media_index_impl(root, folder, false)
+}
+pub(crate) fn read_drive_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, String>> {
+    read_media_index_impl(root, folder, true)
+}
+fn read_media_index_impl(root: &Path, folder: &str, beside: bool) -> Result<BTreeMap<String, String>> {
     let path = f::safe(root, &format!(".ohmy3do/{folder}/index.3di"))?;
-    if !path.exists() {
+    if !path.exists() || (beside && fs::metadata(&path)?.len() == 0) {
         return Ok(BTreeMap::new());
     }
     if fs::metadata(&path)?.len() > 128 * 1024 + 24 {
@@ -916,14 +922,14 @@ pub fn read_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, St
         bail!("Invalid {folder} index")
     }
     let word = |p| u32::from_be_bytes(data[p..p + 4].try_into().unwrap()) as usize;
-    if word(20) == 1 {
+    if word(20) == 1 && !beside {
         bail!("This is a prepared USB drive with media beside each game. Edit the staging library, then prepare the drive again.")
     }
     let count = word(8);
     if count > 2048
         || word(12) > 128 * 1024
         || word(12) + 24 != data.len()
-        || word(20) != 0
+        || word(20) != u32::from(beside) as usize
         || crc32fast::hash(&data[24..]) as usize != word(16)
     {
         bail!("Invalid {folder} index checksum or bounds")
@@ -966,6 +972,40 @@ pub fn read_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, St
     Ok(map)
 }
 pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
+    build_indexes_impl(root, tx, job, false)
+}
+/// Complete a minimal drive without replacing existing user indexes or name mappings.
+pub fn build_missing_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
+    if [
+        ".ohmy3do/library.3di",
+        ".ohmy3do/metadata.3di",
+        ".ohmy3do/save-names.txt",
+    ]
+    .iter()
+    .all(|name| {
+        f::safe(root, name).is_ok_and(|p| p.is_file() && p.metadata().is_ok_and(|m| m.len() > 0))
+    }) {
+        return Ok(());
+    }
+    build_indexes_impl(root, tx, job, true)
+}
+fn write_index(
+    root: &Path,
+    tx: &mut Journal,
+    name: &str,
+    data: &[u8],
+    missing_only: bool,
+) -> Result<()> {
+    if missing_only
+        && f::safe(root, name)?
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.len() > 0)
+    {
+        return Ok(());
+    }
+    tx.write(name, data)
+}
+fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bool) -> Result<()> {
     let sets = d::collect(&[root.to_owned()], None, job)?;
     let mut names = sets
         .iter()
@@ -1004,9 +1044,9 @@ pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
     }
     data.extend(payload);
     data.extend_from_slice(b"END3DL01");
-    tx.write(".ohmy3do/library.3di", &data)?;
+    write_index(root, tx, ".ohmy3do/library.3di", &data, missing_only)?;
     let db = database(root)?;
-    tx.write(".ohmy3do/metadata.3di", &metadata_bytes(&db, &names)?)?;
+    write_index(root, tx, ".ohmy3do/metadata.3di", &metadata_bytes(&db, &names)?, missing_only)?;
     let titles = db["games"]
         .as_array()
         .into_iter()
@@ -1014,8 +1054,8 @@ pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
         .filter_map(|g| Some((f::fold(g["path"].as_str()?), g["title"].as_str()?.to_owned())))
         .collect();
     let saves = crate::saves::save_names_text(root, &names, &titles, job)?;
-    tx.write(".ohmy3do/save-names-cache.json", &saves.cache)?;
-    tx.write(".ohmy3do/save-names.txt", saves.text.as_bytes())?;
+    write_index(root, tx, ".ohmy3do/save-names-cache.json", &saves.cache, missing_only)?;
+    write_index(root, tx, ".ohmy3do/save-names.txt", saves.text.as_bytes(), missing_only)?;
     job.say(format!("Indexed {} save names for the Save manager", saves.count));
     Ok(())
 }

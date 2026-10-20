@@ -128,3 +128,33 @@ int save_archive_merge(SaveArchive *out, const SaveArchive *destination, const S
     result=save_archive_build(out,entries,count);
     free(entries); return result;
 }
+
+size_t save_archive_diff_count(const SaveArchive *before, const SaveArchive *after)
+{
+    size_t i,j,n=before->count;
+    for (i=0;i<after->count;++i) {
+        for (j=0;j<before->count;++j) if (!menu_path_compare(after->entries[i].name,before->entries[j].name)) break;
+        if (j==before->count) ++n;
+    }
+    return n;
+}
+int save_archive_diff(const SaveArchive *before, const SaveArchive *after, size_t index, SaveDifference *out)
+{
+    size_t i,j,n=before->count;
+    const SaveEntry *a=NULL,*b=NULL;
+    memset(out,0,sizeof(*out)); out->before=before->count; out->after=after->count;
+    if (index<before->count) {
+        out->before=index; a=&before->entries[index];
+        for (j=0;j<after->count;++j) if (!menu_path_compare(a->name,after->entries[j].name)) {out->after=j;b=&after->entries[j];break;}
+    } else for (i=0;i<after->count;++i) {
+        for (j=0;j<before->count;++j) if (!menu_path_compare(after->entries[i].name,before->entries[j].name)) break;
+        if (j==before->count && n++==index) {out->after=i;b=&after->entries[i];break;}
+    }
+    if (!a && !b) return -1;
+    out->length=a ? a->size : 0;
+    if (b && b->size>out->length) out->length=b->size;
+    for (i=0;i<out->length;++i) if (!a || !b || i>=a->size || i>=b->size || a->data[i]!=b->data[i]) ++out->changed_bytes;
+    out->metadata_changed=a && b && (a->type!=b->type || strcmp(a->name,b->name));
+    out->state=!a ? SAVE_DIFF_ADDED : !b ? SAVE_DIFF_REMOVED : (out->changed_bytes || out->metadata_changed) ? SAVE_DIFF_CHANGED : SAVE_DIFF_SAME;
+    return 0;
+}

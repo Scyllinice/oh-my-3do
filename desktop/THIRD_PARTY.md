@@ -1,12 +1,12 @@
 # Desktop application dependencies
 
 The desktop application's own code is MIT licensed. It uses Rust crates,
-including eframe/egui, rfd, image, reqwest, rusqlite, compression, hashing and
+including Tauri, Wry, Tao, rfd, image, reqwest, rusqlite, compression, hashing and
 platform support libraries. SQLite is compiled into the executable through
 libsqlite3-sys. Bundled fonts retain their respective font licenses: the app's
-interface uses Ark Pixel (10 and 12 px Latin subsets, by TakWolf) and Atkinson
-Hyperlegible (Braille Institute of America), both under the SIL Open Font
-License 1.1. Their license texts are in `licenses/fonts/`.
+Tauri interface uses the system UI font, with bundled Atkinson Hyperlegible
+(Braille Institute of America) as a fallback under the SIL Open Font License 1.1.
+Ark Pixel licenses are retained for the optional legacy interface. Their license texts are in `licenses/fonts/`.
 
 Portable packages include `licenses/dependencies.json` with the resolved crate
 versions and license expressions, plus license/copyright texts collected from
@@ -21,7 +21,7 @@ the provider's licenses and documentation remain in the downloaded cache.
 
 Provider/source references:
 
-- Rust dependency source versions: `Cargo.lock` and packaged dependency notices.
+- Rust dependency source versions: `shell/Cargo.lock` and packaged dependency notices.
 - SQLite: https://www.sqlite.org/copyright.html
 - FFmpeg: https://ffmpeg.org/download.html
 - BtbN builds and build recipes: https://github.com/BtbN/FFmpeg-Builds

@@ -29,7 +29,7 @@ fn database_roundtrip_compiles_bounded_self_describing_console_file() {
     let loaded = Database::parse(&db.json().unwrap()).unwrap();
     assert_eq!(loaded.profiles[0].presets[0].value, 7);
     let binary = db.binary().unwrap();
-    assert_eq!(&binary[..8], b"OM3DCHT1");
+    assert_eq!(&binary[..8], b"OM3DCHT2");
     assert_eq!(
         u32::from_be_bytes(binary[8..12].try_into().unwrap()) as usize,
         binary.len()
@@ -149,7 +149,7 @@ fn adding_upstream_profiles_preserves_custom_values() {
     extra.filename = "OtherSave".into();
     upstream.profiles.push(extra);
     let merged = save_cheats::merge_missing(&current, &upstream).unwrap();
-    assert_eq!(merged.profiles.len(), 2);
+    assert_eq!(merged.profiles.len(), current.profiles.len() + 1);
     assert_eq!(merged.profiles[0].presets[0].value, 7);
 }
 #[cfg(not(windows))]
@@ -201,7 +201,69 @@ int main(int argc,char **argv){unsigned char db[65536],data[40];FILE *f;size_t n
 }
 
 #[test]
-fn preparation_rejects_a_directory_at_a_database_file_path(){
- let root=tempfile::tempdir().unwrap();let cache=tempfile::tempdir().unwrap();fs::create_dir_all(root.path().join(BINARY_PATH)).unwrap();
- let mut tx=library::Journal::new(root.path(),cache.path()).unwrap();assert!(save_cheats::ensure_database(root.path(),&mut tx).is_err());assert!(!root.path().join(JSON_PATH).exists());tx.undo().unwrap();
+fn preparation_rejects_a_directory_at_a_database_file_path() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join(BINARY_PATH)).unwrap();
+    let mut tx = library::Journal::new(root.path(), cache.path()).unwrap();
+    assert!(save_cheats::ensure_database(root.path(), &mut tx).is_err());
+    assert!(!root.path().join(JSON_PATH).exists());
+    tx.undo().unwrap();
+}
+#[test]
+fn icebreaker_presets_preserve_neighboring_flags_padding_and_difficulty() {
+    for p in Database::bundled().profiles.into_iter().skip(1) {
+        let mut e = Entry {
+            name: p.filename.as_bytes().to_vec(),
+            file_type: 0,
+            data: vec![0xa6; 84],
+        };
+        e.data[..2].copy_from_slice(&1365u16.to_be_bytes());
+        let before = e.clone();
+        assert!(p.matches(&e));
+        p.set(&mut e, 0, 1).unwrap();
+        assert_eq!(e.data[2], 0x16);
+        assert_eq!(&e.data[3..], &before.data[3..]);
+        p.set(&mut e, 1, 8).unwrap();
+        assert_eq!(e.data[2], 0x18);
+        p.apply_preset(&mut e, 0).unwrap();
+        assert_eq!(&e.data[2..17], &[255; 15]);
+        assert_eq!(&e.data[17..], &before.data[17..]);
+        p.apply_preset(&mut e, 1).unwrap();
+        assert_eq!(&e.data[2..77], &[255; 75]);
+        assert_eq!(&e.data[77..], &before.data[77..]);
+        p.apply_preset(&mut e, 2).unwrap();
+        let tracks = u32::from_be_bytes(e.data[80..84].try_into().unwrap());
+        assert_eq!(tracks & 0x3ffff, 0x3ffff);
+        assert_eq!(tracks & 0xfffc0000, 0xa6a6a6a6 & 0xfffc0000);
+        e.data[0] ^= 1;
+        let bad = e.clone();
+        assert!(!p.matches(&e));
+        assert!(p.apply_preset(&mut e, 1).is_err());
+        assert_eq!(e, bad);
+    }
+}
+#[test]
+fn preparation_accepts_exact_matching_legacy_databases_without_rewriting_custom_data() {
+    let mut db = Database::bundled();
+    db.profiles.truncate(1);
+    let modern = db.binary().unwrap();
+    let mut legacy = vec![0; 552];
+    legacy[..8].copy_from_slice(b"OM3DCHT1");
+    legacy[8..12].copy_from_slice(&552u32.to_be_bytes());
+    legacy[12..16].copy_from_slice(&1u32.to_be_bytes());
+    legacy[24..56].copy_from_slice(&modern[24..56]);
+    legacy[24..28].copy_from_slice(&528u32.to_be_bytes());
+    legacy[56..184].copy_from_slice(&modern[72..200]);
+    for i in 0..8 {
+        legacy[184 + i * 40..224 + i * 40].copy_from_slice(&modern[200 + i * 48..240 + i * 48]);
+    }
+    legacy[504..552].copy_from_slice(&modern[584..632]);
+    let crc = crc32fast::hash(&legacy[24..]);
+    legacy[16..20].copy_from_slice(&crc.to_be_bytes());
+    assert!(db.matches_binary(&legacy).unwrap());
+    assert!(db.matches_binary(&modern).unwrap());
+    legacy[500] ^= 1;
+    assert!(!db.matches_binary(&legacy).unwrap());
+    assert!(!Database::bundled().matches_binary(&modern).unwrap());
 }

@@ -118,6 +118,18 @@ int main(void)
         assert(save_archive_merge(&merged,&a,&edit)<0 && merged.count==3);
         save_archive_free(&merged); save_archive_free(&full);
     }
+    {
+        SaveDifference d;
+        assert(save_archive_diff_count(&a,&one)==2);
+        assert(!save_archive_diff(&a,&one,0,&d) && d.state==SAVE_DIFF_SAME && !d.changed_bytes);
+        assert(!save_archive_diff(&a,&one,1,&d) && d.state==SAVE_DIFF_REMOVED && !d.changed_bytes);
+        assert(save_archive_diff(&a,&one,2,&d)<0);
+        assert(save_archive_diff_count(&one,&a)==2);
+        assert(!save_archive_diff(&one,&a,1,&d) && d.state==SAVE_DIFF_ADDED);
+        one.entries[0].type^=1;
+        assert(!save_archive_diff(&a,&one,0,&d) && d.state==SAVE_DIFF_CHANGED && d.metadata_changed && !d.changed_bytes);
+        one.entries[0].type^=1;
+    }
     /* True empty files are distinct from damaged zero or sentinel headers. */
     setup(&f,&ode);
     assert(save_usb_load_target(&ode,reader,"saves/slot01.3ds",&loaded)==1 && !loaded.bytes);
@@ -168,6 +180,10 @@ int main(void)
     setup(&f, &ode); assert(!save_usb_store(&ode, reader, "saves/slot01.3ds", &a)); calls = f.calls;
     assert(!save_usb_load(&ode, reader, "saves/slot01.3ds", &loaded));
     assert(loaded.length == a.length && !memcmp(loaded.bytes, a.bytes, a.length));
+    assert(!save_usb_load(&ode,reader,"saves/slot09.3ds",&loaded));
+    assert(!save_usb_load(&ode,reader,"saves/slot999999999.3ds",&loaded));
+    assert(save_usb_load(&ode,reader,"saves/slot001.3ds",&loaded)<0);
+    assert(save_usb_load(&ode,reader,"saves/slot1000000000.3ds",&loaded)<0);
     /* Replacing a larger slot with a smaller self-delimiting archive is valid. */
     assert(!save_archive_build(&one, NULL, 0));
     assert(!save_usb_store(&ode, reader, "saves/slot01.3ds", &one));

@@ -11,6 +11,7 @@ esac
 : "${TDO_DEVKIT_PATH:?Run this through tools/dev-container}"
 
 python3 "$project_dir/tools/build-save-cheats.py" --check
+python3 "$project_dir/tools/build-save-names.py" --check
 
 stage=$(mktemp -d /tmp/oh-my-3do-menu.XXXXXX)
 trap 'rm -rf "$stage"' EXIT

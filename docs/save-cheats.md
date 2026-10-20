@@ -14,43 +14,36 @@ only the compact file; copying an edited JSON alone will not update it.
 
 ## Desktop editing and updates
 
-Open **CH5 Tools → Edit / update cheat database…**.
+Open **Settings & tools → Open database editor…** in the desktop app.
 
-1. Choose the library or USB root folder and **Load installed database**, or use
-   **Open JSON…** to import a source file. The initial editable copy contains the
-   bundled definitions.
-2. Choose a game profile. Edit field names, hexadecimal byte offsets, decimal
-   ranges, and named presets. Expand **Layout and checksum** for the exact save
-   size, signature, and checksum parameters. Add/remove profiles, fields, and
-   presets as needed; removing a field also removes presets that depend on it.
-3. **Validate** checks structure, bounds, names, overlaps, ranges, and supported
-   formats. **Save JSON** keeps an editable source file; **Save JSON as…** switches
-   to another source file. Opening another file or closing the editor prompts
-   before discarding unsaved changes.
-4. **Install database to selected folder** writes both files, verifies readback,
-   and records their previous contents in the app's transaction journal. It does
-   not replace the boot image or touch saves. Use the app's Undo transaction
-   control if you need to restore the previous database.
+1. The editor starts with bundled definitions. Use **Open JSON…** to load the
+   installed `.ohmy3do/save-cheats.json` or another custom database.
+2. Select a game profile and edit names, addresses, widths, masks, ranges and
+   presets. Add/remove profiles, fields and presets as needed. Advanced JSON
+   exposes signatures, checksums and multi-field presets. **Validate** checks the
+   draft, and saving/installing always validates it too;
+   invalid bounds, overlaps and unsupported formats are rejected.
+3. **Save JSON…** writes a validated source file. **Install to drive…** writes
+   both JSON and compact console files into a selected library/drive and verifies
+   readback. Installation is recorded in the undo journal; it does not replace
+   the boot image or touch saves.
+4. **Merge published profiles** downloads the official JSON from
+   `data/save-cheats.json` on the project's `main` branch and adds missing IDs,
+   preserving your existing profiles. Save or install to publish the result.
+   Failed downloads leave the local database intact.
 
-**Use in Save Manager** makes the current validated definitions available to the
-open desktop save editor. Opening a backup automatically loads the nearest
-installed database JSON; absent or invalid definitions use the bundled set.
-These controls change definitions, not the contents of a save archive.
+Opening another JSON or closing the editor prompts before discarding unsaved
+edits. Opening a backup loads the nearest installed JSON; absent or invalid
+sources use bundled definitions. Reopen the backup after installing changed
+definitions, or **Use in Save Manager** activates validated definitions for the
+current desktop session without writing files. These controls edit definitions,
+not save archive contents.
 
-**Download official definitions** retrieves the project's published JSON on a
-worker thread. Offline mode disables downloading. Review the downloaded set,
-then **Add missing profiles** to retain your current IDs/values, or explicitly
-**Replace matching IDs and add new profiles**. Files are unchanged until you save
-or install. A missing/unpublished feed or invalid download reports an error and
-keeps local definitions intact. The feed is `data/save-cheats.json` on the
-repository's `main` branch, so new official records become downloadable after
-publication there. **Add missing bundled definitions** works offline.
-
-Guided setup and USB preparation install the bundled database if none is
-present. Existing drive databases are preserved; a JSON source without a console
-file can be compiled during preparation. If both staging files exist, they must
-agree. Install changes through the database editor to regenerate a mismatched
-pair. An existing console-only file is preserved.
+Drive setup and USB copying install bundled definitions when absent. Existing
+custom databases are preserved. A JSON source without its console file can be
+compiled during preparation; when both staging files exist they must agree.
+Use the editor to regenerate a mismatched pair. Existing console-only files
+are preserved.
 
 ## Supported saves and controls
 
@@ -96,24 +89,46 @@ checksum. Structural validation cannot establish that a researched offset or
 value has the intended game effect. Unsupported layouts retain raw hex editing;
 raw edits do not automatically repair game checksums.
 
+## Icebreaker and Icebreaker 2
+
+Both bundled profiles support the 84-byte level chart: a 16-bit developer ID,
+150 completion nibbles, and masked music-track bits. Each level value combines
+completion flags: 1 easy, 2 medium, 4 hard, 8 insane; 15 means all difficulties.
+Presets mark the first 30 or all 150 levels complete, or enable every music track.
+The edits preserve the neighboring level, unused chart bytes, padding, and current
+difficulty bits. These game formats have no internal checksum; archive CRCs are
+still regenerated when saving.
+
+Offsets and presets follow the original released source, pinned in each profile's
+source link in [the database](../data/save-cheats.json). These definitions are
+source-verified and tested in both editing engines; they have not been tested
+on physical hardware. Use matching updated menu and desktop builds for these
+profiles. An installed USB database is authoritative: load the new bundled JSON
+in the desktop database editor and install it if your USB still has older definitions.
+
 ## Format and adding profiles
 
 The editable schema is demonstrated by
 [`data/save-cheats.json`](../data/save-cheats.json). Each record has a unique ID,
 game name, exact save filename/size, signature, checksum rule, source URL, notes,
-fields, and presets. A preset refers to one field by its zero-based index and
-supplies a value within its range. Document original source or reproducible
+fields, and presets. A preset refers to a field by its zero-based index and supplies a value within
+its range. Its optional `additional` array applies more `{field, value}` changes
+as one validated preset. Document original source or reproducible
 research for the exact variant before distributing new records.
 
-The initial engine supports aligned 32-bit big-endian fields and a wrapping
-32-bit sum of preceding words plus a seed. New records using those rules can be
-installed from the desktop without an ISO update. New byte encodings, checksum
-algorithms, or multi-field preset operations require extending both engines.
+The engine supports 1-, 2-, and 4-byte big-endian fields, contiguous bit masks,
+and either a wrapping 32-bit sum of preceding words plus a seed or an explicitly
+checksum-free layout. `width` defaults to 4 and `mask` to `4294967295`; a masked
+value is shifted down to bit zero in the editor. Disjoint masks can share a byte,
+while overlapping bits and signature/checksum writes are refused. Signatures
+also accept a 1-, 2-, or 4-byte width. Checksum-free profiles use the save size as
+the checksum offset and a zero seed. New encodings/checksum algorithms still
+require extending both engines.
 
-Limits: 128 profiles, 32 fields and 32 presets per profile, 256 KiB JSON, and
+Limits: 128 profiles, 160 fields and 32 presets per profile, 256 KiB JSON, and
 64 KiB compiled console data. Labels and identifiers have bounded printable
 ASCII lengths; offsets must stay within the save and must not overlap each
-other, its signature, or checksum. The binary has a versioned `OM3DCHT1` header,
+other, its signature, or checksum. The binary has a versioned `OM3DCHT2` header (the updated console also reads `OM3DCHT1`),
 logical length, and payload CRC32. The loader validates the complete candidate
 before activating it and ignores any physical USB tail beyond its logical size.
 Only bounded data records are loaded; definitions contain no executable code.

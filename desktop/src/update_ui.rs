@@ -195,7 +195,7 @@ impl Updates {
                                 }
                             });
                         }
-                        ui.label("Installing boot.iso preserves settings, media, indexes and saves, and creates an undo journal. Disconnect the prepared drive from the PC, reinstall it with the console powered off, then cold boot.");
+                        ui.label("Installing the menu creates missing support files and the saves folder, preserves existing settings, media, indexes and saves, and creates an undo journal. Disconnect the prepared drive from the PC, reinstall it with the console powered off, then cold boot.");
                     }
                     ui.separator();
                     ui.label("Downloads are verified against the release's published SHA-256 checksums.");

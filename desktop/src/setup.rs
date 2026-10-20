@@ -120,12 +120,14 @@ pub fn install_verified(
     let mut tx = library::Journal::new(&root, cache)?;
     let result = (|| -> Result<()> {
         job.check()?;
-        tx.ensure_directory(".ohmy3do/saves")?;
-        crate::save_cheats::ensure_database(&root, &mut tx)?;
-        if !f::safe(&root, console_config::PATH)?.exists() {
-            tx.write(console_config::PATH, &settings.encode()?)?;
+        let refresh_catalog = f::safe(&root, ".ohmy3do/saves/slot-catalog.3di")?
+            .metadata()
+            .is_ok_and(|m| m.len() > 0);
+        ensure_support(&root, &mut tx, settings, job)?;
+        if refresh_catalog {
+            let slots = crate::save_catalog::scan(&root.join(".ohmy3do/saves"), job)?;
+            crate::save_catalog::write(&slots, &mut tx, ".ohmy3do/saves/", job)?;
         }
-        library::build_indexes(&root, &mut tx, job)?;
         job.check()?;
         tx.write("boot.iso", image)?;
         ensure!(
@@ -138,6 +140,56 @@ pub fn install_verified(
         tx.undo().context(format!("{error:#}; rollback failed"))?;
         return Err(error);
     }
-    job.say("Menu installed. Add your discs, then review the USB copy.");
+    job.say("Drive ready: menu, settings and save support installed. No game library was copied.");
     Ok(tx.path)
+}
+
+/// Required runtime layout shared by setup, boot updates and USB preparation.
+/// Existing settings, save archives, media and indexes are never replaced here.
+pub fn ensure_support(
+    root: &Path,
+    tx: &mut library::Journal,
+    settings: &console_config::Settings,
+    job: &Job,
+) -> Result<()> {
+    job.check()?;
+    for name in [".ohmy3do/saves", ".ohmy3do/covers", ".ohmy3do/previews"] {
+        tx.ensure_directory(name)?;
+    }
+    crate::save_cheats::ensure_database(root, tx)?;
+    let ini = f::safe(root, console_config::PATH)?;
+    ensure!(
+        !ini.exists() || ini.is_file(),
+        "Console settings path is occupied by a directory"
+    );
+    if !ini.exists() || ini.metadata()?.len() == 0 {
+        tx.write(console_config::PATH, &settings.encode()?)?;
+    }
+    library::build_missing_indexes(root, tx, job)?;
+    let catalog = f::safe(root, ".ohmy3do/saves/slot-catalog.3di")?;
+    ensure!(
+        !catalog.exists() || catalog.is_file(),
+        "Save catalog path is occupied by a directory"
+    );
+    if !catalog.exists() || catalog.metadata()?.len() == 0 {
+        let slots = crate::save_catalog::scan(&root.join(".ohmy3do/saves"), job)?;
+        crate::save_catalog::write(&slots, tx, ".ohmy3do/saves/", job)?;
+    }
+    job.check()?;
+    Ok(())
+}
+/// Offline setup/repair from a local menu, with no staging library required.
+pub fn install_local(
+    root: &Path,
+    cache: &Path,
+    source: &Path,
+    settings: &console_config::Settings,
+    job: &Job,
+) -> Result<PathBuf> {
+    job.check()?;
+    let mut image = Vec::new();
+    fs::File::open(source)?
+        .take((LIMIT + 1) as u64)
+        .read_to_end(&mut image)?;
+    install_verified(root, cache, &image, settings, job)
 }

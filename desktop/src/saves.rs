@@ -41,8 +41,11 @@ pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
             let mut pos = word(&data, 16) as usize;
             while pos >= 20 && pos + 72 <= end {
                 let flags = word(&data, pos);
-                let (block_size, size, blocks) =
-                    (word(&data, pos + 12), word(&data, pos + 16), word(&data, pos + 20));
+                let (block_size, size, blocks) = (
+                    word(&data, pos + 12),
+                    word(&data, pos + 16),
+                    word(&data, pos + 20),
+                );
                 let (last, avatar) = (word(&data, pos + 64), word(&data, pos + 68) as u64);
                 if last > 15 {
                     break;
@@ -50,7 +53,11 @@ pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
                 if flags & 0xff == 7 {
                     pending.push((avatar, blocks as u64));
                 } else {
-                    let unit = if block_size == 0 { BLOCK } else { block_size as u64 };
+                    let unit = if block_size == 0 {
+                        BLOCK
+                    } else {
+                        block_size as u64
+                    };
                     out.push((avatar * unit, size as u64));
                 }
                 pos += 72 + 4 * last as usize;
@@ -65,8 +72,11 @@ pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
 
 /// NVRAM files a disc's programs name: "=FILE" exact, "*PREFIX" from FILE%d-style patterns.
 pub fn disc_save_names(path: &Path) -> Result<Vec<String>> {
-    let saves = Regex::new(r"/NVRAM/([\x21-\x7e][\x20-\x7e]{0,30})").unwrap();
-    let plain = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || "_.- ".contains(c));
+    let saves = Regex::new(r"(?i)/nvram/([\x21-\x7e][\x20-\x7e]{0,30})").unwrap();
+    let plain = |s: &str| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_.- []'&+!()".contains(c))
+    };
     let mut file = fs::File::open(path)?;
     let mut found = BTreeSet::new();
     for (offset, size) in opera_files(&mut file)? {
@@ -95,7 +105,10 @@ pub fn disc_save_names(path: &Path) -> Result<Vec<String>> {
 /// A list title without trailing (Region) / (Disc 1) groups, as the menu shows it.
 pub fn short_title(title: &str) -> String {
     let group = regex::Regex::new(r" \([^()]*\)$").unwrap();
-    let mut title = regex::Regex::new(r"(?i)\.(iso|cue)$").unwrap().replace(title, "").into_owned();
+    let mut title = regex::Regex::new(r"(?i)\.(iso|cue)$")
+        .unwrap()
+        .replace(title, "")
+        .into_owned();
     loop {
         let shorter = group.replace(&title, "").into_owned();
         if shorter == title || shorter.is_empty() {
@@ -106,9 +119,18 @@ pub fn short_title(title: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     let ascii: String = title
         .nfkd()
-        .filter_map(|c| c.is_ascii().then_some(if c.is_ascii_control() { ' ' } else { c }))
+        .filter_map(|c| {
+            c.is_ascii()
+                .then_some(if c.is_ascii_control() { ' ' } else { c })
+        })
         .collect();
-    ascii.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(96).collect()
+    ascii
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(96)
+        .collect()
 }
 
 pub struct SaveNamesOutput {
@@ -130,7 +152,7 @@ pub fn save_names_text(
     let cache: Value = fs::read(&cache_path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .filter(|v: &Value| v["schema"] == 1)
+        .filter(|v: &Value| v["schema"] == 2)
         .unwrap_or(Value::Null);
     let mut stamps = serde_json::Map::new();
     let mut rows: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -142,10 +164,16 @@ pub fn save_names_text(
         job.check()?;
         let path = f::safe(root, disc)?;
         let (size, modified) = f::stamp(&path)?;
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let stamp = format!("{name}|{size}|{modified}");
         let names: Vec<String> = match cache["discs"][&stamp].as_array() {
-            Some(list) => list.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect(),
+            Some(list) => list
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect(),
             None => {
                 if !announced {
                     job.say("Reading save names from discs; later runs reuse the results...");
@@ -154,7 +182,12 @@ pub fn save_names_text(
                 disc_save_names(&path).unwrap_or_default()
             }
         };
-        let title = short_title(titles.get(&f::fold(disc)).map(String::as_str).unwrap_or(&name));
+        let title = short_title(
+            titles
+                .get(&f::fold(disc))
+                .map(String::as_str)
+                .unwrap_or(&name),
+        );
         for n in &names {
             let row = rows.entry(n.clone()).or_default();
             if !title.is_empty() && !row.contains(&title) {
@@ -168,7 +201,10 @@ pub fn save_names_text(
     let mut text = String::from("# Save names read from the discs by index-media.py\n");
     let mut dropped = 0;
     for key in &keys {
-        let line = format!("{key}\t{}\n", rows[*key].join(" / ").chars().take(63).collect::<String>());
+        let line = format!(
+            "{key}\t{}\n",
+            rows[*key].join(" / ").chars().take(63).collect::<String>()
+        );
         if text.len() + line.len() >= SAVE_NAMES_BYTES {
             dropped += 1;
             continue;
@@ -176,11 +212,37 @@ pub fn save_names_text(
         text.push_str(&line);
     }
     if dropped > 0 {
-        job.say(format!("Save names: {dropped} names left out to stay within {SAVE_NAMES_BYTES} bytes"));
+        job.say(format!(
+            "Save names: {dropped} names left out to stay within {SAVE_NAMES_BYTES} bytes"
+        ));
     }
     Ok(SaveNamesOutput {
         text,
         count: rows.len(),
-        cache: serde_json::to_vec(&json!({"schema": 1, "discs": stamps}))?,
+        cache: serde_json::to_vec(&json!({"schema": 2, "discs": stamps}))?,
     })
+}
+
+/// Verified fallback names shared with the console. Exact names beat prefixes.
+pub fn known_title(file: &str) -> Option<&'static str> {
+    let mut best = None;
+    let mut longest = 0;
+    for line in include_str!("../../data/save-names.txt").lines() {
+        let Some((key, title)) = line.split_once('\t') else {
+            continue;
+        };
+        if key.starts_with('=') && key[1..].eq_ignore_ascii_case(file) {
+            return Some(title);
+        }
+        if key.starts_with('*')
+            && key.len() > longest
+            && file
+                .get(..key.len() - 1)
+                .is_some_and(|s| s.eq_ignore_ascii_case(&key[1..]))
+        {
+            best = Some(title);
+            longest = key.len()
+        }
+    }
+    best
 }

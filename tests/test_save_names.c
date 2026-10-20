@@ -20,6 +20,21 @@ int main(void)
     char snapshot[SAVE_SNAPSHOT_BYTES], out[256];
     memset(&before, 0, sizeof(before)); memset(&after, 0, sizeof(after));
 
+    {
+        SaveSlotLabels labels,roundtrip,old;
+        const char *valid="1\tBefore editing\r\n8\tDOOM level 7\n";
+        assert(!save_slot_labels_parse(&labels,valid,strlen(valid)));
+        assert(!strcmp(labels.labels[0],"Before editing") && !strcmp(labels.labels[7],"DOOM level 7"));
+        assert(!save_slot_labels_format(&labels,out,sizeof(out)));
+        assert(!save_slot_labels_parse(&roundtrip,out,strlen(out)) && !memcmp(&labels,&roundtrip,sizeof(labels)));
+        old=labels;
+        assert(save_slot_labels_parse(&labels,"1\ta\n1\tb",7)<0 && !memcmp(&labels,&old,sizeof(labels)));
+        assert(save_slot_labels_parse(&labels,"9\tbad",5)<0);
+        assert(save_slot_labels_parse(&labels,"1\tbad\tname",10)<0);
+        assert(save_slot_labels_parse(&labels,"1\t1234567890123456789012345",27)<0);
+        assert(!save_slot_labels_parse(&labels,"1\tName\0old tail",15) && !strcmp(labels.labels[0],"Name"));
+        assert(save_slot_labels_format(&old,out,4)<0);
+    }
     assert(!save_names_parse(&names, disc, strlen(disc), learned, strlen(learned)));
     assert(names.count == 5);
     assert(!strcmp(save_names_find(&names, "ea_rrx"), "Road Rash"));
@@ -28,6 +43,9 @@ int main(void)
     assert(!strcmp(save_names_find(&names, "SYNTH"), "Short prefix"));
     assert(!strcmp(save_names_find(&names, "Shared"), "Learned title"));
     assert(!save_names_find(&names, "bad"));
+    assert(!strcmp(save_names_find(&names,"ICEBREAKER[LEVELCHART]"),"Icebreaker"));
+    assert(!strcmp(save_names_find(&names,"HN_DAEDALUS_0E"),"Daedalus Encounter, The"));
+    assert(!strcmp(save_names_find(&names,"POed.05"),"PO'ed"));
 
     entry(&before, "EA_RRX", "race"); entry(&before, "Stays", "same"); entry(&before, "Grows", "a");
     assert(save_snapshot_format(snapshot, 64, "Gex", 3, &before) < 0);

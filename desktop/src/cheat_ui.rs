@@ -264,16 +264,42 @@ impl CheatDatabase {
                         ("Notes", &mut p.notes),
                     ] {
                         ui.label(label);
-                        ui.add(egui::TextEdit::singleline(value).desired_width(580.).min_size(egui::vec2(580.,0.)));
+                        ui.add(
+                            egui::TextEdit::singleline(value)
+                                .desired_width(580.)
+                                .min_size(egui::vec2(580., 0.)),
+                        );
                         ui.end_row();
                     }
                 });
         });
         ui.collapsing("Layout and checksum", |ui| {
-            ui.label(
-                "Supported: aligned 32-bit big-endian fields; sum of preceding words plus seed.",
-            );
+            ui.label("Big-endian byte, 16-bit and 32-bit fields with optional bit masks.");
+            egui::ComboBox::from_id_salt("checksum_algorithm")
+                .selected_text(&p.checksum.algorithm)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut p.checksum.algorithm,
+                        "sum32be".into(),
+                        "Sum of preceding 32-bit words + seed",
+                    );
+                    ui.selectable_value(
+                        &mut p.checksum.algorithm,
+                        "none".into(),
+                        "No game checksum",
+                    );
+                });
+            ui.label("No-checksum layouts use save size as checksum offset and a zero seed.");
             egui::Grid::new("cheat_layout").show(ui, |ui| {
+                ui.label("Signature width");
+                egui::ComboBox::from_id_salt("signature_width")
+                    .selected_text(p.signature.width.to_string())
+                    .show_ui(ui, |ui| {
+                        for n in [1, 2, 4] {
+                            ui.selectable_value(&mut p.signature.width, n, format!("{n} bytes"));
+                        }
+                    });
+                ui.end_row();
                 for (label, value) in [
                     ("Save size", &mut p.size),
                     ("Signature offset", &mut p.signature.offset),
@@ -304,12 +330,35 @@ impl CheatDatabase {
                 ui.label("Offset");
                 ui.label("Minimum");
                 ui.label("Maximum");
+                ui.label("Bytes");
+                ui.label("Bit mask");
                 ui.end_row();
                 for (i, f) in p.fields.iter_mut().enumerate() {
-                    ui.add(egui::TextEdit::singleline(&mut f.label).desired_width(210.).min_size(egui::vec2(210.,0.)));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut f.label)
+                            .desired_width(210.)
+                            .min_size(egui::vec2(210., 0.)),
+                    );
                     ui.add(egui::DragValue::new(&mut f.offset).hexadecimal(4, false, true));
                     ui.add(egui::DragValue::new(&mut f.min));
                     ui.add(egui::DragValue::new(&mut f.max));
+                    egui::ComboBox::from_id_salt(("field_width", i))
+                        .selected_text(f.width.to_string())
+                        .show_ui(ui, |ui| {
+                            for n in [1, 2, 4] {
+                                if ui
+                                    .selectable_value(&mut f.width, n, n.to_string())
+                                    .changed()
+                                {
+                                    f.mask = if n == 4 {
+                                        u32::MAX
+                                    } else {
+                                        (1u32 << (n * 8)) - 1
+                                    };
+                                }
+                            }
+                        });
+                    ui.add(egui::DragValue::new(&mut f.mask).hexadecimal(8, false, true));
                     if ui.small_button("Remove").clicked() {
                         remove = Some(i);
                     }
@@ -320,6 +369,12 @@ impl CheatDatabase {
             p.fields.remove(i);
             p.presets.retain(|preset| preset.field != i);
             for preset in &mut p.presets {
+                preset.additional.retain(|c| c.field != i);
+                for c in &mut preset.additional {
+                    if c.field > i {
+                        c.field -= 1;
+                    }
+                }
                 if preset.field > i {
                     preset.field -= 1;
                 }
@@ -331,13 +386,19 @@ impl CheatDatabase {
                 offset: 4,
                 min: 0,
                 max: 255,
+                width: 4,
+                mask: u32::MAX,
             });
         }
         ui.label(RichText::new("Presets").strong().color(crate::theme::TEXT));
         let mut remove = None;
         egui::Grid::new("cheat_presets").show(ui, |ui| {
             for (i, preset) in p.presets.iter_mut().enumerate() {
-                ui.add(egui::TextEdit::singleline(&mut preset.label).desired_width(250.).min_size(egui::vec2(250.,0.)));
+                ui.add(
+                    egui::TextEdit::singleline(&mut preset.label)
+                        .desired_width(250.)
+                        .min_size(egui::vec2(250., 0.)),
+                );
                 egui::ComboBox::from_id_salt(("preset_field", i))
                     .selected_text(
                         p.fields
@@ -360,8 +421,53 @@ impl CheatDatabase {
         if let Some(i) = remove {
             p.presets.remove(i);
         }
+        for (i, preset) in p.presets.iter_mut().enumerate() {
+            egui::CollapsingHeader::new(format!(
+                "Additional changes: {} ({})",
+                preset.label,
+                preset.additional.len()
+            ))
+            .id_salt(("preset_changes", i))
+            .show(ui, |ui| {
+                let mut remove = None;
+                for (j, c) in preset.additional.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt(("change_field", i, j))
+                            .selected_text(
+                                p.fields
+                                    .get(c.field)
+                                    .map(|f| f.label.as_str())
+                                    .unwrap_or("Choose field"),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (k, f) in p.fields.iter().enumerate() {
+                                    ui.selectable_value(&mut c.field, k, &f.label);
+                                }
+                            });
+                        ui.add(egui::DragValue::new(&mut c.value));
+                        if ui.small_button("Remove change").clicked() {
+                            remove = Some(j);
+                        }
+                    });
+                }
+                if let Some(j) = remove {
+                    preset.additional.remove(j);
+                }
+                if ui.button("Add change").clicked() {
+                    if let Some((field, f)) = p.fields.iter().enumerate().find(|(k, _)| {
+                        *k != preset.field && !preset.additional.iter().any(|c| c.field == *k)
+                    }) {
+                        preset.additional.push(save_cheats::Change {
+                            field,
+                            value: f.min,
+                        });
+                    }
+                }
+            });
+        }
         if ui.button("Add preset").clicked() {
             p.presets.push(save_cheats::Preset {
+                additional: Vec::new(),
                 label: "New preset".into(),
                 field: 0,
                 value: p.fields.first().map(|f| f.min).unwrap_or(0),

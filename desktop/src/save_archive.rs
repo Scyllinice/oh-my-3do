@@ -7,7 +7,7 @@ use std::{
 };
 pub const MAX_BYTES: usize = 65536;
 pub const MAX_FILES: usize = 128;
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     /// Raw filename bytes: console filenames are not required to be UTF-8.
     pub name: Vec<u8>,
@@ -19,7 +19,7 @@ impl Entry {
         self.name.iter().map(|b| char::from(*b)).collect()
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Archive {
     pub entries: Vec<Entry>,
 }
@@ -36,6 +36,27 @@ fn valid_name(name: &[u8]) -> bool {
             .all(|b| *b >= 32 && !matches!(*b, 127 | b'/' | b'\\' | b':'))
 }
 impl Archive {
+    /// Merge into an in-memory draft. A failed bounds/validation check changes nothing.
+    pub fn merge_entries(&mut self, incoming: &[Entry]) -> Result<()> {
+        let mut next = self.clone();
+        for e in incoming {
+            if let Some(old) = next
+                .entries
+                .iter_mut()
+                .find(|old| old.name.eq_ignore_ascii_case(&e.name))
+            {
+                let name = old.name.clone();
+                *old = e.clone();
+                old.name = name;
+            } else {
+                next.entries.push(e.clone());
+            }
+        }
+        let bytes = next.encode()?;
+        Self::parse(&bytes)?;
+        *self = next;
+        Ok(())
+    }
     pub fn read(path: &Path) -> Result<Self> {
         Ok(Self::read_with_bytes(path)?.0)
     }

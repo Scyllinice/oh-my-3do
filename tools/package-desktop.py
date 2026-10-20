@@ -7,7 +7,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('binary',type=Path);p.add_argument('--platform',choices=['Windows-x64','Linux-x64','macOS-arm64','macOS-x64'],required=True)
 p.add_argument('--revision',default='working-tree');p.add_argument('--cargo',default='cargo');args=p.parse_args()
 assert args.binary.is_file()
-version=re.search(r'^version\s*=\s*"([^"]+)"',(ROOT/'desktop/Cargo.toml').read_text(),re.M).group(1);folder=ROOT/'build'/('desktop-'+args.platform)
+version=re.search(r'^version\s*=\s*"([^"]+)"',(ROOT/'desktop/shell/Cargo.toml').read_text(),re.M).group(1);folder=ROOT/'build'/('desktop-'+args.platform)
 if folder.exists():shutil.rmtree(folder)
 folder.mkdir(parents=True)
 name='OhMy3DOLibrary'+('.exe' if args.platform.startswith('Windows') else '')
@@ -19,11 +19,11 @@ shutil.copy2(ROOT/'assets/app-icon.png',folder/'OhMy3DOLibrary.png')
 (folder/'licenses'/'fonts').mkdir(parents=True)
 for font_license in ('ark-pixel-OFL.txt','atkinson-hyperlegible-OFL.txt'):shutil.copy2(ROOT/'vendor/fonts'/font_license,folder/'licenses'/'fonts'/font_license)
 triple={'Windows-x64':'x86_64-pc-windows-msvc','Linux-x64':'x86_64-unknown-linux-gnu','macOS-arm64':'aarch64-apple-darwin','macOS-x64':'x86_64-apple-darwin'}[args.platform]
-meta=json.loads(subprocess.run([args.cargo,'metadata','--manifest-path',str(ROOT/'desktop/Cargo.toml'),'--format-version','1','--locked','--filter-platform',triple],check=True,capture_output=True,text=True,encoding='utf-8').stdout)
+meta=json.loads(subprocess.run([args.cargo,'metadata','--manifest-path',str(ROOT/'desktop/shell/Cargo.toml'),'--format-version','1','--locked','--filter-platform',triple],check=True,capture_output=True,text=True,encoding='utf-8').stdout)
 used={node['id'] for node in meta['resolve']['nodes']}
 notices=[];missing=[]
 for package in meta['packages']:
- if package['name']=='oh-my-3do-library' or package['id'] not in used:continue
+ if package['name'] in ('oh-my-3do-library','oh-my-3do-desktop') or package['id'] not in used:continue
  manifest=Path(package['manifest_path']);source=manifest.parent
  target=folder/'licenses'/(package['name']+'-'+package['version'])
  texts=[]
@@ -39,6 +39,14 @@ for package in meta['packages']:
   src=source/package['license_file']
   if src.is_file() and src.name not in texts:
    target.mkdir(parents=True,exist_ok=True);shutil.copy2(src,target/src.name);texts.append(src.name)
+ if not texts:
+  # Some published crates omit their license files. Keep pinned upstream notices
+  # beside the app sources rather than requiring a mutable network fallback.
+  supplied=ROOT/'desktop/licenses'/(package['name']+'-'+package['version'])
+  if supplied.is_dir():
+   for path in sorted(supplied.iterdir()):
+    if path.is_file():
+     target.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target/path.name);texts.append(path.name)
  if not texts:
   # Some workspace crates omit inherited license files from the crate tarball.
   # Retrieve the exact repository revision recorded by Cargo at publication.
@@ -69,7 +77,7 @@ for package in meta['packages']:
  notices.append({'name':package['name'],'version':package['version'],'license':package.get('license'),'repository':package.get('repository'),'notices':sorted(set(texts))})
 (folder/'licenses').mkdir(exist_ok=True)
 (folder/'licenses/dependencies.json').write_text(json.dumps(notices,indent=2),encoding='utf-8')
-info={'app_version':version,'platform':args.platform,'revision':args.revision,'binary_sha256':hashlib.sha256((folder/name).read_bytes()).hexdigest(),'cargo_lock_sha256':hashlib.sha256((ROOT/'desktop/Cargo.lock').read_bytes()).hexdigest(),'runtime':'native Rust; no Python; FFmpeg downloaded separately','dependencies_without_separate_notice_files':missing}
+info={'app_version':version,'platform':args.platform,'revision':args.revision,'binary_sha256':hashlib.sha256((folder/name).read_bytes()).hexdigest(),'cargo_lock_sha256':hashlib.sha256((ROOT/'desktop/shell/Cargo.lock').read_bytes()).hexdigest(),'runtime':'Tauri 2 + Rust; system WebView; no Node/Python runtime; FFmpeg downloaded separately','dependencies_without_separate_notice_files':missing}
 if args.platform=='Linux-x64' and shutil.which('objdump'):
  output=subprocess.run(['objdump','-T',str(args.binary)],check=True,capture_output=True,text=True).stdout
  versions=re.findall(r'GLIBC_([0-9.]+)',output)

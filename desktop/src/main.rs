@@ -22,6 +22,7 @@ use std::{
 enum Outcome {
     Downloaded {path: PathBuf, desktop: bool},
     BootUpdated {journal: PathBuf, root: PathBuf},
+    DrivePrepared {journal: PathBuf, root: PathBuf},
     Scan(Plan),
     Imported(PathBuf),
     Updated(PathBuf),
@@ -84,7 +85,7 @@ fn groups(records: &[Value]) -> Vec<Group> {
         let folder = if movable {
             parts[..3].join("/")
         } else {
-            path.rsplit_once('/').map_or(path, |(dir, _)| dir).to_owned()
+            path.to_owned()
         };
         let text = |v: &Value| v.as_str().unwrap_or("").to_owned();
         let group = out.entry(f::fold(&folder)).or_insert_with(|| Group {
@@ -162,6 +163,10 @@ struct App {
     edit_category: String,
     edit_region: String,
     usb_plan: Option<usb::CopyPlan>,
+    library_copy_open: bool,
+    library_copy_root: Option<PathBuf>,
+    library_copy_discs: Vec<String>,
+    library_copy_titles: Vec<String>,
     verify: bool,
     last_journal: Option<PathBuf>,
     console_root: String,
@@ -271,7 +276,7 @@ impl App {
             receiver,
             busy: false,
             cancel: Arc::new(AtomicBool::new(false)),
-            status: "Choose a library and add source files to begin".into(),
+            status: "Choose a library to manage games, or use Prepare USB to set up a drive.".into(),
             logs: vec![],
             release_dialog: false,
             release_search: String::new(),
@@ -285,6 +290,10 @@ impl App {
             setup_visible: false,
             setup_settings: Default::default(),
             usb_plan: None,
+            library_copy_open: false,
+            library_copy_root: None,
+            library_copy_discs: vec![],
+            library_copy_titles: vec![],
             verify: false,
             last_journal: None,
             console_root: String::new(),
@@ -451,6 +460,12 @@ impl App {
                                 } else {format!("Verified boot.iso saved to {}",path.display())};
                                 if let Some(parent) = path.parent() { open(parent); }
                             }
+                            Outcome::DrivePrepared {journal, root} => {
+                                self.last_journal=Some(journal);
+                                self.usb_plan=None;
+                                self.records_stale=true;
+                                self.status=format!("Drive ready: {}. Menu and save support installed; no games copied.",root.display());
+                            }
                             Outcome::BootUpdated {journal, root} => {
                                 self.last_journal = Some(journal);
                                 self.usb_plan = None;
@@ -484,6 +499,7 @@ impl App {
                                 self.usb_plan = Some(plan)
                             }
                             Outcome::Copied(path) => {
+                                self.library_copy_open=false;
                                 self.last_journal = Some(path);
                                 self.usb_plan = None;
                                 self.status =
@@ -605,9 +621,9 @@ impl App {
             .collect()
     }
     fn library_ui(&mut self, ui: &mut egui::Ui) {
-        if self.groups.is_empty() && ui.button("Set up a new library / USB drive…").clicked() {
+        if self.groups.is_empty() && ui.button("Set up a PC library…").clicked() {
             self.setup_visible = true;
-            self.tab = Tab::Usb;
+            self.tab = Tab::Settings;
         }
         if self.records_stale && !self.busy && !self.prefs.library.is_empty() {
             self.records_stale = false;
@@ -696,15 +712,16 @@ impl App {
                 theme::heading(ui, &title);
                 ui.label(RichText::new(format!("{} games", visible.len())).color(theme::DIM));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Select all shown").clicked() {
-                        for &i in &visible {
-                            if self.groups[i].movable {
-                                self.lib_selected.insert(self.groups[i].folder.clone());
-                            }
-                        }
-                    }
                     ui.add(egui::TextEdit::singleline(&mut self.lib_search).hint_text("Find a title").desired_width(200.));
                 });
+            });
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Add discs…").clicked() { self.tab=Tab::Import; }
+                let count=self.lib_selected.len();
+                if ui.add_enabled(count>0,theme::primary(format!("Copy selected to USB ({count})…"))).clicked() { self.open_library_copy(); }
+                if ui.button("Select all shown").clicked() {
+                    for &i in &visible { self.lib_selected.insert(self.groups[i].folder.clone()); }
+                }
             });
             if self.lib_adult {
                 ui.label(RichText::new("Vivid Interactive titles, gravure and strip-mahjong discs found in your library. Pick the ones to move; nothing moves until you confirm.").color(theme::MUTED));
@@ -767,7 +784,7 @@ impl App {
                                     .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
                                 painter.text(caption.min + egui::vec2(0., 18.), egui::Align2::LEFT_TOP, detail, egui::FontId::proportional(13.), theme::DIM);
                                 let response = response.on_hover_text(format!("{}\n{}", g.title, g.folder));
-                                if response.clicked() && g.movable {
+                                if response.clicked() {
                                     clicked = Some(index);
                                 }
                             }
@@ -780,9 +797,7 @@ impl App {
                     (true, Some(anchor)) => {
                         let (a, b) = (anchor.min(position), anchor.max(position));
                         for &i in &visible[a..=b] {
-                            if self.groups[i].movable {
-                                self.lib_selected.insert(self.groups[i].folder.clone());
-                            }
+                            self.lib_selected.insert(self.groups[i].folder.clone());
                         }
                     }
                     _ => {
@@ -802,13 +817,14 @@ impl App {
     fn move_bar(&mut self, ui: &mut egui::Ui) {
         let count = self.lib_selected.len();
         let mut confirm = false;
+        let movable=self.groups.iter().filter(|g| self.lib_selected.contains(&g.folder)).all(|g| g.movable);
         egui::Frame::new()
             .fill(theme::HEADER)
             .stroke(egui::Stroke::new(2., theme::LIME))
             .inner_margin(10.)
             .show(ui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(theme::primary(format!("Move {count}"))).clicked() {
+                    if ui.add_enabled(movable,theme::primary(format!("Move {count}"))).on_hover_text("Category moves require Category/Region/Game folders. Loose discs can still be copied to USB.").clicked() {
                         confirm = true;
                     }
                     if ui.add(theme::danger("Clear")).clicked() {
@@ -1289,9 +1305,56 @@ impl App {
             });
         self.show_thumbnail(ui, thumb);
     }
-    fn usb_ui(&mut self, ui: &mut egui::Ui) {
-        theme::heading(ui, "Prepare USB");
-        ui.checkbox(&mut self.setup_visible, "Guided setup for a new library / drive");
+    fn install_drive_from(&mut self, source: PathBuf) {
+        let (target, cache, settings) = (
+            f::root(Path::new(&self.prefs.destination)),
+            self.cache.clone(),
+            self.setup_settings.clone(),
+        );
+        match target {
+            Ok(root) => self.start("Preparing drive without copying games", move |job| {
+                let journal = oh_my_3do_library::setup::install_local(
+                    &root, &cache, &source, &settings, &job,
+                )?;
+                Ok(Outcome::DrivePrepared { journal, root })
+            }),
+            Err(e) => self.error(e),
+        }
+    }
+    fn drive_setup_ui(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(RichText::new("Set up this drive without copying games").strong().color(theme::TEXT));
+            ui.label("Install the menu and everything needed for Save Manager. No game library is required.");
+            ui.collapsing("Initial menu settings", |ui| {
+                ui.checkbox(&mut self.setup_settings.hide_adult,"Hide Adult");
+                ui.checkbox(&mut self.setup_settings.video_previews,"Enable video previews");
+                ui.label("Applied only when creating settings; existing settings are preserved.");
+            });
+            let target=!self.prefs.destination.trim().is_empty();
+            let staged=Path::new(&self.prefs.library).join("boot.iso");
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(target && !self.prefs.library.trim().is_empty() && staged.is_file(),theme::primary("Use library boot.iso")).clicked(){self.install_drive_from(staged);}
+                if ui.add_enabled(target,egui::Button::new("Choose boot.iso…")).clicked(){
+                    if let Some(source)=rfd::FileDialog::new().add_filter("Menu boot ISO",&["iso"]).pick_file(){self.install_drive_from(source);}
+                }
+                if ui.add_enabled(target && !self.prefs.offline,egui::Button::new("Download released menu")).clicked(){
+                    let (root,cache,settings)=(f::root(Path::new(&self.prefs.destination)),self.cache.clone(),self.setup_settings.clone());
+                    match root {
+                        Ok(root)=>self.start("Downloading and preparing drive",move |job|{
+                            let journal=oh_my_3do_library::setup::install_release(&root,&cache,&settings,&job)?;
+                            Ok(Outcome::DrivePrepared{journal,root})
+                        }),
+                        Err(e)=>self.error(e),
+                    }
+                }
+            });
+            let installed=Path::new(&self.prefs.destination).join("boot.iso");
+            if ui.add_enabled(target && installed.is_file(),egui::Button::new("Repair installed menu support")).on_hover_text("Create missing support files and folders using the boot.iso already on this drive. No download or game-library copy.").clicked(){self.install_drive_from(installed);}
+            ui.label("A drive with no games can still boot the menu and use Save Manager. Downloads use the published release; choose a local ISO to test an unreleased build.");
+        });
+    }
+    fn staging_setup_ui(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.setup_visible, "Set up a PC staging library (optional)");
         if self.setup_visible {
             ui.group(|ui| {
                 ui.label(RichText::new("1. Choose an existing folder for your staging library").strong().color(theme::TEXT));
@@ -1310,18 +1373,53 @@ impl App {
                         Err(e) => self.error(e),
                     }
                 }
-                ui.label(RichText::new("3. Add discs, then return here to review and prepare the USB drive").strong().color(theme::TEXT));
+                ui.label(RichText::new("3. Add discs, then select games in Library to copy to USB").strong().color(theme::TEXT));
                 if ui.button("Add discs").clicked() { self.tab = Tab::Import; }
             });
         }
-        ui.label("Validate the staging library, review the copy, then transfer only the files the menu needs.");
+    }
+    fn usb_ui(&mut self, ui: &mut egui::Ui) {
+        theme::heading(ui, "Set up / repair USB");
         directory_row(ui, "USB destination", &mut self.prefs.destination);
-        ui.checkbox(
-            &mut self.verify,
-            "Verify all existing disc contents (slower)",
-        );
-        ui.label("Existing destination settings, favorites, history and saves are preserved. Games moved to another category are moved on the drive too, and its favorites follow them. Different existing discs block copying; nothing is deleted.");
-        if ui.add(theme::primary("Validate & preview copy")).clicked() {
+        self.drive_setup_ui(ui);
+        ui.add_space(12.);
+        ui.label("To copy games, select them in Library and choose Copy selected to USB.");
+        if ui.button("Go to Library").clicked() { self.tab=Tab::Library; }
+    }
+    fn open_library_copy(&mut self) {
+        self.library_copy_discs=self.groups.iter().filter(|g| self.lib_selected.contains(&g.folder)).flat_map(|g| g.discs.clone()).collect();
+        self.library_copy_titles=self.groups.iter().filter(|g| self.lib_selected.contains(&g.folder)).map(|g| g.title.clone()).collect();
+        self.library_copy_root=self.root().ok();
+        self.usb_plan=None;
+        self.library_copy_open=true;
+    }
+    fn library_copy_window(&mut self, ctx: &egui::Context) {
+        if !self.library_copy_open { return; }
+        let mut open=true;
+        egui::Window::new("Copy selected games to USB").id(egui::Id::new("library_usb_copy"))
+            .open(&mut open).collapsible(false).default_width(690.).max_height(620.).vscroll(true).show(ctx,|ui| {
+                ui.add_enabled_ui(!self.busy,|ui| {
+                    ui.label(format!("Selected games: {} · Disc entries: {}",self.library_copy_titles.len(),self.library_copy_discs.len()));
+                    ui.collapsing("Selected games",|ui| { for title in &self.library_copy_titles { ui.label(title); } });
+                    let old_target=self.prefs.destination.clone();
+                    directory_row(ui,"USB destination",&mut self.prefs.destination);
+                    if old_target!=self.prefs.destination { self.usb_plan=None; }
+                    ui.label("Includes every disc, cover, preview and required menu file. Games, settings and saves already on the USB are preserved.");
+                    let current=self.library_copy_root.is_some() && self.root().ok()==self.library_copy_root;
+                    if !current { ui.colored_label(theme::RED,"Library changed. Close this window and select games again."); }
+                    let selected=self.library_copy_discs.clone();
+                    self.usb_copy_review_ui(ui,&selected,current);
+                });
+            });
+        self.library_copy_open=open;
+    }
+    fn usb_copy_review_ui(&mut self, ui: &mut egui::Ui, selected: &[String], selection_current: bool) {
+        ui.collapsing("Copy options & details", |ui| {
+            if ui.checkbox(&mut self.verify,"Verify existing disc contents (slower)").changed() { self.usb_plan=None; }
+            ui.label("Settings, favorites, history and saves on the drive are preserved. Selected games follow category changes. Different existing disc contents block copying; nothing is deleted.");
+        });
+        if ui.add_enabled(selection_current,theme::primary("Validate & preview copy")).clicked() {
+            let selected = selected.to_vec();
             let (root, target, cache, verify) = (
                 self.root(),
                 PathBuf::from(&self.prefs.destination),
@@ -1330,8 +1428,8 @@ impl App {
             );
             match root {
                 Ok(root) => self.start("Validating USB copy", move |job| {
-                    Ok(Outcome::Usb(usb::plan(
-                        &root, &target, &cache, verify, &job,
+                    Ok(Outcome::Usb(usb::plan_selected(
+                        &root, &target, &cache, verify, &selected, &job,
                     )?))
                 }),
                 Err(e) => self.error(e),
@@ -1339,8 +1437,9 @@ impl App {
         }
         if let Some(plan) = &self.usb_plan {
             ui.separator();
-            ui.strong(usb::summary(plan));
+            ui.label(RichText::new(usb::summary(plan)).strong().color(theme::TEXT));
             let mut apply = false;
+            ui.collapsing("Show file details", |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("usb_rows")
                 .max_height(320.)
@@ -1349,7 +1448,8 @@ impl App {
                         ui.label(format!("{:10} {}", item.status, item.path));
                     }
                 });
-            if ui.add(theme::primary("Copy reviewed files to USB")).clicked() {
+            });
+            if ui.add_enabled(selection_current,theme::primary("Copy reviewed files to USB")).clicked() {
                 apply = true
             }
             if apply {
@@ -1476,6 +1576,8 @@ impl App {
     }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         theme::heading(ui, "Tools & settings");
+        self.staging_setup_ui(ui);
+        ui.separator();
         ui.label(RichText::new("Updates").strong().color(theme::TEXT));
         let mut automatic = !self.prefs.disable_update_checks;
         if ui.checkbox(&mut automatic, "Check for updates on startup").changed() {
@@ -1578,29 +1680,9 @@ impl App {
             {
                 let (root, cache) = (self.root(), self.cache.clone());
                 match root {
-                    Ok(root) => self.start("Installing menu boot image", move |job| {
-                        disc::issue(&source)?;
-                        if fs::metadata(&source)?.len() > 16 * 1024 * 1024 {
-                            anyhow::bail!("Choose a menu boot image smaller than 16 MiB")
-                        }
-                        let data = fs::read(&source)?;
-                        if data.len() < 84
-                            || data.len() > 16 * 1024 * 1024
-                            || data[..7] != [1, 90, 90, 90, 90, 90, 1]
-                        {
-                            anyhow::bail!("Choose a 3DO menu boot image")
-                        };
-                        let mut tx = library::Journal::new(&root, &cache)?;
-                        let result = (|| -> anyhow::Result<()> {
-                            job.check()?;
-                            tx.write("boot.iso", &data)?;
-                            tx.finish()
-                        })();
-                        if let Err(error) = result {
-                            tx.undo()?;
-                            return Err(error);
-                        }
-                        Ok(Outcome::Updated(tx.path))
+                    Ok(root) => self.start("Installing menu boot image and support", move |job| {
+                        let journal=oh_my_3do_library::setup::install_local(&root,&cache,&source,&Default::default(),&job)?;
+                        Ok(Outcome::DrivePrepared{journal,root})
                     }),
                     Err(e) => self.error(e),
                 }
@@ -1780,13 +1862,13 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::BG))
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!self.busy, |ui| {
+                ui.add_enabled_ui(!self.busy && !self.library_copy_open, |ui| {
                     if self.tab == Tab::Library {
                         return self.library_ui(ui);
                     }
                     egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 14)).show(ui, |ui| {
                         egui::ScrollArea::vertical()
-                            .id_salt("page")
+                            .id_salt(("page", self.tab as usize))
                             .auto_shrink([false, false])
                             .show(ui, |ui| match self.tab {
                                 Tab::Library => {}
@@ -1798,6 +1880,7 @@ impl eframe::App for App {
                     });
                 });
             });
+        self.library_copy_window(ctx);
         if !self.busy {
             self.resolve_window(ctx)
         }
@@ -1882,6 +1965,8 @@ fn main() -> eframe::Result<()> {
         .windows(2)
         .find(|w| w[0] == "--screenshot")
         .map(|w| PathBuf::from(&w[1]));
+    let compare_backup=args.windows(2).find(|w|w[0]=="--compare-backup").map(|w|PathBuf::from(&w[1]));
+    let save_slots=args.windows(2).find(|w|w[0]=="--save-slots").map(|w|PathBuf::from(&w[1]));
     let save_backup = args.windows(2).find(|w| w[0] == "--save-backup").map(|w| PathBuf::from(&w[1]));
     let cheat_database = args.windows(2).find(|w|w[0]=="--cheat-database").map(|w|PathBuf::from(&w[1]));
     let guided_setup = args.iter().any(|a| a == "--guided-setup");
@@ -1985,7 +2070,7 @@ fn main() -> eframe::Result<()> {
             if let Some(n) = channel {
                 app.tab = [Tab::Library, Tab::Import, Tab::Media, Tab::Usb, Tab::Settings][n.clamp(1, 5) - 1];
             }
-            if guided_setup { app.tab = Tab::Usb; app.setup_visible = true; }
+            if guided_setup { app.tab = Tab::Usb; }
             if check_updates && !app.prefs.offline {
                 app.updates.check(&cc.egui_ctx,vec![PathBuf::from(&app.prefs.library),PathBuf::from(&app.prefs.destination)]);
             }
@@ -1993,6 +2078,8 @@ fn main() -> eframe::Result<()> {
             if let Some(path) = save_backup {
                 if let Err(error) = app.save_browser.open_file(&path) { app.error(error); }
             }
+            if let Some(path)=save_slots {app.save_browser.browse_slots(path);}
+            if let Some(path)=compare_backup {if let Err(error)=app.save_browser.compare_file(&path){app.error(error);}}
             if let Some(path) = profile {
                 // Explicit diagnostic mode: exercise a large list without
                 // importing files or reading/changing the library.

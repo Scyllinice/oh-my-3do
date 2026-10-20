@@ -82,3 +82,7 @@ Thumbs.db
 /desktop/target/
 /desktop/build/
 *.pdb
+
+# Tauri shell builds
+/desktop/shell/target/
+/desktop/shell/gen/

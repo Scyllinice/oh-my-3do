@@ -43,6 +43,27 @@ int main(int argc, char **argv)
     fixture(&entry,data);
     for (i=0;i<40;i+=4) { unsigned char a=data[i],b=data[i+1]; data[i]=data[i+3];data[i+1]=data[i+2];data[i+2]=b;data[i+3]=a; }
     assert(!save_cheats_find(&entry) && !save_cheats_find(NULL));
+    {
+        unsigned char ice[84],old[84];
+        size_t game;
+        for (game=0;game<2;++game) {
+            memset(ice,0xa6,sizeof(ice));ice[0]=5;ice[1]=0x55;
+            strcpy(entry.name,game ? "icebreaker2[levels]" : "icebreaker[levelchart]");entry.size=84;entry.data=ice;
+            p=save_cheats_find(&entry);assert(p && p->field_count==151 && !p->checksum_kind);
+            memcpy(old,ice,84);
+            assert(!save_cheats_set(&entry,p,0,1) && ice[2]==0x16 && !memcmp(ice+3,old+3,81));
+            assert(!save_cheats_set(&entry,p,1,8) && ice[2]==0x18);
+            assert(!save_cheats_preset(&entry,p,0));
+            for (i=2;i<17;++i) assert(ice[i]==255);
+            assert(!memcmp(ice+17,old+17,67));
+            assert(!save_cheats_preset(&entry,p,1));
+            for (i=2;i<77;++i) assert(ice[i]==255);
+            assert(!memcmp(ice+77,old+77,7));
+            assert(!save_cheats_preset(&entry,p,2));
+            assert((save_word(ice+80)&0x3ffffUL)==0x3ffffUL && (save_word(ice+80)&0xfffc0000UL)==(save_word(old+80)&0xfffc0000UL));
+            ice[0]^=1;assert(!save_cheats_find(&entry));
+        }
+    }
     if (argc>1) {
         unsigned char binary[65536], damaged[65536];
         FILE *file=fopen(argv[1],"rb");
@@ -50,8 +71,22 @@ int main(int argc, char **argv)
         assert(file); length=fread(binary,1,sizeof(binary),file); fclose(file);
         /* Change the external preset, proving it overrides the bundled value. */
         assert(length>=552);
-        save_put_word(binary+24+160+8*40+40,2);
+        save_put_word(binary+24+176+8*48+40,2);
         save_put_word(binary+16,usb_art_crc32(binary+24,length-24));
+        {
+            unsigned char legacy[552];
+            size_t at;
+            memset(legacy,0,sizeof(legacy));memcpy(legacy,"OM3DCHT1",8);
+            save_put_word(legacy+8,sizeof(legacy));save_put_word(legacy+12,1);
+            memcpy(legacy+24,binary+24,32);save_put_word(legacy+24,528);
+            memcpy(legacy+24+32,binary+24+48,128);
+            for (at=0;at<8;++at) memcpy(legacy+24+160+at*40,binary+24+176+at*48,40);
+            memcpy(legacy+24+160+8*40,binary+24+176+8*48,48);
+            save_put_word(legacy+16,usb_art_crc32(legacy+24,sizeof(legacy)-24));
+            assert(!save_cheats_load(legacy,sizeof(legacy)));
+            fixture(&entry,data);p=save_cheats_find(&entry);assert(p && p->presets[0].value==2);
+            assert(!save_cheats_preset(&entry,p,0) && save_word(data+24)==2);
+        }
         assert(!save_cheats_load(binary,length) && save_cheats_external());
         fixture(&entry,data); p=save_cheats_find(&entry);
         assert(p && p->presets[0].value==2 && !save_cheats_preset(&entry,p,0) && save_word(data+24)==2);
@@ -61,10 +96,10 @@ int main(int argc, char **argv)
         /* CRC-valid malformed records must also fail atomically. */
         for (i=0;i<5;++i) {
             memcpy(damaged,binary,length);
-            if (i==0) save_put_word(damaged+24+160+28,65532); /* field past EOF */
-            if (i==1) save_put_word(damaged+24+160+40+28,4); /* overlaps another field */
-            if (i==2) memset(damaged+24+32,'x',64); /* unterminated ID */
-            if (i==3) save_put_word(damaged+24+160+8*40+36,99); /* missing preset field */
+            if (i==0) save_put_word(damaged+24+176+28,65532); /* field past EOF */
+            if (i==1) save_put_word(damaged+24+176+48+28,4); /* overlaps another field */
+            if (i==2) memset(damaged+24+48,'x',64); /* unterminated ID */
+            if (i==3) save_put_word(damaged+24+176+8*48+36,99); /* missing preset field */
             if (i==4) save_put_word(damaged+24+24,0xffffffffUL); /* abusive field count */
             save_put_word(damaged+16,usb_art_crc32(damaged+24,length-24));
             assert(save_cheats_load(damaged,length)<0 && save_cheats_find(&entry)==p);

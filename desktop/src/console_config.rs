@@ -16,7 +16,7 @@ fn trim(mut text: &[u8]) -> &[u8] {
     text
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     /// 0 = automatic (FCare), 1 = always, 2 = off.
     pub folder_workaround: u8,
