@@ -10,6 +10,7 @@
 #include "ode.h"
 #include "art_navigation.h"
 #include "library_navigation.h"
+#include "menu_ui.h"
 
 typedef int FRESULT;
 typedef struct { int offset; } DIR;
@@ -29,6 +30,7 @@ static int current_toc_level;
 static int current_toc_offset;
 static int device_count = 1;
 static int hidden_files;
+static int navigation_helper;
 static int calls, toc_calls;
 static int changed_child;
 static int recovery_reject_parent,recovery_stuck_parent,recovery_bad_echo,recovery_io_failure;
@@ -61,7 +63,7 @@ static bool getNextValidToc(FILINFO *info)
         if (index == 0) {
             strcpy(info->fname, "Child");
             info->fattrib = AM_DIR;
-        } else if (index == 1 && !hidden_files) strcpy(info->fname, "Disc 1.iso");
+        } else if (index == 1 && !hidden_files) strcpy(info->fname, navigation_helper ? "Oh My 3DO - Folder Navigation Helper (Keep).iso" : "Disc 1.iso");
     } else if (!strcmp(currentImage.curPath, "0:\\Alpha\\Child") && changed_child && !index) {
         strcpy(info->fname, "Unexpected.iso");
     }
@@ -158,6 +160,7 @@ static void reset_fixture(int key, int depth)
     current_toc_offset = 0;
     device_count = 1;
     hidden_files = calls = 0;
+    navigation_helper = 0;
     changed_child = 0;
     recovery_reject_parent=recovery_stuck_parent=recovery_bad_echo=recovery_io_failure=0;
     recovery_other_identity=recovery_bad_read=commands=0;
@@ -205,6 +208,7 @@ int main(void)
     const MenuEntry boot = {0x01000003UL, 0, "boot.iso"};
     const MenuEntry child = {0x01000001UL, 1, "Child"};
     const MenuEntry disc = {0x01000002UL, 0, "Disc 1.iso"};
+    const MenuEntry helper = {0x01000002UL, 0, "Oh My 3DO - Folder Navigation Helper (Keep).iso"};
     const MenuEntry *root_entries[] = {&alpha, &beta, &boot};
     const MenuEntry *child_entries[] = {&child, &disc};
     OdeListing root = {root_entries, 3, 0, 0};
@@ -269,6 +273,16 @@ int main(void)
     failed += check(ode_enter_directory(&ode, &nested, &child, 1) < 0 &&
                     !strcmp(currentImage.curPath, "0:\\Alpha") && calls == 0,
                     "menu-workaround-no-safe-alternative");
+
+    /* The same folder-only chain becomes navigable with a hidden UI pivot.
+     * transfer() accepts only C0/C1 here: no queue/mount command is allowed. */
+    hidden_files = 0; navigation_helper = 1;
+    nested.count = 2; child_entries[1] = &helper; calls = 0;
+    failed += check(menu_support_entry(helper.name,0,0) &&
+                    ode_enter_directory(&ode, &nested, &child, 1) == 0 &&
+                    !strcmp(currentImage.curPath, "0:\\Alpha\\Child") && calls == 2,
+                    "menu-workaround-folder-only-chain-with-helper");
+    child_entries[1] = &disc;
 
     reset_fixture(0x01000000, 0);
     ode.navigation_known = 1;

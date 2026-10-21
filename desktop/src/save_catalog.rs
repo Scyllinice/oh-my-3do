@@ -128,7 +128,7 @@ fn id(path: &Path) -> Option<u32> {
         .parse()
         .ok()
 }
-fn node_name(id: u32) -> String {
+pub(crate) fn node_name(id: u32) -> String {
     if id == RECOVERY {
         "recovery.3si".into()
     } else if id == RECOVERY + 1 {

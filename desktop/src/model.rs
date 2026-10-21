@@ -110,6 +110,16 @@ pub struct Preferences {
     pub download_covers: bool,
     pub software_rendering: bool,
     pub theme: Theme,
+    pub library_views: std::collections::BTreeMap<String, LibraryView>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryView {
+    pub selected: Vec<String>,
+    pub search: String,
+    pub category: String,
+    pub region: String,
 }
 
 /// Desktop appearance; older preference files follow the operating system.

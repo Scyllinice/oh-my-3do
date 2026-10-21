@@ -199,3 +199,48 @@ pub fn compare(before: &Archive, after: &Archive) -> Vec<Difference> {
         })
         .collect()
 }
+
+#[derive(Debug, serde::Serialize)]
+pub struct ComparisonRow {
+    pub name: String,
+    pub game: String,
+    pub state: String,
+    pub changed_bytes: usize,
+    pub type_changed: bool,
+    pub name_changed: bool,
+    pub before_size: Option<usize>,
+    pub after_size: Option<usize>,
+    pub after_index: Option<usize>,
+    pub changes: Vec<(usize, Option<u8>, Option<u8>)>,
+}
+#[derive(Debug, Default, serde::Serialize)]
+pub struct Comparison {
+    pub added: usize,
+    pub removed: usize,
+    pub changed: usize,
+    pub unchanged: usize,
+    pub rows: Vec<ComparisonRow>,
+}
+/// Changes from the selected reference archive to the current editable draft.
+pub fn comparison(before: &Archive, after: &Archive) -> Comparison {
+    let mut result = Comparison::default();
+    for diff in compare(before, after) {
+        let state = match diff.state {
+            State::Added => {result.added += 1; "Added"},
+            State::Removed => {result.removed += 1; "Removed"},
+            State::Changed => {result.changed += 1; "Changed"},
+            State::Unchanged => {result.unchanged += 1; "Unchanged"},
+        };
+        let name = diff.name(before, after).label();
+        result.rows.push(ComparisonRow {
+            game: crate::saves::known_title(&name).unwrap_or(&name).to_owned(), name,
+            state: state.into(), changed_bytes: diff.changed_bytes,
+            type_changed: diff.type_changed, name_changed: diff.name_changed,
+            before_size: diff.before.map(|i|before.entries[i].data.len()),
+            after_size: diff.after.map(|i|after.entries[i].data.len()),
+            after_index: diff.after,
+            changes: diff.byte_changes(before, after).into_iter().take(512).collect(),
+        });
+    }
+    result
+}

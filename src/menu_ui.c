@@ -164,6 +164,8 @@ int menu_support_entry(const char *name, int directory, int root)
     static const char *files[] = {"boot.iso", "menu-demo.iso", "boot.iso.sha256", "menu-demo.iso.sha256"};
     size_t i;
     size_t length = strlen(name);
+    /* Visible to the ODE for C0 collision detours, hidden from all UI lists. */
+    if (!directory && !menu_path_compare(name,"Oh My 3DO - Folder Navigation Helper (Keep).iso")) return 1;
     if (!directory && length >= 4 && !menu_path_compare(name + length - 4, ".bin")) return 1;
     if (!root) return 0;
     if (directory) return !menu_path_compare(name,".ohmy3do") || menu_categories_hidden_name(name) || (hide_adult && !menu_path_compare(name,"Adult"));

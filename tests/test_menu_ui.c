@@ -107,6 +107,9 @@ int main(void)
     assert(!menu_support_entry("Game.bin.bak",0,0));
     assert(!menu_support_entry("Game.cue",0,0));
     assert(!menu_support_entry("Game.iso",0,0));
+    assert(menu_support_entry("OH MY 3DO - FOLDER NAVIGATION HELPER (KEEP).ISO",0,0));
+    assert(menu_support_entry("Oh My 3DO - Folder Navigation Helper (Keep).iso",0,1));
+    assert(!menu_support_entry("Oh My 3DO - Folder Navigation Helper (Keep).iso",1,0));
     puts("menu_ui: display titles, scroll timing, breadcrumbs and exact cover paths passed");
     return 0;
 }

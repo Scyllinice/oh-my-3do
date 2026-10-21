@@ -38,6 +38,7 @@ struct Inner {
     last: Option<PathBuf>,
     config: Option<console_config::Loaded>,
     backup: Option<Backup>,
+    cleanup: Option<core::recovery::Inventory>,
     release: Option<updates::Check>,
     cheats: save_cheats::Database,
     cheats_original: Option<Vec<u8>>,
@@ -58,6 +59,7 @@ impl Backend {
                 last: None,
                 config: None,
                 backup: None,
+                cleanup: None,
                 release: None,
                 cheats: save_cheats::Database::bundled(),
                 cheats_original: None,
@@ -145,12 +147,27 @@ fn pick(a: &Value) -> Result<Value> {
             .add_filter("Cheat database", &["json"])
             .set_file_name("save-cheats.json")
             .save_file()),
+        "support_save" => json!(dialog.add_filter("Support report", &["txt"]).set_file_name("Oh-My-3DO-support-report.txt").save_file()),
         _ => bail!("Unknown file chooser"),
     })
 }
 #[tauri::command]
 pub fn cancel(state: tauri::State<'_, Bridge>) {
     state.0.cancel.store(true, Ordering::Relaxed);
+}
+
+/// Preference-only writes do not lock the GUI controls or steal search focus.
+#[tauri::command]
+pub async fn save_library_views(state: tauri::State<'_, Bridge>, views: std::collections::BTreeMap<String, LibraryView>) -> Result<(), String> {
+    let backend=state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+        let mut inner=backend.inner.lock().map_err(|_|anyhow::anyhow!("Preferences unavailable"))?;
+        let mut prefs=inner.prefs.clone();
+        prefs.library_views=views;
+        f::atomic(&backend.cache.join("native-settings.json"),&serde_json::to_vec_pretty(&prefs)?)?;
+        inner.prefs=prefs;
+        Ok(())
+    }).await.map_err(|e|e.to_string())?.map_err(|e|format!("{e:#}"))
 }
 #[tauri::command]
 pub async fn cover(state: tauri::State<'_, Bridge>, name: String) -> Result<String, String> {
@@ -369,7 +386,7 @@ fn dispatch(
                 &strings(a, "discs")?,
                 job,
             )?;
-            let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"files":plan.files,"destination":plan.destination});
+            let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?});
             s.copy = Some(plan);
             Ok(value)
         }
@@ -382,6 +399,28 @@ fn dispatch(
             s.last = Some(usb::apply(p, &state.cache, job)?);
             s.copy = None;
             Ok(json!({"journal":s.last}))
+        }
+        "drive_check" => Ok(json!(core::readiness::check(&path(a,"root")?,job)?)),
+        "support_export" => {
+            core::support_report::export(&path(a,"root")?, &path(a,"target")?, &strings(a,"activity")?, job)?;
+            Ok(json!(true))
+        }
+        "recovery_scan" => {
+            let inventory=core::recovery::scan(&path(a,"directory")?,job)?;
+            let result=json!(inventory);
+            s.cleanup=Some(inventory);
+            Ok(result)
+        }
+        "recovery_remove" => {
+            let selected=strings(a,"selected")?;
+            let review=s.cleanup.as_ref().context("Scan recovery copies first")?;
+            if let Some(open)=s.backup.as_ref().and_then(|b|b.path.as_ref()) {
+                let open=open.canonicalize()?;
+                ensure!(!selected.iter().any(|n|review.directory.join(n)==open),"Close the open recovery copy before deleting it");
+            }
+            let removed=core::recovery::remove(review,&selected,job)?;
+            s.cleanup=None;
+            Ok(json!(removed))
         }
         "drive_setup" => {
             let dest = path(a, "destination")?;
@@ -655,7 +694,7 @@ fn dispatch(
         "backup_compare" => {
             let before = Archive::read(&path(a, "path")?)?;
             let after = &s.backup.as_ref().context("Open a backup")?.archive;
-            Ok(json!(backup::compare(&before,after).iter().map(|d|json!({"name":d.name(&before,after).label(),"state":format!("{:?}",d.state),"changed_bytes":d.changed_bytes,"type_changed":d.type_changed,"changes":d.byte_changes(&before,after).into_iter().take(512).collect::<Vec<_>>()})).collect::<Vec<_>>()))
+            Ok(json!(backup::comparison(&before,after)))
         }
         "cheats_validate" => {
             let db = save_cheats::Database::parse(text(a, "json")?.as_bytes())?;

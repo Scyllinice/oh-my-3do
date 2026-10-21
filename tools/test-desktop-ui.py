@@ -8,10 +8,12 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--binary',type=__import__('pathlib').Path)
 parser.add_argument('--library',type=__import__('pathlib').Path)
 parser.add_argument('--gallery',action='store_true')
+parser.add_argument('--features',action='store_true',help='Exercise save comparison and the read-only drive check')
+parser.add_argument('--fixture',type=__import__('pathlib').Path)
 args=parser.parse_args()
 import os,time,json,subprocess,shutil,struct,zlib
 from pathlib import Path
-R=Path(__file__).resolve().parents[1];fixture=R/'build/desktop-ui-smoke';source=fixture/'library';dest=fixture/'usb';cache=fixture/'cache';shots=fixture/'shots'
+R=Path(__file__).resolve().parents[1];fixture=args.fixture or R/'build/desktop-ui-smoke';source=fixture/'library';dest=fixture/'usb';cache=fixture/'cache';shots=fixture/'shots'
 for p in [source,dest,cache/'oh-my-3do',shots]:p.mkdir(parents=True,exist_ok=True)
 paths=['Games/USA/Example/Disc 1.iso','Games/USA/Example/Disc 2.iso','Games/USA/Other/Other.iso','Games/Japan/Third/Third.iso']
 for name in paths:
@@ -77,7 +79,21 @@ try:
   data=save_path.read_bytes();assert struct.unpack_from('>I',data,80)[0]==5;assert b'keep me' in data;assert zlib.crc32(data[24:])==struct.unpack_from('>I',data,16)[0];assert list(save_path.parent.glob('slot01.3ds.*.bak'));assert struct.unpack_from('>I',data,108)[0]==(12345+sum(struct.unpack_from('>9I',data,72)))&0xffffffff
   shot('native-save-saved.png');print('Actual Save Manager: edited DOOM starting map, saved over slot01 with recovery copy; archive/game checksums and unrelated save verified.',flush=True)
   click(1053,124);time.sleep(.5);chord('Control_L','l');chord('Control_L','a');type_text(str(second));press('Return');time.sleep(.3);press('Return');time.sleep(1);shot('native-second-save.png');assert second.read_bytes()==archive([('DoomPrefs',doom)])
+  if args.features:
+   click(1090,354);time.sleep(.5);chord('Control_L','l');chord('Control_L','a');type_text(str(save_path));press('Return');time.sleep(.3);press('Return');time.sleep(1);shot('native-save-comparison.png');press('Tab');press('Return');shot('native-save-byte-differences.png');press('Tab');press('Return');time.sleep(.3);shot('native-comparison-hex-editor.png')
+   click(80,205);t.XTestFakeMotionEvent(display,-1,1100,300,0)
+   for _ in range(25):t.XTestFakeButtonEvent(display,4,1,0);t.XTestFakeButtonEvent(display,4,0,0)
+   x.XFlush(display);time.sleep(.3)
   click(874,220);time.sleep(1);shot('native-slot-search.png');assert save_path.with_name('slot02.3si').is_file();print('Opened another backup after saving and refreshed occupied slots from the actual USB fixture.',flush=True)
+  if args.features:
+   before={str(p.relative_to(dest)):p.read_bytes() for p in dest.rglob('*') if p.is_file()}
+   click(80,320);shot('native-readiness-before.png');click(280,720);time.sleep(2)
+   shot('native-readiness-summary.png')
+   t.XTestFakeMotionEvent(display,-1,1100,720,0)
+   for _ in range(5):t.XTestFakeButtonEvent(display,5,1,0);t.XTestFakeButtonEvent(display,5,0,0)
+   x.XFlush(display);time.sleep(.5);shot('native-readiness-results.png')
+   assert {str(p.relative_to(dest)):p.read_bytes() for p in dest.rglob('*') if p.is_file()}==before
+   print('Native save comparison and readiness controls exercised; drive check preserved every file.',flush=True)
   if args.gallery:
    click(80,320);shot('drive-setup.png');click(85,260);shot('media.png');click(85,814);shot('settings.png')
 finally:p.terminate();p.wait(timeout=10)

@@ -19,3 +19,9 @@ export function displayPath(value){
  if(/^\\\\\?\\UNC\\/i.test(path))return '\\\\'+path.slice(8);
  return path;
 }
+
+// Views belong to one canonical library root; missing games and filters expire.
+export function restoreLibraryView(view,groups,categoryNames){
+ const keys=new Set(groups.map(g=>g.key)),regions=new Set(groups.map(g=>g.region));
+ return {selected:[...new Set(Array.isArray(view?.selected)?view.selected:[])].filter(k=>keys.has(k)),search:typeof view?.search==='string'?view.search:'',category:categoryNames.includes(view?.category)?view.category:'',region:regions.has(view?.region)?view.region:''};
+}

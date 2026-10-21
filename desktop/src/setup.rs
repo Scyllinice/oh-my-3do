@@ -153,6 +153,7 @@ pub fn ensure_support(
     job: &Job,
 ) -> Result<()> {
     job.check()?;
+    ensure_navigation(root, tx, job)?;
     for name in [".ohmy3do/saves", ".ohmy3do/covers", ".ohmy3do/previews"] {
         tx.ensure_directory(name)?;
     }
@@ -178,6 +179,62 @@ pub fn ensure_support(
     }
     job.check()?;
     Ok(())
+}
+
+/// A firmware-visible, one-sector pivot for directory ID collisions. Dotfiles
+/// and FAT hidden files are excluded by the ODE, so the menu hides this name.
+/// Only ancestors of actual discs need pivots; game folders already have discs.
+pub fn ensure_navigation(root: &Path, tx: &mut library::Journal, job: &Job) -> Result<()> {
+    let data = navigation_helper_data();
+    for relative in navigation_helpers(root, job)? {
+        job.check()?;
+        let path = f::safe(root, &relative)?;
+        if path.exists() {
+            ensure!(path.is_file() && fs::read(&path)? == data, "Navigation helper path is occupied: {}", path.display());
+        } else {
+            tx.write(&relative, &data)?;
+            ensure!(fs::read(path)? == data, "Navigation helper readback failed");
+        }
+    }
+    Ok(())
+}
+
+pub const NAVIGATION_HELPER: &str = "Oh My 3DO - Folder Navigation Helper (Keep).iso";
+pub(crate) fn navigation_helper_data() -> [u8; 2048] {
+    let mut data = [0u8; 2048];
+    data[..7].copy_from_slice(&[1, 90, 90, 90, 90, 90, 1]);
+    data[76..80].copy_from_slice(&2048u32.to_be_bytes());
+    data[80..84].copy_from_slice(&1u32.to_be_bytes());
+    let label = b"Oh My 3DO navigation helper. Not a game. Never mount.";
+    data[128..128 + label.len()].copy_from_slice(label);
+    data
+}
+
+/// Expected helper paths, without creating files or validating disc payloads.
+pub(crate) fn navigation_helpers(root: &Path, job: &Job) -> Result<Vec<String>> {
+    let mut folders = std::collections::BTreeSet::new();
+    for entry in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| {
+        !f::is_link(e.path()) && (e.depth() == 0 || !e.file_type().is_dir() ||
+            !e.file_name().to_string_lossy().starts_with('.') &&
+            !["$boot", "system", "system volume information"].contains(&e.file_name().to_string_lossy().to_ascii_lowercase().as_str()))
+    }) {
+        job.check()?;
+        let entry = entry?;
+        if !entry.file_type().is_file() || entry.file_name().to_string_lossy().eq_ignore_ascii_case(NAVIGATION_HELPER) {
+            continue;
+        }
+        let extension = entry.path().extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+        if !["iso", "cue"].contains(&extension.as_str()) { continue; }
+        if entry.path().parent() == Some(root) { continue; }
+        let mut parent = entry.path().parent().and_then(Path::parent);
+        while let Some(folder) = parent {
+            if folder == root { break; }
+            ensure!(folder.starts_with(root), "Disc is outside the drive");
+            folders.insert(folder.to_owned());
+            parent = folder.parent();
+        }
+    }
+    folders.into_iter().map(|folder| Ok(folder.strip_prefix(root)?.join(NAVIGATION_HELPER).to_string_lossy().replace('\\', "/"))).collect()
 }
 /// Offline setup/repair from a local menu, with no staging library required.
 pub fn install_local(

@@ -284,6 +284,8 @@ def scan_units(root):
                 if path.name.casefold() not in SKIP and not path.name.startswith('.'):
                     walk(path)
             elif path.suffix.lower() in ('.iso', '.cue'):
+                if path.name.lower() == 'oh my 3do - folder navigation helper (keep).iso':
+                    continue
                 rel = path.relative_to(root).as_posix()
                 if path.parent == root and path.name.lower() in ('boot.iso', 'menu-demo.iso'):
                     continue

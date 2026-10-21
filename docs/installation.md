@@ -67,12 +67,36 @@ A staging library remains optional: under **Settings & tools**, use **Set up a P
 In **Library**, use **Add discs** to import games. Select the game tiles you
 want (or filter by title, category or region and **Select all shown**), then
 choose **Copy selected to USB…**. In the dialog, choose the USB destination,
-**Review copy**, and **Copy to USB**. Each game folder
+**Review copy**, and **Copy to USB**. The review breaks down games, covers,
+previews and support files, distinguishes reviewed bytes from bytes to copy,
+and shows free space now and estimated free space after copying. It reserves
+working space for filesystem allocation and temporary/support files. An
+insufficient-space review disables copying; free space is checked again before
+the copy starts. Each game folder
 includes all its discs and referenced CUE tracks, with covers/previews copied
 automatically. Games already on the USB remain available when unselected; the
 menu indexes retain them. Selecting all library tiles copies the full library.
 Drive-only setup and repair remain under **Drive setup**. The app needs neither
 Python nor Docker at runtime.
+
+## Check a prepared drive
+
+In **Drive setup**, select the destination and choose **Check drive**. This is
+read only: it checks the boot image's volume header and size, settings,
+categories, game/track paths, search indexes, navigation helpers, save archives
+and their catalog, the cheat database, and indexed covers/previews. Each failed
+check includes a suggested fix; repair remains a separate action. Missing
+optional media is a warning when that media is enabled in console settings.
+
+The report is a snapshot. Run it again after changing the drive. It does not
+boot the console, check firmware behavior, or checksum entire game images.
+Safely eject the drive after preparing it and install it with console power off.
+
+Use **Export support report…** on the same page to save the app version,
+platform, a fresh readiness report, console-exported `.ohmy3do/diagnostics.txt`
+(if present), and recent desktop activity in one text file. Paths and diagnostic
+text are included, so review the file before sharing. Save/game contents are
+excluded. Export does not upload anything or replace the console diagnostics.
 
 ## Keeping the app and menu current
 

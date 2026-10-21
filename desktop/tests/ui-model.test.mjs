@@ -11,3 +11,13 @@ test('Windows path labels hide drive and UNC prefixes without altering other nam
 });
 
 test('configured categories group custom multi-disc titles and remain selectable when hidden on console',()=>{const old=[...categories];try{categories.splice(0,categories.length,'My collection');const groups=groupGames([{path:'My collection/USA/Game/Disc 1.iso',title:'Game (Disc 1)',category:'My collection'},{path:'My collection/USA/Game/Disc 2.iso',title:'Game (Disc 2)',category:'My collection'}]);assert.equal(groups.length,1);assert.equal(groups[0].movable,true);assert.equal(selectedDiscs(groups,new Set([groups[0].key])).length,2);assert.equal(visibleGames(groups,{category:'My collection'}).length,1);}finally{categories.splice(0,categories.length,...old);}});
+
+test('saved library views restore valid selections and filters while dropping removed games/categories/regions',async()=>{
+ const {restoreLibraryView}=await import('../ui/model.mjs');
+ const groups=[{key:'Games/USA/Doom',region:'USA'},{key:'Demos/Japan/Test',region:'Japan'}];
+ const saved={selected:['Games/USA/Doom','Missing','Games/USA/Doom'],search:'doom',category:'Games',region:'USA'};
+ assert.deepEqual(restoreLibraryView(saved,groups,['Games','Demos']),{selected:['Games/USA/Doom'],search:'doom',category:'Games',region:'USA'});
+ assert.deepEqual(restoreLibraryView(saved,[],['New category']),{selected:[],search:'doom',category:'',region:''});
+ assert.deepEqual(restoreLibraryView(null,groups,['Games']),{selected:[],search:'',category:'',region:''});
+});
+test('saved views remain independent between libraries',async()=>{const {restoreLibraryView}=await import('../ui/model.mjs');const views={'A':{selected:['A/Game'],search:'alpha',category:'Games'},'B':{selected:['B/Game'],search:'beta',region:'Japan'}};assert.deepEqual(restoreLibraryView(views.A,[{key:'A/Game',region:'USA'}],['Games']).selected,['A/Game']);const b=restoreLibraryView(views.B,[{key:'B/Game',region:'Japan'}],['Games']);assert.deepEqual(b.selected,['B/Game']);assert.equal(b.search,'beta');assert.equal(b.region,'Japan');});

@@ -49,7 +49,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             bridge::request,
             bridge::cancel,
-            bridge::cover
+            bridge::cover,
+            bridge::save_library_views
         ])
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();

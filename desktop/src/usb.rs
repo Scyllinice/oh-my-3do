@@ -534,9 +534,6 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
             });
         }
     }
-    if fs2::available_space(&target)? < bytes {
-        bail!("Insufficient free space for the reviewed USB copy")
-    }
     let plan = CopyPlan {
         source,
         destination: target,
@@ -563,6 +560,9 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
     }
     let _source_lock = library::lock_library(&plan.source, cache)?;
     let _destination_lock = library::lock_library(&plan.destination, cache)?;
+    if !storage_estimate(plan)?.fits {
+        bail!("Insufficient free space for this copy and its working-space reserve; review the copy again")
+    }
     if let Some(selected) = &plan.selection {
         if crate::usb_selection::indexes(&plan.source, &plan.destination, selected, &plan.moves, job)? != plan.generated {
             bail!("Library or USB indexes changed since preview; review the copy again");
@@ -744,4 +744,45 @@ pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
         for file in files { group.bytes += fs::metadata(file)?.len(); }
     }
     Ok((root, groups.into_values().collect()))
+}
+
+/// File-content totals, plus a conservative reserve for allocation, temporary
+/// replacements and runtime support. Space is queried again before copying.
+#[derive(Clone, Debug, Serialize)]
+pub struct StorageEstimate {
+    pub games: u64,
+    pub covers: u64,
+    pub previews: u64,
+    pub support: u64,
+    pub total: u64,
+    pub to_copy: u64,
+    pub reserve: u64,
+    pub required: u64,
+    pub available: u64,
+    pub remaining: u64,
+    pub shortfall: u64,
+    pub fits: bool,
+}
+pub fn storage_estimate(plan: &CopyPlan) -> Result<StorageEstimate> {
+    Ok(estimate_with_space(plan, fs2::available_space(&plan.destination)?))
+}
+/// Separate space arithmetic from filesystem queries for deterministic checks.
+pub fn estimate_with_space(plan: &CopyPlan, available: u64) -> StorageEstimate {
+    let mut estimate = StorageEstimate {games:0,covers:0,previews:0,support:0,total:0,to_copy:0,reserve:0,required:0,available,remaining:0,shortfall:0,fits:false};
+    for file in &plan.files {
+        let name = file.path.to_ascii_lowercase();
+        let support = name.starts_with(".ohmy3do/") || name.contains("/.ohmy3do/") || name == "boot.iso";
+        let bucket = if support && (name.ends_with(".3dc") || name.ends_with(".png")) { &mut estimate.covers }
+            else if support && name.ends_with(".3dv") { &mut estimate.previews }
+            else if support { &mut estimate.support } else { &mut estimate.games };
+        *bucket = bucket.saturating_add(file.size);
+        estimate.total = estimate.total.saturating_add(file.size);
+        if ["copy", "update"].contains(&file.status.as_str()) { estimate.to_copy = estimate.to_copy.saturating_add(file.size); }
+    }
+    estimate.reserve = (8 * 1024 * 1024).max(estimate.to_copy / 100).max((plan.files.len() as u64).saturating_mul(16 * 1024));
+    estimate.required = estimate.to_copy.saturating_add(estimate.reserve);
+    estimate.fits = estimate.required <= available;
+    estimate.remaining = available.saturating_sub(estimate.required);
+    estimate.shortfall = estimate.required.saturating_sub(available);
+    estimate
 }

@@ -17,6 +17,46 @@ Preferences, catalogs, undo journals and update downloads live in the platform
 cache directory under `oh-my-3do`. The app continues to use
 `native-settings.json`. Changing the GUI does not change disc or save formats.
 
+## Checking a drive, copy space and save changes
+
+**Drive setup → Check drive** produces a read-only readiness report with
+suggested fixes for missing or invalid support, stale indexes/catalogs, and
+missing or damaged indexed media. It checks navigation helpers as well. A
+passing report validates files and layout; it does not prove console booting or
+checksum the full game images. See [drive checks](../docs/installation.md#check-a-prepared-drive).
+
+**Library → Copy selected to USB… → Review copy** shows games/covers/previews/
+support sizes, bytes to transfer, current free space, a working-space reserve
+and estimated free space afterward. Copying is blocked if the estimate does not
+fit, and free space is checked again before writes begin.
+
+**Save Manager → Compare…** compares a chosen reference backup to the current
+draft. Known game names and change totals make affected saves easier to find;
+expand a row for byte differences or open its current save in the hex editor.
+See [save comparison](../docs/saves.md#building-naming-and-comparing-slots).
+
+## Recovery copies, support reports and remembered selections
+
+**Save Manager → Manage recovery copies…** reviews app-created
+`save.3ds.UUID.bak` files in a folder you choose. It shows size, date and archive
+validity. Nothing is selected initially. **Select older copies (keep newest)**
+keeps the newest copy per save and also the newest valid copy if a newer copy
+is malformed. You can adjust the selection before confirming permanent deletion.
+Current slots, `recovery.3ds`, `recovery2.3ds` and unrelated backup files are not
+cleanup candidates. Copies changed since the scan must be rescanned.
+
+**Drive setup → Export support report…** saves a plain-text report with the
+app version/platform, a fresh readiness check, existing console diagnostics and
+recent desktop activity. It includes paths and diagnostic text, but excludes
+save/game payloads. Review it before sharing. The app does not upload it.
+Existing reports can be replaced; unrelated documents and the console's
+original diagnostics cannot be overwritten by report export.
+
+Library selections, search text, category and region filters are remembered
+per library on this PC. Switching libraries restores each library's own view;
+removed games and unavailable categories/regions are dropped from the saved
+view. **Clear selection** is remembered too.
+
 ## Categories and console visibility
 
 Open **Settings & tools → Manage categories…** to add or rename categories,

@@ -45,6 +45,7 @@ def main():
         assert before.returncode != 0
         assert "FAIL stale-root-ID" in before.stdout
         assert "FAIL repeated-child-ID" in before.stdout
+        assert "PASS menu-workaround-folder-only-chain-with-helper" in before.stdout
         assert "PASS short-media-path-parent-restored" in before.stdout
         assert "PASS short-media-path-no-navigation-after-timeout" in before.stdout
         assert "FAIL short-media-path" not in before.stdout

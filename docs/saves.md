@@ -116,10 +116,27 @@ NVRAM saves, capture them on the console first. Open an existing slot to extend
 it instead. Sources stay unchanged, and a failed merge leaves the draft intact.
 The destination still has the same 128-file/64 KiB limit.
 
-The desktop **Compare with backup…** shows archive differences and paged byte
-values against the current draft, including applied edits. It never writes the
-comparison file. Numbered slots also have a **Save slot name** control using the
+The desktop **Compare…** uses the chosen archive as a reference and compares
+it with the current draft, including applied edits. It shows known game names,
+added/removed/changed/unchanged totals, size and filename/file-type changes,
+and the first 512 changed byte offsets per save. Unchanged saves are collapsed.
+**Open current save in hex editor** opens that save in the draft; removed saves
+are available only in the reference archive. Comparing never writes either file. Numbered slots also have a **Save slot name** control using the
 same shared label files, with conflict checks and a recovery copy on replacement.
+
+## Cleaning up desktop recovery copies
+
+After repeatedly replacing backups, open **Save Manager → Manage recovery
+copies…** and choose the folder containing them. Review the sizes, dates and
+archive validity, select copies, and confirm **Delete selected copies**. Deletion
+is permanent. **Select older copies (keep newest)** leaves the newest copy per
+save unchecked; if that copy is invalid, the newest valid copy is also kept.
+You can change those selections manually.
+
+Only app-created `.3ds.UUID.bak` files are listed. Live `.3ds` slots, console
+`recovery.3ds`/`recovery2.3ds`, links and unrelated `.bak` files are excluded.
+The app verifies the reviewed copies before deletion and reports partial errors
+without deleting the remaining files. A changed copy requires a fresh scan.
 
 ## Finding saves across slots
 

@@ -80,6 +80,14 @@ Identically named entries inside game folders remain visible. Volume selectors
 are never hidden. The compatibility workaround retains access to hidden entries
 when needed.
 
+Drive preparation adds a 2 KB `Oh My 3DO - Folder Navigation Helper (Keep).iso` helper to intermediate
+library folders. It is hidden from the menu and excluded from game indexes and
+imports. The ODE must see this file, so do not give it a FAT hidden attribute.
+It supplies a safe navigation detour for firmware folder-ID collisions and is
+never queued or launched. Running drive setup again repairs missing helpers.
+Keep these files when adding more games or folders; they remain in place so
+navigation still works if the library layout changes again.
+
 ## Disc queue and automatic grouping
 
 The queue is intended for discs from **the same multi-disc game**, added in

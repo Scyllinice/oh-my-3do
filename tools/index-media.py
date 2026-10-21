@@ -314,6 +314,8 @@ def index(root, include_save_names=True):
         if path.is_symlink() or not path.is_file() or path.suffix.lower() not in (".iso", ".cue"):
             continue
         relative = path.relative_to(root)
+        if path.name.lower() == "oh my 3do - folder navigation helper (keep).iso":
+            continue
         if len(relative.parts) == 1 and path.name.lower() in ("boot.iso", "menu-demo.iso"):
             continue
         if (relative.parts[0].lower() in ("$boot", "system") or

@@ -986,6 +986,7 @@ fn read_media_index_impl(root: &Path, folder: &str, beside: bool) -> Result<BTre
     Ok(map)
 }
 pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
+    crate::setup::ensure_navigation(root, tx, job)?;
     build_indexes_impl(root, tx, job, false)
 }
 /// Complete a minimal drive without replacing existing user indexes or name mappings.

@@ -270,7 +270,8 @@ pub fn collect(
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_ascii_lowercase();
-                    if ["iso", "cue"].contains(&ext.as_str())
+                    if !e.file_name().to_string_lossy().eq_ignore_ascii_case("Oh My 3DO - Folder Navigation Helper (Keep).iso")
+                        && ["iso", "cue"].contains(&ext.as_str())
                         && !(e.depth() == 1
                             && ["boot.iso", "menu-demo.iso"].contains(
                                 &e.file_name()
@@ -284,6 +285,7 @@ pub fn collect(
                 }
             }
         } else {
+            anyhow::ensure!(!p.file_name().unwrap_or_default().to_string_lossy().eq_ignore_ascii_case("Oh My 3DO - Folder Navigation Helper (Keep).iso"), "The navigation helper is not a game");
             let ext = p
                 .extension()
                 .unwrap_or_default()

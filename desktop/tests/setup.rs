@@ -10,6 +10,45 @@ fn image() -> Vec<u8> {
     bytes
 }
 #[test]
+fn folder_only_chains_get_navigation_helpers_without_becoming_games() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let game = root.path().join("Games/USA/Doom/Doom.iso");
+    fs::create_dir_all(game.parent().unwrap()).unwrap();
+    fs::write(&game, image()).unwrap();
+    let journal = setup::install_verified(root.path(), cache.path(), &image(), &Settings::default(), &Job::default()).unwrap();
+    for directory in ["Games", "Games/USA"] {
+        let data = fs::read(root.path().join(directory).join("Oh My 3DO - Folder Navigation Helper (Keep).iso")).unwrap();
+        assert_eq!(data.len(), 2048);
+        assert_eq!(&data[..7], &[1,90,90,90,90,90,1]);
+    }
+    assert!(!game.parent().unwrap().join("Oh My 3DO - Folder Navigation Helper (Keep).iso").exists());
+    let discs = oh_my_3do_library::disc::collect(&[root.path().to_owned()], None, &Job::default()).unwrap();
+    assert_eq!(discs.len(), 1);
+    assert_eq!(discs[0].0, game);
+    let helper = root.path().join("Games/Oh My 3DO - Folder Navigation Helper (Keep).iso");
+    assert!(oh_my_3do_library::disc::collect(&[helper.clone()], None, &Job::default()).is_err());
+    let index = fs::read(root.path().join(".ohmy3do/library.3di")).unwrap();
+    assert!(!index.windows(b"Folder Navigation Helper".len()).any(|s| s == b"Folder Navigation Helper"));
+    setup::install_verified(root.path(), cache.path(), &image(), &Settings::default(), &Job::default()).unwrap();
+    library::undo(&journal).unwrap();
+    assert!(!helper.exists());
+    assert_eq!(fs::read(&game).unwrap(), image());
+}
+
+#[test]
+fn navigation_helper_never_overwrites_an_existing_file() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("Games/Title")).unwrap();
+    fs::write(root.path().join("Games/Title/Game.iso"), image()).unwrap();
+    let helper = root.path().join("Games/Oh My 3DO - Folder Navigation Helper (Keep).iso");
+    fs::write(&helper, b"personal file").unwrap();
+    assert!(setup::install_verified(root.path(), cache.path(), &image(), &Settings::default(), &Job::default()).is_err());
+    assert_eq!(fs::read(helper).unwrap(), b"personal file");
+    assert!(!root.path().join("boot.iso").exists());
+}
+#[test]
 fn release_digest_and_image_header_must_both_match() {
     let image = image();
     let checksum = format!("{:x}  boot.iso\n", Sha256::digest(&image));
