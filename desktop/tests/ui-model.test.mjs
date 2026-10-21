@@ -15,9 +15,29 @@ test('configured categories group custom multi-disc titles and remain selectable
 test('saved library views restore valid selections and filters while dropping removed games/categories/regions',async()=>{
  const {restoreLibraryView}=await import('../ui/model.mjs');
  const groups=[{key:'Games/USA/Doom',region:'USA'},{key:'Demos/Japan/Test',region:'Japan'}];
- const saved={selected:['Games/USA/Doom','Missing','Games/USA/Doom'],search:'doom',category:'Games',region:'USA'};
- assert.deepEqual(restoreLibraryView(saved,groups,['Games','Demos']),{selected:['Games/USA/Doom'],search:'doom',category:'Games',region:'USA'});
- assert.deepEqual(restoreLibraryView(saved,[],['New category']),{selected:[],search:'doom',category:'',region:''});
- assert.deepEqual(restoreLibraryView(null,groups,['Games']),{selected:[],search:'',category:'',region:''});
+ const saved={selected:['Games/USA/Doom','Missing','Games/USA/Doom'],search:'doom',category:'Games',region:'USA',media:'',information:'',searchScope:'title'};
+ assert.deepEqual(restoreLibraryView(saved,groups,['Games','Demos']),{selected:['Games/USA/Doom'],search:'doom',category:'Games',region:'USA',media:'',information:'',searchScope:'title'});
+ assert.deepEqual(restoreLibraryView(saved,[],['New category']),{selected:[],search:'doom',category:'',region:'',media:'',information:'',searchScope:'title'});
+ assert.deepEqual(restoreLibraryView(null,groups,['Games']),{selected:[],search:'',category:'',region:'',media:'',information:'',searchScope:'title'});
 });
 test('saved views remain independent between libraries',async()=>{const {restoreLibraryView}=await import('../ui/model.mjs');const views={'A':{selected:['A/Game'],search:'alpha',category:'Games'},'B':{selected:['B/Game'],search:'beta',region:'Japan'}};assert.deepEqual(restoreLibraryView(views.A,[{key:'A/Game',region:'USA'}],['Games']).selected,['A/Game']);const b=restoreLibraryView(views.B,[{key:'B/Game',region:'Japan'}],['Games']);assert.deepEqual(b.selected,['B/Game']);assert.equal(b.search,'beta');assert.equal(b.region,'Japan');});
+
+test('missing media filters include partially populated multi-disc titles and combine with search',()=>{
+ const groups=groupGames([
+ {path:'Games/USA/Complete/disc.iso',title:'Complete',cover:'a.png',preview:'a.3dv'},
+ {path:'Games/USA/Partial/Disc 1.iso',title:'Partial (Disc 1)',cover:'b.png',preview:'b.3dv',cover_missing:false,preview_missing:false},
+ {path:'Games/USA/Partial/Disc 2.iso',title:'Partial (Disc 2)',cover:'c.png',preview:'c.3dv',cover_missing:true,preview_missing:false},
+ {path:'Games/USA/No video/disc.iso',title:'No video',cover:'d.png'},
+ {path:'Games/USA/Neither/disc.iso',title:'Neither'}]);
+ const titles=filter=>visibleGames(groups,filter).map(g=>g.title).sort();
+ assert.deepEqual(titles({media:'cover'}),['Neither','Partial']);
+ assert.deepEqual(titles({media:'preview'}),['Neither','No video']);
+ assert.deepEqual(titles({media:'either'}),['Neither','No video','Partial']);
+ assert.deepEqual(titles({media:'either',search:'partial'}),['Partial']);
+ assert.equal(visibleGames(groups).length,4);
+});
+test('missing media preference survives restoration and invalid values reset',async()=>{
+ const {restoreLibraryView}=await import('../ui/model.mjs');
+ assert.equal(restoreLibraryView({media:'either'},[],[]).media,'either');
+ assert.equal(restoreLibraryView({media:'unknown'},[],[]).media,'');
+});

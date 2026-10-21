@@ -163,6 +163,7 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
         }
         files.insert(".ohmy3do/metadata.3di".into());
     }
+    for path in &games {if chosen(path) {let name=crate::game_info::filename(path);if f::safe(root,&name)?.is_file(){files.insert(name);}}}
     let cheats=f::safe(root,crate::save_cheats::JSON_PATH)?;
     if cheats.is_file(){
         let db=crate::save_cheats::Database::read(&cheats)?;

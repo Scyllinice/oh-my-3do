@@ -16,6 +16,7 @@ pub mod setup;
 pub mod readiness;
 pub mod recovery;
 pub mod support_report;
+pub mod eject;
 pub mod usb;
 mod usb_selection;
 pub mod updates;
@@ -57,3 +58,7 @@ pub fn cache_dir() -> std::path::PathBuf {
         .unwrap_or_else(std::env::temp_dir)
         .join("oh-my-3do")
 }
+
+pub mod drive_identity;
+pub mod slot_notes;
+pub mod game_info;

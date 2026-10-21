@@ -270,8 +270,11 @@ fn read_dat(path: &Path) -> Result<Vec<Game>> {
     parse_dat(std::str::from_utf8(&raw)?)
 }
 fn metadata<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Value>> {
+    Ok(metadata_candidates(input,job)?.into_iter().filter_map(|(key,v)|(v.len()==1).then(||(key,v[0].clone()))).collect())
+}
+fn metadata_candidates<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Vec<Value>>> {
     let mut r = Reader::from_reader(input);
-    r.config_mut().trim_text(true);
+    r.config_mut().trim_text(false);
     let mut buf = vec![];
     let (mut depth, mut count) = (0usize, 0usize);
     let mut kind = String::new();
@@ -296,6 +299,12 @@ fn metadata<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Value>> {
                     .or_default()
                     .push_str(&quick_xml::escape::unescape(&e.decode()?)?);
             }
+            Event::GeneralRef(e) if depth == 3 => {
+                let value=data.entry(field.clone()).or_default();
+                if let Some(c)=e.resolve_char_ref()? {value.push(c);} else {
+                    let name=e.decode()?;value.push_str(quick_xml::escape::resolve_predefined_entity(&name).context("Unknown XML entity")?);
+                }
+            }
             Event::CData(e) if depth == 3 => {
                 data.entry(field.clone())
                     .or_default()
@@ -303,6 +312,7 @@ fn metadata<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Value>> {
             }
             Event::End(_) => {
                 if depth == 2 {
+                    for value in data.values_mut(){*value=value.trim().to_owned();}
                     count += 1;
                     if count % 10000 == 0 {
                         job.check()?;
@@ -331,7 +341,7 @@ fn metadata<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Value>> {
         let year = rx(r"\d{4}")
             .find(&format!("{} {}", get("ReleaseYear"), get("ReleaseDate")))
             .and_then(|m| m.as_str().parse::<u32>().ok());
-        let value = json!({"title":get("Name"),"genre":get("Genres"),"publisher":get("Publisher"),"developer":get("Developer"),"year":year,"release_type":get("ReleaseType"),"release_date":get("ReleaseDate"),"launchbox_id":get("DatabaseID"),"source":LAUNCHBOX});
+        let value = json!({"title":get("Name"),"genre":get("Genres"),"publisher":get("Publisher"),"developer":get("Developer"),"description":get("Overview"),"year":year,"release_type":get("ReleaseType"),"release_date":get("ReleaseDate"),"launchbox_id":get("DatabaseID"),"source":LAUNCHBOX});
         let mut names = vec![get("Name")];
         names.extend(
             aliases
@@ -346,10 +356,7 @@ fn metadata<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Value>> {
             }
         }
     }
-    Ok(candidates
-        .into_iter()
-        .filter_map(|(key, v)| (v.len() == 1).then(|| (key, v[0].clone())))
-        .collect())
+    Ok(candidates)
 }
 pub fn prepare(catalog: &mut Catalog) {
     let mut signatures: HashMap<String, HashSet<String>> = HashMap::new();
@@ -469,4 +476,17 @@ pub fn load(cache: &Path, offline: bool, job: &Job) -> Result<Catalog> {
     f::atomic(&path, &serde_json::to_vec_pretty(&value)?)?;
     prepare(&mut catalog);
     Ok(catalog)
+}
+
+/// Reuse the cached metadata ZIP offline; title collisions stay unresolved.
+pub fn information(cache:&Path,offline:bool,job:&Job)->Result<HashMap<String,Value>>{
+ Ok(information_candidates(cache,offline,job)?.into_iter().filter_map(|(key,v)|(v.len()==1).then(||(key,v[0].clone()))).collect())
+}
+/// Includes colliding titles for explicit user selection; automatic matches stay unique.
+pub fn information_candidates(cache:&Path,offline:bool,job:&Job)->Result<HashMap<String,Vec<Value>>>{
+ let path=cache.join("launchbox.zip");
+ if !path.is_file(){if offline{bail!("No game information cached. Turn off offline mode to download it first.");}download(LAUNCHBOX,&path,256*1024*1024,job)?;}
+ let mut zip=zip::ZipArchive::new(File::open(path)?)?;let xml=zip.by_name("Metadata.xml")?;
+ if xml.size()>1200*1024*1024{bail!("Oversized game information XML");}
+ metadata_candidates(BufReader::new(xml),job)
 }

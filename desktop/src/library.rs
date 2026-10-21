@@ -653,6 +653,7 @@ pub struct Journal {
 }
 impl Journal {
     pub fn new(root: &Path, cache: &Path) -> Result<Self> {
+        crate::game_info::backup_custom(root,cache)?;
         let path = cache
             .join("native-transactions")
             .join(format!("{}.json", uuid::Uuid::new_v4()));
@@ -856,6 +857,7 @@ pub fn undo(path: &Path) -> Result<()> {
     if f::root(&journal.root)? != journal.root {
         bail!("Transaction root changed")
     };
+    crate::game_info::backup_custom(&journal.root,cache)?;
     journal.undo()
 }
 pub fn relative(root: &Path, p: &Path) -> Result<String> {
@@ -1061,6 +1063,7 @@ fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bo
     data.extend_from_slice(b"END3DL01");
     write_index(root, tx, ".ohmy3do/library.3di", &data, missing_only)?;
     let db = database(root)?;
+    for (name,data) in crate::game_info::files(&db)? {write_index(root,tx,&name,&data,missing_only)?;}
     write_index(root, tx, ".ohmy3do/metadata.3di", &metadata_bytes(&db, &names)?, missing_only)?;
     let titles = db["games"]
         .as_array()
@@ -1545,7 +1548,15 @@ pub fn update_media(
     provided: Option<(&str, Option<PathBuf>, Option<PathBuf>)>,
     job: &Job,
 ) -> Result<PathBuf> {
-    update_media_mode(root, prefs, cache, provided, false, job)
+    update_media_mode(root, prefs, cache, provided, false, None, job)
+}
+/// One transaction for the chosen discs; unrelated records and media are retained.
+pub fn update_selected_media(root:&Path,prefs:&Preferences,cache:&Path,discs:&[String],job:&Job)->Result<PathBuf>{
+    let db=database(root)?;
+    let available:HashSet<_>=db["games"].as_array().context("Invalid library")?.iter().filter_map(|r|r["path"].as_str().map(f::fold)).collect();
+    let selected:HashSet<_>=discs.iter().map(|p|f::fold(p)).collect();
+    anyhow::ensure!(!selected.is_empty()&&selected.iter().all(|p|available.contains(p)),"Select existing library games first");
+    update_media_mode(root,prefs,cache,None,false,Some(&selected),job)
 }
 type MediaWork = (Value, String, Entry, bool, bool);
 /// Prepares media for many discs at once, one disc per worker thread at a
@@ -1603,7 +1614,7 @@ fn prepare_parallel(
     Ok(())
 }
 pub fn rebuild_media(root: &Path, prefs: &Preferences, cache: &Path, job: &Job) -> Result<PathBuf> {
-    update_media_mode(root, prefs, cache, None, true, job)
+    update_media_mode(root, prefs, cache, None, true, None, job)
 }
 fn update_media_mode(
     root: &Path,
@@ -1611,11 +1622,14 @@ fn update_media_mode(
     cache: &Path,
     provided: Option<(&str, Option<PathBuf>, Option<PathBuf>)>,
     rebuild: bool,
+    selected: Option<&HashSet<String>>,
     job: &Job,
 ) -> Result<PathBuf> {
     let root = f::root(root)?;
     let _lock = lock_library(&root, cache)?;
     let mut db = database(&root)?;
+    let include_info=provided.is_none()&&!rebuild;
+    let info_changed=if include_info {crate::game_info::fill_missing(&mut db,prefs,cache,selected,job)?} else {0};
     let mut covers = read_media_index(&root, "covers")?;
     let mut previews = read_media_index(&root, "previews")?;
     let mut outputs = media::Outputs::new();
@@ -1626,6 +1640,7 @@ fn update_media_mode(
     for record in db["games"].as_array().context("Invalid library records")? {
         job.check()?;
         let path = record["path"].as_str().context("Missing disc path")?;
+        if selected.is_some_and(|set| !set.contains(&f::fold(path))) { continue; }
         let source = f::safe(&root, path)?;
         if !source.is_file() {
             bail!("Missing database disc: {path}")
@@ -1728,6 +1743,10 @@ fn update_media_mode(
             records.push(changed)
         }
     }
+    let description_files=if include_info {crate::game_info::files_for(&db,selected)?}else{BTreeMap::new()};
+    let metadata_file=if include_info && (info_changed>0 || (!description_files.is_empty()&&!root.join(".ohmy3do/metadata.3di").is_file())) {
+        Some(crate::game_info::console_metadata(&root,&db)?)
+    }else{None};
     let mut tx = Journal::new(&root, cache)?;
     let result = (|| -> Result<()> {
         let mut written = HashSet::new();
@@ -1748,7 +1767,13 @@ fn update_media_mode(
                 }
             }
         }
-        if !records.is_empty() {
+        for (name,data) in &description_files {
+            job.check()?;
+            let path=f::safe(&root,name)?;
+            if !path.is_file()||fs::metadata(&path)?.len()!=data.len() as u64||fs::read(&path)?!=*data {tx.write(name,data)?;}
+        }
+        if let Some(bytes)=&metadata_file {tx.write(".ohmy3do/metadata.3di",bytes)?;}
+        if !records.is_empty() || info_changed>0 {
             if !covers.is_empty() {
                 tx.write(".ohmy3do/covers/index.3di", &media_index(&covers)?)?;
             }
@@ -1766,8 +1791,8 @@ fn update_media_mode(
         return Err(error);
     }
     job.say(format!(
-        "Media update complete: {} associations prepared; existing media retained",
-        outputs.len()
+        "Media update complete: {} artwork associations prepared; {} missing descriptions found; {} description files ready; existing media retained",
+        outputs.len(),info_changed,description_files.len()
     ));
     Ok(tx.path)
 }

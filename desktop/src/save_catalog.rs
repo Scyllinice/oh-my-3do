@@ -20,6 +20,7 @@ pub struct Slot {
     pub id: u32,
     pub path: PathBuf,
     pub label: String,
+    pub notes: String,
     pub files: Vec<String>,
     pub valid: bool,
     pub aliases: Vec<String>,
@@ -56,6 +57,7 @@ impl Slot {
             }
         }
         haystack.push_str(&self.aliases.join(" "));
+        haystack.push(' ');haystack.push_str(&self.notes);
         let haystack = haystack.to_ascii_lowercase();
         query
             .split_whitespace()
@@ -229,6 +231,7 @@ pub fn scan(directory: &Path, job: &Job) -> Result<Vec<Slot>> {
             id,
             Slot {
                 id,
+                notes:crate::slot_notes::read(&path).ok().flatten().unwrap_or_default(),
                 path,
                 label,
                 files,

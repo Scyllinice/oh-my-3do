@@ -178,3 +178,15 @@ snapshot, adds each new or changed file that has no name yet to
 use the browser's cleaned game title, capped at 63 bytes. PC-generated titles
 separately strip trailing parenthesized groups (including region and disc tags)
 before applying the same 63-byte cap.
+
+## Optional game descriptions
+
+The desktop writes `.ohmy3do/info/xxxxxxxx.txt` for titles with descriptions.
+`xxxxxxxx` is the CRC32 of the ASCII-case-folded UTF-8 relative disc path.
+Each file contains `OM3DINFO1`, the complete relative path, a printable ASCII
+description of at most 2048 bytes, and an eight-digit hexadecimal CRC32 of
+`path + newline + description + newline`, each on its own newline-terminated line.
+The reader verifies the full path as well as the checksum, so a filename collision
+cannot display another game's description. Files are bounded to 12287 bytes and
+loaded only on a details request; they do not enlarge the resident metadata index.
+The desktop retains the original Unicode description in `library.json`.

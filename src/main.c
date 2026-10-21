@@ -2,6 +2,8 @@
 #include "ode_bus.h"
 #include "menu_config.h"
 #include "menu_ui.h"
+#include "menu_help.h"
+#include "game_info.h"
 #include "ui_font.h"
 #include "preview_audio.h"
 #include "usb_art.h"
@@ -103,6 +105,7 @@ typedef struct TitleHash { unsigned long hash; size_t index; } TitleHash;
 
 typedef struct Menu {
     size_t game_details_page, game_details_pages;
+    char game_description[GAME_DESCRIPTION_BYTES];
     ScreenContext screen;
     PreviewAudio preview_audio;
     CCB *splash;
@@ -283,6 +286,7 @@ typedef struct Menu {
     SaveNames save_names;
     int save_names_loaded;
     int tools;
+    MenuHelpHold help_hold;
     size_t tool_selected;
     size_t save_selected;
     int backup_mode;
@@ -320,6 +324,8 @@ typedef struct Menu {
 static void refresh_usb_art(Menu *menu);
 static void stop_preview(Menu *menu);
 static void draw_tools(Menu *menu);
+static void draw_context_help(Menu *menu);
+static void open_game_details(Menu *menu);
 static void draw_full_cover(Menu *menu);
 static void close_full_cover(Menu *menu);
 static void current_route(Menu *menu, ArtRouteStep *route);
@@ -1667,6 +1673,7 @@ static void draw(Menu *menu)
         !menu->loading && !menu->tuning && !menu->preview_cel && menu->view_valid;
     if (!browsing) menu->browser_frames[0].valid=menu->browser_frames[1].valid=0;
     if (menu->booting) { boot_screen(menu,now); return; }
+    if (menu->help_hold.active) { draw_context_help(menu); return; }
     if (menu->tools) { draw_tools(menu); return; }
     if (menu->full_view) { draw_full_cover(menu); return; }
     menu->text_cursor=0; menu->text_style=UI_FONT_NORMAL;
@@ -2872,6 +2879,9 @@ static u32 browser_shortcuts(Menu *menu, u32 buttons, u32 pressed, u32 released)
     if (menu->review || menu->demo || !menu->ready) { menu->c_pending = 0; return pressed; }
     if (pressed & (ControlA | ControlB | ControlX | ControlStart)) menu->c_pending = 0;
     if (pressed & ControlC) { menu->c_pending = 1; pressed &= ~ControlC; }
+    if ((buttons & ControlC) && (pressed & ControlStart)) {
+        menu->c_pending=0;open_game_details(menu);return 0;
+    }
     if ((buttons & ControlC) && (pressed & ControlUp)) {
         focus_alphabet(menu);
         return 0;
@@ -3578,11 +3588,13 @@ static void game_details_text(Menu *menu, const char *value, size_t *row, Color 
         take = ui_font_fit(value,length,274,UI_FONT_SMALL);
         if (!take) take = 1;
         if (take > sizeof(line)-1) take = sizeof(line)-1;
+        if(take<length && value[take]!=' ') {size_t word=take;while(word && value[word]!=' ')--word;if(word)take=word;}
         if (*row / 10 == menu->game_details_page) {
             memcpy(line,value,take); line[take]=0;
             tool_line(menu,(int)(*row % 10),line,ink);
         }
         ++*row; value += take; length -= take;
+        while(length && *value==' '){++value;--length;}
     }
 }
 static void draw_game_details(Menu *menu)
@@ -3596,6 +3608,13 @@ static void draw_game_details(Menu *menu)
     if (row_count(menu) && !(menu->listing.has_parent && !menu->selected) && !menu->review)
         entry = browser_entry(menu,menu->selected-(menu->listing.has_parent ? 1 : 0));
     if (!entry) { tool_line(menu,0,"Select a game or folder first.",MUTED); menu->game_details_pages=1; return; }
+    info=game_info(menu,entry);
+    if(info) {
+        game_details_text(menu,info->genre,&row,ACCENT);
+        game_details_text(menu,info->publisher,&row,TEXT);
+        game_details_text(menu,info->released,&row,TEXT);
+    }
+    game_details_text(menu,*menu->game_description ? menu->game_description : "No description available. Prepare game information in the desktop app.",&row,TEXT);
     game_details_text(menu,"Original name:",&row,ACCENT);
     game_details_text(menu,entry->name,&row,TEXT);
     game_details_text(menu,"Location:",&row,ACCENT);
@@ -3607,16 +3626,31 @@ static void draw_game_details(Menu *menu)
         game_details_text(menu,line,&row,ACCENT);
         for (i=0;i<count;++i) game_details_text(menu,discs[i],&row,TEXT);
     } else game_details_text(menu,entry->is_directory ? "Folder" : "Disc image",&row,MUTED);
-    info=game_info(menu,entry);
-    if (info) {
-        game_details_text(menu,"Metadata:",&row,ACCENT);
-        game_details_text(menu,info->genre,&row,TEXT);
-        game_details_text(menu,info->publisher,&row,TEXT);
-        game_details_text(menu,info->released,&row,TEXT);
-    }
     menu->game_details_pages=(row+9)/10;
     format(line,"%lu / %lu",(unsigned long)(menu->game_details_page+1),(unsigned long)menu->game_details_pages);
     label_on(menu,254,64,line,MUTED,UI_FONT_SMALL,PANEL);
+}
+/* Explicit details requests may read optional text; browsing never does. */
+static void open_game_details(Menu *menu)
+{
+    const MenuEntry *entry=NULL;
+    const LibraryGameInfo *info;
+    char name[32],*bytes;
+    size_t length;
+    stop_preview(menu);menu->game_description[0]=0;
+    if(row_count(menu)&&!(menu->listing.has_parent&&!menu->selected)&&!menu->review)
+        entry=browser_entry(menu,menu->selected-(menu->listing.has_parent?1:0));
+    info=entry?game_info(menu,entry):NULL;
+    menu->tools=TOOL_GAME_DETAILS;menu->tool_message=NULL;menu->game_details_page=0;menu->game_details_pages=1;
+    if(info&&!menu->demo){
+        bytes=(char *)malloc(12288);
+        if(bytes){
+            game_info_filename(info->path,name);
+            if(!text_at_root(menu,name,NULL,bytes,12288,&length))
+                game_info_parse(bytes,length,info->path,menu->game_description,sizeof(menu->game_description));
+            free(bytes);
+        }
+    }
 }
 /* Work only in an owned copy; saving rebuilds archive checksums and uses the
  * normal USB slot review/confirmation. Restoring NVRAM remains separate. */
@@ -3793,7 +3827,7 @@ static void draw_tools(Menu *menu)
     menu->text_cursor=0; menu->text_style=UI_FONT_SMALL;
     menu->screen.sc_curScreen ^= 1;
     rectangle(menu,0,0,320,240,BG);
-    brand(menu,"Tools");
+    brand(menu,menu->tools==TOOL_GAME_DETAILS ? "Game info" : "Tools");
     /* The TV's own setup menu: an on-screen-display tag, as CH is in the library. */
     label(menu,308-(ui_font_width("MENU",UI_FONT_HEADING)*320+319-2*menu->config.screen_margin)/(320-2*menu->config.screen_margin),9,"MENU",OSD_GREEN,UI_FONT_HEADING);
     rectangle(menu,12,58,296,148,PANEL);
@@ -3801,12 +3835,12 @@ static void draw_tools(Menu *menu)
     rectangle(menu,22,77,39,2,TV_ORANGE);
     rectangle(menu,63,77,17,2,ACCENT);
     if (menu->tools == TOOL_HOME) {
-        static const char *items[]={"Save Manager","Game details","Favorites","Settings","Help & controls","Diagnostics","Recent games","Find a game"};
-        for (i=0;i<8;++i) {
+        static const char *items[]={"Save Manager","Favorites","Settings","Help & controls","Diagnostics","Recent games","Find a game"};
+        for (i=0;i<7;++i) {
             int x=18+(i/4)*144, y=84+(i%4)*28;
             int active=i==menu->tool_selected;
             rectangle(menu,x,y,138,24,active ? ACCENT : SELECT);
-            label_on(menu,x+9,y+5,i==3 && config_dirty(menu) ? "Settings *" : items[i],active ? INK : TEXT,UI_FONT_NORMAL,active ? ACCENT : SELECT);
+            label_on(menu,x+9,y+5,i==2 && config_dirty(menu) ? "Settings *" : items[i],active ? INK : TEXT,UI_FONT_NORMAL,active ? ACCENT : SELECT);
         }
     } else if (menu->tools == TOOL_CHEATS) {
         draw_cheats(menu);
@@ -3966,7 +4000,7 @@ static void draw_tools(Menu *menu)
     } else if (menu->tools == TOOL_HELP) {
         static const char *help[] = {
             "A: Open folder / launch game", "B: Parent folder / cancel", "Up/Down: Select (hold to repeat)",
-            "Left/Right or L/R: Page", "C: Add selected disc to queue", "P: Review queued discs",
+            "Left/Right or L/R: Page", "C: Add selected disc to queue", "Tap P:Queue / Hold P:Help",
             "X: Cover/video or refresh", "L+R together: Open tools", "Hold X at boot: Skip USB extras", "C+Up or list ends: Alphabet"
         };
         static const char *more[] = {
@@ -4097,7 +4131,7 @@ static void draw_tools(Menu *menu)
     }
     {
         const SaveCheatProfile *cheats=menu->tools==TOOL_CHEATS ? save_cheats_find(&menu->hex_archive.entries[menu->save_selected]) : NULL;
-        const char *controls = menu->tools == TOOL_HOME ? "A:Select X:Game details B:Back" : "A:Select B:Back";
+        const char *controls = menu->tools == TOOL_HOME ? "A:Select B:Back" : "A:Select B:Back";
         if (menu->tools == TOOL_GAME_DETAILS) controls = "Left/Right:Page B:Back";
         if (menu->tools == TOOL_FAVORITES) controls = menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel" : "A:Open C:Add X:Remove B:Back";
         else if (menu->tools == TOOL_RESULTS) controls = "A:Open P:Edit X:Reload B:Back";
@@ -4123,7 +4157,7 @@ static void draw_tools(Menu *menu)
         else control_badges(menu,16,210,controls,1);
     }
     control_badges(menu,16,225,menu->tools==TOOL_SLOTS ? "L/R:Slot page P:Find slots" : menu->tools==TOOL_ARCHIVE ? "P:Copy to slot L+R:Library" : menu->tools == TOOL_CHEATS ? "C:Save as X:Hex B:Back" : menu->tools == TOOL_HEX ? "L/R:Page X:Cheats B:Back" : save_views ? "Left/Right:View B:Back" : menu->tools == TOOL_FAVORITES ? "R:Move order P:Reload" :
-         ((menu->tools == TOOL_DIAG || menu->tools == TOOL_HELP) ? "Left/Right:More pages" : "L+R:Return to library"),0);
+         ((menu->tools == TOOL_DIAG || menu->tools == TOOL_HELP) ? "Left/Right:More pages" : "Hold P:Help L+R:Library"),0);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
@@ -4378,10 +4412,6 @@ static void tools_input(Menu *menu, u32 pressed)
     if (page == TOOL_ARCHIVE && (pressed & ControlC) && menu->backup.count) {
         menu->save_selected=menu->tool_selected; open_hex(menu); return;
     }
-    if (page == TOOL_HOME && ((pressed & ControlX) || ((pressed & ControlA) && menu->tool_selected == 1))) {
-        menu->tools=TOOL_GAME_DETAILS; menu->game_details_page=0; menu->game_details_pages=1;
-        menu->tool_message=NULL; return;
-    }
     if (page == TOOL_GAME_DETAILS && !(pressed & ControlB)) {
         if ((pressed & ControlRight) && menu->game_details_page+1 < menu->game_details_pages) ++menu->game_details_page;
         if ((pressed & ControlLeft) && menu->game_details_page) --menu->game_details_page;
@@ -4530,7 +4560,7 @@ static void tools_input(Menu *menu, u32 pressed)
     if(page==TOOL_CATEGORIES && (pressed & ControlB)) {menu->tools=TOOL_CONFIG;menu->tool_selected=8;menu->tool_message=NULL;return;}
     if (pressed & ControlB) {
         menu->tool_message = NULL;
-        if (page == TOOL_HOME) { menu->tools = 0; selection_changed(menu); }
+        if (page == TOOL_HOME || page == TOOL_GAME_DETAILS) { menu->tools = 0; selection_changed(menu); }
         else if (page==TOOL_SLOTS && menu->compare_choosing) {menu->compare_choosing=0;save_archive_free(&menu->compare_archive);}
         else if (page == TOOL_SLOTS && menu->backup_mode) {
             save_archive_free(&menu->pending); menu->backup_mode = 0;
@@ -4558,7 +4588,7 @@ static void tools_input(Menu *menu, u32 pressed)
         } else if (pressed & (ControlLeft | ControlLeftShift))
             menu->tool_selected=menu->tool_selected>=6 ? menu->tool_selected-6 : 0;
     }
-    if (page == TOOL_HOME) count = 8;
+    if (page == TOOL_HOME) count = 7;
     if (page == TOOL_SAVES) count = menu->nvram.count;
     if (page == TOOL_ARCHIVE) count = menu->backup.count;
     if (page == TOOL_SLOTS) count = slot_count(menu);
@@ -4573,6 +4603,7 @@ static void tools_input(Menu *menu, u32 pressed)
         if (pressed & ControlUp) row=(row+3)%4;
         if (pressed & ControlDown) row=(row+1)%4;
         menu->tool_selected=column*4+row;
+        if(menu->tool_selected>=7)menu->tool_selected=column*4+(pressed&ControlUp?2:0);
     } else if (count) {
         if (pressed & ControlUp) menu->tool_selected = menu->tool_selected ? menu->tool_selected - 1 : count - 1;
         if (pressed & ControlDown) menu->tool_selected = (menu->tool_selected + 1) % count;
@@ -4638,11 +4669,11 @@ static void tools_input(Menu *menu, u32 pressed)
         size_t selected = menu->tool_selected;
         menu->tool_selected = 0;
         if (!selected) { menu->tools = TOOL_SAVES; scan_nvram(menu); }
-        else if (selected == 2) { menu->tools = TOOL_FAVORITES; open_favorites(menu); }
-        else if (selected == 3) menu->tools = TOOL_CONFIG;
-        else if (selected == 4) menu->tools = TOOL_HELP;
-        else if (selected == 5) menu->tools = TOOL_DIAG;
-        else if (selected == 6) { menu->tools = TOOL_RECENT; open_recent(menu); }
+        else if (selected == 1) { menu->tools = TOOL_FAVORITES; open_favorites(menu); }
+        else if (selected == 2) menu->tools = TOOL_CONFIG;
+        else if (selected == 3) menu->tools = TOOL_HELP;
+        else if (selected == 4) menu->tools = TOOL_DIAG;
+        else if (selected == 5) { menu->tools = TOOL_RECENT; open_recent(menu); }
         else { menu->tools = TOOL_FIND; menu->find_key = 0; }
     } else if (page == TOOL_SLOTS) {
         char path[40];
@@ -4693,6 +4724,52 @@ static void tools_input(Menu *menu, u32 pressed)
     } else if (page == TOOL_CONFIRM_RESTORE) {
         restore_selected(menu); menu->tools = TOOL_ARCHIVE; menu->tool_selected = menu->save_selected;
     }
+}
+
+static MenuHelpTopic current_help_topic(const Menu *menu)
+{
+    switch(menu->tools) {
+    case TOOL_HOME: return HELP_TOOLS;
+    case TOOL_SAVES: return HELP_SAVES;
+    case TOOL_SLOTS: return menu->backup_mode ? HELP_DESTINATION : menu->compare_choosing ? HELP_COMPARE_PICK : HELP_SLOTS;
+    case TOOL_ARCHIVE: return HELP_ARCHIVE;
+    case TOOL_HEX: return menu->hex_editing ? HELP_HEX_BYTE : HELP_HEX;
+    case TOOL_CHEATS: return HELP_CHEATS;
+    case TOOL_CONFIG: return HELP_SETTINGS;
+    case TOOL_CATEGORIES: return HELP_CATEGORIES;
+    case TOOL_FIND: case TOOL_SLOT_NAME: case TOOL_SLOT_QUERY: return HELP_KEYBOARD;
+    case TOOL_FAVORITES: return menu->favorites_move ? HELP_FAVORITE_MOVE : HELP_FAVORITES;
+    case TOOL_RECENT: return HELP_RECENT;
+    case TOOL_RESULTS: return HELP_RESULTS;
+    case TOOL_COMPARE: return HELP_COMPARE;
+    case TOOL_COMPARE_BYTES: return HELP_COMPARE_BYTES;
+    case TOOL_CONFIRM_BACKUP: case TOOL_CONFIRM_RESTORE: case TOOL_HEX_DISCARD: return HELP_CONFIRM;
+    case TOOL_DIAG: return HELP_DIAGNOSTICS;
+    case TOOL_GAME_DETAILS: return HELP_DETAILS;
+    case TOOL_BACKUP_DETAILS: return HELP_BACKUP_DETAILS;
+    case TOOL_SLOT_JUMP: return HELP_SLOT_JUMP;
+    case TOOL_HELP: return HELP_GENERAL;
+    case TOOL_SLOT_FIND: return HELP_SLOT_FIND;
+    default: return menu->alphabet_active ? HELP_ALPHABET : menu->review ? HELP_QUEUE : HELP_LIBRARY;
+    }
+}
+static void draw_context_help(Menu *menu)
+{
+    MenuHelpTopic topic=current_help_topic(menu);
+    unsigned int row;
+    menu->text_cursor=0;menu->text_style=UI_FONT_SMALL;
+    menu->screen.sc_curScreen^=1;
+    menu->browser_frames[0].valid=menu->browser_frames[1].valid=0;
+    rectangle(menu,0,0,320,240,BG);
+    brand(menu,"Controls");
+    rectangle(menu,12,58,296,148,PANEL);
+    label(menu,22,62,menu_help_title(topic),TEXT,UI_FONT_NORMAL);
+    rectangle(menu,22,77,39,2,TV_ORANGE);
+    rectangle(menu,63,77,17,2,ACCENT);
+    for(row=0;row<MENU_HELP_ROWS;++row) tool_line(menu,(int)row,menu_help_line(topic,row),TEXT);
+    control_badges(menu,16,211,"B/P:Return to this screen",0);
+    label(menu,16,228,"Tap P: Normal action / Hold P: Help",MUTED,UI_FONT_SMALL);
+    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
 }
 
 static void toggle_tools(Menu *menu)
@@ -4810,6 +4887,27 @@ int main(int argc, char **argv)
             else if (now >= repeat_at) { repeated = buttons & DIRECTIONS; pressed |= repeated; repeat_at = now + 50UL; }
         }
         previous = buttons;
+        if (!menu.full_view) {
+            int help_action;
+            if (menu.help_hold.active) {
+                if (pressed & (ControlB | ControlStart)) {
+                    menu.help_hold.active=menu.help_hold.pending=0;
+                    menu.suppress_buttons|=buttons;
+                    menu.clear_frames=2;menu.preview_attempted=0;
+                    menu.selection_since=now_ms(&menu);
+                }
+                draw(&menu);WaitVBL(menu.vbl,1);continue;
+            }
+            help_action=menu_help_poll(&menu.help_hold,now_ms(&menu),
+                !!(buttons&ControlStart),!!(pressed&ControlStart),
+                !!(released&ControlStart),!!(buttons&~ControlStart));
+            if (menu.help_hold.pending || help_action==2) pressed&=~ControlStart;
+            if (help_action==1) pressed|=ControlStart;
+            if (help_action==2) {
+                stop_preview(&menu);menu.browser_frames[0].valid=menu.browser_frames[1].valid=0;
+                draw(&menu);WaitVBL(menu.vbl,1);continue;
+            }
+        }
         if (menu.full_view) {
             if (pressed) {
                 close_full_cover(&menu);
@@ -4847,6 +4945,7 @@ int main(int argc, char **argv)
             draw(&menu); WaitVBL(menu.vbl,1); continue;
         }
         pressed = browser_shortcuts(&menu,buttons,pressed,released);
+        if(menu.tools){draw(&menu);WaitVBL(menu.vbl,1);continue;}
         total = row_count(&menu);
         selection = menu.review ? &menu.queue_selected : &menu.selected;
         old_selection = *selection;
@@ -4917,7 +5016,7 @@ int main(int argc, char **argv)
         /* A shoulder may be the first half of L+R. Do not start blocking
          * media I/O while it is held and the other shoulder is on its way, nor
          * while a held direction is still moving through the list. */
-        if (!(buttons&(ControlLeftShift|ControlRightShift|DIRECTIONS)) && !menu.tools_requested) {
+        if (!(buttons&(ControlLeftShift|ControlRightShift|DIRECTIONS)) && !menu.tools_requested && !menu.help_hold.pending) {
             update_cover(&menu);
             update_preview(&menu);
         }

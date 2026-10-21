@@ -73,21 +73,21 @@ try:
  else:
   shot('native-library.png');click(280,390);shot('native-selected.png');primary();shot('native-copy-dialog.png');primary();time.sleep(1.5);shot('native-copy-review.png');primary();time.sleep(2)
   assert (dest/'Games/USA/Example/Disc 1.iso').is_file();assert (dest/'Games/USA/Example/Disc 2.iso').is_file();assert not (dest/'Games/USA/Other').exists();assert b'Other' not in (dest/'.ohmy3do/library.3di').read_bytes();assert (dest/'boot.iso').read_bytes()==(source/'boot.iso').read_bytes();assert (dest/'.ohmy3do/saves/slot-catalog.3di').is_file();shot('native-copy-complete.png');print('Actual Tauri mouse test: selected one multi-disc title, reviewed and copied it; filtered index, boot and save support verified.',flush=True)
-  click(1200,124);shot('native-import.png');print('Actual Library Add discs action exercised.',flush=True)
+  press('Escape');click(1200,124);shot('native-import.png');print('Actual Library Add discs action exercised.',flush=True)
   click(85,205);shot('native-saves.png');click(1053,124);time.sleep(1);shot('native-file-dialog.png');chord('Control_L','l');chord('Control_L','a');type_text(str(save_path));press('Return');time.sleep(.5);press('Return');time.sleep(2);shot('native-save-open.png')
-  click(1020,647);chord('Control_L','a');type_text('5');press('Tab');time.sleep(.5);shot('native-save-edited.png');click(763,354);time.sleep(.3);shot('native-save-confirm.png');primary();time.sleep(1.5)
+  click(1020,647);chord('Control_L','a');type_text('5');press('Tab');time.sleep(.5);shot('native-save-edited.png');click(678,354);time.sleep(.3);shot('native-save-confirm.png');primary();time.sleep(1.5)
   data=save_path.read_bytes();assert struct.unpack_from('>I',data,80)[0]==5;assert b'keep me' in data;assert zlib.crc32(data[24:])==struct.unpack_from('>I',data,16)[0];assert list(save_path.parent.glob('slot01.3ds.*.bak'));assert struct.unpack_from('>I',data,108)[0]==(12345+sum(struct.unpack_from('>9I',data,72)))&0xffffffff
   shot('native-save-saved.png');print('Actual Save Manager: edited DOOM starting map, saved over slot01 with recovery copy; archive/game checksums and unrelated save verified.',flush=True)
   click(1053,124);time.sleep(.5);chord('Control_L','l');chord('Control_L','a');type_text(str(second));press('Return');time.sleep(.3);press('Return');time.sleep(1);shot('native-second-save.png');assert second.read_bytes()==archive([('DoomPrefs',doom)])
   if args.features:
-   click(1090,354);time.sleep(.5);chord('Control_L','l');chord('Control_L','a');type_text(str(save_path));press('Return');time.sleep(.3);press('Return');time.sleep(1);shot('native-save-comparison.png');press('Tab');press('Return');shot('native-save-byte-differences.png');press('Tab');press('Return');time.sleep(.3);shot('native-comparison-hex-editor.png')
+   click(1005,354);time.sleep(.5);chord('Control_L','l');chord('Control_L','a');type_text(str(save_path));press('Return');time.sleep(.3);press('Return');time.sleep(1);shot('native-save-comparison.png');press('Tab');press('Return');shot('native-save-byte-differences.png');press('Tab');press('Return');time.sleep(.3);shot('native-comparison-hex-editor.png')
    click(80,205);t.XTestFakeMotionEvent(display,-1,1100,300,0)
    for _ in range(25):t.XTestFakeButtonEvent(display,4,1,0);t.XTestFakeButtonEvent(display,4,0,0)
    x.XFlush(display);time.sleep(.3)
   click(874,220);time.sleep(1);shot('native-slot-search.png');assert save_path.with_name('slot02.3si').is_file();print('Opened another backup after saving and refreshed occupied slots from the actual USB fixture.',flush=True)
   if args.features:
    before={str(p.relative_to(dest)):p.read_bytes() for p in dest.rglob('*') if p.is_file()}
-   click(80,320);shot('native-readiness-before.png');click(280,720);time.sleep(2)
+   click(80,320);shot('native-readiness-before.png');click(280,755);time.sleep(2)
    shot('native-readiness-summary.png')
    t.XTestFakeMotionEvent(display,-1,1100,720,0)
    for _ in range(5):t.XTestFakeButtonEvent(display,5,1,0);t.XTestFakeButtonEvent(display,5,0,0)

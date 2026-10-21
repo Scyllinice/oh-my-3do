@@ -35,6 +35,9 @@ struct Inner {
     prefs: Preferences,
     import: Option<Plan>,
     copy: Option<usb::CopyPlan>,
+    information_restore: Option<(String,core::game_info::RestorePlan)>,
+    information_import: Option<(String,core::game_info::ImportPlan)>,
+    information_matches: Option<(String,core::game_info::MatchReview)>,
     last: Option<PathBuf>,
     config: Option<console_config::Loaded>,
     backup: Option<Backup>,
@@ -56,6 +59,9 @@ impl Backend {
                 prefs,
                 import: None,
                 copy: None,
+                information_restore: None,
+                information_import: None,
+                information_matches: None,
                 last: None,
                 config: None,
                 backup: None,
@@ -117,7 +123,7 @@ fn entry_index(a: &Value, b: &Backup) -> Result<usize> {
     Ok(n)
 }
 fn slots(directory: &Path, cache: &Path, job: &Job) -> Result<Value> {
-    Ok(json!(save_catalog::refresh(directory,cache,job)?.iter().map(|s|json!({"id":s.id,"path":s.path,"name":s.name(),"label":s.label,"valid":s.valid,"games":s.games(),"files":s.files,"search":format!("{} {} {}",s.name(),s.games(),s.aliases.join(" "))})).collect::<Vec<_>>()))
+    Ok(json!(save_catalog::refresh(directory,cache,job)?.iter().map(|s|json!({"id":s.id,"path":s.path,"name":s.name(),"label":s.label,"notes":s.notes,"valid":s.valid,"games":s.games(),"files":s.files,"search":format!("{} {} {}",s.name(),s.games(),format!("{} {}",s.aliases.join(" "),s.notes))})).collect::<Vec<_>>()))
 }
 fn pick(a: &Value) -> Result<Value> {
     let kind = text(a, "kind")?;
@@ -148,6 +154,8 @@ fn pick(a: &Value) -> Result<Value> {
             .set_file_name("save-cheats.json")
             .save_file()),
         "support_save" => json!(dialog.add_filter("Support report", &["txt"]).set_file_name("Oh-My-3DO-support-report.txt").save_file()),
+        "metadata" => json!(dialog.add_filter("Custom game metadata", &["json"]).pick_file()),
+        "metadata_save" => json!(dialog.add_filter("Custom game metadata", &["json"]).set_file_name("Oh-My-3DO-custom-metadata.json").save_file()),
         _ => bail!("Unknown file chooser"),
     })
 }
@@ -285,8 +293,15 @@ fn dispatch(
         "library" => {
             let root = root(s)?;
             let db = library::database(&root)?;
+            let mut records=db["games"].as_array().cloned().unwrap_or_default();
+            for record in &mut records {
+                for (field,folder) in [("cover","covers"),("preview","previews")] {
+                    let missing=record[field].as_str().is_none_or(|name|f::safe(&root,&format!(".ohmy3do/{folder}/{name}")).map_or(true,|p|!p.is_file()));
+                    record[format!("{field}_missing")]=json!(missing);
+                }
+            }
             Ok(
-                json!({"root":root,"records":db["games"],"categories":categories::load(&root)?.names()}),
+                json!({"root":root,"records":records,"categories":categories::load(&root)?.names()}),
             )
         }
         "categories_read" => {
@@ -377,7 +392,15 @@ fn dispatch(
             )?);
             Ok(json!({"journal":s.last}))
         }
+        "drive_inspect" => Ok(json!(core::drive_identity::inspect(&path(a,"root")?,&s.prefs)?)),
+        "drive_remember" => {
+            let value=core::drive_identity::remember(&path(a,"root")?,text(a,"name")?,&mut s.prefs,text(a,"token")?)?;
+            f::atomic(&state.cache.join("native-settings.json"),&serde_json::to_vec_pretty(&s.prefs)?)?;
+            Ok(json!({"identity":value,"prefs":s.prefs}))
+        }
         "copy_preview" => {
+            let drive=core::drive_identity::inspect(&path(a,"destination")?,&s.prefs)?;
+            ensure!(!drive.mismatch,"Different drive at this location. Inspect and remember it in Drive setup first.");
             let plan = usb::plan_selected(
                 &root(s)?,
                 &path(a, "destination")?,
@@ -386,7 +409,7 @@ fn dispatch(
                 &strings(a, "discs")?,
                 job,
             )?;
-            let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?});
+            let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?,"drive":drive});
             s.copy = Some(plan);
             Ok(value)
         }
@@ -396,9 +419,22 @@ fn dispatch(
                 f::root(&path(a, "destination")?)? == p.destination && root(s)? == p.source,
                 "Folders changed; preview again"
             );
+            core::drive_identity::check(&p.destination,&s.prefs,text(a,"drive_token")?)?;
             s.last = Some(usb::apply(p, &state.cache, job)?);
             s.copy = None;
             Ok(json!({"journal":s.last}))
+        }
+        "drive_eject" => {
+            let target=path(a,"root")?;
+            let canonical=f::root(&target)?;
+            let library_closed=Path::new(&s.prefs.library).canonicalize().is_ok_and(|p|p.starts_with(&canonical));
+            let backup_closed=s.backup.as_ref().and_then(|b|b.path.as_ref()).is_some_and(|p|p.canonicalize().is_ok_and(|p|p.starts_with(&canonical)));
+            let mut protected=vec![state.cache.clone(),std::env::current_exe()?];
+            if let Some(file)=s.backup.as_ref().filter(|b|b.dirty).and_then(|b|b.path.clone()){protected.push(file);}
+            let result=core::eject::eject(&target,&protected)?;
+            if backup_closed{s.backup=None;}
+            s.copy=None;s.cleanup=None;
+            Ok(json!({"root":result.root,"message":result.message,"backup_closed":backup_closed,"library_closed":library_closed}))
         }
         "drive_check" => Ok(json!(core::readiness::check(&path(a,"root")?,job)?)),
         "support_export" => {
@@ -424,6 +460,7 @@ fn dispatch(
         }
         "drive_setup" => {
             let dest = path(a, "destination")?;
+            core::drive_identity::check(&dest,&s.prefs,text(a,"drive_token")?)?;
             let settings: console_config::Settings =
                 serde_json::from_value(a["settings"].clone()).unwrap_or_default();
             s.last = Some(if a["release"].as_bool() == Some(true) {
@@ -473,6 +510,70 @@ fn dispatch(
             )?);
             Ok(json!({"journal":s.last}))
         }
+        "media_selected" => {
+            s.last=Some(library::update_selected_media(&root(s)?,&s.prefs,&state.cache,&strings(a,"discs")?,job)?);
+            Ok(json!({"journal":s.last}))
+        }
+        "game_info_load" => Ok(json!(core::game_info::edit_view(&root(s)?,&strings(a,"discs")?)?)),
+        "game_info_matches" => {
+            let review=core::game_info::review_matches(&root(s)?,&s.prefs,&state.cache,job)?;
+            let token=uuid::Uuid::new_v4().to_string();
+            let value=json!({"token":token,"records":review.records,"choices":review.choices,"status":review.status});
+            s.information_matches=Some((token,review));Ok(value)
+        }
+        "game_info_choose_match" => {
+            let (token,review)=s.information_matches.as_ref().context("Review information matches first")?;
+            ensure!(token==text(a,"token")?,"Information match review changed; reopen it");
+            s.last=Some(core::game_info::choose_match(&root(s)?,review,&strings(a,"discs")?,text(a,"id")?,&state.cache,job)?);
+            s.information_matches=None;Ok(json!({"journal":s.last}))
+        }
+        "game_info_backups" => Ok(json!(core::game_info::backups(&root(s)?,&state.cache)?)),
+        "game_info_backup_preview" => {
+            let plan=core::game_info::preview_backup(&root(s)?,&state.cache,text(a,"name")?,job)?;
+            let token=uuid::Uuid::new_v4().to_string();
+            let value=json!({"token":token,"records":plan.records,"skipped":plan.skipped});
+            s.information_import=Some((token,plan));Ok(value)
+        }
+        "game_info_export" => {
+            let count=core::game_info::export_custom(&root(s)?,&path(a,"target")?,&strings(a,"discs")?,job)?;
+            Ok(json!({"count":count}))
+        }
+        "game_info_import_preview" => {
+            let plan=core::game_info::preview_import(&root(s)?,&path(a,"file")?,job)?;
+            let token=uuid::Uuid::new_v4().to_string();
+            let value=json!({"token":token,"records":plan.records,"skipped":plan.skipped});
+            s.information_import=Some((token,plan));Ok(value)
+        }
+        "game_info_import" => {
+            let (token,plan)=s.information_import.as_ref().context("Preview custom metadata before importing")?;
+            ensure!(token==text(a,"token")?,"Import preview changed; review it again");
+            s.last=Some(core::game_info::import_custom(&root(s)?,plan,&strings(a,"discs")?,&state.cache,job)?);
+            s.information_import=None;Ok(json!({"journal":s.last}))
+        }
+        "game_info_restore_preview" => {
+            let original:Vec<core::game_info::EditRecord>=serde_json::from_value(a["original"].clone())?;
+            let plan=core::game_info::preview_restore(&root(s)?,&original,&s.prefs,&state.cache,job)?;
+            let token=uuid::Uuid::new_v4().to_string();
+            let value=json!({"token":token,"records":plan.records,"available":plan.available});
+            s.information_restore=Some((token,plan));Ok(value)
+        }
+        "game_info_save" => {
+            let expected:Vec<core::game_info::EditRecord>=serde_json::from_value(a["original"].clone())?;
+            let fields:Vec<String>=if a["restore_fields"].is_array(){strings(a,"restore_fields")?}else{vec![]};
+            s.last=Some(if fields.is_empty(){
+                core::game_info::save_edits(&root(s)?,&expected,&a["patch"],&state.cache,job)?
+            }else{
+                let (token,plan)=s.information_restore.as_ref().context("Preview downloaded information before restoring")?;
+                ensure!(token==text(a,"restore_token")?,"Restore preview changed; review it again");
+                core::game_info::save_edits_restoring(&root(s)?,&expected,&a["patch"],plan,&fields,&state.cache,job)?
+            });
+            s.information_restore=None;
+            Ok(json!({"journal":s.last}))
+        }
+        "game_information" => {
+            s.last=Some(core::game_info::refresh(&root(s)?,&s.prefs,&state.cache,job)?);
+            Ok(json!({"journal":s.last}))
+        }
         "media_rebuild" => {
             s.last = Some(library::rebuild_media(
                 &root(s)?,
@@ -512,6 +613,12 @@ fn dispatch(
             Ok(json!(true))
         }
         "slots" => slots(&path(a, "directory")?, &state.cache, job),
+        "slot_notes_read" => Ok(json!({"notes":core::slot_notes::read(&path(a,"path")?)?})),
+        "slot_notes_save" => {
+            let p=path(a,"path")?;
+            core::slot_notes::save(&p,text(a,"notes")?,a["original"].as_str())?;
+            Ok(json!(true))
+        }
         "slot_label" => {
             let p = path(a, "path")?;
             let (page, index) = backup::slot(&p).context("Choose a numbered slot")?;
@@ -777,6 +884,7 @@ fn dispatch(
         "boot_update" => {
             let check = s.release.as_ref().context("Check for updates first")?;
             let target = path(a, "root")?;
+            core::drive_identity::check(&target,&s.prefs,text(a,"drive_token")?)?;
             let expected = check
                 .targets
                 .iter()

@@ -19,6 +19,8 @@ STUBS = r'''
 #include "ode.h"
 #include "menu_config.h"
 #include "menu_ui.h"
+#include "menu_help.h"
+#include "game_info.h"
 #include "usb_art.h"
 #include "cover_cache.h"
 #include "usb_media.h"
@@ -837,7 +839,10 @@ int main(int argc, char **argv) {
         {
             size_t before=menu.selected, last;
             int reads=preview_reads, writes=preview_writes, nvram=preview_nvram_reads;
-            menu.tools=TOOL_HOME; tools_input(&menu,ControlX);
+            menu.tools=0;menu.demo=0;menu.ready=1;
+            browser_shortcuts(&menu,ControlC,ControlC,0);
+            if(browser_shortcuts(&menu,ControlC|ControlStart,ControlStart,0) || menu.c_pending) abort();
+            menu.demo=1;
             if (menu.tools!=TOOL_GAME_DETAILS || menu.game_details_page) abort();
             draw(&menu);
             if (!menu.game_details_pages) abort();
@@ -857,10 +862,10 @@ int main(int argc, char **argv) {
             tools_input(&menu,ControlLeft);
             if (menu.game_details_page || menu.selected!=before) abort();
             tools_input(&menu,ControlB);
-            if (menu.tools!=TOOL_HOME || menu.selected!=before || reads!=preview_reads ||
+            if (menu.tools || menu.selected!=before || reads!=preview_reads ||
                 writes!=preview_writes || nvram!=preview_nvram_reads) abort();
         }
-        /* Tools wraps across eight entries; viewing Help/Diagnostics is read-only. */
+        /* Tools wraps across seven entries; viewing Help/Diagnostics is read-only. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlUp);
         if (menu.tool_selected != 3) abort();
@@ -868,7 +873,7 @@ int main(int argc, char **argv) {
         if (menu.tool_selected != 0) abort();
         tools_input(&menu, ControlRight); if (menu.tool_selected != 4) abort();
         tools_input(&menu, ControlLeft); if (menu.tool_selected != 0) abort();
-        menu.tool_selected=4; tools_input(&menu, ControlA);
+        menu.tool_selected=3; tools_input(&menu, ControlA);
         if (menu.tools != TOOL_HELP || menu.usb_tested) abort();
         {
             Menu slots;char path[40];memset(&slots,0,sizeof(slots));
@@ -1020,7 +1025,7 @@ int main(int argc, char **argv) {
             if (menu.tools!=TOOL_HEX) abort();
             close_hex(&menu);
         }
-        menu.ode.navigation_failed=1; menu.tools=TOOL_HOME; menu.tool_selected=5;
+        menu.ode.navigation_failed=1; menu.tools=TOOL_HOME; menu.tool_selected=4;
         tools_input(&menu, ControlA); draw(&menu);
         if (menu.tools != TOOL_DIAG || preview_nvram_writes) abort();
         tools_input(&menu, ControlRight); draw(&menu); tools_input(&menu, ControlRight); draw(&menu);
@@ -1066,7 +1071,7 @@ int main(int argc, char **argv) {
         if (menu.config.screen_margin || menu.config.large_titles) abort();
         if (menu.settings_folder_workaround != MENU_WORKAROUND_OFF || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlB);
-        menu.tool_selected=3; tools_input(&menu,ControlA);
+        menu.tool_selected=2; tools_input(&menu,ControlA);
         if (menu.tools != TOOL_CONFIG || menu.settings_folder_workaround != MENU_WORKAROUND_OFF || !menu.settings_usb_covers) abort();
         tools_input(&menu,ControlUp); if (menu.tool_selected != 11) abort();
         tools_input(&menu,ControlA);
@@ -1346,6 +1351,9 @@ int main(int argc, char **argv) {
         menu.config.folder_workaround=1;
     }
     if (argc > 1 && !strcmp(argv[1], "tools")) menu.tools=TOOL_HOME;
+    if (argc > 1 && !strcmp(argv[1], "context-help")) menu.help_hold.active=1;
+    if (argc > 1 && !strcmp(argv[1], "context-hex")) {menu.help_hold.active=1;menu.tools=TOOL_HEX;}
+    if (argc > 1 && !strcmp(argv[1], "context-confirm")) {menu.help_hold.active=1;menu.tools=TOOL_CONFIRM_RESTORE;}
     if (argc > 1 && !strcmp(argv[1], "help")) menu.tools=TOOL_HELP;
     if (argc > 1 && !strcmp(argv[1], "diagnostics")) {
         menu.tools=TOOL_DIAG; memcpy(menu.ode.identity,"LOCODE",7);
@@ -1527,6 +1535,7 @@ def main():
     loading = source[source.index("static void progress("):source.index("static int directory_path(")]
     covers = source[source.index("static int directory_path("):source.index("static void show_demo(")]
     demo = source[source.index("static void show_demo("):source.index("static void connect_ode(")]
+    back = source[source.index("static void go_back(Menu *menu)\n{"):source.index("static void activate(Menu *menu)")]
     queue = source[source.index("static void queue_selected_disc(Menu *menu)\n{"):source.index("/* Tools stay available")]
     tools = source[source.index("/* Tools stay available"):source.index("int main(int argc") ]
     font = (ROOT / "third_party/portfolio_os/src/graphics/text_deffont.c").read_text()
@@ -1543,12 +1552,12 @@ def main():
     output.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
-        code.write_text(STUBS + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_options preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_options\n#undef usb_png_cover\n' + demo + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+        code.write_text(STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + drawing + '\n#define ode_read_directory preview_read_directory\n' +
+                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_options preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_options\n#undef usb_png_cover\n' + demo + back + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
-                        str(ROOT / "src/menu_ui.c"), str(ROOT / "src/menu_categories.c"), str(ROOT / "src/ui_font.c"),
+                        str(ROOT / "src/menu_help.c"), str(ROOT / "src/game_info.c"), str(ROOT / "src/menu_ui.c"), str(ROOT / "src/menu_categories.c"), str(ROOT / "src/ui_font.c"),
                         str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/preview_v5.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_cheats.c"), str(ROOT / "src/save_cheats_usb.c"), str(ROOT / "src/save_usb.c"), str(ROOT / "src/save_names.c"), str(ROOT / "src/save_catalog.c"),
                         str(ROOT / "src/library_index.c"), str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
@@ -1568,7 +1577,7 @@ def main():
         file_lines=subprocess.check_output([str(binary),"diagnostics-file"],text=True).splitlines()
         assert "L Last requested USB file:" in file_lines and "L Indexes: 536 covers / 282 clips" in file_lines
         assert "L Game metadata: 483 entries" in file_lines and "L Retained after a USB timeout." in file_lines
-        for mode in ("library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "save-usb", "save-hex", "restore", "display", "display-save", "large", "margin", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-preview", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet", "gecko-tuning", "gecko-queued", "gecko-folder-game", "gecko-full", "gecko-preview-full"):
+        for mode in ("context-help", "context-hex", "context-confirm", "library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "save-usb", "save-hex", "restore", "display", "display-save", "large", "margin", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-preview", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet", "gecko-tuning", "gecko-queued", "gecko-folder-game", "gecko-full", "gecko-preview-full"):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode == "gecko-cover":
                 assert sum(command.startswith("I 2 ") for command in commands)==1, "Draw one centered cover without a stretched duplicate"

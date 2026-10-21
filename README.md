@@ -31,6 +31,8 @@ Get the matching packages from the [latest release](https://github.com/Scyllinic
 
 The optional desktop app runs without Python or Docker. It can organize discs,
 prepare covers and previews, edit console settings and save backups, and prepare a USB drive.
+It also manages game descriptions and metadata, with bulk editing, portable
+custom-edit backups and a review for unmatched games.
 It also offers verified updates for the app and `boot.iso`.
 See [installation and drive layout](docs/installation.md) or the
 [desktop guide](desktop/README.md) for the full workflow.
@@ -44,7 +46,9 @@ See [installation and drive layout](docs/installation.md) or the
 | A | Open a folder or play a game |
 | B | Go back |
 | C | Add the selected game to the disc queue |
-| P (Start) | Review the queue |
+| Tap P (Start) | Review the queue |
+| Hold P for 750 ms | Show controls for the current screen |
+| Hold C + tap P | Show the selected game's information and description |
 | X | Tap to switch cover/video; hold for full-screen viewing |
 | L + R | Open Tools |
 

@@ -30,6 +30,26 @@ support sizes, bytes to transfer, current free space, a working-space reserve
 and estimated free space afterward. Copying is blocked if the estimate does not
 fit, and free space is checked again before writes begin.
 
+After a verified copy, choose **Safely eject drive** in the completion dialog.
+It is also available under **Drive setup**. Windows uses Explorer’s eject action
+and confirms the volume is unavailable. Linux needs `udisksctl` (udisks2) and
+refuses drives with other mounted volumes. Busy, unsupported, fixed Windows
+drives and WSL mounts may require the operating system’s eject controls. The
+app reports failures; it never forces an unmount. Keep the app and its cache
+off the drive being removed.
+
+**Library → Prepare missing media** works on the selected titles, including
+all their discs. It finds missing covers, previews and descriptions, creates or
+repairs the console description files, retains existing descriptions/media, and
+leaves unselected games alone. The configured media folder and download
+preferences still apply. Descriptions use the cached LaunchBox download offline;
+if metadata is unavailable, artwork preparation continues and logs the reason.
+
+The Library’s media filter shows **Missing covers**, **Missing previews**, or
+**Missing covers or previews**. It checks whether the associated files exist;
+a multi-disc title is included if any disc is missing that media. Use the drive
+readiness check for damaged files.
+
 **Save Manager → Compare…** compares a chosen reference backup to the current
 draft. Known game names and change totals make affected saves easier to find;
 expand a row for byte differences or open its current save in the hex editor.
@@ -52,10 +72,128 @@ save/game payloads. Review it before sharing. The app does not upload it.
 Existing reports can be replaced; unrelated documents and the console's
 original diagnostics cannot be overwritten by report export.
 
-Library selections, search text, category and region filters are remembered
+Library selections, search text, category, region and missing-media filters are remembered
 per library on this PC. Switching libraries restores each library's own view;
 removed games and unavailable categories/regions are dropped from the saved
 view. **Clear selection** is remembered too.
+
+## Game information, named drives and slot notes
+
+Select one Library tile and choose **Game details** to read its description,
+genre, developer, publisher, release date and disc paths. **Get game information…**
+loads matching LaunchBox metadata; an existing download works offline. Ambiguous
+or unmatched titles keep their previous information. **Prepare missing media**
+also fills missing descriptions, so a separate information download is optional.
+New imports also retain
+available descriptions. Copy selected games after refreshing to transfer optional
+`.ohmy3do/info/*.txt` files. Console descriptions are plain text, limited to 2048
+ASCII bytes; the desktop retains the full original text and source attribution.
+Choose **Game details → Edit information…** to edit descriptions, genre,
+developer, publisher, release date, release year and player count. Only changed
+fields are applied to all discs of that game. Edits, including deliberately cleared
+fields, are retained by later metadata downloads. Source attribution identifies
+edited descriptions. Use **Restore downloaded** beside a field or
+**Restore downloaded information…** for the whole game. Review the current and
+downloaded values, choose **Use downloaded values**, then **Save information**.
+Restoring removes manual overrides for the restored fields, allowing subsequent
+downloads to update them again. Fields not supplied by LaunchBox are kept;
+matching multi-disc games restore each disc's own downloaded values. Cached
+metadata works offline. Canceling the preview leaves the draft unchanged.
+Saving checks for concurrent metadata changes, regenerates
+console metadata and description files, and supports the normal Undo command.
+The desktop accepts descriptions up to 64 KB; the console copy uses 2048 ASCII bytes.
+
+The Library's **All information** filter can show games missing descriptions,
+release dates/years, genres, developers, publishers or player counts, or games
+with manual edits. **Missing any information** matches any of those missing
+fields on any disc. A release date or year satisfies the release filter.
+Deliberately cleared fields still count as missing. This filter combines with
+search, region, category and missing-media filters and is remembered per library.
+
+**Edited** markers in the Library, game details and information editor identify
+manual values protected from downloads. The editor distinguishes fields edited
+on only some discs, newly staged edits and downloaded values staged for restore.
+Select games and choose **Edit information…** in the selection bar to set shared
+genre, developer, publisher, release date/year and player count values. Check
+**Apply** for each field you want to change. Unchecked fields and descriptions
+are kept; an applied blank clears the field. Mixed values are identified and the
+changes are confirmed before saving. The whole bulk change supports Undo.
+
+Choose **Metadata…** in the Library to export all or selected games' custom
+metadata to a portable JSON file, or to import one. Exports contain manual edits
+only, including intentional blanks; they contain neither downloaded metadata nor
+game/save contents. Keep the export outside the internal `.ohmy3do` folder.
+Imports work offline and show current and imported values before applying checked
+entries. Conflicting manual edits start unchecked. Matches prefer relative disc
+paths and verify title, region and disc; moved entries require a unique match on
+those same identifiers. Ambiguous, unmatched and already matching entries are
+listed as skipped. Unsupported versions or invalid fields reject the import.
+Only supplied fields change; they become protected manual edits. Changes use one
+undoable operation and regenerate the console metadata and description files.
+Copy the affected games afterward to update the console drive. Export/import
+files are limited to 16 MB; use selected exports for larger custom collections.
+
+The Library search has **Titles only** and **Titles & information** scopes.
+The broader scope also searches descriptions, genres, developers and publishers
+from every disc in a grouped game. Search scope is remembered per library and
+combines with the existing filters.
+**Clear filters** resets search, category, region and information/media filters
+without discarding selections or changing search scope. The heading shows how
+many games match; the selection bar identifies selected games outside the current
+view so you can see what a copy or bulk edit will include.
+
+Library controls wrap into consistent rows on smaller windows. Dialog contents
+scroll while their action buttons stay visible, and space is reserved below the
+game tiles when the selection bar wraps. Long-running operations show start,
+progress and completion messages in the status bar and Activity. Hover over the
+status message to read its full text. Cancel changes to **Canceling…** while the
+current step finishes; cancellation is reported separately from a failure.
+
+**Metadata… → Review information matches…** lists games with no automatic match,
+ambiguous titles, or previously chosen LaunchBox entries missing from the cached
+data. Enable **Show matched games too** to change an existing choice. Choose a
+game, search the downloaded 3DO titles, and review current/downloaded fields
+before **Use this match**. This immediately saves available downloaded values
+for the game's discs, preserves manual overrides and unavailable fields, and
+remembers the LaunchBox ID. It changes information only, not disc identification,
+paths or media associations. Subsequent information refreshes, missing-description
+preparation and Restore downloaded use that entry. If the chosen ID becomes
+unavailable, existing values are kept until you choose another match. Cached
+data works offline; the match operation supports Undo.
+
+Automatic custom-metadata snapshots are saved on the desktop before operations
+using the library Undo journal, and before an explicit Undo. This includes metadata
+edits/restores/imports/matches/refreshes, game imports, media preparation and
+category changes. No snapshot is needed when there are no custom fields. Identical
+current snapshots are not duplicated; the five newest distinct snapshots per
+canonical library path are retained. These are separate from Undo and are not
+copied to the console drive. **Metadata… → Automatic metadata backups…** shows
+their dates, size, location and disc counts. **Review restore…** uses the normal
+import review and conflict controls. Only custom information fields (including
+intentional blanks) are restored; files, downloaded information, chosen LaunchBox
+matches and save data are outside these snapshots. Copy a snapshot JSON from the
+shown folder for a separate long-term backup. Snapshots use the same 16 MB limit
+and portable format as metadata exports. Backup write failures stop the pending
+operation before its journal is created.
+
+On the console, **hold C and tap P** opens details without queuing or launching.
+
+**Drive setup → Name / identify drive…** writes a small `.ohmy3do/drive.json`
+with a persistent UUID and a friendly name, such as “Console SD.” The PC remembers
+which identity used that drive letter or mount path. Copy review shows the drive
+name and path, and copying, setup and boot updates recheck the ID before writing.
+If another drive occupies a remembered location, check it and explicitly remember
+it in Drive setup. Drive identities are never copied from the staging library.
+An unnamed drive can still be prepared or copied; name it to enable identity checks.
+Cloning a drive also copies its identity; rename creates a new label, not a new UUID.
+
+Open a numbered backup in **Save Manager → Notes…** to add up to 4096 UTF-8 bytes
+of notes. Slot search includes notes, which are also shown in the slot list.
+They are stored alongside the archive as `slotNN.notes.txt`; copying the archive
+alone does not copy its notes. Notes never change save payloads or their checksums.
+An editor rejects changes if another process has updated the notes since opening.
+Notes belong to the slot and remain when its archive is replaced; review them
+when reusing a slot. They are managed in the desktop app.
 
 ## Categories and console visibility
 

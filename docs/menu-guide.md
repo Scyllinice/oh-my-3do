@@ -14,15 +14,22 @@ Folders sort first, ignoring ASCII case and using natural numeric order:
 | Up / Down | Move selection; hold to repeat |
 | Left / Right or L / R | Page through the list |
 | A | Open a folder or launch a game; a disc from a multi-disc set also queues the discs after it |
+| Hold C + tap P | Game information and description for the selected entry |
 | Hold C + A | Launch only the selected disc; on a folder that acts as a game, open the folder |
 | B | Parent folder |
 | C | Add selected image to the queue when released |
 | Hold C + Up | Focus the alphabet strip from anywhere in the list |
 | Hold C + Left / Right | Jump to the previous/next initial letter without adding a disc |
-| P (Start) | Review the disc queue |
+| Tap P (Start) | Review the disc queue (on release) |
+| Hold P for 750 ms | Controls for the current menu screen |
 | X | Clear an active find filter; else tap to switch cover/video. Hold for 500 ms to show the current cover or playing preview full-screen; any button returns. Otherwise refresh / retry connection |
 | L + R together | Tools: saves, backups, favorites, recent games, find, configuration, help, diagnostics; also cancels a cover/preview load |
 | Hold X at startup | Skip USB configuration, artwork, favorites and settings writes |
+
+Hold P in the browser or a tool to see its controls. B or P closes help and
+returns to the same screen with the selection and unsaved edits preserved.
+A short P press keeps its usual action and runs when released. Full-screen
+media keeps its existing any-button-to-return behavior.
 
 The browser uses a proportional, mixed-case bitmap font, a dedicated artwork
 panel, square selection bars and raised, colour-coded controller prompts shaped
@@ -31,7 +38,7 @@ and direction buttons; P is the pad's Start button). Under the list, prompts
 show what A and C (or Start) do for the selected entry, with `B Back` (inside a
 folder or the queue) and `L+R Tools` below them. Beside the channel number, `QUEUE n` shows queued discs and `UNSAVED`
 marks unsaved settings. The Tools screen has two
-columns of four cards; the arrows move between them. Cover images and video
+columns with seven cards; the arrows move between them. Cover images and video
 previews share the larger artwork panel.
 
 **Save Manager** contains **Console saves** and **USB backups** views; use
@@ -53,11 +60,16 @@ Full filenames and original TOC IDs are retained.
 Game labels consistently hide recognized region and language tags, while keeping
 edition, revision, disc and other designators. Identical cleaned names receive
 `[1]`, `[2]`, etc. in the browser and title card; files and folders are not renamed.
-Select an entry, open **L+R Tools**, then select **Game details** or press **X**.
-This read-only view shows the original name (including region, revision and
-other tags), its location, disc filenames for recognized game folders, and
-available genre/publisher/date metadata. Left/Right pages through the complete
-text; B returns to Tools. It does not enter the game folder or access the ODE.
+Select an entry, **hold C and tap P** to open **Game details**. This view shows
+available genre/publisher/date metadata and a description, followed by the
+original name, location and disc filenames. Left/Right pages through the text;
+B returns directly to the same browser selection. It does not queue or launch
+the game. Descriptions are optional: use **Prepare missing media** or
+**Get game information…** in the desktop Library, or edit them under
+**Game details → Edit information…**, then copy the selected games to the console drive. They remain available
+offline. The console reads one small description file on opening details, using
+the same folder restoration safeguards as other USB tools. Normal scrolling
+and preview playback do not load descriptions.
 
 Long selected names scroll after a pause; folder changes reset the animation.
 Parent navigation restores selection. The

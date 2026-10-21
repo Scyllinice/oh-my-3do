@@ -110,6 +110,7 @@ pub struct Preferences {
     pub download_covers: bool,
     pub software_rendering: bool,
     pub theme: Theme,
+    pub drives: std::collections::BTreeMap<String, crate::drive_identity::Identity>,
     pub library_views: std::collections::BTreeMap<String, LibraryView>,
 }
 
@@ -120,6 +121,10 @@ pub struct LibraryView {
     pub search: String,
     pub category: String,
     pub region: String,
+    pub media: String,
+    pub information: String,
+    #[serde(rename = "searchScope")]
+    pub search_scope: String,
 }
 
 /// Desktop appearance; older preference files follow the operating system.

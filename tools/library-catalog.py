@@ -196,7 +196,7 @@ def enrich(games, metadata):
                                     publisher=match['Publisher'] or None, developer=match['Developer'] or None,
                                     release_type=match.get('ReleaseType') or None,
                                     year=int(year[0]) if year else None, release_date=match['ReleaseDate'] or None,
-                                    launchbox_id=match['DatabaseID'], source=LAUNCHBOX)
+                                    launchbox_id=match['DatabaseID'], description=match.get('Overview') or None, source=LAUNCHBOX)
     return games
 
 
