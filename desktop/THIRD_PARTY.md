@@ -13,6 +13,15 @@ versions and license expressions, plus license/copyright texts collected from
 the exact dependency source directories used for the build. These notices are
 part of the distribution and should be kept alongside the executable.
 
+The optional Windows setup executable uses [NSIS](https://nsis.sourceforge.io/License),
+with its notices installed as `licenses/installer/NSIS.txt`. It embeds Microsoft's
+Evergreen WebView2 bootstrapper, downloaded from Microsoft's official distribution
+link. Setup invokes it only if the shared runtime is missing; the runtime itself
+is then downloaded from Microsoft and remains installed when this app is removed.
+See [Microsoft's distribution documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution).
+The Linux per-user installer uses a shell wrapper and the same licensed desktop
+payload; it does not bundle GTK or WebKitGTK.
+
 The desktop app does not contain Python, the 3DO SDK, console runtime files,
 game images, commercial covers, gameplay footage or FFmpeg binaries. Catalogs
 and optional media are fetched at runtime from their providers. Video tools

@@ -6,6 +6,30 @@ verification run in Rust. No Python or Node installation is needed to use it.
 
 ## Install and start
 
+**Windows:** run `OhMy3DO-Library-Windows-x64-v1.0.0-Setup.exe`. It installs for
+your account under `%LOCALAPPDATA%\Programs\OhMy3DOLibrary`, adds Start menu
+shortcuts and an entry in Windows Installed apps, and offers an optional desktop
+shortcut. No administrator account is required. Setup checks Microsoft WebView2
+and runs Microsoft's Evergreen bootstrapper if it is missing; that step needs
+an internet connection. Close the app before reinstalling or uninstalling. Use
+Windows Installed apps or the Start menu's Uninstall shortcut to remove it.
+
+**Linux:** run `sh OhMy3DO-Library-Linux-x64-v1.0.0-Install.run` as your normal
+user, without sudo. It checks the package checksum and missing dynamic libraries,
+then installs in `$XDG_DATA_HOME/oh-my-3do-library` (normally
+`~/.local/share/oh-my-3do-library`) and adds an application-menu entry. GTK 3 and
+WebKitGTK 4.1 must already be installed. The installer does not install system
+packages or require Python. Run `sh ~/.local/share/oh-my-3do-library/uninstall.sh`
+to uninstall; adjust the path if you use a custom XDG data directory. Install and
+uninstall scripts accept `--yes` for unattended use. `--help` describes the installer.
+
+Both installers use a writable per-user application folder, so the existing
+verified ZIP-based self-updater continues to work. Uninstall removes application
+files and shortcuts, while keeping games, saves, preferences, metadata snapshots
+and the shared WebView2 Runtime. Extra files placed in the app folder are kept,
+except the application's dependency-notice directory and owned update remnants.
+
+**Portable:**
 Extract the complete Windows or Linux ZIP into a writable folder and start
 `OhMy3DOLibrary.exe` (Windows) or `OhMy3DOLibrary` (Linux). Keep the license
 files beside it. Windows requires Microsoft Edge WebView2, normally present on
@@ -357,6 +381,29 @@ from `desktop/ui`; there is no Node runtime or npm dependency tree to ship.
 Command-line shortcuts include `--library PATH`, `--guided-setup`,
 `--save-backup PATH.3ds` and `--save-slots PATH`. `--software-rendering` selects software graphics before creating the window.
 The legacy automatic screenshot switch belongs to the previous interface.
+
+### Building installers
+
+First build and package the Windows/Linux desktop app with
+`tools/build-desktop.py` and `tools/package-desktop.py`. The installer builder
+requires those complete, licensed `build/desktop-Windows-x64` and
+`build/desktop-Linux-x64` payloads; it checks their executable hashes and retains
+their `BUILD.json` source revision. It does not build the application itself.
+
+```sh
+docker build -t oh3do-installers -f tools/installer.Dockerfile .
+mkdir -p build/installer-cache
+curl --fail --location --proto '=https' --proto-redir '=https' --output build/installer-cache/MicrosoftEdgeWebview2Setup.exe 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src oh3do-installers python3 tools/package-installers.py --webview-bootstrapper build/installer-cache/MicrosoftEdgeWebview2Setup.exe
+```
+
+Outputs are `iso/*-Setup.exe`, `iso/*-Install.run` and their `.sha256` files.
+`--platform Windows-x64` or `--platform Linux-x64` builds just one installer.
+Windows packaging uses NSIS, includes its notices and records the bootstrapper
+hash in `build/installer-Windows-x64/BUILD.json`. Linux's self-extracting archive
+embeds the complete package and verifies its compressed payload before extracting.
+An installer is an additional download; portable ZIPs remain required for the
+desktop app's self-update protocol.
 
 Native interaction and updater-recovery smoke tests are in
 `tools/test-desktop-ui.py` and `tools/test-desktop-update.py`. They run in the

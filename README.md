@@ -19,7 +19,8 @@ Get the matching packages from the [latest release](https://github.com/Scyllinic
 | Download | Purpose |
 | --- | --- |
 | `boot.iso` | Console menu |
-| Windows or Linux desktop ZIP | Import discs, prepare media and copy a library to USB |
+| Windows setup EXE or Linux installer | Install the desktop app and application-menu shortcuts |
+| Windows or Linux desktop ZIP | Portable desktop app; no installation needed |
 | `media-tools.zip` | Optional Python command-line tools |
 | `menu-demo.iso` | Offline interface demo; does not launch games |
 
