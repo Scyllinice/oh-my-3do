@@ -26,7 +26,7 @@ Folders sort first, ignoring ASCII case and using natural numeric order:
 | L + R together | Tools: saves, backups, favorites, recent games, find, configuration, help, diagnostics; also cancels a cover/preview load |
 | Hold X at startup | Skip USB configuration, artwork, favorites and settings writes |
 
-Hold P in the browser or a tool to see its controls. B or P closes help and
+The browser keeps a **Hold P** pill with a **Help** label beside the other button prompts. The list shows 10 rows, or 7 with large titles, to leave room for all three control rows. Hold P in the browser or a tool to see its controls. B or P closes help and
 returns to the same screen with the selection and unsaved edits preserved.
 A short P press keeps its usual action and runs when released. Full-screen
 media keeps its existing any-button-to-return behavior.
@@ -75,8 +75,8 @@ Long selected names scroll after a pause; folder changes reset the animation.
 Parent navigation restores selection. The
 previous listing remains visible while a folder loads. A read failure hides the
 listing and prevents selection until the connection recovers. The whole
-directory is sorted before paging. Normal text shows eleven rows; large filenames
-show eight. Browsing redraws changed rows and details while retaining the TV frame
+directory is sorted before paging. Normal text shows ten rows; large filenames
+show seven. Browsing redraws changed rows and details while retaining the TV frame
 and logo in each display buffer; an unchanged screen needs no redraw. Artwork
 waits until selection settles, and queued movement takes priority over preview loading.
 Uncached covers wait 700 ms and previews wait 1.6 seconds after selection settles.
@@ -283,7 +283,7 @@ unknown INI keys such as `theme` are rejected.
 
 ![Gecko TV root browser](images/gecko-tv.png)
 
-Screenshot of the v1.0.0 boot image in Opera: native 320×240, enlarged to 960×720.
+Screenshot of the menu v1.0.1 boot image in Opera: native 320×240, enlarged to 960×720.
 
 **C** or **Save changes to USB** writes all nine settings, closes/reopens the
 file and verifies every byte. B returns without writing; unsaved display
@@ -296,7 +296,7 @@ preview.
 The margin moves the menu into an inset area while keeping text at native pixel
 size. Text uses Ark Pixel, a bitmap font drawn pixel by pixel at 10 and 12 pixels,
 so letters stay crisp on the console. The game list uses the 10-pixel design in
-eleven rows, or the 12-pixel design in eight rows with large titles enabled.
+ten rows, or the 12-pixel design in seven rows with large titles enabled.
 Restore display defaults resets only the margin and larger-title settings.
 
 The save writes a canonical INI containing all nine settings and replaces

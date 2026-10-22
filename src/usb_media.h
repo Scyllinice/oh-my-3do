@@ -13,6 +13,8 @@
 #define USB_PREVIEW_CHUNKS 8
 #define USB_PNG_MAX_BYTES (512UL * 1024UL)
 typedef int (*MediaCancel)(void *context);
+/* Release optional cached data; return nonzero only when memory was freed. */
+typedef int (*MediaReclaim)(void *context);
 typedef void (*MediaLoadPhase)(void *context,int checking);
 typedef struct UsbPreview {
     /* The frame table: source_frames + 1 offsets into the video bytes. */
@@ -53,6 +55,11 @@ int usb_preview_load_profiled(Ode *ode,OdeReadBuffer reader,const char *filename
     UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context);
 int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,
     UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound);
+/* Reclaim hooks run at allocation boundaries, before audio/video payload reads.
+ * They never retry a firmware command or a failed media transfer. */
+int usb_preview_load_reclaim(Ode *ode,OdeReadBuffer reader,const char *filename,
+    UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound,
+    MediaReclaim reclaim,void *reclaim_context);
 int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder);
 int usb_media_filename(const char *name);
 #endif

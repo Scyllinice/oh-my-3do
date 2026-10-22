@@ -14,6 +14,7 @@
 !tests/**
 !tools/
 !tools/prepare-runtime.py
+!tools/release.py
 !tools/index-media.py
 !tools/organize-library.py
 !tools/library-maintenance.py

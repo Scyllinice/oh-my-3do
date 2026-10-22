@@ -6,7 +6,7 @@ verification run in Rust. No Python or Node installation is needed to use it.
 
 ## Install and start
 
-**Windows:** run `OhMy3DO-Library-Windows-x64-v1.0.0-Setup.exe`. It installs for
+**Windows:** run `OhMy3DO-Library-Windows-x64-v<version>-Setup.exe`. It installs for
 your account under `%LOCALAPPDATA%\Programs\OhMy3DOLibrary`, adds Start menu
 shortcuts and an entry in Windows Installed apps, and offers an optional desktop
 shortcut. No administrator account is required. Setup checks Microsoft WebView2
@@ -14,7 +14,7 @@ and runs Microsoft's Evergreen bootstrapper if it is missing; that step needs
 an internet connection. Close the app before reinstalling or uninstalling. Use
 Windows Installed apps or the Start menu's Uninstall shortcut to remove it.
 
-**Linux:** run `sh OhMy3DO-Library-Linux-x64-v1.0.0-Install.run` as your normal
+**Linux:** run `sh OhMy3DO-Library-Linux-x64-v<version>-Install.run` as your normal
 user, without sudo. It checks the package checksum and missing dynamic libraries,
 then installs in `$XDG_DATA_HOME/oh-my-3do-library` (normally
 `~/.local/share/oh-my-3do-library`) and adds an application-menu entry. GTK 3 and
@@ -401,9 +401,9 @@ console keeps bundled fallback definitions; external updates need no ISO rebuild
 
 ## App and menu updates
 
-**Updates** checks the latest stable GitHub release. Startup checks open an offer
+**Updates** checks the latest stable `desktop-v…` and `menu-v…` GitHub releases independently. The two version numbers do not need to match. New-drive setup downloads the latest stable menu rather than the desktop app’s version. Startup checks open an offer
 only for a newer desktop version or a differing/missing boot ISO on a checked
-root. A boot-only offer contains only the relevant boot-image actions. Offline
+root. Each offer shows its own version and release notes. A boot-only offer contains only the relevant boot-image actions. Offline
 mode disables checks and downloads.
 
 **Update and restart** downloads the desktop ZIP, verifies its published SHA-256

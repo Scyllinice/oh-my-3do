@@ -9,9 +9,13 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-const REPO: &str = "https://github.com/Scyllinice/oh-my-3do";
+pub const REPO: &str = "https://github.com/Scyllinice/oh-my-3do";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Component { Menu, Desktop }
 #[derive(Clone, Debug)]
 pub struct Release {
+    /// None identifies a historical combined vX.Y.Z release.
+    pub component: Option<Component>,
     pub tag: String,
     pub version: String,
     pub notes: String,
@@ -24,7 +28,8 @@ pub struct BootState {
 }
 #[derive(Clone, Debug)]
 pub struct Check {
-    pub release: Release,
+    pub menu: Release,
+    pub desktop: Release,
     pub boot_digest: String,
     pub targets: Vec<BootState>,
     pub warnings: Vec<String>,
@@ -58,10 +63,14 @@ impl Release {
             .as_str()
             .context("Release tag missing")?
             .to_owned();
-        let number = tag
-            .strip_prefix('v')
-            .context("Unsupported release tag")?
-            .to_owned();
+        let (component, number) = if let Some(number) = tag.strip_prefix("menu-v") {
+            (Some(Component::Menu), number)
+        } else if let Some(number) = tag.strip_prefix("desktop-v") {
+            (Some(Component::Desktop), number)
+        } else {
+            (None, tag.strip_prefix('v').context("Unsupported release tag")?)
+        };
+        let number = number.to_owned();
         version(&number)?;
         let mut assets = Vec::new();
         for asset in value["assets"]
@@ -88,6 +97,7 @@ impl Release {
             assets.push((name.to_owned(), url.to_owned()));
         }
         Ok(Self {
+            component,
             tag,
             version: number,
             notes: value["body"]
@@ -110,6 +120,7 @@ impl Release {
             .with_context(|| format!("Release is missing {name}"))
     }
     pub fn desktop_name(&self, platform: &str) -> Result<String> {
+        ensure!(self.component != Some(Component::Menu), "Not a desktop release");
         ensure!(
             ["Windows-x64", "Linux-x64", "macOS-arm64", "macOS-x64"].contains(&platform),
             "Unsupported desktop platform"
@@ -119,11 +130,11 @@ impl Release {
         self.asset(&format!("{name}.sha256"))?;
         Ok(name)
     }
-    fn digest(&self, client: &Client, name: &str, job: &Job) -> Result<String> {
+    pub(crate) fn digest(&self, client: &Client, name: &str, job: &Job) -> Result<String> {
         let bytes = setup::download(client, self.asset(&format!("{name}.sha256"))?, 1024, job)?;
         checksum(std::str::from_utf8(&bytes)?, name)
     }
-    fn bytes(&self, name: &str, limit: usize, client: &Client, job: &Job) -> Result<Vec<u8>> {
+    pub(crate) fn bytes(&self, name: &str, limit: usize, client: &Client, job: &Job) -> Result<Vec<u8>> {
         let expected = self.digest(client, name, job)?;
         let bytes = setup::download(client, self.asset(name)?, limit, job)?;
         ensure!(
@@ -164,15 +175,58 @@ fn boot_digest(root: &Path, job: &Job) -> Result<Option<String>> {
     );
     Ok(Some(f::sha256(&path, job)?))
 }
+/// Select numerically within one stream; combined releases are a fallback only
+/// until that stream has its own stable release. Publication order is irrelevant.
+pub fn select_release(values: &[Value], component: Component) -> Result<Release> {
+    let mut split: Option<Release> = None;
+    let mut combined: Option<Release> = None;
+    for value in values {
+        if value["draft"] != false || value["prerelease"] != false { continue; }
+        let tag = value["tag_name"].as_str().unwrap_or("");
+        let prefix = match component { Component::Menu => "menu-v", Component::Desktop => "desktop-v" };
+        let slot = if tag.starts_with(prefix) { &mut split }
+            else if tag.starts_with('v') { &mut combined } else { continue; };
+        // Ignore unrelated tag schemes; fail closed for malformed assets in a
+        // recognized stable release instead of silently installing an older one.
+        let number = tag.strip_prefix(prefix).or_else(|| tag.strip_prefix('v')).unwrap();
+        if version(number).is_err() { continue; }
+        let release = Release::parse(&serde_json::to_vec(value)?)?;
+        if slot.as_ref().is_none_or(|old| is_newer(&release.version, &old.version).unwrap_or(false)) {
+            *slot = Some(release);
+        }
+    }
+    split.or(combined).context("No stable release found for this component")
+}
+fn release_pages(mut fetch: impl FnMut(usize) -> Result<Vec<Value>>) -> Result<Vec<Value>> {
+    let mut releases = Vec::new();
+    for page in 1..=100 {
+        let batch = fetch(page)?;
+        let done = batch.len() < 100;
+        releases.extend(batch);
+        if done { return Ok(releases); }
+    }
+    anyhow::bail!("Too many release pages; cannot complete the update check")
+}
+fn published_releases(client: &Client, job: &Job) -> Result<Vec<Value>> {
+    // GitHub has one /latest marker for the repository. Read every list page
+    // so frequent desktop releases cannot hide the latest console release.
+    release_pages(|page| {
+        let bytes = setup::download(client, &format!(
+            "https://api.github.com/repos/Scyllinice/oh-my-3do/releases?per_page=100&page={page}"
+        ), 8 * 1024 * 1024, job)?;
+        Ok(serde_json::from_slice(&bytes)?)
+    })
+}
+pub fn latest(component: Component, job: &Job) -> Result<Release> {
+    let client = setup::client()?;
+    select_release(&published_releases(&client, job)?, component)
+}
 pub fn check(roots: &[PathBuf], job: &Job) -> Result<Check> {
     let client = setup::client()?;
-    let release = Release::parse(&setup::download(
-        &client,
-        "https://api.github.com/repos/Scyllinice/oh-my-3do/releases/latest",
-        1024 * 1024,
-        job,
-    )?)?;
-    let digest = release.digest(&client, "boot.iso", job)?;
+    let releases = published_releases(&client, job)?;
+    let menu = select_release(&releases, Component::Menu)?;
+    let desktop = select_release(&releases, Component::Desktop)?;
+    let digest = menu.digest(&client, "boot.iso", job)?;
     let mut targets: Vec<BootState> = Vec::new();
     let mut warnings = Vec::new();
     for path in roots {
@@ -197,7 +251,8 @@ pub fn check(roots: &[PathBuf], job: &Job) -> Result<Check> {
     }
     job.check()?;
     Ok(Check {
-        release,
+        menu,
+        desktop,
         boot_digest: digest,
         targets,
         warnings,
@@ -237,6 +292,7 @@ fn write_download(destination: &Path, bytes: &[u8], job: &Job) -> Result<()> {
     Ok(())
 }
 fn menu_bytes(release: &Release, digest: &str, job: &Job) -> Result<Vec<u8>> {
+    ensure!(release.component != Some(Component::Desktop), "Not a menu release");
     let bytes = release.bytes("boot.iso", 16 * 1024 * 1024, &setup::client()?, job)?;
     setup::verify_image(&bytes, &format!("{digest}  boot.iso"))?;
     Ok(bytes)
@@ -305,6 +361,20 @@ pub fn install_boot_bytes(
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
+    #[test]
+    fn release_listing_reads_past_frequent_desktop_releases_and_fails_on_incomplete_pages() {
+        let value = |tag: &str| serde_json::json!({"tag_name":tag,"draft":false,"prerelease":false,"assets":[]});
+        let mut pages = Vec::new();
+        let all = release_pages(|page| {
+            pages.push(page);
+            Ok(if page == 1 { vec![value("desktop-v9.0.0");100] }
+                else { vec![value("menu-v1.2.0")] })
+        }).unwrap();
+        assert_eq!(pages, vec![1,2]);
+        assert_eq!(select_release(&all, Component::Menu).unwrap().version, "1.2.0");
+        assert!(release_pages(|page| if page == 1 { Ok(vec![value("desktop-v9.0.0");100]) }
+            else { anyhow::bail!("Connection lost") }).is_err());
+    }
     #[test]
     fn verified_download_publication_is_atomic_and_never_clobbers() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,10 +1,13 @@
 # Screenshots
 
-The console screenshots show the v1.0.0 menu running in the Opera
-emulator, captured at its native 320×240 resolution with an 8-pixel screen
+The console screenshots show the menu running in the Opera emulator,
+captured at its native 320×240 resolution with an 8-pixel screen
 margin. The images below are enlarged 3× to **960×720** using nearest-neighbor
 scaling, keeping each original pixel sharp. No smoothing or retouching is applied.
 The [original 320×240 captures](images/native/) are also available.
+
+The browser, media, Tools, Help and game details captures show menu v1.0.1.
+The category and Save Manager examples show v1.0.0.
 
 ## Startup
 
@@ -13,6 +16,14 @@ The [original 320×240 captures](images/native/) are also available.
 ## Game browser and cover
 
 ![Road Rash selected in the game browser with its cover displayed](images/browser.png)
+
+![Real Pinball selected with seven large-text rows and the Hold P Help control](images/browser-large.png)
+
+## Help
+
+Hold **P** for 750 ms to open Help. The button stays visible beneath the game list.
+
+![Controls page explaining navigation, previews, queueing and game details](images/controls.png)
 
 ## Video preview
 
@@ -28,7 +39,7 @@ The [original 320×240 captures](images/native/) are also available.
 
 ## Tools
 
-![Tools menu with Save Manager, Game details, Favorites, Settings, Help, Diagnostics, Recent games and Find a game](images/tools.png)
+![Tools menu with Save Manager, Favorites, Settings, Help, Diagnostics, Recent games and Find a game](images/tools.png)
 
 ## Category visibility
 
@@ -60,7 +71,7 @@ The [original 320×240 captures](images/native/) are also available.
 
 ## Desktop library and USB copying
 
-Actual 1280×900 captures of the Tauri desktop app. The Library uses real covers;
+Actual 1280×900 captures of the Tauri desktop app v1.0.1. The Library uses real covers;
 the library, transfer and save screens use disposable test fixtures.
 
 ![Tauri Library with real game covers](images/desktop-library.png)

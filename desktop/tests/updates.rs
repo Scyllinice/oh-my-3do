@@ -166,3 +166,56 @@ fn new_boot_install_can_be_undone_without_removing_other_files() {
     assert!(!root.path().join("boot.iso").exists());
     assert_eq!(fs::read(root.path().join("keep")).unwrap(), b"keep");
 }
+
+fn component_release(tag: &str) -> Value {
+    let mut value = release();
+    value["tag_name"] = json!(tag);
+    for asset in value["assets"].as_array_mut().unwrap() {
+        let name = asset["name"].as_str().unwrap().to_owned();
+        asset["browser_download_url"] = json!(format!("https://github.com/Scyllinice/oh-my-3do/releases/download/{tag}/{name}"));
+    }
+    value
+}
+#[test]
+fn release_streams_choose_versions_independently_of_publication_order() {
+    use updates::Component::{Menu, Desktop};
+    let mut draft = component_release("menu-v90.0.0"); draft["draft"] = json!(true);
+    let mut prerelease = component_release("desktop-v90.0.0"); prerelease["prerelease"] = json!(true);
+    let releases = vec![component_release("desktop-v3.9.0"), component_release("menu-v1.10.0"),
+        component_release("desktop-v3.10.0"), component_release("menu-v1.9.0"),
+        component_release("v99.0.0"), draft, prerelease, component_release("other-v100.0.0")];
+    assert_eq!(updates::select_release(&releases, Menu).unwrap().tag, "menu-v1.10.0");
+    assert_eq!(updates::select_release(&releases, Desktop).unwrap().tag, "desktop-v3.10.0");
+    let menu = Release::parse(&serde_json::to_vec(&component_release("menu-v1.10.0")).unwrap()).unwrap();
+    assert!(menu.desktop_name("Windows-x64").is_err());
+}
+#[test]
+fn each_stream_falls_back_to_combined_release_only_until_it_exists() {
+    use updates::Component::{Menu, Desktop};
+    let mut releases = vec![component_release("v1.0.0")];
+    assert_eq!(updates::select_release(&releases, Menu).unwrap().tag, "v1.0.0");
+    assert_eq!(updates::select_release(&releases, Desktop).unwrap().tag, "v1.0.0");
+    releases.push(component_release("desktop-v1.10.0"));
+    assert_eq!(updates::select_release(&releases, Menu).unwrap().tag, "v1.0.0");
+    assert_eq!(updates::select_release(&releases, Desktop).unwrap().tag, "desktop-v1.10.0");
+    releases.push(component_release("menu-v1.2.0"));
+    assert_eq!(updates::select_release(&releases, Menu).unwrap().tag, "menu-v1.2.0");
+    assert!(updates::select_release(&[component_release("desktop-v1.10.0")], Menu).is_err());
+}
+#[test]
+fn split_release_downloads_stay_pinned_to_their_own_tag() {
+    for tag in ["menu-v1.10.0", "desktop-v1.10.0"] {
+        let value = component_release(tag);
+        let parsed = Release::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(parsed.page(), format!("https://github.com/Scyllinice/oh-my-3do/releases/tag/{tag}"));
+        if tag.starts_with("desktop-") {
+            assert_eq!(parsed.desktop_name("Windows-x64").unwrap(), "OhMy3DO-Library-Windows-x64-v1.10.0.zip");
+        }
+        let mut wrong = value;
+        wrong["assets"][0]["browser_download_url"] = json!("https://github.com/Scyllinice/oh-my-3do/releases/download/v1.10.0/boot.iso");
+        assert!(Release::parse(&serde_json::to_vec(&wrong).unwrap()).is_err());
+    }
+    for tag in ["menu-v1.0", "desktop-v01.0.0", "menu-v1.0.0-beta"] {
+        assert!(Release::parse(&serde_json::to_vec(&component_release(tag)).unwrap()).is_err());
+    }
+}

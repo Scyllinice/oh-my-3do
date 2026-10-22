@@ -36,8 +36,8 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "1.0.0"
-#define ROWS 11
+#define MENU_VERSION "1.0.1"
+#define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
 #define TOOL_SLOTS 3
@@ -102,7 +102,7 @@ typedef struct ScrollMeasure {
 #define UI_TEXT_CACHE 64
 typedef struct UiText {
     CCB *cel;
-    int style, width, palette_valid, capacity_width;
+    int style, width, palette_valid, capacity_width, glyph_width;
     Color ink, background;
     char value[97];
 } UiText;
@@ -364,7 +364,7 @@ static void learn_saves(Menu *menu);
 static int config_dirty(const Menu *menu);
 static size_t menu_rows(const Menu *menu)
 {
-    return menu->config.large_titles ? 8 : ROWS;
+    return menu->config.large_titles ? 7 : ROWS;
 }
 
 /* Use quoted SDK headers: Norcroft's built-in <stdarg.h> uses a different
@@ -534,6 +534,7 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
     size_t i;
     int style=menu->large_drawing ? UI_FONT_LARGE : menu->text_style;
     int margin=menu->config.screen_margin;
+    int glyph_width;
     int px=margin+x*(320-2*margin)/320;
     int py=margin+y*(240-2*margin)/240;
     int max_width=(308-x)*(320-2*margin)/320;
@@ -551,8 +552,12 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
     UI_PREVIEW_TEXT(safe);
 #endif
     cached=&menu->text_cache[menu->text_cursor<UI_TEXT_CACHE ? menu->text_cursor++ : UI_TEXT_CACHE-1];
+    /* Raster and glyph width share the same sanitized text/style key. Keep
+     * the full width so a later margin or clipping change can grow the cel. */
+    glyph_width=cached->cel && cached->style==style && !strcmp(cached->value,safe) ?
+        cached->glyph_width : ui_font_width(safe,style);
     {
-        int needed=ui_font_width(safe,style),capacity;
+        int needed=glyph_width,capacity;
         if (needed>max_width) needed=max_width;
         capacity=(needed+15)&~15;if (capacity<16) capacity=16;
         if ((!cached->cel || cached->capacity_width<capacity) && !menu->text_failed) {
@@ -577,7 +582,8 @@ static void text(Menu *menu,int x,int y,const char *string,Color color)
                 memcpy((unsigned char *)cel->ccb_SourcePtr+row*stride,bitmap+row*UI_FONT_STRIDE,(size_t)stride);
             strcpy(cached->value,safe); cached->style=style; cached->width=max_width;
         }
-        width=ui_font_width(safe,style); if (width>max_width) width=max_width;
+        cached->glyph_width=glyph_width;
+        width=glyph_width; if (width>max_width) width=max_width;
         if (!width) return;
         if (!cached->palette_valid || cached->ink!=color || cached->background!=background) {
             ui_font_palette((unsigned short *)cel->ccb_PLUTPtr,color,background);
@@ -730,7 +736,7 @@ static void cap_shape(Menu *menu,int x,int y,int w,int h,int ends,Color color,Co
 static int button(Menu *menu,int x,int y,const char *key,const char *action,int lit)
 {
     Color cap=!strcmp(key,"A") ? ACCENT : !strcmp(key,"B") ? REMOTE_RED : !strcmp(key,"C") ? AMBER :
-        (!strcmp(key,"P") || !strcmp(key,"X")) ? MakeRGB15(22,23,26) : TV_ORANGE;
+        (!strcmp(key,"P") || !strcmp(key,"X") || !strcmp(key,"Hold P")) ? MakeRGB15(22,23,26) : TV_ORANGE;
     Color lip=mix((unsigned int)cap,(unsigned int)INK,9U,16U);
     unsigned int rgb=(unsigned int)cap, luma=((rgb>>10)&31U)*30U+((rgb>>5)&31U)*59U+(rgb&31U)*11U;
     /* Dark letters on light caps, white on the red B. */
@@ -1618,13 +1624,17 @@ static int browser_controls_key(Menu *menu,const MenuEntry *chosen,size_t total)
 }
 static void browser_controls(Menu *menu,const MenuEntry *chosen,size_t total)
 {
-    rectangle(menu,8,210,138,30,BG);
-    if (menu->ready && total) {
-        if (!chosen) control_badges(menu,12,211,"A:Back",1);
-        else if (!game_entry(menu,chosen)) control_badges(menu,12,211,"A:Open",1);
-        else control_badges(menu,12,211,menu->playlist.count ? "P:Queue C:Add" : "A:Play C:Queue",1);
+    /* Three prompt rows below the shorter list; help is always discoverable. */
+    rectangle(menu,8,196,138,44,BG);
+    if (menu->review) {
+        if (total) control_badges(menu,12,197,"A:Play",1);
+    } else if (menu->ready && total) {
+        if (!chosen) control_badges(menu,12,197,"A:Back",1);
+        else if (!game_entry(menu,chosen)) control_badges(menu,12,197,"A:Open",1);
+        else control_badges(menu,12,197,menu->playlist.count ? "P:Queue C:Add" : "A:Play C:Queue",1);
     }
-    control_badges(menu,12,226,menu->depth || menu->listing.has_parent ? "B:Back L+R:Tools" : "L+R:Tools",0);
+    control_badges(menu,12,212,menu->review || menu->depth || menu->listing.has_parent ? "B:Back L+R:Tools" : "L+R:Tools",0);
+    button(menu,12,226,"Hold P","Help",0);
 }
 static unsigned long browser_shell(Menu *menu,size_t total)
 {
@@ -1864,9 +1874,7 @@ static void draw(Menu *menu)
     }
     /* Button prompts under the list: what A and C do right now, then the
      * ways out (B to the parent folder or the library, L+R into Tools). */
-    if (menu->review) { if (total) control_badges(menu,12,211,"A:Play",1); }
-    else browser_controls(menu,chosen,total);
-    if (menu->review) control_badges(menu,12,226,"B:Back L+R:Tools",0);
+    browser_controls(menu,chosen,total);
 
     if (menu->tuning) {
         /* Changing channel: no caption, just the tuning notice over the static. */
@@ -2338,13 +2346,21 @@ static void preview_phase(void *context,int phase)
     } else if (read->checking) read->menu->preview_check_ms=now-read->checked;
     else read->menu->preview_read_ms=now-read->started;
 }
+/* Cache pixels are expendable; release them only when preview allocations
+ * need space. This hook never sends an ODE command. */
+static int reclaim_preview_covers(void *context)
+{
+    Menu *menu=(Menu *)context;
+    if (!menu->cover_cache.clock) return 0;
+    cover_cache_clear(&menu->cover_cache); return 1;
+}
 static int read_usb_preview(void *context)
 {
     PreviewRead *read = (PreviewRead *)context;
     int result;
     read->started=now_ms(read->menu);
-    result=usb_preview_load_options(&read->menu->ode,ode_bus_read_buffer,read->file,
-                            &read->menu->preview,media_cancel,read->menu,preview_phase,read,read->menu->config.preview_sound);
+    result=usb_preview_load_reclaim(&read->menu->ode,ode_bus_read_buffer,read->file,
+                            &read->menu->preview,media_cancel,read->menu,preview_phase,read,read->menu->config.preview_sound,reclaim_preview_covers,read->menu);
     read->finished=now_ms(read->menu);
     if (!read->checking) read->menu->preview_read_ms=read->finished-read->started;
     return result;
@@ -2455,9 +2471,8 @@ static void update_preview(Menu *menu)
     /* Playback holds off timed position saves (a USB write stalls the video),
      * so save it now, while loading pauses the menu anyway. */
     if (menu->position_dirty) remember_position(menu,1);
-    /* Decoded covers are optional cache entries. Leave room for the compressed
-     * clip, audio and drawable frame on the console's constrained heap. */
-    cover_cache_clear(&menu->cover_cache);
+    /* Keep decoded covers if the full clip fits. The loader releases them
+     * at allocation boundaries if memory or fragmentation requires it. */
     memory_available(0,&menu->preview_free_bytes,&menu->preview_largest_bytes);
     memory_available(1,&menu->preview_vram_free_bytes,&menu->preview_vram_largest_bytes);
     for (i=0;i<menu->depth;++i) { route[i].id=menu->path_ids[i]; route[i].name=menu->path[i]; }
@@ -2484,6 +2499,8 @@ static void update_preview(Menu *menu)
     if (menu->media_cancelled && result!=-2) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-5; }
     if (!result) {
         menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,menu->preview.frame_buffer);
+        if (!menu->preview_cel && reclaim_preview_covers(menu))
+            menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,menu->preview.frame_buffer);
         if (menu->preview_cel) {
             /* The loader has already decoded frame 0 into the cel's pixels. */
             menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;

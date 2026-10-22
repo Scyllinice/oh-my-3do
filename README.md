@@ -4,17 +4,16 @@
 
 An alphabetical game menu for the [FCare/SataTo3DO ODE](https://github.com/FCare/SataTo3DO),
 with covers, video previews with sound, favorites, disc queues and save backups.
-No firmware update is required. The menu, desktop app and media tools share
-version **1.0.0**.
+No firmware update is required.
 
 ![Game browser with cover artwork](docs/images/browser.png)
 
-Actual v1.0.0 output captured in the Opera emulator, enlarged 3× for readability.
+Actual menu v1.0.1 output captured in the Opera emulator, enlarged 3× for readability.
 [More screenshots](docs/screenshots.md).
 
 ## Download and install
 
-Get the matching packages from the [latest release](https://github.com/Scyllinice/oh-my-3do/releases/latest).
+Get the menu/support files and desktop app from [Releases](https://github.com/Scyllinice/oh-my-3do/releases). Menu releases use `menu-v…`; desktop releases use `desktop-v…`. Their versions advance independently.
 
 | Download | Purpose |
 | --- | --- |

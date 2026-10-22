@@ -2,6 +2,8 @@ use crate::Job;
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -37,7 +39,7 @@ pub fn root(p: &Path) -> Result<PathBuf> {
     }
     Ok(p.canonicalize()?)
 }
-pub fn safe(root: &Path, name: &str) -> Result<PathBuf> {
+fn safe_with(root: &Path, name: &str, mut check: impl FnMut(&Path, &str, &OsStr) -> Result<()>) -> Result<PathBuf> {
     if name.is_empty()
         || name.contains(['\\', ':'])
         || name.chars().any(|c| c < ' ' || c == '\u{7f}')
@@ -62,20 +64,58 @@ pub fn safe(root: &Path, name: &str) -> Result<PathBuf> {
         {
             bail!("Reserved FAT filename: {s}")
         }
-        if p.is_dir() {
-            for entry in fs::read_dir(&p)? {
-                let n = entry?.file_name();
-                if n.to_string_lossy().eq_ignore_ascii_case(s) && n != raw {
-                    bail!("Case-colliding path: {name}")
-                }
-            }
-        }
+        if p.is_dir() { check(&p, s, raw)?; }
         p.push(raw);
         if is_link(&p) {
             bail!("Links and junctions are unsupported: {}", p.display())
         }
     }
     Ok(p)
+}
+/// Fresh validation for writes and standalone lookups.
+pub fn safe(root: &Path, name: &str) -> Result<PathBuf> {
+    safe_with(root, name, |directory, text, raw| {
+        for entry in fs::read_dir(directory)? {
+            let entry_name = entry?.file_name();
+            if entry_name.to_string_lossy().eq_ignore_ascii_case(text) && entry_name != raw {
+                bail!("Case-colliding path: {name}");
+            }
+        }
+        Ok(())
+    })
+}
+/// A directory-name snapshot for one read-only inventory operation. Construct
+/// a fresh instance for every refresh; never use cached names to authorize writes.
+/// Link/junction checks still run on every component of every lookup.
+pub struct ReadPaths {
+    root: PathBuf,
+    directories: HashMap<PathBuf, HashMap<String, Vec<OsString>>>,
+}
+impl ReadPaths {
+    pub fn new(directory: &Path) -> Result<Self> {
+        Ok(Self { root: root(directory)?, directories: HashMap::new() })
+    }
+    pub fn root(&self) -> &Path { &self.root }
+    pub fn path(&mut self, name: &str) -> Result<PathBuf> {
+        let directories = &mut self.directories;
+        safe_with(&self.root, name, |directory, text, raw| {
+            let names = match directories.entry(directory.to_owned()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let mut names: HashMap<String, Vec<OsString>> = HashMap::new();
+                    for child in fs::read_dir(directory)? {
+                        let name = child?.file_name();
+                        names.entry(name.to_string_lossy().to_ascii_lowercase()).or_default().push(name);
+                    }
+                    entry.insert(names)
+                }
+            };
+            if names.get(&text.to_ascii_lowercase()).is_some_and(|names| names.iter().any(|name| name != raw)) {
+                bail!("Case-colliding path: {name}");
+            }
+            Ok(())
+        })
+    }
 }
 pub fn sha256(p: &Path, job: &Job) -> Result<String> {
     let mut f = File::open(p)?;

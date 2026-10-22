@@ -1,7 +1,7 @@
 # Build and test from source
 
 Run these commands from the repository root. Downloadable console images,
-desktop apps and media tools are available from the [latest release](https://github.com/Scyllinice/oh-my-3do/releases/latest); building is optional.
+desktop apps and media tools are available from [Releases](https://github.com/Scyllinice/oh-my-3do/releases); building is optional. Menu and desktop versions are independent. See [the release guide](releasing.md) for packaging each stream.
 
 ## Build
 
@@ -89,7 +89,7 @@ it does not patch the original compiled Fixel menu.
 
 ## Desktop builds
 
-See the [desktop build instructions](../desktop/README.md#building-and-checking)
+See the [desktop build instructions](../desktop/README.md#development)
 for Rust requirements, native builds and Windows cross-compilation.
 
 ## Emulator captures and decoder timing

@@ -22,17 +22,21 @@ when adding fields or dependencies. `tests/test_stack_usage.py` checks stack
 budgets; keep large paths and save archives off the 32 KiB task stack.
 See `docs/emulator-and-bench.md` for the emulator and ARM60 timing harnesses.
 
-The menu, desktop app and media tools share one release version. Update
-`MENU_VERSION` in `src/main.c`, `SCANNER_VERSION` in `tools/organize-library.py`,
-the app versions in `desktop/Cargo.toml`, `desktop/Cargo.lock`,
-`desktop/shell/Cargo.toml` and `desktop/shell/Cargo.lock`, and the release
-links and version labels in the documentation together. Build and validate all
-packages before publishing a release. Desktop packaging includes the exact
-dependency notices and source revision in `BUILD.json`.
+Menu and desktop releases have independent versions and tags:
 
-Version **1.0.0 is final**. Future published changes must use a higher shared
-version and a new Git tag/release; do not replace the 1.0.0 tag or assets again.
-This also lets installed desktop apps detect newer releases.
+- **Menu:** `menu-vX.Y.Z`, containing the boot/demo ISOs, default settings and
+  portable media tools. Update `MENU_VERSION` in `src/main.c`, `SCANNER_VERSION`
+  in `tools/organize-library.py`, and `assets/media-tools-README.txt` together.
+- **Desktop:** `desktop-vX.Y.Z`, containing installers and portable packages.
+  Update the package versions in both desktop Cargo manifests and lockfiles,
+  plus `desktop/shell/tauri.conf.json`. The shared Rust engine follows the
+  desktop version; it does not determine which menu version is downloaded.
+
+The combined **v1.0.0 is final**. Do not replace its tag or assets. Each new
+stream starts above 1.0.0 and can advance without changing the other stream.
+See [the release guide](docs/releasing.md) for version checks, staging and
+publication. Desktop packages include exact dependency notices and source
+revision in `BUILD.json`.
 
 Do not blindly retry timed-out XBUS operations or claim a USB/NVRAM write worked
 from an acknowledgement alone. Preserve the recovery-backup ordering and readback

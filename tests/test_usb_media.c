@@ -50,6 +50,17 @@ static void sdk_empty(void)
     int i;
     for (i=0;i<SDK_SLOTS;++i) assert(!sdk_memory[i].data);
 }
+static void *optional_cache;
+static int reclaimed;
+static unsigned long reclaim_largest;
+static int reclaim_cache(void *context)
+{
+    (void)context;
+    if (!optional_cache) return 0;
+    FreeMem(optional_cache,65536);optional_cache=NULL;++reclaimed;
+    if (reclaim_largest) sdk_largest=reclaim_largest;
+    return 1;
+}
 static unsigned long sdk_bytes(unsigned long flags)
 {
     unsigned long total=0; int i;
@@ -60,7 +71,7 @@ static unsigned long sdk_bytes(unsigned long flags)
 typedef struct Fake {
     unsigned char *data, buffer[2048];
     size_t size, pos;
-    int calls, fail_at, opened, closed, cancel_after;
+    int calls, fail_at, opened, closed, cancel_after, opens;
     int reads, stale_at; /* E3 count; the stale_at-th leaves the old buffer in place, as FCare can */
 } Fake;
 static int transfer(void *context,const unsigned char *packet,unsigned char *reply,size_t capacity,size_t *length)
@@ -76,7 +87,7 @@ static int transfer(void *context,const unsigned char *packet,unsigned char *rep
         const char *name=(const char *)f->buffer;
         assert(!strncmp(name,".ohmy3do/",9)); name+=9;
         assert(!strncmp(name,"covers/",7) || !strncmp(name,"previews/",9) || !strcmp(name,"library.3di") || !strcmp(name,"metadata.3di"));
-        f->pos=0; f->opened=1; reply[1]=1; *length=3;
+        f->pos=0; f->opened=1; ++f->opens; reply[1]=1; *length=3;
     } else if (packet[0] == 0xe3) {
         size_t n=(size_t)packet[1]*256+packet[2], actual=n;
         assert(f->opened && n <= 2048);
@@ -107,7 +118,7 @@ static void phase(void *context,int checking)
 }
 static void reset(Fake *f,Ode *ode)
 {
-    f->pos=0; f->calls=f->fail_at=f->opened=f->closed=f->cancel_after=0; f->reads=f->stale_at=0;
+    f->pos=0; f->calls=f->fail_at=f->opened=f->closed=f->cancel_after=f->opens=0; f->reads=f->stale_at=0;
     memset(f->buffer,0xa5,sizeof(f->buffer)); memset(ode,0,sizeof(*ode));
     ode->transfer=transfer; ode->context=f; strcpy(ode->identity,"LOCODE");
 }
@@ -169,6 +180,9 @@ int main(int argc,char **argv)
         /* argv[3], if given, holds every frame as the encoder's reference decoder drew it. */
         unsigned long frame_bytes;
         unsigned int frame,full;
+#ifdef OH3DO_SDK
+        unsigned int baseline_frames;
+#endif
         expected=NULL; bytes=0;
         if (argc==4) expected=load(argv[3],&bytes);
 #ifdef OH3DO_SDK
@@ -201,10 +215,48 @@ int main(int argc,char **argv)
         assert(!usb_preview_frame(&preview,frame,pixels) && (!expected || !memcmp(pixels,expected+frame*frame_bytes,(size_t)frame_bytes)));
         assert(usb_preview_frame(&preview,preview.frames,pixels)<0);
         if (preview.audio) assert(preview.audio_rate==11025 && preview.audio_frames<=preview.audio_bytes && preview.audio_frames);
+#ifdef OH3DO_SDK
+        baseline_frames=preview.frames;
+#endif
         calls=f.calls; usb_preview_free(&preview);
         assert(!preview.chunk_count && !preview.audio && !preview.decoder);
 #ifdef OH3DO_SDK
         sdk_empty();
+        /* Optional cover storage survives when the whole clip fits, and is
+         * reclaimed before any loss of frames or firmware read retry. */
+        optional_cache=AllocMem(65536,MEMTYPE_DRAM);assert(optional_cache);reclaimed=0;
+        reset(&f,&ode);read_phase=check_phase=0;
+        assert(!usb_preview_load_reclaim(&ode,reader,"Game.3dv",&preview,cancel,&f,phase,&f,1,reclaim_cache,NULL));
+        assert(preview.frames==baseline_frames && f.calls==calls && f.opens==1);
+        for (frame=0;frame<preview.frames;++frame) {
+            assert(!usb_preview_frame(&preview,frame,pixels));
+            assert(!expected || !memcmp(pixels,expected+frame*frame_bytes,(size_t)frame_bytes));
+        }
+        assert(reclaimed==(!strcmp(argv[1],"budgetvideo") ? 1 : 0));
+        usb_preview_free(&preview);reclaim_cache(NULL);sdk_empty();
+        if (!strcmp(argv[1],"video")) for (i=1;i<=4;++i) {
+            optional_cache=AllocMem(65536,MEMTYPE_DRAM);assert(optional_cache);reclaimed=0;
+            reset(&f,&ode);sdk_calls=0;sdk_fail=i;
+            assert(!usb_preview_load_reclaim(&ode,reader,"Game.3dv",&preview,cancel,&f,NULL,NULL,1,reclaim_cache,NULL));
+            assert(preview.frames==baseline_frames && f.calls==calls && f.opens==1 && !f.opened && f.closed);
+            assert(!usb_preview_frame(&preview,preview.frames-1,pixels));
+            assert(!expected || !memcmp(pixels,expected+(preview.frames-1)*frame_bytes,(size_t)frame_bytes));
+            sdk_fail=0;usb_preview_free(&preview);reclaim_cache(NULL);sdk_empty();
+        }
+        if (!strcmp(argv[1],"video")) {
+            unsigned long saved_vram=sdk_vram,saved_largest=sdk_largest;
+            optional_cache=AllocMem(65536,MEMTYPE_DRAM);assert(optional_cache);
+            sdk_vram=0;sdk_largest=4096;reclaim_largest=saved_largest;reclaimed=0;
+            reset(&f,&ode);
+            assert(!usb_preview_load_reclaim(&ode,reader,"Game.3dv",&preview,cancel,&f,NULL,NULL,1,reclaim_cache,NULL));
+            assert(reclaimed==1 && preview.frames==baseline_frames && f.calls==calls && f.opens==1);
+            usb_preview_free(&preview);sdk_empty();sdk_vram=saved_vram;reclaim_largest=0;
+            optional_cache=AllocMem(65536,MEMTYPE_DRAM);assert(optional_cache);reclaimed=0;
+            reset(&f,&ode);f.fail_at=calls/2;
+            assert(usb_preview_load_reclaim(&ode,reader,"Game.3dv",&preview,cancel,&f,NULL,NULL,1,reclaim_cache,NULL)<0);
+            assert(f.opens==1 && !reclaimed && !preview.chunk_count && f.calls<=f.fail_at+1);
+            reclaim_cache(NULL);sdk_empty();
+        }
         for (i=1;i<=24;++i) {
             reset(&f,&ode); sdk_calls=0; sdk_fail=i;
             frame=(unsigned int)usb_preview_load(&ode,reader,"Game.3dv",&preview,cancel,&f);

@@ -13,8 +13,8 @@ fn media_index(root: &Path, folder: &str, warnings: &mut Vec<String>) -> (BTreeM
         }
     }
 }
-fn description(root: &Path, path: &str) -> Option<String> {
-    let file = f::safe(root, &game_info::filename(path)).ok()?;
+fn description(paths: &mut f::ReadPaths, path: &str) -> Option<String> {
+    let file = paths.path(&game_info::filename(path)).ok()?;
     if fs::metadata(&file).ok()?.len() > 16384 { return None; }
     let text = fs::read_to_string(file).ok()?;
     let lines: Vec<_> = text.lines().collect();
@@ -32,6 +32,7 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
     let metadata = usb_selection::metadata(&root).unwrap_or_else(|e| { warnings.push(format!("Cannot read game metadata: {e}")); BTreeMap::new() });
     let db = library::database(&root).unwrap_or_else(|e| { warnings.push(format!("Cannot read desktop metadata: {e}")); json!({"games":[]}) });
     let known: BTreeMap<_, _> = db["games"].as_array().into_iter().flatten().filter_map(|r| r["path"].as_str().map(|p| (f::fold(p),r.clone()))).collect();
+    let mut paths = f::ReadPaths::new(&root)?;
     let mut records = vec![];
     let mut total = 0u64;
     job.phase("Finding games on the drive");
@@ -62,12 +63,12 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
         if let Some(fields) = metadata.get(&key) {
             for (field,value) in ["genre","publisher","year"].iter().zip(fields) { record["metadata"][*field] = json!(value); }
         }
-        if let Some(text) = description(&root, &path) { record["metadata"]["description"] = json!(text); }
+        if let Some(text) = description(&mut paths, &path) { record["metadata"]["description"] = json!(text); }
         for (field,folder,index,beside) in [("cover","covers",&covers,cover_beside),("preview","previews",&previews,preview_beside)] {
             let indexed = index.contains_key(&key);
             let name = index.get(&key).cloned().or_else(|| record[field].as_str().map(str::to_owned));
             let relative = name.map(|name| if beside && indexed { format!("{}.ohmy3do/{name}", path.rsplit_once('/').map(|(parent,_)|format!("{parent}/")).unwrap_or_default()) } else { format!(".ohmy3do/{folder}/{name}") });
-            let existing = relative.filter(|p| f::safe(&root,p).is_ok_and(|p| p.is_file()));
+            let existing = relative.filter(|p| paths.path(p).is_ok_and(|p| p.is_file()));
             record[field] = json!(existing);
             record[format!("{field}_missing")] = json!(record[field].is_null());
         }
@@ -78,14 +79,24 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
 /// Presence comparison checks paths and file sizes, including every CUE track.
 /// It deliberately does not claim to verify file contents.
 pub fn presence(source: &Path, destination: &Path, path: &str) -> Result<bool> {
-    let main = f::safe(source,path)?;
-    let files = if main.extension().is_some_and(|e|e.eq_ignore_ascii_case("cue")) {
-        let (_, refs) = disc::cue_refs(&main)?;
-        let mut files = vec![main]; files.extend(refs); files
-    } else { vec![main] };
-    for file in files {
-        let target = f::safe(destination,&library::relative(source,&file)?)?;
-        if !target.is_file() || fs::metadata(&target)?.len() != fs::metadata(&file)?.len() { return Ok(false); }
+    PresenceScan::new(source, destination)?.check(path)
+}
+/// Reuse path inventories across every title in one PC-library refresh.
+pub struct PresenceScan { source: f::ReadPaths, target: f::ReadPaths }
+impl PresenceScan {
+    pub fn new(source: &Path, destination: &Path) -> Result<Self> {
+        Ok(Self { source: f::ReadPaths::new(source)?, target: f::ReadPaths::new(destination)? })
     }
-    Ok(true)
+    pub fn check(&mut self, path: &str) -> Result<bool> {
+        let main = self.source.path(path)?;
+        let files = if main.extension().is_some_and(|e|e.eq_ignore_ascii_case("cue")) {
+            let (_, refs) = disc::cue_refs(&main)?;
+            let mut files = vec![main]; files.extend(refs); files
+        } else { vec![main] };
+        for file in files {
+            let target = self.target.path(&library::relative(self.source.root(),&file)?)?;
+            if !target.is_file() || fs::metadata(&target)?.len() != fs::metadata(&file)?.len() { return Ok(false); }
+        }
+        Ok(true)
+    }
 }

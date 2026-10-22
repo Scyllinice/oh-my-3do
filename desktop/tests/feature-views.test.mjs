@@ -54,3 +54,15 @@ test('copy review uses readable nonzero file counts without repeating the transf
  for(const text of ['554 discs',`${(2407).toLocaleString()} files`,`${(2399).toLocaleString()} new files`,'3 files to update','4 existing files kept','1 file already up to date'])assert.ok(html.includes(text),text);
  assert.ok(!html.includes('to move'));assert.ok(!html.includes('copy:'));assert.ok(!html.includes('GiB'));
 });
+
+test('update cards show independent versions and only relevant release notes',()=>{
+ const menu={tag:'menu-v1.2.0',notes:'Menu only <notes>'};
+ const desktop={tag:'desktop-v3.4.0',notes:'Desktop only <notes>'};
+ const state={updates:{desktop:true,desktop_release:desktop,menu_release:menu,targets:[],warnings:[]}};
+ const render=view('updateCards',{state,pathLabel:e});
+ let html=render();assert.ok(html.includes('desktop-v3.4.0'));assert.ok(html.includes('Desktop only &lt;notes&gt;'));assert.ok(!html.includes('menu-v1.2.0'));assert.ok(!html.includes('Menu only'));
+ state.updates.desktop=false;state.updates.targets=[{root:'/card',installed:true}];
+ html=render();assert.ok(html.includes('menu-v1.2.0'));assert.ok(html.includes('Menu only &lt;notes&gt;'));assert.ok(!html.includes('desktop-v3.4.0'));assert.ok(!html.includes('Desktop only'));
+ state.updates.desktop=true;html=render();assert.ok(html.includes('desktop-v3.4.0'));assert.ok(html.includes('menu-v1.2.0'));
+ state.updates.desktop=false;state.updates.targets=[];html=render();assert.ok(html.includes('up to date'));assert.ok(!html.includes('Release notes'));
+});

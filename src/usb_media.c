@@ -76,7 +76,7 @@ static unsigned char *chunk_alloc(unsigned long bytes,int vram)
     return (unsigned char *)malloc((size_t)bytes);
 #endif
 }
-void usb_preview_free(UsbPreview *preview)
+static void preview_chunks_free(UsbPreview *preview)
 {
     unsigned int i;
     for (i=0;i<preview->chunk_count;++i) {
@@ -85,7 +85,13 @@ void usb_preview_free(UsbPreview *preview)
 #else
         free(preview->chunk[i]);
 #endif
+        preview->chunk[i]=NULL;
     }
+    preview->chunk_count=0; preview->vram_bytes=0;
+}
+void usb_preview_free(UsbPreview *preview)
+{
+    preview_chunks_free(preview);
 #ifdef OH3DO_SDK
     if (preview->audio) FreeMem(preview->audio,(int32)preview->audio_bytes);
     if (preview->frame_buffer) FreeMem(preview->frame_buffer,(int32)preview->frame_bytes);
@@ -216,10 +222,14 @@ static int preview_block(Ode *ode,OdeReadBuffer reader,UsbPreview *next,PreviewC
  * READ_AHEAD bytes, so a packet is always contiguous. VRAM is
  * filled first. Audio is allocated before the chunks claim DRAM. */
 static int preview_store(Ode *ode,OdeReadBuffer reader,UsbPreview *next,unsigned long source_video,unsigned long source_audio,
-    int sound,PreviewCheck *check,MediaCancel cancel,void *context)
+    int sound,PreviewCheck *check,MediaCancel cancel,void *context,MediaReclaim reclaim,void *reclaim_context)
 {
     unsigned long capacity=chunk_capacity();
     unsigned int frame,plan=0,placed=0,k=0;
+    unsigned long full_audio=source_audio && sound ? (((next->source_frames*11025UL+next->fps-1)/next->fps)+3)&~3UL : 0;
+    unsigned long need=word(next->table+next->source_frames*4)-next->table_bytes+full_audio+USB_PREVIEW_CHUNKS*READ_AHEAD;
+    /* Optional covers must never shorten a preview's planned duration. */
+    if (need>capacity && reclaim && reclaim(reclaim_context)) capacity=chunk_capacity();
     for (frame=1;frame<=next->source_frames;++frame) {
         unsigned long audio=source_audio && sound ? (((frame*11025UL+next->fps-1)/next->fps)+3)&~3UL : 0;
         unsigned long need=word(next->table+frame*4)-next->table_bytes+audio+USB_PREVIEW_CHUNKS*READ_AHEAD;
@@ -229,8 +239,10 @@ static int preview_store(Ode *ode,OdeReadBuffer reader,UsbPreview *next,unsigned
     if (source_audio && sound) {
         next->audio_bytes=next->audio_frames=(((plan*11025UL+next->fps-1)/next->fps)+3)&~3UL;
         next->audio_rate=11025; next->audio=audio_memory(next->audio_bytes);
+        if (!next->audio && reclaim && reclaim(reclaim_context)) next->audio=audio_memory(next->audio_bytes);
         if (!next->audio) return USB_PREVIEW_NO_MEMORY;
     }
+retry_chunks:
     while (placed<plan && k<USB_PREVIEW_CHUNKS) {
         unsigned long vram_room=chunk_room(1),room,begin=word(next->table+placed*4),bytes;
         unsigned int last=placed;
@@ -247,6 +259,10 @@ static int preview_store(Ode *ode,OdeReadBuffer reader,UsbPreview *next,unsigned
         if (vram) next->vram_bytes+=bytes;
         next->chunk_count=++k; placed=last;
     }
+    if (placed<plan && reclaim && reclaim(reclaim_context)) {
+        /* Allocation/fragmentation fallback only: no payload has been read yet. */
+        preview_chunks_free(next); placed=0; k=0; goto retry_chunks;
+    }
     if (!placed) return USB_PREVIEW_NO_MEMORY;
     next->frames=placed; next->video_bytes=word(next->table+placed*4);
     if (next->audio) next->audio_frames=(((placed*11025UL+next->fps-1)/next->fps)+3)&~3UL;
@@ -258,8 +274,9 @@ static int preview_store(Ode *ode,OdeReadBuffer reader,UsbPreview *next,unsigned
         if (preview_block(ode,reader,next,check,cancel,context)<0) return -1;
     return 0;
 }
-int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,
-    UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound)
+int usb_preview_load_reclaim(Ode *ode,OdeReadBuffer reader,const char *filename,
+    UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound,
+    MediaReclaim reclaim,void *reclaim_context)
 {
     unsigned char header[40];
     UsbPreview next;
@@ -288,9 +305,15 @@ int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,
     if (source_video+pad>bytes || source_audio!=bytes-source_video-pad || source_video<=next.table_bytes) goto done;
     expected=(((next.source_frames*11025UL+next.fps-1)/next.fps)+3)&~3UL;
     if (source_audio ? (source_rate!=11025 || source_audio!=source_samples || source_samples!=expected) : (source_rate || source_samples)) goto done;
+    /* Account for all fixed buffers and the full clip before keeping caches. */
+    expected=source_video+(source_audio && sound ? source_audio : 0)+next.frame_bytes+sizeof(PreviewV5)+USB_PREVIEW_CHUNKS*READ_AHEAD;
+    if (expected>chunk_capacity() && reclaim) reclaim(reclaim_context);
     next.decoder=calloc(1,sizeof(PreviewV5));
+    if (!next.decoder && reclaim && reclaim(reclaim_context)) next.decoder=calloc(1,sizeof(PreviewV5));
     next.frame_buffer=frame_memory(next.frame_bytes);
+    if (!next.frame_buffer && reclaim && reclaim(reclaim_context)) next.frame_buffer=frame_memory(next.frame_bytes);
     next.table=(unsigned char *)malloc((size_t)next.table_bytes);
+    if (!next.table && reclaim && reclaim(reclaim_context)) next.table=(unsigned char *)malloc((size_t)next.table_bytes);
     if (!next.decoder || !next.frame_buffer || !next.table) { result=USB_PREVIEW_NO_MEMORY;goto done; }
     if (preview_bytes(ode,reader,next.table,next.table_bytes,&check,cancel,context)<0) goto done;
     if (word(next.table)!=next.table_bytes || word(next.table+next.source_frames*4)!=source_video) goto done;
@@ -299,7 +322,7 @@ int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,
         if (begin<next.table_bytes || begin>=end || end>source_video) goto done;
     }
     memset(next.frame_buffer,0,(size_t)next.frame_bytes);
-    result=preview_store(ode,reader,&next,source_video+pad,source_audio,sound,&check,cancel,context);
+    result=preview_store(ode,reader,&next,source_video+pad,source_audio,sound,&check,cancel,context,reclaim,reclaim_context);
     if (result) goto done;
     result=-1;
     if (phase) phase(phase_context,1);
@@ -312,6 +335,11 @@ done:
     if (phase) phase(phase_context,2);
     if (!result) { usb_preview_free(preview);*preview=next;memset(&next,0,sizeof(next)); }
     usb_preview_free(&next);return result;
+}
+int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,
+    UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound)
+{
+    return usb_preview_load_reclaim(ode,reader,filename,preview,cancel,context,phase,phase_context,sound,NULL,NULL);
 }
 int usb_preview_load_profiled(Ode *ode,OdeReadBuffer reader,const char *filename,
     UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context)

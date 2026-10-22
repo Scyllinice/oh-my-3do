@@ -1,0 +1,168 @@
+{
+  "date": "2026-10-22",
+  "source_revision": "a2f6f7547edc8e43d30539c0d00f89c90dd93d72",
+  "working_tree_dirty": true,
+  "boot_sha256": "999869ef06d9d3d4fd435199b82cdcfcd940c79ad279f019c1d4107b38110477",
+  "console": {
+    "emulator": "Opera libretro",
+    "native_size": [
+      320,
+      240
+    ],
+    "display_size": [
+      960,
+      720
+    ],
+    "screen_margin": 8,
+    "scaling": "nearest-neighbor"
+  },
+  "desktop": {
+    "framework": "Tauri",
+    "size": [
+      1280,
+      900
+    ],
+    "fixtures": "Disposable libraries and save archives with real artwork"
+  },
+  "captures": {
+    "startup.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/startup-04s.ppm",
+      "sha256": "115d9fcbf13aa2dff4b3a57aea7154f45fc3ed17471f792969b7780df22bf3b9"
+    },
+    "gecko-tv.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/root.ppm",
+      "sha256": "a86f6f510c7b0fbc208a5c97efed208143a234d25752e5796aba1c165d9c819c"
+    },
+    "browser.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/cover-view.ppm",
+      "sha256": "096dd5ba3eefc041c5a1e3bba470c3ffe4f51b71e7b0c1e197866d4410b79a70"
+    },
+    "gameplay-preview.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/video-preview-later.ppm",
+      "sha256": "ad3e5b018ecd73d875ac6d42e537b99f285a8b074c02c17b2c2edd86c05f6afa"
+    },
+    "fullscreen-preview.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/fullscreen-preview.ppm",
+      "sha256": "c95efafd04958b3246fdcc2674b154ec8be7b427d2a1b9d44a8328803eda2996"
+    },
+    "fullscreen-cover.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/fullscreen-cover.ppm",
+      "sha256": "00db2b7d69b825d938eef8801e59f9d29d3544c09d6df2ff81c424b5d8281fab"
+    },
+    "tools.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/tools.ppm",
+      "sha256": "7c1fbcc7f23cae55eae3c64e2e17d11ef3e2d238bb137873d3932aecce934913"
+    },
+    "game-details.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/gallery/game-details.ppm",
+      "sha256": "b0ed3b4aedbc82241be843440c8000bcb2c65b02d9e66ea09d62fcda78273709"
+    },
+    "browser-large.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/paging-help/large-start.ppm",
+      "sha256": "48efc6e6929244342d09e61aa9175db06062df649316d3df2648908e71709f01"
+    },
+    "controls.png": {
+      "component": "menu",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-validation/shots/paging-help/large-help.ppm",
+      "sha256": "3abf39924bdf1425d9c13245ef1b8c64455cac2b501397c5df4f1dea86c1077e"
+    },
+    "desktop-library.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-library.png",
+      "sha256": "ac5157abda0a5c445b628622d39e0ad86b190bfa9aa2d2e4b4c194c8945b28b5"
+    },
+    "desktop-copy.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-copy.png",
+      "sha256": "df21f83f139ca23df820c1d67931930cd310f861d911264a692dcdc3413c091e"
+    },
+    "desktop-drive-library.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-drive-library.png",
+      "sha256": "e291dd6089a5c947df5b05e73a1c6c7ffbf51e5787a9785a05e5a5538c62305c"
+    },
+    "desktop-remove.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-remove.png",
+      "sha256": "4b6142f514624489ba5c51de5ce2bf8764130e3c4b918b3f4d5c885b5fa06468"
+    },
+    "desktop-setup.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-setup.png",
+      "sha256": "91b4f6275916de6277e3830382b50138ca37d4bd942080cab046283e8457f8b0"
+    },
+    "desktop-dark.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-dark.png",
+      "sha256": "927c07b1256b034c8e71c2175f3b6f1012bf5bf3fd1e198c13abcdd0c819aa0d"
+    },
+    "desktop-categories.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-categories.png",
+      "sha256": "d2bc7b012d2b38521ad42ad0be0b0cec52bfb5dc611dc651bd995eef27df8589"
+    },
+    "desktop-save-editor.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-save-editor.png",
+      "sha256": "e6d70119dc3301952c173e1cda95d41a0f93b5143065e00797fbccd688771525"
+    },
+    "desktop-save-comparison.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-save-comparison.png",
+      "sha256": "163292a2d87732119d4e554cb08c83adc6f5c7fb483aacaa69dad67b4d66dec3"
+    },
+    "desktop-hex-editor.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-hex-editor.png",
+      "sha256": "f4ea0beb37f0fd480d553c6e139b2eb6e1e0625167c86d212b03ae175995fad6"
+    },
+    "desktop-save-slots.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-save-slots.png",
+      "sha256": "4c93d6d11f2117a6938659bfdc539e178f23880154eeea05562ea34620770534"
+    },
+    "desktop-cheat-database.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-cheat-database.png",
+      "sha256": "2403e1891fa811fa7d296d2977ff2f4ed886d3f9acd12e6aabe4ca580e03c5d6"
+    },
+    "desktop-updates.png": {
+      "component": "desktop",
+      "version": "1.0.1",
+      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-updates.png",
+      "sha256": "2fc908d9855e1c63f0a0ee5d813ebd63a63758792e7008d4e1d0c0d7b5fc782e",
+      "note": "Live check of published releases; combined v1.0.0 is still the available fallback. No download or install performed."
+    }
+  }
+}

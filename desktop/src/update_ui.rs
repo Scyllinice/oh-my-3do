@@ -26,7 +26,7 @@ struct Pending { desktop: bool, boot: bool }
 impl Pending {
     fn for_report(report: &Check) -> Self {
         Self {
-            desktop: updates::is_newer(&report.release.version, env!("CARGO_PKG_VERSION")).unwrap_or(false),
+            desktop: updates::is_newer(&report.desktop.version, env!("CARGO_PKG_VERSION")).unwrap_or(false),
             boot: report.targets.iter().any(|t| t.digest.as_deref() != Some(&report.boot_digest)),
         }
     }
@@ -79,9 +79,9 @@ impl Updates {
                         let pending = Pending::for_report(&report);
                         self.visible = pending.any();
                         self.status = if pending.any() {
-                            format!("{} available: {}", pending.title(), report.release.tag)
+                            format!("{} available.", pending.title())
                         } else {
-                            format!("Everything checked is up to date. Latest release: {}", report.release.tag)
+                            "Everything checked is up to date.".into()
                         };
                         self.report = Some(report);
                     }
@@ -151,7 +151,6 @@ impl Updates {
         if !self.visible || !pending.any() { return None; }
         let mut visible = self.visible;
         let mut action = None;
-        let release = &report.release;
         egui::Window::new(pending.title())
             .id(egui::Id::new("updates_downloads"))
             .open(&mut visible)
@@ -160,8 +159,9 @@ impl Updates {
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().id_salt("updates_window")
                     .max_height(ui.available_height().min(600.)).show(ui, |ui| {
-                    ui.hyperlink_to(format!("Release notes for {}",release.tag),release.page());
                     if pending.desktop {
+                        let release = &report.desktop;
+                        ui.hyperlink_to(format!("Desktop release notes for {}",release.tag),release.page());
                         ui.label(RichText::new("Desktop app update available").strong().color(crate::theme::TEXT));
                         ui.label(format!("Installed: v{} → Available: {}",env!("CARGO_PKG_VERSION"),release.tag));
                         if let Some(platform) = updates::platform() {
@@ -180,6 +180,8 @@ impl Updates {
                     }
                     if pending.desktop && pending.boot { ui.separator(); }
                     if pending.boot {
+                        let release = &report.menu;
+                        ui.hyperlink_to(format!("Menu release notes for {}",release.tag),release.page());
                         ui.label(RichText::new("Console boot.iso update").strong().color(crate::theme::TEXT));
                         if ui.add_enabled(enabled,egui::Button::new(format!("Download {} boot.iso…",release.tag))).clicked() {
                             if let Some(path) = rfd::FileDialog::new().set_file_name("boot.iso").add_filter("Boot image", &["iso"]).save_file() {
@@ -216,7 +218,7 @@ mod tests {
         let release=Release::parse(&serde_json::to_vec(&serde_json::json!({
             "tag_name":format!("v{latest}"),"draft":false,"prerelease":false,"body":"","assets":[]
         })).unwrap()).unwrap();
-        let report=Check {release,boot_digest:"published".into(),targets:vec![BootState {
+        let report=Check {menu:release.clone(),desktop:release,boot_digest:"published".into(),targets:vec![BootState {
             root:PathBuf::from("test-library"),digest:digest.map(str::to_owned)
         }],warnings:vec![]};
         let (sender,receiver)=mpsc::channel();sender.send(Ok(report)).unwrap();

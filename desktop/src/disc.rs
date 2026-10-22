@@ -8,10 +8,19 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
+    sync::{OnceLock, RwLock},
 };
 use unicode_normalization::UnicodeNormalization;
-pub fn rx(s: &str) -> Regex {
-    Regex::new(s).expect("constant regex")
+/// Compile each constant pattern once. Clones share the compiled expression
+/// while keeping independent matching scratch space for concurrent jobs.
+pub fn rx(s: &'static str) -> Regex {
+    static PATTERNS: OnceLock<RwLock<HashMap<&'static str, Regex>>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Some(pattern) = patterns.read().expect("regex cache").get(s) {
+        return pattern.clone();
+    }
+    patterns.write().expect("regex cache")
+        .entry(s).or_insert_with(|| Regex::new(s).expect("constant regex")).clone()
 }
 pub fn title_key(s: &str) -> String {
     let s = rx(r"\([^)]*\)|\[[^]]*\]").replace_all(s, "");
@@ -156,16 +165,25 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
     let pattern = rx(r#"(?im)^\s*FILE\s+(?:"([^"\r\n]+)"|(\S+))\s+BINARY\s*$"#);
     let parent = p.parent().context("CUE parent missing")?;
     let mut refs = vec![];
+    let mut siblings: Option<HashMap<String, Vec<PathBuf>>> = None;
     for c in pattern.captures_iter(&text) {
         let name = c.get(1).or_else(|| c.get(2)).unwrap().as_str();
         if name.contains(['/', '\\', ':']) || name == ".." {
             bail!("CUE FILE must name a sibling file")
         }
-        let matches = fs::read_dir(parent)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name))
-            .map(|e| e.path())
-            .collect::<Vec<_>>();
+        // Build one case-insensitive inventory for all FILE directives. Keep
+        // every match so ambiguous names are still rejected on case-sensitive hosts.
+        if siblings.is_none() {
+            let mut names: HashMap<String, Vec<PathBuf>> = HashMap::new();
+            for entry in fs::read_dir(parent)? {
+                let entry = entry?;
+                names.entry(entry.file_name().to_string_lossy().to_ascii_lowercase())
+                    .or_default().push(entry.path());
+            }
+            siblings = Some(names);
+        }
+        let matches = siblings.as_ref().unwrap().get(&name.to_ascii_lowercase())
+            .map(Vec::as_slice).unwrap_or(&[]);
         if matches.len() != 1 || !matches[0].is_file() || f::is_link(&matches[0]) {
             bail!("Missing or ambiguous CUE track: {name}")
         }
@@ -191,9 +209,11 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
     Ok((text, refs))
 }
 pub fn redundant_cue(p: &Path) -> Result<Option<PathBuf>> {
-    let Ok((text, refs)) = cue_refs(p) else {
-        return Ok(None);
-    };
+    let Ok((text, refs)) = cue_refs(p) else { return Ok(None); };
+    Ok(redundant_cue_from_refs(&text, &refs))
+}
+// Collection already has validated text and track paths; reuse that parse.
+fn redundant_cue_from_refs(text: &str, refs: &[PathBuf]) -> Option<PathBuf> {
     if refs.len() != 1
         || refs[0]
             .extension()
@@ -202,7 +222,7 @@ pub fn redundant_cue(p: &Path) -> Result<Option<PathBuf>> {
             .to_ascii_lowercase()
             != "iso"
     {
-        return Ok(None);
+        return None;
     }
     let mut directives = vec![];
     for line in text.lines() {
@@ -221,11 +241,11 @@ pub fn redundant_cue(p: &Path) -> Result<Option<PathBuf>> {
         {
             continue;
         } else {
-            return Ok(None);
+            return None;
         };
         directives.push(token);
     }
-    Ok((directives == ["file", "track", "index"]).then(|| refs[0].clone()))
+    (directives == ["file", "track", "index"]).then(|| refs[0].clone())
 }
 pub fn collect(
     inputs: &[PathBuf],
@@ -262,6 +282,7 @@ pub fn collect(
                                     ))
                 })
             {
+                job.check()?;
                 let e = entry?;
                 if e.file_type().is_file() {
                     let ext = e
@@ -302,19 +323,20 @@ pub fn collect(
     let mut ordered = candidates.into_iter().collect::<Vec<_>>();
     ordered.sort();
     for p in &ordered {
+        job.check()?;
         if p.extension()
             .unwrap_or_default()
             .to_string_lossy()
             .eq_ignore_ascii_case("cue")
         {
-            if let Some(iso) = redundant_cue(p)? {
-                if !ordered.contains(&iso) {
+            let (text, refs) = cue_refs(p)?;
+            if let Some(iso) = redundant_cue_from_refs(&text, &refs) {
+                if ordered.binary_search(&iso).is_err() {
                     ordered_contains_iso(&mut sets, &mut consumed, &iso)?;
                 }
                 consumed.insert(p.clone());
                 continue;
             }
-            let (_, refs) = cue_refs(p)?;
             let mut files = vec![p.clone()];
             for r in refs {
                 consumed.insert(r.clone());
@@ -325,6 +347,7 @@ pub fn collect(
         }
     }
     for p in ordered {
+        job.check()?;
         if !consumed.contains(&p) {
             issue(&p)?;
             sets.push((p.clone(), vec![p]));

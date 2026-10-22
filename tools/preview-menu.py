@@ -40,6 +40,9 @@ STUBS = r'''
 #include "ui_font.h"
 #include "preview_audio.h"
 #include "channel_gecko_data.h"
+static unsigned long preview_width_calls;
+static int preview_font_width(const char *value,int style) { ++preview_width_calls;return ui_font_width(value,style); }
+#define ui_font_width preview_font_width
 static int audio_starts,audio_restarts,audio_fail,display_count,audio_start_displays;
 static unsigned long preview_now,preview_load_delay,preview_display_delay;
 int preview_audio_start(PreviewAudio *a,unsigned char *p,unsigned long n,unsigned long rate) { (void)p;(void)n;(void)rate;++audio_starts;audio_start_displays=display_count;a->status=audio_fail ? -1 : 1;return audio_fail ? -1 : 0; }
@@ -180,7 +183,7 @@ static void DrawText8(GrafCon *g, Item item, const u8 *s) {
     double sy=preview_font.ccb_VDY ? preview_font.ccb_VDY/65536.0 : 1.0;
     (void)item; printf("T %d %d %u %.6f %.6f %s\n", g->x, g->y, g->color, sx, sy, s);
 }
-static int preview_video_enabled, preview_video_loads;
+static int preview_video_enabled, preview_video_loads, preview_video_reclaim;
 /* A two-frame OM3DVID5 clip: solid 0x1111, then solid 0x2222, each as SOLID
  * runs over the 1200 blocks (the second colour is the cache's entry 1). */
 static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, UsbPreview *preview, MediaCancel cancel, void *context) {
@@ -215,8 +218,9 @@ static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, 
     if (usb_preview_frame(preview,0,preview->frame_buffer)<0) abort();
     return 0;
 }
-static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound) {
+static int preview_video_load_profiled(Ode *ode,OdeReadBuffer reader,const char *file,UsbPreview *preview,MediaCancel cancel,void *context,MediaLoadPhase phase,void *phase_context,int sound,MediaReclaim reclaim,void *reclaim_context) {
     int result;
+    if (preview_video_reclaim && reclaim) reclaim(reclaim_context);
     (void)sound;
     result=preview_video_load(ode,reader,file,preview,cancel,context);
     preview_now+=preview_load_delay;
@@ -365,7 +369,7 @@ int main(int argc, char **argv) {
     memset(&menu, 0, sizeof(menu));
     menu_config_defaults(&menu.config);
     menu.saved_config=menu.config; menu.settings_remember_position=menu.settings_recent_games=1;
-    menu.settings_usb_covers=1;
+    menu.settings_usb_covers=1; menu.settings_video_previews=menu.config.video_previews;
     menu.font_ccb=*GetCurrentFont()->font_CCB; menu.have_font=1;
     logo.ccb_XPos=16L<<16; logo.ccb_YPos=8L<<16; logo.ccb_HDX=1L<<20; logo.ccb_VDY=1L<<16;
     cover.ccb_Width=64; cover.ccb_Height=80;
@@ -374,6 +378,13 @@ int main(int argc, char **argv) {
     init_channel_gecko(&menu);
     menu.logo=&logo;
     menu.message=NULL;
+    if (argc>1 && !strcmp(argv[1],"font-measure-bench")) {
+        unsigned int i;
+        preview_width_calls=0;
+        for (i=0;i<1000;++i) { menu.text_cursor=0;label_on(&menu,10,70,"Unchanged menu text",TEXT,UI_FONT_NORMAL,BG); }
+        fprintf(stderr,"Text width: %lu measurements for 1000 identical draws\n",preview_width_calls);
+        return 0;
+    }
     if (argc>1 && !strcmp(argv[1],"browser-render")) {
         static const int selections[]={2,2,2,3,4,2,2,12,13,12,1,0,24,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23};
         static unsigned short actual[320*240];
@@ -450,6 +461,28 @@ int main(int argc, char **argv) {
                 if (pixels[y*10+x]!=expected) abort();
             }
         }
+        /* Widths remain valid across clipping/margin changes, and text/style
+         * changes still invalidate them. Growing the available room must grow
+         * a cel originally allocated for a clipped label. */
+        {
+            const char *name="Long menu text with a changing right edge";
+            int original,expected=ui_font_width(name,UI_FONT_NORMAL);
+            unsigned long calls;
+            menu.text_cursor=0;label_on(&menu,290,70,name,TEXT,UI_FONT_NORMAL,BG);
+            original=menu.text_cache[0].capacity_width; calls=preview_width_calls;
+            menu.text_cursor=0;label_on(&menu,290,70,name,TEXT,UI_FONT_NORMAL,BG);
+            if (preview_width_calls!=calls || menu.text_cache[0].glyph_width!=expected) abort();
+            menu.text_cursor=0;label_on(&menu,10,70,name,TEXT,UI_FONT_NORMAL,BG);
+            if (menu.text_cache[0].capacity_width<=original || menu.text_cache[0].cel->ccb_Width!=expected || preview_width_calls!=calls) abort();
+            menu.config.screen_margin=12;menu.text_cursor=0;
+            label_on(&menu,10,70,name,TEXT,UI_FONT_NORMAL,BG);
+            if (preview_width_calls!=calls) abort();
+            menu.text_cursor=0;label_on(&menu,10,70,name,TEXT,UI_FONT_SMALL,BG);
+            if (preview_width_calls!=calls+1) abort();
+            menu.text_cursor=0;label_on(&menu,10,70,"Changed text",TEXT,UI_FONT_SMALL,BG);
+            if (preview_width_calls!=calls+2) abort();
+            menu.config.screen_margin=0;
+        }
         /* A held direction must not keep resetting the remote to frame zero. */
         preview_now=1000;menu.gecko_active=0;selection_changed(&menu);
         if (!menu.gecko_active || menu.gecko_since!=1000 || channel_gecko_frame(&menu,1000)!=0) abort();
@@ -462,8 +495,8 @@ int main(int argc, char **argv) {
             MenuEntry folder={1,1,"Folder"};
             memset(&probe,0,sizeof(probe));
             probe.metadata.entries=&info;probe.metadata.count=1;
-            if (!game_entry(&probe,&folder) || probe.entry_type_next!=1) abort();
-            if (!game_entry(&probe,&folder) || probe.entry_type_next!=1) abort(); /* Cached. */
+            if (!game_entry(&probe,&folder) || probe.lookup_next!=1) abort();
+            if (!game_entry(&probe,&folder) || probe.lookup_next!=1) abort(); /* Cached. */
             probe.metadata.count=0;
             if (game_entry(&probe,&folder)) abort();
             probe.metadata.count=1;++probe.listing_generation;
@@ -731,7 +764,10 @@ int main(int argc, char **argv) {
             cover_cache_put(&menu.cover_cache,0,"Cached.png",cache_pixels,sizeof(cache_pixels));
             update_preview(&menu);
             if (!menu.preview_cel || menu.preview_cel->ccb_SourcePtr!=menu.preview.frame_buffer ||
-                ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0]!=0x11 || menu.cover_cache.clock) abort();
+                ((unsigned char *)menu.preview_cel->ccb_SourcePtr)[0]!=0x11 || !menu.cover_cache.clock) abort();
+            stop_preview(&menu);selection_changed(&menu);preview_now+=PREVIEW_IDLE_MS+270;
+            preview_video_reclaim=1;update_preview(&menu);preview_video_reclaim=0;
+            if (!menu.preview_cel || menu.cover_cache.clock) abort();
         }
         stop_preview(&menu);
         selection_changed(&menu);preview_now+=PREVIEW_IDLE_MS+270;preview_video_enabled=USB_PREVIEW_NO_MEMORY;
@@ -1553,7 +1589,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
         code.write_text(STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_options preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_options\n#undef usb_png_cover\n' + demo + back + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_reclaim preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_reclaim\n#undef usb_png_cover\n' + demo + back + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
         (output / "menu-preview.c").write_text(code.read_text())
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
@@ -1567,6 +1603,7 @@ def main():
         subprocess.run([str(binary), "browser-render"], check=True, stdout=subprocess.DEVNULL)
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
         subprocess.run([str(binary),"font-memory"],stdout=subprocess.DEVNULL,check=True)
+        subprocess.run([str(binary),"font-measure-bench"],stdout=subprocess.DEVNULL,check=True)
         playback=subprocess.check_output([str(binary),"gecko-playback"],text=True).split("FRAME ")[1:]
         logos=[sum(line.startswith("I 1 ") for line in frame.splitlines()) for frame in playback]
         assert logos==[1,1,0,0,1], logos  # light frames leave the list panel alone; a new selection redraws it

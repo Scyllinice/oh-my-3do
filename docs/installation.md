@@ -1,11 +1,10 @@
 # Installation and support files
 
-Use the matching menu and desktop/media tools from the [latest release](https://github.com/Scyllinice/oh-my-3do/releases/latest).
+Menu and desktop releases have independent versions. In [Releases](https://github.com/Scyllinice/oh-my-3do/releases), choose `menu-v…` for the boot ISO and support/media tools, or `desktop-v…` for desktop installers and portable apps.
 
 ## Install
 
-Download `boot.iso` from the [latest
-release](https://github.com/Scyllinice/oh-my-3do/releases/latest). Back up the
+Download `boot.iso` from the latest stable **menu** release. Back up the
 existing `boot.iso` on the USB drive, replace it with the download, and cold
 boot the console. Keep games in their existing folders.
 
@@ -63,7 +62,7 @@ backups, custom cheat definitions and media are preserved. Installations have
 an undo journal. Paths are under `.ohmy3do/`; the backup directory is
 `.ohmy3do/saves/`, not a top-level `/saves` folder.
 
-A staging library remains optional: under **Settings & tools**, use **Set up a PC staging library**, choose its folder, and download the matching released menu there.
+A staging library remains optional: under **Settings & tools**, use **Set up a PC staging library**, choose its folder, and download the latest stable menu there.
 In **Library**, use **Add discs** to import games. Select the game tiles you
 want (or filter by title, category or region and **Select all shown**), then
 choose **Copy selected to USB…**. In the dialog, choose the USB destination,

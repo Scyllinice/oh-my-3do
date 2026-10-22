@@ -311,19 +311,24 @@ fn dispatch(
         }
         "drive_browser" => core::drive_browser::scan(&path(a, "root")?, &s.prefs, job),
         "library" => {
+            job.check()?;
             let root = root(s)?;
             let db = library::database(&root)?;
             let mut records=db["games"].as_array().cloned().unwrap_or_default();
             let destination = if s.prefs.destination.is_empty() { None } else { f::root(Path::new(&s.prefs.destination)).ok() };
+            let mut presence=destination.as_ref().map(|target|core::drive_browser::PresenceScan::new(&root,target)).transpose()?;
+            let mut paths=f::ReadPaths::new(&root)?;
             let total=records.len() as u64;job.report(0,total,"Reading PC library");
             for (index,record) in records.iter_mut().enumerate() {
-                record["on_drive"] = json!(destination.as_ref().and_then(|target| record["path"].as_str().and_then(|path| core::drive_browser::presence(&root,target,path).ok())));
+                job.check()?;
+                record["on_drive"] = json!(record["path"].as_str().and_then(|path|presence.as_mut().and_then(|scan|scan.check(path).ok())));
                 for (field,folder) in [("cover","covers"),("preview","previews")] {
-                    let missing=record[field].as_str().is_none_or(|name|f::safe(&root,&format!(".ohmy3do/{folder}/{name}")).map_or(true,|p|!p.is_file()));
+                    let missing=record[field].as_str().is_none_or(|name|paths.path(&format!(".ohmy3do/{folder}/{name}")).map_or(true,|p|!p.is_file()));
                     record[format!("{field}_missing")]=json!(missing);
                 }
                 job.report(index as u64+1,total,"Reading PC library");
             }
+            job.check()?;
             Ok(
                 json!({"root":root,"records":records,"categories":categories::load(&root)?.names(),"destination_available":destination.is_some()}),
             )
@@ -922,14 +927,17 @@ fn dispatch(
                 ],
                 job,
             )?;
-            let newer = updates::is_newer(&check.release.version, env!("CARGO_PKG_VERSION"))?;
+            let newer = updates::is_newer(&check.desktop.version, env!("CARGO_PKG_VERSION"))?;
             let targets = check
                 .targets
                 .iter()
                 .filter(|t| t.digest.as_deref() != Some(check.boot_digest.as_str()))
                 .map(|t| json!({"root":t.root,"installed":t.digest.is_some()}))
                 .collect::<Vec<_>>();
-            let out = json!({"tag":check.release.tag,"version":check.release.version,"notes":check.release.notes,"desktop":newer,"targets":targets,"warnings":check.warnings});
+            let out = json!({"desktop":newer,
+                "menu_release":{"tag":check.menu.tag,"version":check.menu.version,"notes":check.menu.notes,"url":check.menu.page()},
+                "desktop_release":{"tag":check.desktop.tag,"version":check.desktop.version,"notes":check.desktop.notes,"url":check.desktop.page()},
+                "targets":targets,"warnings":check.warnings});
             s.release = Some(check);
             Ok(out)
         }
@@ -943,7 +951,7 @@ fn dispatch(
                 .find(|t| t.root == target)
                 .context("Check this drive for updates first")?;
             s.last = Some(updates::install_boot(
-                &check.release,
+                &check.menu,
                 expected,
                 &check.boot_digest,
                 &state.cache,
@@ -956,7 +964,7 @@ fn dispatch(
                 .release
                 .as_ref()
                 .context("Check for updates first")?
-                .release;
+                .desktop;
             ensure!(
                 updates::is_newer(&release.version, env!("CARGO_PKG_VERSION"))?,
                 "The latest desktop version is already installed"

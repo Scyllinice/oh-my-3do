@@ -120,7 +120,7 @@ import clips already saved on the PC.
 
 ![Road Rash video preview playing in the menu](images/gameplay-preview.png)
 
-Road Rash preview in the v1.0.0 boot image in Opera: native 320×240, enlarged to 960×720.
+Road Rash preview in the menu v1.0.1 boot image in Opera: native 320×240, enlarged to 960×720.
 
 The library uses a left-hand game list and a fixed right-hand media panel.
 Portrait covers display at **96×120**; gameplay previews display at **160×120**,

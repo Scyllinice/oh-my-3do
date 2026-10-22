@@ -1,8 +1,7 @@
-//! Guided installation of the menu release matching this desktop application.
+//! Guided installation of the latest stable console menu, independently of the app version.
 use crate::{console_config, fsutil as f, library, Job};
 use anyhow::{ensure, Context, Result};
 use reqwest::blocking::Client;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -68,41 +67,13 @@ pub fn install_release(
     settings: &console_config::Settings,
     job: &Job,
 ) -> Result<PathBuf> {
-    let version = env!("CARGO_PKG_VERSION");
-    job.say(format!(
-        "Downloading menu v{version} from Scyllinice/oh-my-3do"
-    ));
-    let client = client()?;
-    let release: Value = serde_json::from_slice(&download(
-        &client,
-        &format!("https://api.github.com/repos/Scyllinice/oh-my-3do/releases/tags/v{version}"),
-        1024 * 1024,
-        job,
-    )?)?;
-    ensure!(
-        release["tag_name"] == format!("v{version}") && release["draft"] == false,
-        "Menu release does not match this application"
-    );
-    let assets = release["assets"]
-        .as_array()
-        .context("Release has no assets")?;
-    let asset = |name: &str| -> Result<String> {
-        let url = assets
-            .iter()
-            .find(|a| a["name"] == name)
-            .and_then(|a| a["browser_download_url"].as_str())
-            .context("Matching menu release asset is missing")?;
-        ensure!(
-            url.starts_with(&format!(
-                "https://github.com/Scyllinice/oh-my-3do/releases/download/v{version}/"
-            )),
-            "Unexpected release asset URL"
-        );
-        Ok(url.to_owned())
-    };
-    let checksum = download(&client, &asset("boot.iso.sha256")?, 1024, job)?;
-    let image = download(&client, &asset("boot.iso")?, LIMIT, job)?;
-    verify_image(&image, std::str::from_utf8(&checksum)?)?;
+    let release = crate::updates::latest(crate::updates::Component::Menu, job)?;
+    job.say(format!("Downloading menu {} from Scyllinice/oh-my-3do", release.tag));
+    let image = release.bytes("boot.iso", LIMIT, &client()?, job)?;
+    // The shared release reader validates repository URLs and checksums. Keep
+    // the 3DO volume-header validation before starting the installation journal.
+    let digest = format!("{:x}", Sha256::digest(&image));
+    verify_image(&image, &format!("{digest}  boot.iso"))?;
     install_verified(root, cache, &image, settings, job)
 }
 /// Install an already verified menu image with rollback and readback.
