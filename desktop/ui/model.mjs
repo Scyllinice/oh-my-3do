@@ -1,9 +1,9 @@
 export const categories=['Games','Educational','Adult','Demos','Samplers','Multimedia','Applications','Bonus Discs'];
 export function groupGames(records) {
  const groups=new Map();
- for(const r of records){const path=String(r.path??'');if(!path)continue;const parts=path.split('/');const movable=parts.length>=4&&categories.includes(parts[0]);const key=movable?parts.slice(0,3).join('/'):path;
-  if(!groups.has(key))groups.set(key,{key,title:String(r.title||parts.at(-1)).replace(/ \((?:disc|cd) \d+\)/ig,''),category:movable?parts[0]:r.category||'Games',region:r.region||'',genre:r.metadata?.genre||'',publisher:r.metadata?.publisher||'',cover:r.cover,discs:[],missingCover:false,missingPreview:false,missingInformation:[],edited:false,informationSearch:[],movable});
-  const game=groups.get(key);game.discs.push(path);game.cover ||= r.cover;game.missingCover ||= r.cover_missing??!r.cover;game.missingPreview ||= r.preview_missing??!r.preview;
+ for(const r of records){const path=String(r.path??'');if(!path)continue;const parts=path.split('/');const movable=parts.length>=4&&categories.includes(parts[0]);const key=movable?parts.slice(0,3).join('/'):String(r.group_key||path);
+  if(!groups.has(key))groups.set(key,{key,title:String(r.title||parts.at(-1)).replace(/ \((?:disc|cd) \d+\)/ig,''),category:movable?parts[0]:r.category||'Games',region:r.region||'',genre:r.metadata?.genre||'',publisher:r.metadata?.publisher||'',cover:r.cover,discs:[],missingCover:false,missingPreview:false,missingInformation:[],edited:false,informationSearch:[],bytes:0,presentDiscs:0,presenceKnown:true,movable});
+  const game=groups.get(key);game.bytes+=Number(r.bytes||0);game.presentDiscs+=r.on_drive===true?1:0;game.presenceKnown&&=typeof r.on_drive==='boolean';game.discs.push(path);game.cover ||= r.cover;game.missingCover ||= r.cover_missing??!r.cover;game.missingPreview ||= r.preview_missing??!r.preview;
   const m=r.metadata||{};game.informationSearch.push([r.title,m.description||m.overview,m.genre,m.developer,m.publisher].filter(Boolean).join(' ').toLocaleLowerCase());const present=v=>v!==null&&v!==undefined&&String(v).trim()!=='';
   for(const [key,value] of Object.entries({description:m.description||m.overview,genre:m.genre,developer:m.developer,publisher:m.publisher,released:m.release_date||m.year,players:m.players}))if(!present(value)&&!game.missingInformation.includes(key))game.missingInformation.push(key);
   game.edited ||= Object.keys(r.metadata_overrides||{}).length>0;

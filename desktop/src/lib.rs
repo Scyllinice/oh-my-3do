@@ -62,3 +62,5 @@ pub fn cache_dir() -> std::path::PathBuf {
 pub mod drive_identity;
 pub mod slot_notes;
 pub mod game_info;
+
+pub mod drive_browser;

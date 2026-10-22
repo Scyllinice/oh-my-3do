@@ -66,7 +66,7 @@ fn platform(root:&Path)->Result<()>{
  let b=plain.as_bytes();
  ensure!(b.len()==3&&b[0].is_ascii_alphabetic()&&b[1]==b':'&&b[2]==b'\\',"Choose a removable drive root such as K:\\");
  let wide:Vec<u16>=std::ffi::OsStr::new(&plain).encode_wide().chain(Some(0)).collect();
- ensure!(unsafe{GetDriveTypeW(wide.as_ptr())}==2,"Use Windows Safely Remove Hardware for fixed, network or unsupported drives");
+ ensure!(matches!(unsafe{GetDriveTypeW(wide.as_ptr())},2|3),"Use Windows Safely Remove Hardware for network or unsupported drives");
  // Avoid no-media dialogs while checking whether Shell actually removed it.
  let mut old=0;
  ensure!(unsafe{SetThreadErrorMode(0x8001,&mut old)}!=0,"Cannot configure safe drive detection");
@@ -78,13 +78,14 @@ fn platform(root:&Path)->Result<()>{
   if matches!(error.raw_os_error(),Some(3|15|21|1167)){Ok(false)}else{Err(error.into())}
  };
  ensure!(present()?,"Drive is already unavailable");
- // Request the Explorer eject action as the current user. No administrator
- // disk access, forced dismount, or fallback that ignores open handles.
- let script=format!("$ErrorActionPreference='Stop'; $s=New-Object -ComObject Shell.Application; $i=$s.NameSpace(17).ParseName('{}:\\'); if ($null -eq $i) {{ throw 'Drive not found' }}; $i.InvokeVerb('Eject')",b[0] as char);
+ // Map the logical volume to its disk and request PnP removal. Explorer's
+ // InvokeVerb can silently do nothing for USB/SD devices. PnP returns a veto
+ // when files or drivers prevent removal, without forcing an unmount.
+ let script = include_str!("eject-windows.ps1");
+ let script = format!("& {{ {script} }} -Letter '{}'", b[0] as char);
  let output=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",&script]).creation_flags(0x08000000).output().context("Cannot request Windows eject; use Safely Remove Hardware")?;
  ensure!(output.status.success(),"Windows eject failed: {}",String::from_utf8_lossy(&output.stderr).trim());
- // InvokeVerb has no success return. Only confirm removal once the volume
- // becomes unavailable; a busy or unsupported drive remains an error.
+ // Confirm the selected volume is unavailable even after PnP reported success.
  let started=Instant::now();
  while started.elapsed()<Duration::from_secs(15){
   if !present()?{return Ok(());}

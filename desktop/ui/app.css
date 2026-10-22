@@ -60,3 +60,7 @@ dialog[open] {
  .brand { margin-bottom:16px; }
  .empty { margin:40px auto; }
 }
+
+.library-location{flex:1}.library-location label{font-size:11px;font-weight:700;white-space:nowrap}.library-location select{width:100%;max-width:560px;text-overflow:ellipsis}.library-location .path{display:none}.topbar>.row{flex-shrink:0}
+
+.game-status{white-space:normal;line-height:1.5;margin-top:3px}

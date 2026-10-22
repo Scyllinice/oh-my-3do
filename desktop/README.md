@@ -41,6 +41,41 @@ Preferences, catalogs, undo journals and update downloads live in the platform
 cache directory under `oh-my-3do`. The app continues to use
 `native-settings.json`. Changing the GUI does not change disc or save formats.
 
+## Browse your PC library and console drives
+
+Use **View library** above the game grid to switch between your PC library and
+USB/SD drives. The copy destination appears in the selector; **Browse another
+drive…** remembers additional locations. **PC folder…** changes the source
+library used for imports, media and metadata editing. Each view keeps its own
+filters and selection.
+
+Browsing does not change drive files. It scans actual ISO/CUE files and reads available
+console artwork and information indexes, without requiring a desktop database
+on the card. The grid shows disc counts, game sizes and missing covers/previews;
+the summary shows free space. Boot images and navigation helpers are excluded.
+Use **Refresh** after connecting, replacing or changing a drive.
+
+To update an existing drive, choose **Update media & information…** in its
+library view. Select games first to update a subset, or leave the selection
+empty to match the entire drive. It transfers prepared PC media, descriptions
+and metadata, plus console support, after a file/space review. Optionally find
+missing media and descriptions first. Unmatched paths are listed and skipped;
+missing disc files require the normal copy workflow. Game disc files are never
+copied or replaced by this update. The copy destination setting stays unchanged.
+To revise text or assign new artwork, edit the game in the PC library, then run
+this update again.
+
+In the PC view, **Already on drive** means every disc and referenced CUE track
+exists at the same relative path with the same file size on the copy destination.
+Partial multidisc copies are marked separately. This is a presence check, not a
+checksum verification. Browsing another drive does not change the copy
+destination; choose that separately in the copy dialog or Drive setup.
+
+Windows eject requests device removal directly and reports Windows' refusal
+reason when available. It confirms the volume is unavailable before reporting
+success. Close files on the drive if removal is refused; drives with multiple
+mounted volumes should be removed through Windows Safely Remove Hardware.
+
 ## Checking a drive, copy space and save changes
 
 **Drive setup → Check drive** produces a read-only readiness report with

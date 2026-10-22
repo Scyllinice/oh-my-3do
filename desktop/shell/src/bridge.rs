@@ -178,7 +178,7 @@ pub async fn save_library_views(state: tauri::State<'_, Bridge>, views: std::col
     }).await.map_err(|e|e.to_string())?.map_err(|e|format!("{e:#}"))
 }
 #[tauri::command]
-pub async fn cover(state: tauri::State<'_, Bridge>, name: String) -> Result<String, String> {
+pub async fn cover(state: tauri::State<'_, Bridge>, name: String, browser_root: Option<String>, token: Option<String>) -> Result<String, String> {
     let backend = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<String> {
         let root = {
@@ -186,9 +186,16 @@ pub async fn cover(state: tauri::State<'_, Bridge>, name: String) -> Result<Stri
                 .inner
                 .lock()
                 .map_err(|_| anyhow::anyhow!("State unavailable"))?;
-            root(&inner)?
+            if let Some(path) = &browser_root {
+                let root = f::root(Path::new(path))?;
+                if let Some(token) = &token {
+                    ensure!(core::drive_identity::inspect(&root, &inner.prefs)?.token == *token, "Drive changed; refresh the browser");
+                }
+                root
+            } else { root(&inner)? }
         };
-        let p = f::safe(&root, &format!(".ohmy3do/covers/{name}"))?;
+        let relative = if browser_root.is_some() { name } else { format!(".ohmy3do/covers/{name}") };
+        let p = f::safe(&root, &relative)?;
         ensure!(
             fs::metadata(&p)?.len() <= 32 * 1024 * 1024,
             "Oversized cover"
@@ -290,18 +297,21 @@ fn dispatch(
             s.prefs = prefs;
             Ok(json!(s.prefs))
         }
+        "drive_browser" => core::drive_browser::scan(&path(a, "root")?, &s.prefs, job),
         "library" => {
             let root = root(s)?;
             let db = library::database(&root)?;
             let mut records=db["games"].as_array().cloned().unwrap_or_default();
+            let destination = if s.prefs.destination.is_empty() { None } else { f::root(Path::new(&s.prefs.destination)).ok() };
             for record in &mut records {
+                record["on_drive"] = json!(destination.as_ref().and_then(|target| record["path"].as_str().and_then(|path| core::drive_browser::presence(&root,target,path).ok())));
                 for (field,folder) in [("cover","covers"),("preview","previews")] {
                     let missing=record[field].as_str().is_none_or(|name|f::safe(&root,&format!(".ohmy3do/{folder}/{name}")).map_or(true,|p|!p.is_file()));
                     record[format!("{field}_missing")]=json!(missing);
                 }
             }
             Ok(
-                json!({"root":root,"records":records,"categories":categories::load(&root)?.names()}),
+                json!({"root":root,"records":records,"categories":categories::load(&root)?.names(),"destination_available":destination.is_some()}),
             )
         }
         "categories_read" => {
@@ -409,6 +419,15 @@ fn dispatch(
                 &strings(a, "discs")?,
                 job,
             )?;
+            if a["existing_only"].as_bool().unwrap_or(false) {
+                if let Some(expected) = a["drive_token"].as_str() { ensure!(drive.token == expected, "Drive changed; refresh and review again"); }
+                ensure!(plan.moves.is_empty(), "Drive categories differ. Use the normal copy review to reconcile folders first.");
+                ensure!(plan.files.iter().all(|file| {
+                    let name = file.path.to_ascii_lowercase();
+                    let support = name == "boot.iso" || name.starts_with(".ohmy3do/") || name.contains("/.ohmy3do/");
+                    support || file.status == "unchanged"
+                }), "Some game files are missing. Use Copy selected to USB to repair them first.");
+            }
             let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?,"drive":drive});
             s.copy = Some(plan);
             Ok(value)

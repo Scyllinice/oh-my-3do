@@ -1,3 +1,4 @@
+import {groupGames} from '../ui/model.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -33,4 +34,16 @@ test('cleanup review starts with no selection and labels protected copies withou
  const dialogs=[];const state={cleanupSelected:new Set(),cleanup:{directory:'/usb/saves',bytes:64,copies:[{name:'<save>.3ds.uuid.bak',original:'<save>.3ds',bytes:64,modified:0,valid:true,newest:true,keep:true}]}};
  view('recoveryDialog',{state,dialog:(...args)=>dialogs.push(args)})();
  const [title,html,buttons]=dialogs[0];assert.equal(title,'Recovery copies');assert.ok(html.includes('0 selected'));assert.ok(html.includes('Newest copy'));assert.ok(html.includes('&lt;save&gt;'));assert.ok(!html.includes('<save>'));assert.ok(buttons.includes('disabled'));
+});
+
+test('presence and sizes aggregate across every disc, with unknown kept distinct',()=>{
+ const groups=groupGames([
+  {path:'Games/USA/Two discs/Disc 1.iso',title:'Two discs',bytes:100,on_drive:true},
+  {path:'Games/USA/Two discs/Disc 2.iso',title:'Two discs',bytes:200,on_drive:false}
+ ]);
+ assert.equal(groups.length,1);
+ assert.equal(groups[0].bytes,300);
+ assert.equal(groups[0].presentDiscs,1);
+ assert.equal(groups[0].presenceKnown,true);
+ assert.equal(groupGames([{path:'Unknown.iso'}])[0].presenceKnown,false);
 });

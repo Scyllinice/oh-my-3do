@@ -40,7 +40,7 @@ fn string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     out.push(0);
     Ok(())
 }
-fn metadata(root: &Path) -> Result<BTreeMap<String, [String; 3]>> {
+pub(crate) fn metadata(root: &Path) -> Result<BTreeMap<String, [String; 3]>> {
     let path = f::safe(root, ".ohmy3do/metadata.3di")?;
     if !path.exists() {
         return Ok(BTreeMap::new());
