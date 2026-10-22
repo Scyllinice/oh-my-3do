@@ -735,17 +735,22 @@ impl Journal {
             bail!("Refusing to overwrite {}", p.display())
         }
         self.parents(&p)?;
+        let mut copy_job = job.clone();
         let hash = if let Some(h) = expected.filter(|h| !h.is_empty()) {
             h.to_owned()
         } else {
-            f::sha256(source, job)?
+            // Journal creation hashes first; include that pass so the copy bar
+            // does not reach the end and restart before transfer/readback.
+            let bytes = fs::metadata(source)?.len().max(1);
+            copy_job = job.progress_range(bytes,bytes*2,bytes*3,"Copying and verifying file");
+            f::sha256(source, &job.progress_range(0,bytes,bytes*3,"Copying and verifying file"))?
         };
         self.created.push(Created {
             path: name.into(),
             sha256: hash.clone(),
         });
         self.save()?;
-        let actual = f::copy_new(source, &p, job, Some(&hash))?;
+        let actual = f::copy_new(source, &p, &copy_job, Some(&hash))?;
         if actual != hash {
             bail!("Source contents changed since scan: {}", source.display())
         }
@@ -775,6 +780,7 @@ impl Journal {
         self.save()
     }
     pub fn undo(&mut self) -> Result<()> {
+        anyhow::ensure!(self.state != "removal-committed", "Permanent title removal cannot be undone");
         if self.state == "undone" {
             bail!("Transaction is already undone")
         }
@@ -989,7 +995,7 @@ fn read_media_index_impl(root: &Path, folder: &str, beside: bool) -> Result<BTre
 }
 pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
     crate::setup::ensure_navigation(root, tx, job)?;
-    build_indexes_impl(root, tx, job, false)
+    build_indexes_impl(root, tx, job, false, true)
 }
 /// Complete a minimal drive without replacing existing user indexes or name mappings.
 pub fn build_missing_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
@@ -1004,7 +1010,7 @@ pub fn build_missing_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result
     }) {
         return Ok(());
     }
-    build_indexes_impl(root, tx, job, true)
+    build_indexes_impl(root, tx, job, true, true)
 }
 fn write_index(
     root: &Path,
@@ -1022,7 +1028,13 @@ fn write_index(
     }
     tx.write(name, data)
 }
-fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bool) -> Result<()> {
+/// Removing discs adds no save names. Keep the existing mappings because the
+/// saves themselves remain, and avoid rereading every remaining disc.
+pub fn build_indexes_after_removal(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
+    crate::setup::ensure_navigation(root, tx, job)?;
+    build_indexes_impl(root, tx, job, false, false)
+}
+fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bool, scan_save_names: bool) -> Result<()> {
     let sets = d::collect(&[root.to_owned()], None, job)?;
     let mut names = sets
         .iter()
@@ -1065,6 +1077,7 @@ fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bo
     let db = database(root)?;
     for (name,data) in crate::game_info::files(&db)? {write_index(root,tx,&name,&data,missing_only)?;}
     write_index(root, tx, ".ohmy3do/metadata.3di", &metadata_bytes(&db, &names)?, missing_only)?;
+    if !scan_save_names { return Ok(()); }
     let titles = db["games"]
         .as_array()
         .into_iter()
@@ -1400,6 +1413,8 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
             tx.write(".ohmy3do/ohmy3do.ini", include_bytes!("../../ohmy3do.ini"))?;
         }
         let mut records = vec![];
+        let import_total = entries.iter().flat_map(|entry|&entry.files).map(|file|file.fingerprint.size).sum::<u64>().max(1);
+        let mut imported_bytes = 0u64;job.report(0,import_total,"Importing and verifying discs");
         for (n, entry) in entries.iter().enumerate() {
             job.check()?;
             job.say(format!(
@@ -1417,8 +1432,9 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
                     &file.source,
                     &file.target,
                     Some(&file.fingerprint.sha256),
-                    job,
+                    &job.progress_range(imported_bytes,file.fingerprint.size,import_total,"Importing and verifying discs"),
                 )?;
+                imported_bytes += file.fingerprint.size;job.report(imported_bytes,import_total,"Importing and verifying discs");
             }
             if entry
                 .source
@@ -1498,6 +1514,7 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
             records.push(record);
         }
         let mut written = HashSet::new();
+        job.phase("Saving library metadata and indexes");
         for ((_, kind), asset) in &prepared {
             let folder = if kind == "cover" {
                 "covers"
@@ -1568,14 +1585,15 @@ fn prepare_parallel(
     outputs: &mut media::Outputs,
     job: &Job,
 ) -> Result<()> {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
     let total = work.iter().filter(|w| w.3 || w.4).count();
     // Leave one core for the interface.
     let workers = std::thread::available_parallelism()
         .map_or(1, |n| n.get().saturating_sub(1).max(1))
         .min(total.max(1));
     let queue = std::sync::Mutex::new(work.iter_mut());
-    let (done, failed) = (AtomicUsize::new(0), AtomicBool::new(false));
+    let (done, failed) = (std::sync::Mutex::new(0usize), AtomicBool::new(false));
+    let worker_job = job.quiet_progress();job.report(0,total as u64,"Preparing media");
     let results = std::thread::scope(|s| {
         let handles = (0..workers)
             .map(|_| {
@@ -1591,12 +1609,13 @@ fn prepare_parallel(
                             continue;
                         }
                         let result =
-                            media::prepare_missing(entry, prefs, cache, &mut out, *cover, *preview, job);
+                            media::prepare_missing(entry, prefs, cache, &mut out, *cover, *preview, &worker_job);
                         if result.is_err() {
                             failed.store(true, Relaxed);
                             result?;
                         }
-                        let n = done.fetch_add(1, Relaxed) + 1;
+                        let mut completed = done.lock().unwrap();*completed += 1;let n = *completed;
+                        job.report(n as u64,total as u64,"Preparing media");
                         job.say(format!("Media {n} of {total} ready: {path}"));
                     }
                     Ok(out)
@@ -1611,6 +1630,7 @@ fn prepare_parallel(
     for result in results {
         outputs.extend(result?);
     }
+    job.phase("Saving prepared media");
     Ok(())
 }
 pub fn rebuild_media(root: &Path, prefs: &Preferences, cache: &Path, job: &Job) -> Result<PathBuf> {

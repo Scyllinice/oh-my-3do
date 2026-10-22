@@ -32,6 +32,8 @@ Get the matching packages from the [latest release](https://github.com/Scyllinic
 
 The optional desktop app runs without Python or Docker. It can organize discs,
 prepare covers and previews, edit console settings and save backups, and prepare a USB drive.
+Browse PC and drive libraries, copy selected games, or remove titles after a
+file review.
 It also manages game descriptions and metadata, with bulk editing, portable
 custom-edit backups and a review for unmatched games.
 It also offers verified updates for the app and `boot.iso`.
@@ -54,8 +56,9 @@ See [installation and drive layout](docs/installation.md) or the
 | L + R | Open Tools |
 
 The [menu guide](docs/menu-guide.md) covers letter navigation, multi-disc games,
-favorites, search, settings and the other shortcuts. Enable **Video previews**
-in Tools → Settings, save and cold boot to play prepared previews.
+favorites, search, settings and the other shortcuts. Prepared video previews
+play by default on new setups. Change this in Tools → Settings, save and cold
+boot; existing settings are preserved.
 
 ## Guides
 

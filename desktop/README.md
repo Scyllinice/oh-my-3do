@@ -65,16 +65,32 @@ copied or replaced by this update. The copy destination setting stays unchanged.
 To revise text or assign new artwork, edit the game in the PC library, then run
 this update again.
 
+Select one or more titles and choose **Remove…** to review their disc, track and
+associated media files. **Permanently remove** deletes them from the library
+being viewed and rebuilds its menu indexes. Shared artwork, unrelated files,
+save backups and copies in other libraries are kept. Existing save-name mappings
+are retained without scanning the remaining discs. Removal cannot be undone;
+review the library path and file list before confirming. Cancellation before
+final deletion rolls back staged files and index changes.
+
 In the PC view, **Already on drive** means every disc and referenced CUE track
 exists at the same relative path with the same file size on the copy destination.
 Partial multidisc copies are marked separately. This is a presence check, not a
 checksum verification. Browsing another drive does not change the copy
 destination; choose that separately in the copy dialog or Drive setup.
 
-Windows eject requests device removal directly and reports Windows' refusal
-reason when available. It confirms the volume is unavailable before reporting
-success. Close files on the drive if removal is refused; drives with multiple
-mounted volumes should be removed through Windows Safely Remove Hardware.
+Windows eject targets the selected card's removable media, leaving other reader
+slots connected. It locks the volume before dismounting and ejecting it; if
+Windows denies direct access, it asks Explorer to eject that volume. Success
+requires confirming that the volume is unavailable. Cards containing multiple
+mounted volumes and drives that do not expose removable media require Windows'
+eject controls. Readers may not support individual media eject.
+
+Long operations show live status, a progress bar and cancellation controls in the
+active dialog. Copying and verification use byte-based progress; review/library
+scans and media batches use file/game counts. Downloads use the server's size
+when available. Phases with unknown totals show an indeterminate bar. Errors
+and cancellation results stay readable in the dialog, including in Activity.
 
 ## Checking a drive, copy space and save changes
 
@@ -90,7 +106,9 @@ and estimated free space afterward. Copying is blocked if the estimate does not
 fit, and free space is checked again before writes begin.
 
 After a verified copy, choose **Safely eject drive** in the completion dialog.
-It is also available under **Drive setup**. Windows uses Explorer’s eject action
+It is also available in the top bar throughout the app and under **Drive setup**.
+The top bar targets the drive being viewed, or the PC library’s copy destination;
+hover over it to see the path. Windows requests safe device removal
 and confirms the volume is unavailable. Linux needs `udisksctl` (udisks2) and
 refuses drives with other mounted volumes. Busy, unsupported, fixed Windows
 drives and WSL mounts may require the operating system’s eject controls. The

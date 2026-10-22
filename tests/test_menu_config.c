@@ -171,7 +171,9 @@ static void display_config(void)
     assert(menu_config_parse(&c,"theme=3",7) < 0); /* Gecko TV is the only theme; the key is gone. */
     assert(menu_config_parse(&c,"[audio]\nmenu_music=1\n",strlen("[audio]\nmenu_music=1\n")) < 0); /* no background music */
     menu_config_defaults(&c);
-    assert(c.remember_position && c.recent_games && !c.video_previews && c.preview_sound);
+    assert(!menu_config_parse(&c,"video_previews=0",strlen("video_previews=0")) && !c.video_previews);
+    menu_config_defaults(&c);
+    assert(c.remember_position && c.recent_games && c.video_previews && c.preview_sound);
     assert(!menu_config_parse(&c,"[audio]\npreview_sound=0\n",strlen("[audio]\npreview_sound=0\n")) && !c.preview_sound);
     assert(menu_config_parse(&c,"preview_sound=2",strlen("preview_sound=2")) < 0);
     assert(menu_config_parse(&c,"preview_sound=0\npreview_sound=1",strlen("preview_sound=0\npreview_sound=1")) < 0);

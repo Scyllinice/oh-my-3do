@@ -22,6 +22,7 @@ stubs = r'''
 #include <string.h>
 #include <stdio.h>
 #define MAX_DEPTH 32
+/*GAME_LOOKUP_TYPES*/
 typedef struct Menu {
     Ode ode; OdeListing listing; OdePlaylist playlist; LibraryMetadata metadata;
     MenuPosition last_position; MenuConfig config;
@@ -29,7 +30,8 @@ typedef struct Menu {
     char path[MAX_DEPTH][ODE_MAX_NAME]; size_t previous_selection[MAX_DEPTH],selected;
     int ready,view_valid,demo,loading,review,tools,single_disc,launching;
     int config_result,position_result,position_dirty,recovery_media_off;
-    unsigned long selection_since;
+    unsigned long selection_since,listing_generation;
+/*GAME_LOOKUP_FIELDS*/
     struct { int timed_out; } bus;
     char status[128]; const char *message;
     void *preview_cel;
@@ -77,9 +79,12 @@ static int transfer(void *ctx,const unsigned char *p,unsigned char *r,size_t cap
 }
 '''
 
+stubs=stubs.replace('/*GAME_LOOKUP_TYPES*/',section('#define GAME_LOOKUP_SLOTS', '#define SCROLL_MEASURE_SLOTS'))
+stubs=stubs.replace('/*GAME_LOOKUP_FIELDS*/',section('    GameLookup game_lookups[GAME_LOOKUP_SLOTS];','    ScrollMeasure scroll_measures'))
+
 controller = ''.join([
     section('static int directory_path(Menu *menu, char *buffer, size_t capacity)\n{', 'typedef struct UsbCoverRead'),
-    section('static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{', '/* Metadata for the selected game'),
+    section('static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{', "/* Resolve the selected game's metadata once"),
     section('static void activate(Menu *menu)\n{', 'static void review_queue(Menu *menu)\n{'),
     section('static void start_queue(Menu *menu)\n{', '/* Tools stay available after a transport failure'),
     section('static void remember_position(Menu *menu, int force)\n{', 'typedef struct RecentLaunch'),

@@ -400,7 +400,11 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
     let remaps = moved_paths(&target, &moves);
     let mut items = vec![];
     let mut bytes = 0;
-    for (name, source_name) in files {
+    const REVIEW_UNITS: u64 = 1_000_000;
+    let review_total = (files.len()+generated.len()).max(1) as u64 * REVIEW_UNITS;
+    job.report(0,review_total,"Reviewing files");
+    for (review_index,(name, source_name)) in files.into_iter().enumerate() {
+        let file_job = job.progress_range(review_index as u64*REVIEW_UNITS,REVIEW_UNITS,review_total,"Reviewing files");
         job.check()?;
         let src = f::safe(&source, &source_name)?;
         // A file in a folder that will move is compared where it is now.
@@ -479,7 +483,7 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
             if disc && !verify && size == ds.0 && (source_stamp == ds.1 || receipt) {
                 trusted = receipt;
                 "unchanged"
-            } else if size == ds.0 && f::sha256(&src, job)? == f::sha256(&dest, job)? {
+            } else if size == ds.0 && f::sha256(&src, &file_job.progress_range(0,size.max(1),size.max(1)*2,"Checking source"))? == f::sha256(&dest, &file_job.progress_range(size.max(1),size.max(1),size.max(1)*2,"Checking destination"))? {
                 trusted = true;
                 "unchanged"
             } else if disc {
@@ -500,14 +504,16 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
             destination_stamp,
             verified: trusted,
         });
+        job.report((review_index as u64+1)*REVIEW_UNITS,review_total,"Reviewing files");
     }
-    for (name, content) in &generated {
+    for (generated_index,(name, content)) in generated.iter().enumerate() {
         let dest = f::safe(&target, name)?;
         if dest.exists() && !dest.is_file() { bail!("Destination is occupied: {name}"); }
         let destination_stamp = if dest.is_file() { Some(f::stamp(&dest)?.1) } else { None };
         let status = if destination_stamp.is_none() { "copy" } else if fs::read(&dest)? == *content { "unchanged" } else { "update" };
         if status != "unchanged" { bytes += content.len() as u64; }
         items.push(CopyItem { path: name.clone(), source_path: None, status: status.into(), size: content.len() as u64, source_stamp: 0, destination_stamp, verified: status == "unchanged" });
+        job.report(review_total-(generated.len() as u64-generated_index as u64-1)*REVIEW_UNITS,review_total,"Reviewing files");
     }
     // Menu-written lists on the drive follow moved folders even when staging has none.
     let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
@@ -570,6 +576,8 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
         }
     }
     let category_config=categories::for_transfer(&plan.source,&plan.destination)?;
+    let total_bytes = plan.files.iter().filter(|file| ["copy","update"].contains(&file.status.as_str())).map(|file|file.size).sum::<u64>().max(1);
+    let mut completed_bytes = 0u64;job.report(0,total_bytes,"Copying and verifying files");
     let mut tx = Journal::new(&plan.destination, cache)?;
     let mut receipt = plan.clone();
     let result = (|| -> Result<()> {
@@ -615,6 +623,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 continue;
             };
             job.check()?;
+            let file_job = job.progress_range(completed_bytes,file.size,total_bytes,"Copying and verifying files");
             if let Some(content) = plan.generated.get(&file.path) {
                 let dest = f::safe(&plan.destination, &file.path)?;
                 let stamp = if dest.exists() { Some(f::stamp(&dest)?.1) } else { None };
@@ -625,6 +634,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 receipt.files[i].status = "verified".into();
                 receipt.files[i].verified = true;
                 receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
+                completed_bytes += file.size;job.report(completed_bytes,total_bytes,"Copying and verifying files");
                 continue;
             }
             let src = f::safe(
@@ -651,7 +661,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                     bail!("Copy readback failed")
                 }
             } else if file.status == "copy" {
-                tx.copy(&src, &file.path, None, job)?;
+                tx.copy(&src, &file.path, None, &file_job)?;
             } else {
                 if f::stamp(&dest)?.1
                     != file
@@ -662,14 +672,16 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 };
                 let bytes = fs::read(&src)?;
                 tx.write(&file.path, &bytes)?;
-                if f::sha256(&dest, job)? != f::sha256(&src, job)? {
+                if f::sha256(&dest, &file_job.progress_range(0,file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? != f::sha256(&src, &file_job.progress_range(file.size.max(1),file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? {
                     bail!("Copy readback failed")
                 }
             }
             receipt.files[i].status = "verified".into();
             receipt.files[i].verified = true;
             receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
+            completed_bytes += file.size;job.report(completed_bytes,total_bytes,"Copying and verifying files");
         }
+        job.phase("Finalizing drive support");
         for file in &mut receipt.files {
             if file.status == "unchanged" && file.verified {
                 file.status = "verified".into();
@@ -687,6 +699,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
         Ok(())
     })();
     if let Err(error) = result {
+        job.phase("Restoring the drive after the interrupted copy");
         if let Err(undo) = tx.undo() {
             bail!(
                 "{error:#}; rollback needs attention: {undo:#}. Keep {}",

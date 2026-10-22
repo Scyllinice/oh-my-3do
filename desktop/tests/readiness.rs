@@ -7,8 +7,8 @@ fn snapshot(root:&Path)->BTreeMap<String,Vec<u8>>{walkdir::WalkDir::new(root).in
 fn prepared_drive_passes_with_optional_media_warning_and_check_is_read_only(){
  let root=tempfile::tempdir().unwrap();let cache=tempfile::tempdir().unwrap();prepare(root.path(),cache.path());
  let before=snapshot(root.path());let report=readiness::check(root.path(),&Job::default()).unwrap();
- assert!(report.ready,"{:?}",report);assert_eq!(report.errors,0);assert_eq!(report.warnings,1);
- assert!(report.checks.iter().any(|c|c.name=="previews"&&c.status=="ok"));assert_eq!(snapshot(root.path()),before);
+ assert!(report.ready,"{:?}",report);assert_eq!(report.errors,0);assert_eq!(report.warnings,2);
+ assert!(report.checks.iter().any(|c|c.name=="previews"&&c.status=="warning"));assert_eq!(snapshot(root.path()),before);
 }
 #[test]
 fn reports_independent_errors_and_does_not_repair_them(){

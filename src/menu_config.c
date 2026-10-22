@@ -5,12 +5,12 @@ static int space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
 void menu_config_defaults(MenuConfig *config)
 {
-    memset(config, 0, sizeof(*config)); config->usb_covers = config->remember_position = config->recent_games = config->preview_sound = 1;
+    memset(config, 0, sizeof(*config)); config->usb_covers = config->remember_position = config->recent_games = config->video_previews = config->preview_sound = 1;
 }
 int menu_config_parse(MenuConfig *config, const char *data, size_t length)
 {
     static const char *keys[] = {"folder_workaround", "usb_covers", "screen_margin", "large_titles", "remember_position", "recent_games", "video_previews", "preview_sound", "hide_adult"};
-    int values[9] = {0, 1, 0, 0, 1, 1, 0, 1, 0};
+    int values[9] = {0, 1, 0, 0, 1, 1, 1, 1, 0};
     unsigned int seen = 0;
     size_t pos = 0, i;
     int ended = 0;

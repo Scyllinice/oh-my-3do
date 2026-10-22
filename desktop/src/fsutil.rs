@@ -79,6 +79,8 @@ pub fn safe(root: &Path, name: &str) -> Result<PathBuf> {
 }
 pub fn sha256(p: &Path, job: &Job) -> Result<String> {
     let mut f = File::open(p)?;
+    let total = f.metadata()?.len();let mut completed = 0;
+    job.report(0,total,"Verifying file");
     let mut h = Sha256::new();
     let mut b = vec![0; 1024 * 1024];
     loop {
@@ -87,7 +89,7 @@ pub fn sha256(p: &Path, job: &Job) -> Result<String> {
         if n == 0 {
             break;
         }
-        h.update(&b[..n]);
+        h.update(&b[..n]);completed += n as u64;job.report(completed,total,"Verifying file");
     }
     Ok(format!("{:x}", h.finalize()))
 }
@@ -112,6 +114,8 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     fs::create_dir_all(parent)?;
     let mut t = tempfile::NamedTempFile::new_in(parent)?;
     let mut src = File::open(source)?;
+    let total = before.0.saturating_mul(2).max(1);let mut completed = 0;
+    job.report(0,total,"Copying and verifying file");
     let mut hash = Sha256::new();
     let mut b = vec![0; 1024 * 1024];
     loop {
@@ -121,14 +125,15 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
             break;
         }
         t.write_all(&b[..n])?;
-        hash.update(&b[..n]);
+        hash.update(&b[..n]);completed += n as u64;job.report(completed,total,"Copying and verifying file");
     }
     t.as_file().sync_all()?;
     let actual_hash = format!("{:x}", hash.finalize());
     if expected.is_some_and(|h| h != actual_hash) {
         bail!("Source contents changed since scan: {}", source.display())
     }
-    if stamp(source)? != before || sha256(t.path(), job)? != actual_hash {
+    let verify_job = job.progress_range(before.0,before.0,total,"Copying and verifying file");
+    if stamp(source)? != before || sha256(t.path(), &verify_job)? != actual_hash {
         bail!(
             "Source changed or copy verification failed: {}",
             source.display()
@@ -143,6 +148,7 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     )?;
     job.check()?;
     t.persist_noclobber(target).map_err(|e| e.error)?;
+    job.report(total,total,"Copying and verifying file");
     Ok(actual_hash)
 }
 pub fn outside(p: &Path, root: &Path) -> Result<()> {

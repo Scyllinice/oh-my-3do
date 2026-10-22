@@ -194,10 +194,11 @@ py index-media.py M:/
 
 Use `--silent` to omit audio.
 
-Enable **Video previews** in Tools → Settings, save, and cold boot
-(or set `video_previews=1` under `[artwork]` in the INI). **Preview sound**
+**Video previews** are enabled by default for new setups. Toggle them in
+Tools → Settings, save, and cold boot (or set `video_previews=0/1` under
+`[artwork]` in the INI). **Preview sound**
 controls audio separately and saves as `preview_sound=0/1` under `[audio]`.
-Previews remain disabled by default. There is no background-music setting;
+Existing explicit preview settings are preserved. There is no background-music setting;
 `menu_music` is an unknown key and makes an INI invalid. Music files are not
 read or deleted.
 

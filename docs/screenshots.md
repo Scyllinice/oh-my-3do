@@ -56,16 +56,20 @@ The [original 320×240 captures](images/native/) are also available.
 
 ## Game details
 
-![Original game folder and disc filenames in the console details view](images/game-details.png)
+![Console game information showing genre, publisher, release date and description](images/game-details.png)
 
 ## Desktop library and USB copying
 
 Actual 1280×900 captures of the Tauri desktop app. The Library uses real covers;
-the transfer and save screens use disposable test fixtures.
+the library, transfer and save screens use disposable test fixtures.
 
 ![Tauri Library with real game covers](images/desktop-library.png)
 
-![Reviewing a selected multi-disc USB transfer](images/desktop-copy.png)
+![Reviewing selected games, file counts and transfer size before copying to USB](images/desktop-copy.png)
+
+![Browsing actual drive contents with the library selector and top-bar eject action](images/desktop-drive-library.png)
+
+![Reviewing permanent title removal while preserving saves and other library copies](images/desktop-remove.png)
 
 ## Desktop appearance
 
@@ -75,7 +79,7 @@ Choose Light, Dark, or System under **Settings & tools → Appearance**.
 
 ## Desktop categories
 
-![Desktop category editor with a renamed category hidden on the console](images/desktop-categories.png)
+![Desktop category editor with configurable names and console visibility](images/desktop-categories.png)
 
 ## Desktop drive setup
 

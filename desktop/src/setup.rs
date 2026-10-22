@@ -26,6 +26,7 @@ pub(crate) fn download(client: &Client, url: &str, limit: usize, job: &Job) -> R
         response.content_length().is_none_or(|n| n <= limit as u64),
         "Download exceeds size limit"
     );
+    let expected = response.content_length().unwrap_or(0);job.report(0,expected,"Downloading");
     let mut bytes = Vec::new();
     let mut stream = response.take(limit as u64 + 1);
     let mut buffer = [0u8; 32768];
@@ -37,6 +38,7 @@ pub(crate) fn download(client: &Client, url: &str, limit: usize, job: &Job) -> R
         }
         bytes.extend_from_slice(&buffer[..n]);
         ensure!(bytes.len() <= limit, "Download exceeds size limit");
+        job.report(bytes.len() as u64,expected,"Downloading");
     }
     Ok(bytes)
 }

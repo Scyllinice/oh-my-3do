@@ -23,6 +23,7 @@ test: build/test_game_info build/test_menu_help build/test_menu_categories build
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py
 	python3 tests/test_queue_workflow.py
+	python3 tests/test_menu_lookup_cache.py
 	python3 tests/test_game_folder_workflow.py
 	python3 tests/test_recovery_workflow.py
 	python3 tests/test_startup_workflow.py

@@ -24,10 +24,15 @@ See `docs/emulator-and-bench.md` for the emulator and ARM60 timing harnesses.
 
 The menu, desktop app and media tools share one release version. Update
 `MENU_VERSION` in `src/main.c`, `SCANNER_VERSION` in `tools/organize-library.py`,
-the app version in `desktop/Cargo.toml` and `desktop/Cargo.lock`, and the release
+the app versions in `desktop/Cargo.toml`, `desktop/Cargo.lock`,
+`desktop/shell/Cargo.toml` and `desktop/shell/Cargo.lock`, and the release
 links and version labels in the documentation together. Build and validate all
 packages before publishing a release. Desktop packaging includes the exact
 dependency notices and source revision in `BUILD.json`.
+
+Version **1.0.0 is final**. Future published changes must use a higher shared
+version and a new Git tag/release; do not replace the 1.0.0 tag or assets again.
+This also lets installed desktop apps detect newer releases.
 
 Do not blindly retry timed-out XBUS operations or claim a USB/NVRAM write worked
 from an acknowledgement alone. Preserve the recovery-backup ordering and readback

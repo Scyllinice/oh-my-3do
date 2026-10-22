@@ -20,6 +20,10 @@ fn word(data: &[u8], at: usize) -> u32 {
 
 /// (byte offset, size) of every file on a 3DO (Opera) disc image.
 pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
+    opera_files_with_job(file, &Job::default())
+}
+fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)>> {
+    job.check()?;
     let mut header = [0u8; BLOCK as usize];
     let mut out = vec![];
     if file.read_exact(&mut header).is_err() || &header[..7] != b"\x01ZZZZZ\x01" {
@@ -28,10 +32,12 @@ pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
     let mut pending = vec![(word(&header, 100) as u64, word(&header, 88) as u64)];
     let mut seen = BTreeSet::new();
     while let Some((start, count)) = pending.pop() {
+        job.check()?;
         if !seen.insert(start) || seen.len() > 4096 {
             continue;
         }
         for block in 0..count.min(64) {
+            job.check()?;
             let mut data = [0u8; BLOCK as usize];
             file.seek(SeekFrom::Start((start + block) * BLOCK))?;
             if file.read_exact(&mut data).is_err() {
@@ -72,6 +78,10 @@ pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
 
 /// NVRAM files a disc's programs name: "=FILE" exact, "*PREFIX" from FILE%d-style patterns.
 pub fn disc_save_names(path: &Path) -> Result<Vec<String>> {
+    disc_save_names_with_job(path, &Job::default())
+}
+fn disc_save_names_with_job(path: &Path, job: &Job) -> Result<Vec<String>> {
+    job.check()?;
     let saves = Regex::new(r"(?i)/nvram/([\x21-\x7e][\x20-\x7e]{0,30})").unwrap();
     let plain = |s: &str| {
         s.chars()
@@ -79,15 +89,20 @@ pub fn disc_save_names(path: &Path) -> Result<Vec<String>> {
     };
     let mut file = fs::File::open(path)?;
     let mut found = BTreeSet::new();
-    for (offset, size) in opera_files(&mut file)? {
+    for (offset, size) in opera_files_with_job(&mut file, job)? {
+        job.check()?;
         if !(64..=3 * 1024 * 1024).contains(&size) {
             continue;
         }
         let mut data = vec![0; size as usize];
         file.seek(SeekFrom::Start(offset))?;
-        if file.read_exact(&mut data).is_err() {
-            continue;
+        let mut readable = true;
+        for chunk in data.chunks_mut(64 * 1024) {
+            job.check()?;
+            if file.read_exact(chunk).is_err() { readable = false; break; }
         }
+        if !readable { continue; }
+        job.check()?;
         for m in saves.captures_iter(&data) {
             let name = String::from_utf8_lossy(&m[1]).into_owned();
             if let Some((prefix, _)) = name.split_once('%') {
@@ -156,7 +171,9 @@ pub fn save_names_text(
         .unwrap_or(Value::Null);
     let mut stamps = serde_json::Map::new();
     let mut rows: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut announced = false;
+    let total=discs.iter().filter(|d|d.to_ascii_lowercase().ends_with(".iso")).count() as u64;
+    let mut completed=0;
+    job.report(0,total,"Reading save-name information");
     for disc in discs {
         if !disc.to_ascii_lowercase().ends_with(".iso") {
             continue;
@@ -175,11 +192,10 @@ pub fn save_names_text(
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect(),
             None => {
-                if !announced {
-                    job.say("Reading save names from discs; later runs reuse the results...");
-                    announced = true;
-                }
-                disc_save_names(&path).unwrap_or_default()
+                job.say(format!("Reading save names from {disc} ({}/{total})",completed+1));
+                let result=disc_save_names_with_job(&path,job);
+                job.check()?;
+                result.unwrap_or_default()
             }
         };
         let title = short_title(
@@ -195,6 +211,7 @@ pub fn save_names_text(
             }
         }
         stamps.insert(stamp, json!(names));
+        completed+=1;job.report(completed,total,"Reading save-name information");
     }
     let mut keys: Vec<&String> = rows.keys().collect();
     keys.sort_by_key(|n| (n[1..].to_ascii_lowercase(), n.to_string()));

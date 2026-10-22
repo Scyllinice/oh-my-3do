@@ -78,14 +78,16 @@ fn platform(root:&Path)->Result<()>{
   if matches!(error.raw_os_error(),Some(3|15|21|1167)){Ok(false)}else{Err(error.into())}
  };
  ensure!(present()?,"Drive is already unavailable");
- // Map the logical volume to its disk and request PnP removal. Explorer's
- // InvokeVerb can silently do nothing for USB/SD devices. PnP returns a veto
- // when files or drivers prevent removal, without forcing an unmount.
+ // Remove only the selected card media. Never request PnP removal of its
+ // reader, which could take other slots offline. Lock before dismount;
+ // standard-user Explorer fallback is also verified below.
  let script = include_str!("eject-windows.ps1");
- let script = format!("& {{ {script} }} -Letter '{}'", b[0] as char);
+ // Catch at the outer boundary to return the message without PowerShell's
+ // source excerpt, CategoryInfo and stack-formatting noise.
+ let script = format!("try {{ & {{ {script} }} -Letter '{}' }} catch {{ [Console]::Error.WriteLine($_.Exception.GetBaseException().Message); exit 1 }}", b[0] as char);
  let output=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command",&script]).creation_flags(0x08000000).output().context("Cannot request Windows eject; use Safely Remove Hardware")?;
  ensure!(output.status.success(),"Windows eject failed: {}",String::from_utf8_lossy(&output.stderr).trim());
- // Confirm the selected volume is unavailable even after PnP reported success.
+ // Confirm the selected volume is unavailable after the removal request.
  let started=Instant::now();
  while started.elapsed()<Duration::from_secs(15){
   if !present()?{return Ok(());}

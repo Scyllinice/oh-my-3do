@@ -242,7 +242,7 @@ and level selection DOOM stores, rather than inventing a mid-level save feature.
 
 To restore an edited archive, keep the original on your PC. With the console
 off, connect its drive to the PC and put the edited copy into an unused
-a numbered `.ohmy3do/saves/slotNN.3ds` file. Back up an occupied slot before replacing
+numbered `.ohmy3do/saves/slotNN.3ds` file. Back up an occupied slot before replacing
 it. Reinstall the drive, cold boot, then select the save in **Tools → Save Manager → USB backups**
 and follow the normal restore confirmation and recovery-backup procedure.
 

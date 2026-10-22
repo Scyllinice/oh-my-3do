@@ -19,7 +19,7 @@ test('readiness report stays visible for the requested path with trailing separa
 });
 test('storage review displays category sizes and an explicit shortfall without negative free space',()=>{
  const html=view('storageView')({games:1024,covers:20,previews:40,support:100,total:1184,to_copy:160,reserve:100,required:260,available:250,remaining:0,shortfall:10,fits:false});
- for(const text of ['Games','Covers','Previews','Menu & support','1.0 KB','Not enough room','10 B','0 B','free space is needed'])assert.ok(html.includes(text),text);
+ for(const text of ['Games','Covers','Previews','Menu & support','1.0 KiB','Not enough room','10 B','0 B','free space is needed'])assert.ok(html.includes(text),text);
  assert.ok(!html.includes('-10'));
 });
 test('save comparison shows game names, metadata changes, absent bytes and only current saves get an editor shortcut',()=>{
@@ -46,4 +46,11 @@ test('presence and sizes aggregate across every disc, with unknown kept distinct
  assert.equal(groups[0].presentDiscs,1);
  assert.equal(groups[0].presenceKnown,true);
  assert.equal(groupGames([{path:'Unknown.iso'}])[0].presenceKnown,false);
+});
+
+test('copy review uses readable nonzero file counts without repeating the transfer size',()=>{
+ const files=[...Array.from({length:2399},()=>({status:'copy'})),...Array.from({length:4},()=>({status:'preserve'})),{status:'unchanged'},...Array.from({length:3},()=>({status:'update'}))];
+ const html=view('copySummary',{quantity:(n,unit)=>`${n.toLocaleString()} ${unit}${n===1?'':'s'}`})({games:554,files,folders_to_move:0});
+ for(const text of ['554 discs',`${(2407).toLocaleString()} files`,`${(2399).toLocaleString()} new files`,'3 files to update','4 existing files kept','1 file already up to date'])assert.ok(html.includes(text),text);
+ assert.ok(!html.includes('to move'));assert.ok(!html.includes('copy:'));assert.ok(!html.includes('GiB'));
 });

@@ -34,7 +34,10 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
     let known: BTreeMap<_, _> = db["games"].as_array().into_iter().flatten().filter_map(|r| r["path"].as_str().map(|p| (f::fold(p),r.clone()))).collect();
     let mut records = vec![];
     let mut total = 0u64;
-    for (disc, files) in disc::collect(&[root.clone()], None, job)? {
+    job.phase("Finding games on the drive");
+    let sets=disc::collect(&[root.clone()], None, job)?;let total_discs=sets.len() as u64;
+    job.report(0,total_discs,"Reading drive library");
+    for (index,(disc, files)) in sets.into_iter().enumerate() {
         job.check()?;
         let path = library::relative(&root, &disc)?;
         let key = f::fold(&path);
@@ -68,7 +71,7 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
             record[field] = json!(existing);
             record[format!("{field}_missing")] = json!(record[field].is_null());
         }
-        records.push(record);
+        records.push(record);job.report(index as u64+1,total_discs,"Reading drive library");
     }
     Ok(json!({"root":root,"records":records,"categories":names,"identity":identity,"warnings":warnings,"game_bytes":total,"available":fs2::available_space(&root).ok(),"capacity":fs2::total_space(&root).ok()}))
 }

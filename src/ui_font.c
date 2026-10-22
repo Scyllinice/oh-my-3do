@@ -40,6 +40,47 @@ size_t ui_font_tail_start(const char *text,size_t length,int pixels,int style)
     }
     return start;
 }
+void ui_font_measure(UiFontMeasure *measure,const char *text,size_t length,int pixels,int style)
+{
+    if (measure->valid && measure->length==length && measure->pixels==pixels &&
+        measure->style==style && !memcmp(measure->value,text,length)) return;
+    measure->length=length;measure->pixels=pixels;measure->style=style;
+    measure->fit_valid=measure->tail_valid=measure->ellipsis_valid=measure->offset_valid=0;
+    measure->valid=length<UI_FONT_MEASURE_BYTES;
+    if (measure->valid) { memcpy(measure->value,text,length);measure->value[length]=0; }
+}
+size_t ui_font_measure_tail(UiFontMeasure *measure,const char *text)
+{
+    if (!measure->tail_valid) {
+        measure->tail=ui_font_tail_start(text,measure->length,measure->pixels,measure->style);
+        measure->tail_valid=1;
+    }
+    return measure->tail;
+}
+size_t ui_font_measure_ellipsis(UiFontMeasure *measure,const char *text)
+{
+    if (!measure->ellipsis_valid) {
+        /* A line can fit in pixels yet exceed the caller's 64-character cap. */
+        measure->ellipsis=ui_font_fit(text,measure->length,measure->pixels-ui_font_width("...",measure->style),measure->style);
+        measure->ellipsis_valid=1;
+    }
+    return measure->ellipsis;
+}
+size_t ui_font_measure_fit(UiFontMeasure *measure,const char *text,size_t offset)
+{
+    if (offset>=measure->length) return 0;
+    if (!offset) {
+        if (!measure->fit_valid) {
+            measure->fit=ui_font_fit(text,measure->length,measure->pixels,measure->style);
+            measure->fit_valid=1;
+        }
+        return measure->fit;
+    }
+    if (measure->offset_valid && measure->offset==offset) return measure->offset_fit;
+    measure->offset=offset;measure->offset_valid=1;
+    measure->offset_fit=ui_font_fit(text+offset,measure->length-offset,measure->pixels,measure->style);
+    return measure->offset_fit;
+}
 /* Widen each stroke a pixel rightwards, except where that would close a
  * one-pixel gap before the next stroke, so letters like m and B stay open. */
 static void embolden(unsigned char *out,int width,int height)

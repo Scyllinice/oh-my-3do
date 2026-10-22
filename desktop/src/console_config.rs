@@ -34,7 +34,7 @@ impl Default for Settings {
         Self {
             folder_workaround: 0, usb_covers: true, screen_margin: 0,
             large_titles: false, remember_position: true, recent_games: true,
-            video_previews: false, preview_sound: true, hide_adult: false,
+            video_previews: true, preview_sound: true, hide_adult: false,
         }
     }
 }
@@ -45,7 +45,7 @@ impl Settings {
         let data = data.split(|b| *b == 0).next().unwrap_or_default();
         let length = data.len();
         let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
-        let mut values = [0u8, 1, 0, 0, 1, 1, 0, 1, 0];
+        let mut values = [0u8, 1, 0, 0, 1, 1, 1, 1, 0];
         let mut seen = [false; 9];
         let mut ended = false;
         for raw in data.split(|b| *b == b'\n') {

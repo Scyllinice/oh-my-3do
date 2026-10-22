@@ -22,6 +22,8 @@ fn changed() -> Settings {
 fn defaults_and_every_setting_round_trip_in_the_console_format() {
     assert_eq!(Settings::parse(include_bytes!("../../ohmy3do.ini")).unwrap(), Settings::default());
     assert_eq!(Settings::parse(b"").unwrap(), Settings::default());
+    assert!(Settings::default().video_previews);
+    assert!(!Settings::parse(b"video_previews=0").unwrap().video_previews);
     let settings = changed();
     let text = settings.encode().unwrap();
     assert!(text.len() < 512 && text.ends_with(b"; End of Oh My 3DO settings.\r\n"));

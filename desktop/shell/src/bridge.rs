@@ -33,6 +33,7 @@ struct Backup {
 }
 struct Inner {
     prefs: Preferences,
+    removal: Option<(core::title_removal::Plan, Option<String>)>,
     import: Option<Plan>,
     copy: Option<usb::CopyPlan>,
     information_restore: Option<(String,core::game_info::RestorePlan)>,
@@ -57,6 +58,7 @@ impl Backend {
         Self {
             inner: Mutex::new(Inner {
                 prefs,
+                removal: None,
                 import: None,
                 copy: None,
                 information_restore: None,
@@ -218,6 +220,7 @@ pub async fn request(
     state: tauri::State<'_, Bridge>,
     action: String,
     args: Value,
+    request_id: Option<String>,
 ) -> Result<Value, String> {
     let backend = state.0.clone();
     if action == "quit" {
@@ -234,10 +237,19 @@ pub async fn request(
     backend.cancel.store(false, Ordering::Relaxed);
     let _ = app.emit("busy", true);
     let events = app.clone();
+    let progress_events = app.clone();
+    let last_progress = Mutex::new((std::time::Instant::now(), String::new()));
     let job = Job {
         cancel: backend.cancel.clone(),
         log: Arc::new(move |message| {
             let _ = events.emit("progress", message);
+        }),
+        progress: Arc::new(move |progress| {
+            let mut last = last_progress.lock().unwrap();
+            if progress.phase != last.1 || progress.completed == progress.total || last.0.elapsed() >= std::time::Duration::from_millis(100) {
+                last.0 = std::time::Instant::now();last.1 = progress.phase.clone();
+                let _ = progress_events.emit("operation-progress", json!({"request_id":request_id,"completed":progress.completed,"total":progress.total,"phase":progress.phase}));
+            }
         }),
         ..Default::default()
     };
@@ -303,12 +315,14 @@ fn dispatch(
             let db = library::database(&root)?;
             let mut records=db["games"].as_array().cloned().unwrap_or_default();
             let destination = if s.prefs.destination.is_empty() { None } else { f::root(Path::new(&s.prefs.destination)).ok() };
-            for record in &mut records {
+            let total=records.len() as u64;job.report(0,total,"Reading PC library");
+            for (index,record) in records.iter_mut().enumerate() {
                 record["on_drive"] = json!(destination.as_ref().and_then(|target| record["path"].as_str().and_then(|path| core::drive_browser::presence(&root,target,path).ok())));
                 for (field,folder) in [("cover","covers"),("preview","previews")] {
                     let missing=record[field].as_str().is_none_or(|name|f::safe(&root,&format!(".ohmy3do/{folder}/{name}")).map_or(true,|p|!p.is_file()));
                     record[format!("{field}_missing")]=json!(missing);
                 }
+                job.report(index as u64+1,total,"Reading PC library");
             }
             Ok(
                 json!({"root":root,"records":records,"categories":categories::load(&root)?.names(),"destination_available":destination.is_some()}),
@@ -392,6 +406,25 @@ fn dispatch(
             s.import = None;
             Ok(json!({"journal":s.last}))
         }
+        "titles_remove_review" => {
+            s.removal=None;
+            let target=if a["browser_root"].as_str().is_some() { f::root(&path(a,"browser_root")?)? } else {root(s)?};
+            let token=if a["browser_root"].as_str().is_some() {
+                let token=text(a,"drive_token")?;
+                core::drive_identity::check(&target,&s.prefs,token)?;Some(token.to_owned())
+            }else{None};
+            let plan=core::title_removal::review(&target,&strings(a,"discs")?,job)?;
+            let response=json!(plan);s.removal=Some((plan,token));Ok(response)
+        }
+        "titles_remove" => {
+            let (plan,token)=s.removal.take().context("Review title removal first")?;
+            if let Some(token)=token {core::drive_identity::check(&plan.root,&s.prefs,&token)?;}
+            else {ensure!(plan.root==root(s)?,"Library changed. Review removal again.");}
+            let result=core::title_removal::apply(&plan,&state.cache,job);
+            // Earlier journals may restore metadata for now-deleted game files.
+            s.last=None;s.copy=None;s.import=None;
+            Ok(json!(result?))
+        }
         "move" => {
             s.last = Some(library::recategorize(
                 &root(s)?,
@@ -428,7 +461,7 @@ fn dispatch(
                     support || file.status == "unchanged"
                 }), "Some game files are missing. Use Copy selected to USB to repair them first.");
             }
-            let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?,"drive":drive});
+            let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"folders_to_move":plan.moves.len(),"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?,"drive":drive});
             s.copy = Some(plan);
             Ok(value)
         }

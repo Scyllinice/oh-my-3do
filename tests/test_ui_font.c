@@ -48,6 +48,49 @@ int main(void)
         }
     }
     {
+        UiFontMeasure measure;
+        char scratch[320];
+        int pixels,title;
+        const char *names[]={"Dennis Miller - That's News To Me","iiiiiiiiiiiiWWWWWWWW","WWWWWWWWiiiiiiiiiiii"};
+        memset(&measure,0,sizeof(measure));
+        for (title=0;title<3;++title) for (style=0;style<5;++style) for (pixels=0;pixels<=288;pixels+=3) {
+            size_t length=strlen(names[title]),offset;
+            strcpy(scratch,names[title]);
+            ui_font_measure(&measure,scratch,length,pixels,style);
+            assert(!measure.tail_valid && !measure.ellipsis_valid);
+            assert(ui_font_measure_fit(&measure,scratch,0)==ui_font_fit(scratch,length,pixels,style));
+            assert(ui_font_measure_tail(&measure,scratch)==ui_font_tail_start(scratch,length,pixels,style));
+            for (offset=0;offset<=length;++offset) {
+                size_t fit=ui_font_fit(scratch+offset,length-offset,pixels,style);
+                assert(ui_font_measure_fit(&measure,scratch,offset)==fit);
+                assert(ui_font_measure_fit(&measure,scratch,offset)==fit);
+            }
+            ui_font_measure_fit(&measure,scratch,1);
+            ui_font_measure(&measure,scratch,length,pixels,style);
+            assert(measure.valid && measure.offset_valid); /* repeated layout kept */
+            assert(ui_font_measure_ellipsis(&measure,scratch)==ui_font_fit(scratch,length,pixels-ui_font_width("...",style),style));
+        }
+        /* A 65-character line can fit in pixels but still need the renderer's
+         * 64-character truncation; reserve the original ellipsis width. */
+        memset(scratch,'i',65);scratch[65]=0;
+        pixels=ui_font_width(scratch,UI_FONT_SMALL);
+        ui_font_measure(&measure,scratch,65,pixels,UI_FONT_SMALL);
+        assert(ui_font_measure_fit(&measure,scratch,0)==65);
+        assert(ui_font_measure_ellipsis(&measure,scratch)==ui_font_fit(scratch,65,pixels-ui_font_width("...",UI_FONT_SMALL),UI_FONT_SMALL));
+        /* Shared scratch with a different value, and uncacheably long text. */
+        strcpy(scratch,"WWWW");ui_font_measure(&measure,scratch,4,24,UI_FONT_SMALL);
+        strcpy(scratch,"iiii");ui_font_measure(&measure,scratch,4,24,UI_FONT_SMALL);
+        assert(ui_font_measure_fit(&measure,scratch,0)==ui_font_fit(scratch,4,24,UI_FONT_SMALL));
+        memset(scratch,'W',sizeof(scratch)-1);scratch[sizeof(scratch)-1]=0;
+        ui_font_measure(&measure,scratch,strlen(scratch),47,UI_FONT_SMALL);
+        assert(!measure.valid);
+        assert(ui_font_measure_fit(&measure,scratch,300)==ui_font_fit(scratch+300,19,47,UI_FONT_SMALL));
+        memset(scratch,'i',sizeof(scratch)-1);
+        ui_font_measure(&measure,scratch,strlen(scratch),47,UI_FONT_SMALL);
+        assert(!measure.valid && !measure.offset_valid);
+        assert(ui_font_measure_fit(&measure,scratch,300)==ui_font_fit(scratch+300,19,47,UI_FONT_SMALL));
+    }
+    {
         /* Bold button letters: one pixel wider per glyph, a superset of the
          * small glyph, and "m" keeps three separate stems. */
         unsigned char small[UI_FONT_STRIDE*UI_FONT_HEIGHT], bold[UI_FONT_STRIDE*UI_FONT_HEIGHT];

@@ -316,7 +316,7 @@ folder_workaround=0
 
 [artwork]
 usb_covers=1
-video_previews=0
+video_previews=1
 
 [display]
 screen_margin=0
@@ -336,7 +336,7 @@ firmware ignores entering a folder whose ID matches the one it last entered.
 `0` (the default) is automatic: the workaround is used with the FCare ODE and
 costs nothing unless a collision would happen. `1` uses it with any ODE and `2`
 turns it off. Diagnostics shows whether it is in use. `usb_covers` and `video_previews` are 0/1; previews
-default off. Margin is 0–12; large titles is 0/1. The three library settings are 0/1. `hide_adult` is a legacy fallback used only without a category configuration.
+default on. Margin is 0–12; large titles is 0/1. The three library settings are 0/1. `hide_adult` is a legacy fallback used only without a category configuration.
 When `.ohmy3do/categories.json` exists, its per-category visibility takes precedence.
 The desktop carries the old Adult visibility choice into a newly created category file. Both files retain hidden games,
 including when visible favorites are removed or reordered. Missing optional settings use their defaults. Unknown/duplicate

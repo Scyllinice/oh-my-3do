@@ -64,3 +64,9 @@ dialog[open] {
 .library-location{flex:1}.library-location label{font-size:11px;font-weight:700;white-space:nowrap}.library-location select{width:100%;max-width:560px;text-overflow:ellipsis}.library-location .path{display:none}.topbar>.row{flex-shrink:0}
 
 .game-status{white-space:normal;line-height:1.5;margin-top:3px}
+
+dialog[open]{display:flex;flex-direction:column;overflow:hidden}.dialog-head,.dialog-foot{flex-shrink:0}.dialog-body{min-height:0}.dialog-progress{flex-shrink:0;padding:14px 25px;background:var(--notice);border-bottom:1px solid var(--dialog-divider)}.dialog-progress-status{margin:0 0 8px;overflow-wrap:anywhere;color:var(--notice-text)}.dialog-progress progress{width:100%;height:8px;accent-color:#327545}.dialog-progress details{margin:5px 0 0}.dialog-progress .progress-log{max-height:120px;margin-bottom:0;overflow-wrap:anywhere}.dialog-progress[data-state=error]{background:var(--error)}.dialog-progress[data-state=error] .dialog-progress-status{color:var(--error-text)}.copy-summary ul{padding-left:20px;line-height:1.7;color:var(--secondary)}
+
+.operation-meter-label{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--notice-text);margin-bottom:5px}.dialog-toast{flex-shrink:0;padding:12px 25px;background:var(--notice);color:var(--notice-text);overflow-wrap:anywhere;white-space:pre-wrap}.dialog-toast.error{background:var(--error);color:var(--error-text)}#operation-meter{width:110px;height:8px;flex-shrink:0;accent-color:#327545}#operation-percent{font-variant-numeric:tabular-nums}
+
+dialog[data-operation-busy=true] .dialog-foot [data-action]:not([data-action=cancel]){display:none}

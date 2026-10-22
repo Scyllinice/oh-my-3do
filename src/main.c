@@ -85,6 +85,20 @@
 #define INK MakeRGB15(1,1,2)
 #define AMBER MakeRGB15(30, 22, 9)
 
+#define GAME_LOOKUP_SLOTS 16
+typedef struct GameLookup {
+    const MenuEntry *entry;
+    const char *discs[ODE_MAX_DISCS];
+    size_t count;
+    const LibraryGameInfo *info;
+    int info_valid;
+} GameLookup;
+#define SCROLL_MEASURE_SLOTS 8
+typedef struct ScrollMeasure {
+    int valid,x,y;
+    UiFontMeasure measure;
+} ScrollMeasure;
+
 #define UI_TEXT_CACHE 64
 typedef struct UiText {
     CCB *cel;
@@ -252,11 +266,14 @@ typedef struct Menu {
     unsigned char alphabet_letters[27];
     unsigned long alphabet_key;
     int alphabet_valid;
-    const MenuEntry *typed_entries[8];
-    unsigned char entry_is_game[8];
-    unsigned int entry_type_next;
-    unsigned long entry_type_key;
-    int entry_types_valid;
+    GameLookup game_lookups[GAME_LOOKUP_SLOTS];
+    const LibraryGameInfo *lookup_metadata;
+    size_t lookup_metadata_count;
+    unsigned long lookup_listing_generation;
+    unsigned int lookup_depth,lookup_next;
+    int game_lookups_valid;
+    ScrollMeasure scroll_measures[SCROLL_MEASURE_SLOTS];
+    unsigned int scroll_measure_next;
     unsigned short *title_variants;
     size_t title_variants_count,title_variants_capacity;
     unsigned long title_variants_key;
@@ -601,20 +618,37 @@ static void rounded(Menu *menu,int x,int y,int w,int h,Color color)
     rectangle(menu,x+1,y+1,w-2,h-2,color);
     rectangle(menu,x,y+3,w,h-6,color);
 }
+/* A few labels animate; ordinary redraws reuse their font measurements.
+ * The font cache compares owned text, since most labels use shared scratch. */
+static UiFontMeasure *scroll_measure(Menu *menu,int x,int y)
+{
+    unsigned int i;
+    ScrollMeasure *slot;
+    for (i=0;i<SCROLL_MEASURE_SLOTS;++i) {
+        slot=menu->scroll_measures+i;
+        if (slot->valid && slot->x==x && slot->y==y) return &slot->measure;
+    }
+    slot=menu->scroll_measures+menu->scroll_measure_next;
+    menu->scroll_measure_next=(menu->scroll_measure_next+1)%SCROLL_MEASURE_SLOTS;
+    memset(slot,0,sizeof(*slot));slot->valid=1;slot->x=x;slot->y=y;
+    return &slot->measure;
+}
 /* One line of a name: scrolls while selected, otherwise ends in "..." when cut. */
 static void scroll_label(Menu *menu,int x,int y,int room,const char *name,size_t length,
                          int style,Color ink,Color background,int selected)
 {
     char title[68];
     size_t visible, offset=0;
+    UiFontMeasure *measure=scroll_measure(menu,x,y);
     int limit=(308-x)*(320-2*menu->config.screen_margin)/320;
     room=room*(320-2*menu->config.screen_margin)/320;
     if (room>limit) room=limit; /* Match text()'s actual right edge. */
     if (room>UI_FONT_WIDTH) room=UI_FONT_WIDTH;
-    visible=selected ? 0 : ui_font_fit(name,length,room,style);
+    ui_font_measure(measure,name,length,room,style);
+    visible=selected ? 0 : ui_font_measure_fit(measure,name,0);
     if (visible>64) visible=64;
     if (selected) {
-        size_t tail=ui_font_tail_start(name,length,room,style);
+        size_t tail=ui_font_measure_tail(measure,name);
         if (length-tail>64) tail=length-64;
         /* The end can be wider than the beginning in a proportional font. */
         visible=length-tail;
@@ -622,14 +656,14 @@ static void scroll_label(Menu *menu,int x,int y,int room,const char *name,size_t
         if (menu->scroll_count<4) { menu->scroll_length[menu->scroll_count]=length; menu->scroll_visible[menu->scroll_count++]=visible; }
     }
     else if (visible<length) {
-        visible=ui_font_fit(name,length,room-ui_font_width("...",style),style);
+        visible=ui_font_measure_ellipsis(measure,name);
         if (visible>64) visible=64;
         while (visible && name[visible-1]==' ') --visible;
         memcpy(title,name,visible); strcpy(title+visible,"...");
         label_on(menu,x,y,title,ink,style,background);
         return;
     }
-    visible=ui_font_fit(name+offset,length-offset,room,style);
+    visible=ui_font_measure_fit(measure,name,offset);
     if (visible>64) visible=64;
     memcpy(title,name+offset,visible); title[visible]=0;
     label_on(menu,x,y,title,ink,style,background);
@@ -743,6 +777,7 @@ static void free_listing(Menu *menu)
 {
     free(menu->title_variants);menu->title_variants=NULL;
     menu->title_variants_count=menu->title_variants_capacity=0;menu->title_variants_valid=0;
+    menu->game_lookups_valid=0;
     ode_listing_free(&menu->listing);
     ++menu->listing_generation;
 }
@@ -1233,7 +1268,7 @@ static long relative_folder(Menu *menu,char *path,size_t size,size_t room)
  * discs with the disc names in play order and returns how many (0 for an
  * ordinary folder, including any with subfolders of games). The names point
  * into the index, which a volume change reloads. */
-static size_t folder_game(Menu *menu,const MenuEntry *entry,const char **discs)
+static size_t resolve_folder_game(Menu *menu,const MenuEntry *entry,const char **discs)
 {
     static char prefix[9217], probe[9217];
     MenuEntry candidates[ODE_MAX_DISCS];
@@ -1266,43 +1301,58 @@ static size_t folder_game(Menu *menu,const MenuEntry *entry,const char **discs)
     for (i=0;i<count;++i) discs[i]=set[i]->name;
     return count;
 }
-/* Metadata for the selected game, looked up by its path below the volume. */
+/* Cached pointers borrow their listing/index storage. Invalidate before either
+ * owner is released, and after an index reload even if malloc reused its address. */
+static GameLookup *game_lookup(Menu *menu,const MenuEntry *entry)
+{
+    GameLookup *lookup;
+    unsigned int i;
+    if (!menu->game_lookups_valid || menu->lookup_listing_generation!=menu->listing_generation ||
+        menu->lookup_metadata!=menu->metadata.entries || menu->lookup_metadata_count!=menu->metadata.count ||
+        menu->lookup_depth!=menu->depth) {
+        memset(menu->game_lookups,0,sizeof(menu->game_lookups));
+        menu->lookup_listing_generation=menu->listing_generation;
+        menu->lookup_metadata=menu->metadata.entries;menu->lookup_metadata_count=menu->metadata.count;
+        menu->lookup_depth=menu->depth;menu->lookup_next=0;menu->game_lookups_valid=1;
+    }
+    for (i=0;i<GAME_LOOKUP_SLOTS;++i)
+        if (menu->game_lookups[i].entry==entry) return menu->game_lookups+i;
+    lookup=menu->game_lookups+menu->lookup_next;
+    menu->lookup_next=(menu->lookup_next+1)%GAME_LOOKUP_SLOTS;
+    memset(lookup,0,sizeof(*lookup));lookup->entry=entry;
+    if (entry->is_directory) lookup->count=resolve_folder_game(menu,entry,lookup->discs);
+    return lookup;
+}
+static size_t folder_game(Menu *menu,const MenuEntry *entry,const char **discs)
+{
+    GameLookup *lookup;
+    if (!entry || !entry->is_directory) return 0;
+    lookup=game_lookup(menu,entry);
+    memcpy(discs,lookup->discs,lookup->count*sizeof(*discs));
+    return lookup->count;
+}
+/* Resolve the selected game's metadata once, including absent metadata. */
 static const LibraryGameInfo *game_info(Menu *menu,const MenuEntry *chosen)
 {
     static char path[9217];
-    const char *discs[ODE_MAX_DISCS];
-    size_t game=chosen && chosen->is_directory ? folder_game(menu,chosen,discs) : 0;
+    GameLookup *lookup;
     long used;
-    if (!chosen || (chosen->is_directory && !game)) return NULL;
-    used=relative_folder(menu,path,sizeof(path),strlen(chosen->name)+(game ? strlen(discs[0])+1 : 0));
+    if (!chosen) return NULL;
+    lookup=game_lookup(menu,chosen);
+    if (lookup->info_valid) return lookup->info;
+    lookup->info_valid=1;
+    if (chosen->is_directory && !lookup->count) return NULL;
+    used=relative_folder(menu,path,sizeof(path),strlen(chosen->name)+(lookup->count ? strlen(lookup->discs[0])+1 : 0));
     if (used<0) return NULL;
     strcpy(path+used,chosen->name);
-    if (game) { strcat(path,"/"); strcat(path,discs[0]); }
-    return library_metadata_find(&menu->metadata,path);
+    if (lookup->count) { strcat(path,"/"); strcat(path,lookup->discs[0]); }
+    lookup->info=library_metadata_find(&menu->metadata,path);
+    return lookup->info;
 }
 /* Shows and plays as a game: a disc image, or a folder acting as its game. */
 static int game_entry(Menu *menu,const MenuEntry *entry)
 {
-    const char *discs[ODE_MAX_DISCS];
-    unsigned long key;
-    unsigned int i;
-    int game;
-    if (!entry) return 0;
-    if (!entry->is_directory) return 1;
-    /* Painting and idle polling repeatedly ask about the same few folders.
-     * Keep their classifications instead of searching metadata each time. */
-    key=(menu->listing_generation^(unsigned long)menu->metadata.entries)*16777619UL;
-    key=(key^(unsigned long)menu->metadata.count)*16777619UL;
-    key=(key^(unsigned long)menu->depth)*16777619UL;
-    if (!menu->entry_types_valid || menu->entry_type_key!=key) {
-        memset(menu->typed_entries,0,sizeof(menu->typed_entries));
-        menu->entry_type_key=key;menu->entry_types_valid=1;menu->entry_type_next=0;
-    }
-    for (i=0;i<8;++i) if (menu->typed_entries[i]==entry) return menu->entry_is_game[i];
-    game=folder_game(menu,entry,discs)!=0;
-    i=menu->entry_type_next;menu->entry_type_next=(i+1)%8;
-    menu->typed_entries[i]=entry;menu->entry_is_game[i]=(unsigned char)game;
-    return game;
+    return entry && (!entry->is_directory || game_lookup(menu,entry)->count!=0);
 }
 static int compare_title_hash(const void *a,const void *b)
 {
@@ -1955,7 +2005,7 @@ static void refresh_usb_art(Menu *menu)
     }
     usb_art_index_free(&menu->usb_art);
     usb_art_index_free(&menu->usb_previews);
-    menu->entry_types_valid=0;
+    menu->game_lookups_valid=0;
     menu->title_variants_valid=0;
     library_metadata_free(&menu->metadata);
     menu->covers_enabled = 0;
@@ -1987,6 +2037,7 @@ static void refresh_usb_art(Menu *menu)
         usb_media_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_previews,"previews");
     if (!menu->bus.timed_out && !menu->ode.navigation_failed)
         library_metadata_load(&menu->ode,ode_bus_read_buffer,&menu->metadata);
+    menu->game_lookups_valid=0;
     menu->message = message;
     menu->covers_enabled = menu->usb_art.count != 0;
     if (menu->bus.timed_out || menu->ode.navigation_failed) {

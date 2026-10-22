@@ -38,6 +38,7 @@ pub fn download(url: &str, path: &Path, max: u64, job: &Job) -> Result<()> {
         .build()?;
     let mut response = client.get(url).send()?.error_for_status()?;
     let expected = response.content_length();
+    job.report(0,expected.unwrap_or(0),"Downloading");
     if expected.is_some_and(|n| n > max) {
         bail!("Download exceeds size limit")
     }
@@ -56,6 +57,7 @@ pub fn download(url: &str, path: &Path, max: u64, job: &Job) -> Result<()> {
             bail!("Download exceeds size limit")
         };
         tmp.write_all(&buf[..n])?;
+        job.report(total,expected.unwrap_or(0),"Downloading");
         if total / (8 * 1024 * 1024) > last_progress {
             last_progress = total / (8 * 1024 * 1024);
             job.say(format!("Downloaded {} MiB", total / 1024 / 1024));
