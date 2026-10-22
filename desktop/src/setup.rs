@@ -76,6 +76,18 @@ pub fn install_release(
     verify_image(&image, &format!("{digest}  boot.iso"))?;
     install_verified(root, cache, &image, settings, job)
 }
+/// Install a checksum-pinned local developer menu using the normal journal.
+pub fn install_developer(directory: &Path, root: &Path, cache: &Path,
+    settings: &console_config::Settings, job: &Job) -> Result<PathBuf> {
+    let release = crate::updates::local_release(directory, crate::updates::Component::Menu, job)?
+        .context("No local menu-update.json was found in the developer update directory")?;
+    let image = release.bytes("boot.iso", LIMIT, &client()?, job)?;
+    let digest = format!("{:x}", Sha256::digest(&image));
+    verify_image(&image, &format!("{digest}  boot.iso"))?;
+    let result = install_verified(root, cache, &image, settings, job)?;
+    crate::updates::remember_menu(cache, &digest, &release.version)?;
+    Ok(result)
+}
 /// Install an already verified menu image with rollback and readback.
 pub fn install_verified(
     root: &Path,

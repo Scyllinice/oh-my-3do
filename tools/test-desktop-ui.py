@@ -71,7 +71,7 @@ try:
  if args.library:
   time.sleep(4);shot('library-real.png');print('Read-only library screenshot captured.',flush=True)
  else:
-  shot('native-library.png');click(280,390);shot('native-selected.png');primary();shot('native-copy-dialog.png');primary();time.sleep(1.5);shot('native-copy-review.png');primary();time.sleep(2)
+  shot('native-library.png');click(280,500);shot('native-selected.png');primary();shot('native-copy-dialog.png');primary();time.sleep(1.5);shot('native-copy-review.png');primary();time.sleep(2)
   assert (dest/'Games/USA/Example/Disc 1.iso').is_file();assert (dest/'Games/USA/Example/Disc 2.iso').is_file();assert not (dest/'Games/USA/Other').exists();assert b'Other' not in (dest/'.ohmy3do/library.3di').read_bytes();assert (dest/'boot.iso').read_bytes()==(source/'boot.iso').read_bytes();assert (dest/'.ohmy3do/saves/slot-catalog.3di').is_file();shot('native-copy-complete.png');print('Actual Tauri mouse test: selected one multi-disc title, reviewed and copied it; filtered index, boot and save support verified.',flush=True)
   press('Escape');click(1200,124);shot('native-import.png');print('Actual Library Add discs action exercised.',flush=True)
   click(85,205);shot('native-saves.png');click(1053,124);time.sleep(1);shot('native-file-dialog.png');chord('Control_L','l');chord('Control_L','a');type_text(str(save_path));press('Return');time.sleep(.5);press('Return');time.sleep(2);shot('native-save-open.png')

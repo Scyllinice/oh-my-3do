@@ -20,6 +20,7 @@ test: build/test_game_info build/test_menu_help build/test_menu_categories build
 	python3 tests/test_preview_tools.py
 	python3 tests/test_media_tools.py
 	python3 tests/test_release.py
+	python3 tests/test_update_manifest.py
 	python3 tests/test_metadata_tools.py
 	python3 tests/test_format.py
 	python3 tests/test_restore_workflow.py

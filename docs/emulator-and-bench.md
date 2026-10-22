@@ -157,6 +157,36 @@ changing the decoder, re-measure with the bench and refit those constants.
 - **Contiguous packets:** the menu splits clips into a few memory chunks, but
   each packet is contiguous, so the bench matches that.
 
+## Menu drawing checks
+
+`python3 tools/preview-menu.py` runs the actual drawing routines with host
+stubs. It checks incremental browser rendering against full redraws across
+26 margin/font combinations, plus full-screen covers/video, contextual Help
+and the Tools home screen across 65 mode/margin combinations. It also exercises
+selection changes, messages changed in the same buffer, unsaved settings,
+Help round trips, frame changes and audio loops.
+
+Static screens prepare both framebuffers once, then continue polling input
+without repainting. Full-screen video still advances its decoder and audio
+clock on every poll, but presents only when its decoded image changes. Inline
+video also skips duplicate presentations once both buffers have the current
+caption; scrolling text, notices and selection changes still redraw.
+
+The host fixture's drawing-call counts for 1,000 unchanged polls are:
+
+| Screen | Before | After |
+| --- | ---: | ---: |
+| Full-screen cover | 78,000 | 156 |
+| Contextual Help | 84,000 | 168 |
+| Tools home | 304,000 | 608 |
+| Unchanged full-screen video frame | 1,002 | 4 |
+| Unchanged inline video frame | 72,370 | 1,654 |
+
+These are drawing-call counts, not console frame-rate measurements. The normal
+browser already performs zero draws while idle. Live screens such as
+Diagnostics continue refreshing. Measure cel-engine time on the console;
+the emulator does not model that cost.
+
 ## The decoder's own tests
 
 `tests/test_preview_asm.py` (part of `make test-sdk`) checks the assembly

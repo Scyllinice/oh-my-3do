@@ -90,5 +90,6 @@ with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=9,strict_tim
   if path.is_file():z.write(path,'OhMy3DO-Library/'+path.relative_to(folder).as_posix())
 sha=hashlib.sha256(archive.read_bytes()).hexdigest()
 archive.with_suffix('.zip.sha256').write_text(sha+'  '+archive.name+'\n',encoding='utf-8')
+subprocess.run([os.sys.executable,str(ROOT/'tools/write-update-manifest.py'),'desktop','--artifact',str(archive),'--platform',args.platform,'--version',version],check=True)
 print('Packaged:',archive)
 print('Dependency notices:',len(notices),'packages; without separate notice files:',', '.join(missing))

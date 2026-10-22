@@ -13,10 +13,14 @@ fn main() {
             let plan: oh_my_3do_library::self_update::Install =
                 serde_json::from_slice(&fs::read(path)?)?;
             let result = oh_my_3do_library::self_update::apply(&plan);
+            if let Err(error) = oh_my_3do_library::self_update::record_result(&plan, &result) {
+                eprintln!("Could not save update result: {error:#}");
+            }
             if let Err(e) = &result {
                 let _ = fs::write(&plan.log, format!("{e:#}"));
                 if let Err(restart) = oh_my_3do_library::self_update::restart_previous(&plan) {
-                    let _ = fs::write(&plan.log, format!("{e:#}\n{restart:#}"));
+                    let _ = oh_my_3do_library::self_update::record_result(&plan,
+                        &Err(anyhow::anyhow!("{e:#}\n{restart:#}")));
                 }
             }
             result
@@ -44,6 +48,10 @@ fn main() {
         }
     }
     let handle = state.clone();
+    let mut context = tauri::generate_context!();
+    if args.iter().any(|a| a == "--update-exit") {
+        for window in &mut context.config_mut().app.windows { window.visible = false; }
+    }
     let result = tauri::Builder::default()
         .manage(bridge::Bridge(state))
         .invoke_handler(tauri::generate_handler![
@@ -69,7 +77,7 @@ fn main() {
                 let _ = window.emit("close-requested", ());
             }
         })
-        .run(tauri::generate_context!());
+        .run(context);
     if let Err(error) = result {
         rfd::MessageDialog::new().set_title("Oh My 3DO could not start").set_description(format!("{error}\n\nWindows requires Microsoft Edge WebView2. Linux requires WebKitGTK 4.1.")).set_level(rfd::MessageLevel::Error).show();
     }

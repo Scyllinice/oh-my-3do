@@ -128,4 +128,7 @@ else
 fi
 (cd "$project_dir/iso" && sha256sum "$name.iso" > "$name.iso.sha256")
 cat "$project_dir/iso/$name.iso.sha256"
+if [[ "$mode" == menu ]]; then
+    python3 "$project_dir/tools/write-update-manifest.py" menu --artifact "$project_dir/iso/boot.iso"
+fi
 echo "Built: $project_dir/iso/$name.iso"

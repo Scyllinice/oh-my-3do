@@ -36,7 +36,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "1.0.1"
+#define MENU_VERSION "1.0.2"
 #define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -211,6 +211,7 @@ typedef struct Menu {
      * the 192x240 file when the library has one; else the cover is doubled. */
     int full_view; /* 1 = cover, 2 = playing preview */
     int full_cleared; /* screen buffers cleared since the view opened */
+    unsigned long full_drawn_decode;
     int x_pending;
     unsigned long x_since;
     CCB *full_cover;
@@ -255,6 +256,7 @@ typedef struct Menu {
      * Their look depends on the panel, the message and the scroll offsets of
      * the names drawn with scroll_label, whose lengths are kept here. */
     int overlay_frames, scroll_count;
+    unsigned long preview_drawn_decode;
     CCB *badge; /* the X badge as drawn on screen; see badge_save */
     int badge_saved;
     /* Visible listing entries (not hidden, matching the filter), rebuilt only
@@ -304,7 +306,11 @@ typedef struct Menu {
     int save_names_loaded;
     int tools;
     MenuHelpHold help_hold;
+    int help_drawn,help_topic,help_margin;
+    unsigned long tools_home_hash;
+    int tools_home_drawn;
     size_t tool_selected;
+    size_t home_selected;
     size_t save_selected;
     int backup_mode;
     unsigned int backup_slot;
@@ -1466,6 +1472,7 @@ static void gecko_video(Menu *menu)
     copy.ccb_HDX=((long)USB_PREVIEW_WIDTH<<20)/menu->preview_cel->ccb_Width; copy.ccb_HDY=0;
     copy.ccb_VDX=0; copy.ccb_VDY=((long)USB_PREVIEW_HEIGHT<<16)/menu->preview_cel->ccb_Height;
     draw_cel(menu,&copy);
+    menu->preview_drawn_decode=menu->preview_decodes;
     menu->preview_video_ms+=now_ms(menu)-started; ++menu->preview_video_draws;
     tv_corners(menu);
 }
@@ -1708,6 +1715,8 @@ static void draw(Menu *menu)
     unsigned long shell=0,picture=0;
     BrowserFrame *frame=NULL;
     int playing, browsing, controls=0;
+    if (menu->tools!=TOOL_HOME || menu->help_hold.active || menu->full_view || menu->loading || menu->booting)
+        menu->tools_home_drawn=0;
     /* A successful mount releases the browser listing. Keep the last launch
      * frame displayed until the game takes over, including this input pass. */
     if (menu->launching) return;
@@ -1734,6 +1743,7 @@ static void draw(Menu *menu)
     if (!browsing) menu->browser_frames[0].valid=menu->browser_frames[1].valid=0;
     if (menu->booting) { boot_screen(menu,now); return; }
     if (menu->help_hold.active) { draw_context_help(menu); return; }
+    menu->help_drawn=0;
     if (menu->tools) { draw_tools(menu); return; }
     if (menu->full_view) { draw_full_cover(menu); return; }
     menu->text_cursor=0; menu->text_style=UI_FONT_NORMAL;
@@ -1816,6 +1826,12 @@ static void draw(Menu *menu)
          * every frame would take most of a 30 fps frame. */
         unsigned long key=overlay_key(menu,message);
         if (key!=menu->overlay_key) { menu->overlay_key=key; menu->overlay_frames=0; }
+        if (menu->overlay_frames>=2 && menu->preview_drawn_decode==menu->preview_decodes) {
+            /* The front already holds this video frame and both buffers have
+             * the current caption. Keep polling without another cel pass. */
+            menu->screen.sc_curScreen^=1;
+            return;
+        }
         gecko_video(menu);
         if (menu->overlay_frames<2) {
             ++menu->overlay_frames;
@@ -2200,15 +2216,20 @@ static void open_full_cover(Menu *menu)
 static void draw_full_cover(Menu *menu)
 {
     CCB copy;
+    if (menu->full_view==2) {
+        advance_preview(menu,now_ms(menu));
+        if (!menu->preview_cel) { close_full_cover(menu); return; }
+        /* Input polling and audio continue even when no video frame is due.
+         * Leave the displayed image alone rather than drawing it twice. */
+        if (menu->full_cleared>=2 && menu->full_drawn_decode==menu->preview_decodes) return;
+    } else if (menu->full_cleared>=2) return;
     menu->text_cursor=0; menu->text_style=UI_FONT_SMALL;
     menu->screen.sc_curScreen ^= 1;
     /* A playing preview covers all but the margin, which keeps the
      * background once both buffers have it; filling the screen every frame
      * would cost the cel engine time a 30 fps frame cannot spare. */
-    if (menu->full_view != 2 || menu->full_cleared < 2) { rectangle(menu,0,0,320,240,BG); ++menu->full_cleared; }
+    if (menu->full_cleared < 2) { rectangle(menu,0,0,320,240,BG); ++menu->full_cleared; }
     if (menu->full_view == 2) {
-        advance_preview(menu,now_ms(menu));
-        if (!menu->preview_cel) { close_full_cover(menu); return; }
         memcpy(&copy,menu->preview_cel,sizeof(copy));
         /* Doubled to fill the screen. */
         copy.ccb_XPos = copy.ccb_YPos = 0;
@@ -2219,6 +2240,7 @@ static void draw_full_cover(Menu *menu)
             draw_cel(menu,&copy);
             menu->preview_video_ms += now_ms(menu) - started; ++menu->preview_video_draws;
         }
+        menu->full_drawn_decode=menu->preview_decodes;
     } else if (menu->full_cover) draw_cel(menu,menu->full_cover);
     else if (menu->cover) {
         memcpy(&copy,menu->cover,sizeof(copy));
@@ -3871,6 +3893,22 @@ static void draw_tools(Menu *menu)
     const char *title = "Menu";
     size_t i, count = 0, start;
     int save_views = menu->tools == TOOL_SAVES || (menu->tools == TOOL_SLOTS && !menu->backup_mode);
+    /* The home screen has no scrolling or live diagnostics. Retain its two
+     * buffers until a selection, settings marker, message or layout changes. */
+    if (menu->tools==TOOL_HOME) {
+        const char *c=menu->tool_message;
+        unsigned long key=(2166136261UL^(unsigned long)menu->tool_selected)*16777619UL;
+        key=(key^(unsigned long)menu->config.screen_margin)*16777619UL;
+        key=(key^(unsigned long)config_dirty(menu))*16777619UL;
+        key=(key^(unsigned long)menu->logo)*16777619UL;
+        key=(key^(unsigned long)(c!=NULL))*16777619UL;
+        if(c) for(;*c;++c)key=(key^(unsigned char)*c)*16777619UL;
+        if(!menu->tools_home_drawn || menu->tools_home_hash!=key) {
+            menu->tools_home_hash=key;menu->tools_home_drawn=0;
+        }
+        if(menu->tools_home_drawn>=2)return;
+        ++menu->tools_home_drawn;
+    }
     if (menu->tools == TOOL_CHEATS) title = "Known values & cheats";
     if (menu->tools == TOOL_HEX) title = "Hex editor / USB copy";
     if (menu->tools == TOOL_HEX_DISCARD) title = "Discard edits?";
@@ -4641,7 +4679,7 @@ static void tools_input(Menu *menu, u32 pressed)
         else if (page == TOOL_ARCHIVE) { menu->tools = TOOL_SLOTS; menu->backup_mode = 0; slot_select(menu,menu->backup_slot); }
         else if (page == TOOL_CONFIRM_RESTORE) { menu->tools = TOOL_ARCHIVE; menu->tool_selected = menu->save_selected; }
         else if (page == TOOL_CONFIRM_BACKUP) { menu->tools = TOOL_SLOTS; slot_select(menu,menu->backup_slot); }
-        else { menu->tools = TOOL_HOME; menu->tool_selected = 0; save_archive_free(&menu->pending); }
+        else { menu->tools = TOOL_HOME; menu->tool_selected = menu->home_selected; save_archive_free(&menu->pending); }
         if (menu->tools==TOOL_SLOTS && menu->slot_labels_page!=menu->slot_page) save_root_operation(menu,6,NULL,NULL);
         return;
     }
@@ -4672,6 +4710,7 @@ static void tools_input(Menu *menu, u32 pressed)
         if (pressed & ControlDown) row=(row+1)%4;
         menu->tool_selected=column*4+row;
         if(menu->tool_selected>=7)menu->tool_selected=column*4+(pressed&ControlUp?2:0);
+        menu->home_selected=menu->tool_selected;
     } else if (count) {
         if (pressed & ControlUp) menu->tool_selected = menu->tool_selected ? menu->tool_selected - 1 : count - 1;
         if (pressed & ControlDown) menu->tool_selected = (menu->tool_selected + 1) % count;
@@ -4825,6 +4864,11 @@ static void draw_context_help(Menu *menu)
 {
     MenuHelpTopic topic=current_help_topic(menu);
     unsigned int row;
+    if (menu->help_topic!=(int)topic || menu->help_margin!=menu->config.screen_margin) {
+        menu->help_drawn=0;menu->help_topic=(int)topic;menu->help_margin=menu->config.screen_margin;
+    }
+    if (menu->help_drawn>=2) return;
+    ++menu->help_drawn;
     menu->text_cursor=0;menu->text_style=UI_FONT_SMALL;
     menu->screen.sc_curScreen^=1;
     menu->browser_frames[0].valid=menu->browser_frames[1].valid=0;
@@ -4842,6 +4886,7 @@ static void draw_context_help(Menu *menu)
 
 static void toggle_tools(Menu *menu)
 {
+    if (menu->tools==TOOL_HOME) menu->home_selected=menu->tool_selected;
     if (menu->favorites_move) cancel_favorites_move(menu);
     if (menu->tools && menu->hex_archive.bytes && (menu->hex_dirty || menu->hex_editing)) {
         menu->tools=TOOL_HEX_DISCARD; menu->tool_message=NULL; return;
@@ -4852,8 +4897,8 @@ static void toggle_tools(Menu *menu)
         save_archive_free(&menu->compare_archive);menu->compare_choosing=0;
         save_archive_free(&menu->pending);
         menu->tools=menu->review=0; selection_changed(menu);
-    } else menu->tools=TOOL_HOME;
-    menu->tool_selected=0; menu->tool_message=NULL;
+    } else { menu->tools=TOOL_HOME; menu->tool_selected=menu->home_selected; }
+    menu->tool_message=NULL;
     menu->c_pending=menu->alphabet_active=0;
 }
 static int dispatch_tools_request(Menu *menu)

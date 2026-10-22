@@ -140,3 +140,37 @@ fn recovery_never_launches_an_externally_changed_executable() {
     fs::write(&old, b"changed executable").unwrap();
     assert!(self_update::restart_previous(&plan).is_err());
 }
+
+#[test]
+fn deferred_update_can_be_cancelled_without_changing_the_installed_app() {
+    let t = tempfile::tempdir().unwrap();
+    let old = t.path().join("current");fs::write(&old, b"old app").unwrap();
+    let zip = package(t.path(), member(), &image());
+    let (plan, path) = self_update::stage(&zip, &old, &t.path().join("cache"), &Job::default()).unwrap();
+    // Old update plans still restart by default.
+    let mut value = serde_json::to_value(&plan).unwrap();value.as_object_mut().unwrap().remove("restart");
+    assert!(serde_json::from_value::<self_update::Install>(value).unwrap().restart);
+    self_update::discard(&plan, &path).unwrap();
+    assert!(!plan.staged.exists());assert!(!path.exists());
+    assert_eq!(fs::read(&old).unwrap(), b"old app");
+}
+
+#[test]
+fn failure_reports_distinguish_intact_previous_apps_and_unconfirmed_recovery() {
+    let t = tempfile::tempdir().unwrap();let cache = t.path().join("cache");
+    let old = t.path().join("current");fs::write(&old, b"old app").unwrap();
+    let zip = package(t.path(), member(), &image());
+    let (mut plan, _) = self_update::stage(&zip, &old, &cache, &Job::default()).unwrap();
+    plan.restart = false;plan.parent = 99_999_999;
+    let result = Err(anyhow::anyhow!("Launch failed <details>"));
+    self_update::record_result(&plan, &result).unwrap();
+    let report = self_update::last_report(&cache, &old).unwrap();
+    assert!(!report.success);assert!(report.previous_intact);assert!(report.detail.contains("Launch failed"));
+    let other = t.path().join("other");fs::write(&other,b"another app").unwrap();
+    assert!(self_update::last_report(&cache,&other).is_none());
+    fs::write(&old,b"externally changed app").unwrap();
+    self_update::record_result(&plan,&result).unwrap();
+    assert!(!self_update::last_report(&cache,&old).unwrap().previous_intact);
+    // Updates on exit never relaunch even after a failure.
+    assert!(self_update::restart_previous(&plan).is_ok());
+}

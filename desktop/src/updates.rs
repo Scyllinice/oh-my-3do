@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 pub const REPO: &str = "https://github.com/Scyllinice/oh-my-3do";
@@ -20,6 +20,21 @@ pub struct Release {
     pub version: String,
     pub notes: String,
     assets: Vec<(String, String)>,
+    local: Option<LocalBuild>,
+}
+#[derive(Clone, Debug)]
+struct LocalBuild { root: PathBuf, artifact: String, digest: String, binary_digest: Option<String> }
+#[derive(Clone, Debug)]
+pub struct Offers {
+    pub menu: Option<Release>,
+    pub desktop: Option<Release>,
+    pub boot_digest: Option<String>,
+    pub targets: Vec<BootState>,
+    pub warnings: Vec<String>,
+}
+impl From<Check> for Offers {
+    fn from(check: Check) -> Self { Self { menu: Some(check.menu), desktop: Some(check.desktop),
+        boot_digest: Some(check.boot_digest), targets: check.targets, warnings: check.warnings } }
 }
 #[derive(Clone, Debug)]
 pub struct BootState {
@@ -107,9 +122,17 @@ impl Release {
                 .take(12000)
                 .collect(),
             assets,
+            local: None,
         })
     }
+    pub fn is_local(&self) -> bool { self.local.is_some() }
+    pub fn binary_digest(&self) -> Option<&str> { self.local.as_ref().and_then(|b| b.binary_digest.as_deref()) }
+    pub fn desktop_available(&self, executable: &Path, installed: &str, job: &Job) -> Result<bool> {
+        if let Some(digest) = self.binary_digest() { return Ok(f::sha256(executable, job)? != digest); }
+        is_newer(&self.version, installed)
+    }
     pub fn page(&self) -> String {
+        if let Some(build) = &self.local { return build.root.display().to_string(); }
         format!("{REPO}/releases/tag/{}", self.tag)
     }
     fn asset(&self, name: &str) -> Result<&str> {
@@ -126,23 +149,82 @@ impl Release {
             "Unsupported desktop platform"
         );
         let name = format!("OhMy3DO-Library-{platform}-v{}.zip", self.version);
+        if let Some(build) = &self.local {
+            ensure!(name == build.artifact, "Local build does not match this platform/version");
+            return Ok(name);
+        }
         self.asset(&name)?;
         self.asset(&format!("{name}.sha256"))?;
         Ok(name)
     }
     pub(crate) fn digest(&self, client: &Client, name: &str, job: &Job) -> Result<String> {
+        if let Some(build) = &self.local {
+            job.check()?;
+            ensure!(name == build.artifact, "Unexpected local build artifact");
+            return Ok(build.digest.clone());
+        }
         let bytes = setup::download(client, self.asset(&format!("{name}.sha256"))?, 1024, job)?;
         checksum(std::str::from_utf8(&bytes)?, name)
     }
     pub(crate) fn bytes(&self, name: &str, limit: usize, client: &Client, job: &Job) -> Result<Vec<u8>> {
         let expected = self.digest(client, name, job)?;
-        let bytes = setup::download(client, self.asset(name)?, limit, job)?;
+        let bytes = if let Some(build) = &self.local { read_local(&build.root, name, limit, job)? }
+            else { setup::download(client, self.asset(name)?, limit, job)? };
         ensure!(
             format!("{:x}", Sha256::digest(&bytes)) == expected,
-            "Download checksum mismatch for {name}"
+            "Update checksum mismatch for {name}; check for updates again if the build changed"
         );
         Ok(bytes)
     }
+}
+fn read_local(root: &Path, name: &str, limit: usize, job: &Job) -> Result<Vec<u8>> {
+    let path = f::safe(root, name)?;
+    let mut file = fs::File::open(&path).with_context(|| format!("Cannot read local update: {}", path.display()))?;
+    let size = file.metadata()?.len();
+    ensure!(size <= limit as u64, "Local update exceeds size limit: {name}");
+    let mut bytes = Vec::new();let mut buffer = [0u8; 32768];
+    loop {
+        job.check()?;let count = file.read(&mut buffer)?;if count == 0 { break; }
+        ensure!(bytes.len()+count <= limit, "Local update exceeds size limit: {name}");
+        bytes.extend_from_slice(&buffer[..count]);job.report(bytes.len() as u64, size, "Reading local update");
+    }
+    Ok(bytes)
+}
+/// Local manifests are explicit developer inputs. Artifact hashes stay pinned
+/// to the offer, so rebuilding a file during confirmation requires a new check.
+pub fn local_release(directory: &Path, component: Component, job: &Job) -> Result<Option<Release>> {
+    let root = f::root(directory).context("Local update directory is unavailable")?;
+    let platform = platform().context("No desktop package for this platform")?;
+    let manifest = match component { Component::Menu => "menu-update.json".into(),
+        Component::Desktop => format!("desktop-update-{platform}.json") };
+    if !f::safe(&root, &manifest)?.exists() { return Ok(None); }
+    let value: Value = serde_json::from_slice(&read_local(&root, &manifest, 16*1024, job)?)?;
+    let kind = if component == Component::Menu { "menu" } else { "desktop" };
+    ensure!(value["schema"] == 1 && value["component"] == kind, "Invalid local update manifest: {manifest}");
+    let number = value["version"].as_str().context("Local build version missing")?;version(number)?;
+    let name = value["artifact"].as_str().context("Local artifact missing")?;
+    let expected = if component == Component::Menu { "boot.iso".into() }
+        else { ensure!(value["platform"] == platform, "Local desktop platform mismatch");format!("OhMy3DO-Library-{platform}-v{number}.zip") };
+    ensure!(name == expected, "Unexpected local artifact filename");
+    let digest = value["sha256"].as_str().context("Local checksum missing")?;
+    let valid_hash = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    ensure!(valid_hash(digest), "Invalid local artifact checksum");
+    let binary_digest = if component == Component::Desktop {
+        let hash = value["binary_sha256"].as_str().context("Local executable checksum missing")?;
+        ensure!(valid_hash(hash), "Invalid local executable checksum");Some(hash.to_ascii_lowercase())
+    } else { None };
+    ensure!(f::safe(&root, name)?.is_file(), "Local update artifact is missing: {name}");
+    Ok(Some(Release { component: Some(component), tag: format!("{kind}-v{number}"), version: number.into(),
+        notes: format!("Local developer build\nDirectory: {}\nArtifact: {name}\nSHA-256: {digest}", root.display()), assets: vec![],
+        local: Some(LocalBuild { root, artifact: name.into(), digest: digest.to_ascii_lowercase(), binary_digest }) }))
+}
+pub fn check_local(directory: &Path, roots: &[PathBuf], job: &Job) -> Result<Offers> {
+    let menu = local_release(directory, Component::Menu, job)?;
+    let desktop = local_release(directory, Component::Desktop, job)?;
+    ensure!(menu.is_some() || desktop.is_some(), "No local update manifests found. Choose the build output directory containing menu-update.json or desktop-update-{}.json", platform().unwrap_or("PLATFORM"));
+    let digest = menu.as_ref().and_then(|r| r.local.as_ref()).map(|b| b.digest.clone());
+    let (targets,warnings) = if menu.is_some() { scan_targets(roots, job)? } else { (vec![],vec![]) };
+    Ok(Offers { menu, desktop, boot_digest: digest, targets, warnings })
 }
 pub fn checksum(text: &str, name: &str) -> Result<String> {
     let fields: Vec<_> = text.split_whitespace().collect();
@@ -174,6 +256,25 @@ fn boot_digest(root: &Path, job: &Job) -> Result<Option<String>> {
         "Existing boot.iso is not a menu image under 16 MiB"
     );
     Ok(Some(f::sha256(&path, job)?))
+}
+/// Version labels are bound to image contents, never inferred from a filename
+/// or a previously selected drive. Unknown images remain explicitly unknown.
+pub fn remember_menu(cache: &Path, digest: &str, number: &str) -> Result<()> {
+    ensure!(digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()), "Invalid menu digest");
+    version(number)?;
+    let path = cache.join("menu-versions.json");
+    let mut known: std::collections::BTreeMap<String, String> = fs::read(&path).ok()
+        .filter(|b| b.len() <= 1024 * 1024).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    known.insert(digest.to_ascii_lowercase(), number.into());
+    f::atomic(&path, &serde_json::to_vec_pretty(&known)?)
+}
+pub fn installed_menu(root: &Path, cache: &Path, job: &Job) -> Result<Value> {
+    let root = f::root(root)?;
+    let digest = boot_digest(&root, job)?;
+    let known: std::collections::BTreeMap<String, String> = fs::read(cache.join("menu-versions.json")).ok()
+        .filter(|b| b.len() <= 1024 * 1024).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let number = digest.as_ref().and_then(|d| known.get(d)).filter(|v| version(v).is_ok());
+    Ok(serde_json::json!({"root":root,"installed":digest.is_some(),"version":number}))
 }
 /// Select numerically within one stream; combined releases are a fallback only
 /// until that stream has its own stable release. Publication order is irrelevant.
@@ -221,12 +322,7 @@ pub fn latest(component: Component, job: &Job) -> Result<Release> {
     let client = setup::client()?;
     select_release(&published_releases(&client, job)?, component)
 }
-pub fn check(roots: &[PathBuf], job: &Job) -> Result<Check> {
-    let client = setup::client()?;
-    let releases = published_releases(&client, job)?;
-    let menu = select_release(&releases, Component::Menu)?;
-    let desktop = select_release(&releases, Component::Desktop)?;
-    let digest = menu.digest(&client, "boot.iso", job)?;
+fn scan_targets(roots: &[PathBuf], job: &Job) -> Result<(Vec<BootState>, Vec<String>)> {
     let mut targets: Vec<BootState> = Vec::new();
     let mut warnings = Vec::new();
     for path in roots {
@@ -250,6 +346,15 @@ pub fn check(roots: &[PathBuf], job: &Job) -> Result<Check> {
         }
     }
     job.check()?;
+    Ok((targets, warnings))
+}
+pub fn check(roots: &[PathBuf], job: &Job) -> Result<Check> {
+    let client = setup::client()?;
+    let releases = published_releases(&client, job)?;
+    let menu = select_release(&releases, Component::Menu)?;
+    let desktop = select_release(&releases, Component::Desktop)?;
+    let digest = menu.digest(&client, "boot.iso", job)?;
+    let (targets, warnings) = scan_targets(roots, job)?;
     Ok(Check {
         menu,
         desktop,

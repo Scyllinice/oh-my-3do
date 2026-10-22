@@ -401,10 +401,12 @@ console keeps bundled fallback definitions; external updates need no ISO rebuild
 
 ## App and menu updates
 
-**Updates** checks the latest stable `desktop-v…` and `menu-v…` GitHub releases independently. The two version numbers do not need to match. New-drive setup downloads the latest stable menu rather than the desktop app’s version. Startup checks open an offer
-only for a newer desktop version or a differing/missing boot ISO on a checked
-root. Each offer shows its own version and release notes. A boot-only offer contains only the relevant boot-image actions. Offline
-mode disables checks and downloads.
+**Updates** checks the latest stable `desktop-v…` and `menu-v…` GitHub releases independently. The two version numbers do not need to match. New-drive setup downloads the latest stable menu rather than the desktop app’s version. Startup checks show a dismissible notice for a newer desktop version or a differing/missing boot ISO, without opening the Updates screen. **Settings & tools → Notify when updates are available** controls these notices; startup checks have their own setting. Each offer shows its own version and release notes. A boot-only offer contains only the relevant boot-image actions. Offline mode disables GitHub checks and downloads.
+
+The Updates screen also shows the installed desktop version and the menu on a
+selected library or drive. A menu version is identified by its image checksum
+after a release check and remembered for offline use. Unrecognized images show
+**Version unknown**; unplugged drives show **Drive unavailable**.
 
 **Update and restart** downloads the desktop ZIP, verifies its published SHA-256
 checksum and stages the exact platform executable plus allowlisted program
@@ -415,8 +417,37 @@ journal are kept; a failed launch or missing frontend-ready acknowledgement
 restores the previous version. Update work and logs are under the cache's
 `self-update` directory. The portable app folder must be writable.
 
+**Update on exit** downloads and verifies the same package while leaving the
+app open. Close the app normally when finished; unsaved edits still receive the
+usual prompts. The helper installs the update and runs a hidden startup check,
+then leaves the app closed. Choose **Restart now** to install immediately, or
+**Cancel scheduled update** to discard the download. Scheduling lasts for the
+current session; a forced termination does not apply the update.
+
+Update results persist in **Updates**, with the failure reason, log path and
+whether the previous executable is intact. If recovery cannot be confirmed,
+the app says so rather than claiming that restoration succeeded. These updates
+work for both installed and portable copies without running Setup again.
+
+For local development, open **Settings & tools → Developer updates**, enable
+**Use local builds instead of GitHub releases**, and select the repository’s
+`iso` folder. Use **Updates → Check for updates** after building. This works
+in offline mode. It uses local packages for desktop updates and local `boot.iso`
+for boot updates, drive setup and PC staging setup. Nothing is downloaded from
+GitHub while developer mode is enabled.
+
+Menu builds and desktop packaging write checksum manifests beside their output
+automatically. The folder can contain either component or both. Desktop builds
+are compared by executable checksum, so rebuilding without changing the version
+still offers an update. Local builds can also replace a newer version. The usual
+confirmation, verification and rollback remain in place. If a build changes after
+checking, check again before installing it. Turn developer mode off to return to
+published releases.
+
 Boot ISO updates are separate: the checked image is replaced using the existing
-verified, undoable installation path, preserving games, settings and saves.
+verified, undoable installation path, preserving games, settings and saves. After
+each boot update, the Updates screen stays open for any remaining library or
+drive update.
 A local unreleased build is not published automatically by building packages.
 
 ## Development

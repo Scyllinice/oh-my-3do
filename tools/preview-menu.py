@@ -378,11 +378,131 @@ int main(int argc, char **argv) {
     init_channel_gecko(&menu);
     menu.logo=&logo;
     menu.message=NULL;
+    if (argc>1 && !strcmp(argv[1],"tools-return")) {
+        static const int pages[]={TOOL_SAVES,TOOL_FAVORITES,TOOL_CONFIG,TOOL_HELP,TOOL_DIAG,TOOL_RECENT,TOOL_FIND};
+        size_t selected;
+        for(selected=0;selected<7;++selected) {
+            menu.tools=TOOL_HOME;menu.tool_selected=selected;
+            draw(&menu);draw(&menu);
+            tools_input(&menu,ControlA);
+            if(menu.tools!=pages[selected] || menu.home_selected!=selected || menu.tool_selected)abort();
+            draw(&menu);draw(&menu);
+            if(selected==2)menu.tool_selected=11;
+            else if(selected==3)menu.tool_selected=1;
+            else if(selected==4)menu.tool_selected=4;
+            tools_input(&menu,ControlB);
+            if(menu.tools!=TOOL_HOME || menu.tool_selected!=selected)abort();
+            preview_primitives=0;draw(&menu);
+            if(!preview_primitives)abort();
+            tools_input(&menu,ControlB);draw(&menu);toggle_tools(&menu);
+            if(menu.tools!=TOOL_HOME || menu.tool_selected!=selected)abort();
+        }
+        menu.tools=TOOL_HOME;menu.tool_selected=2;tools_input(&menu,ControlA);
+        menu.tools=TOOL_CATEGORIES;tools_input(&menu,ControlB);
+        if(menu.tools!=TOOL_CONFIG || menu.tool_selected!=8)abort();
+        tools_input(&menu,ControlB);
+        if(menu.tools!=TOOL_HOME || menu.tool_selected!=2)abort();
+        tools_input(&menu,ControlDown);toggle_tools(&menu);draw(&menu);toggle_tools(&menu);
+        if(menu.tools!=TOOL_HOME || menu.tool_selected!=3)abort();
+        tools_input(&menu,ControlA);toggle_tools(&menu);draw(&menu);toggle_tools(&menu);
+        if(menu.tools!=TOOL_HOME || menu.tool_selected!=3)abort();
+        fprintf(stderr,"Tools selection: all seven tools, nested settings and close/reopen retain the home selection and redraw\n");
+        return 0;
+    }
     if (argc>1 && !strcmp(argv[1],"font-measure-bench")) {
         unsigned int i;
         preview_width_calls=0;
         for (i=0;i<1000;++i) { menu.text_cursor=0;label_on(&menu,10,70,"Unchanged menu text",TEXT,UI_FONT_NORMAL,BG); }
         fprintf(stderr,"Text width: %lu measurements for 1000 identical draws\n",preview_width_calls);
+        return 0;
+    }
+    if (argc>1 && !strcmp(argv[1],"fullscreen-render")) {
+        static unsigned short actual[320*240];
+        CCB video={5,0,0,0};
+        int mode,margin,step,idle=0,changes=0;char message[80];
+        menu.screen.sc_BitmapItems[0]=menu.screen.sc_Screens[0]=0;
+        menu.screen.sc_BitmapItems[1]=menu.screen.sc_Screens[1]=1;
+        preview_raster=1;preview_video_enabled=1;
+        if(preview_video_load(&menu.ode,ode_bus_read_buffer,"fixture",&menu.preview,NULL,NULL))abort();
+        menu.preview.fps=30;video.ccb_Width=160;video.ccb_Height=120;
+        video.ccb_PRE1=78UL<<24;video.ccb_SourcePtr=menu.preview.frame_buffer;
+        menu.preview_cel=&video;menu.preview_audio.status=1;
+        for(mode=0;mode<5;++mode)for(margin=0;margin<=12;++margin) {
+            menu.config.screen_margin=margin;menu.cover=&cover;
+            menu.full_view=mode==2 ? 2 : mode==0 ? 1 : 0;menu.full_cleared=0;
+            menu.help_hold.active=mode==1;menu.help_drawn=0;menu.tools=mode==3 ? TOOL_HOME : 0;menu.tools_home_drawn=0;menu.tool_selected=0;menu.tool_message=NULL;menu.settings_recent_games=menu.config.recent_games;
+            preview_now=10000;menu.preview_since=preview_now;menu.message=NULL;
+            if(mode==4) {
+                MenuEntry *entry=(MenuEntry *)menu.listing.entries[2];
+                entry->name="A long selected game title that must keep scrolling while the video is unchanged.iso";
+                menu.selected=2;menu.title_variants_valid=0;menu.selection_since=preview_now-1200;
+            }
+            if(usb_preview_frame(&menu.preview,0,menu.preview.frame_buffer)<0)abort();
+            menu.preview_frame=0;menu.panel_frames=menu.overlay_frames=0;menu.preview_priming=0;menu.osd_hidden=0;
+            for(step=0;step<80;++step) {
+                int front,current,cleared,help_drawn,home_drawn,panels,overlays,cost;
+                unsigned long decoded,inline_decoded;
+                preview_now=10000+(unsigned long)step*5;
+                if(mode==1 && step==30)menu.tools=TOOL_SAVES;
+                if(mode==1 && step==60)menu.tools=TOOL_CONFIG;
+                if(mode==4) {
+                    if(step==20){strcpy(message,"A playback notice");menu.message=message;}
+                    if(step==21)strcpy(message,"Changed playback notice");
+                    if(step==30)menu.message=NULL;
+                    if(step==42)menu.selected=3;
+                    if(step==50)menu.selected=2;
+                }
+                if(mode==3) {
+                    if(step==10)menu.tool_selected=2;
+                    if(step==20)menu.settings_recent_games=!menu.config.recent_games;
+                    if(step==30){strcpy(message,"A new message");menu.tool_message=message;}
+                    if(step==31)strcpy(message,"Changed in the same buffer");
+                    if(step==40)menu.tool_message="";
+                    if(step==42)menu.tool_message=NULL;
+                    if(step==50)menu.tools=TOOL_HELP;
+                    if(step==52)menu.tools=TOOL_HOME;
+                    if(step==60)menu.help_hold.active=1;
+                    if(step==64)menu.help_hold.active=0;
+                }
+                preview_primitives=0;
+                if(mode==1)draw_context_help(&menu);else if(mode>=3)draw(&menu);else draw_full_cover(&menu);
+                cost=preview_primitives;front=preview_front;current=menu.screen.sc_curScreen;
+                if(!cost)++idle;else ++changes;
+                memcpy(actual,preview_screen[front],sizeof(actual));
+                cleared=menu.full_cleared;decoded=menu.full_drawn_decode;help_drawn=menu.help_drawn;home_drawn=menu.tools_home_drawn;panels=menu.panel_frames;overlays=menu.overlay_frames;inline_decoded=menu.preview_drawn_decode;
+                menu.screen.sc_curScreen=front^1;menu.full_cleared=0;menu.help_drawn=0;menu.tools_home_drawn=0;menu.panel_frames=0;
+                if(mode==1)draw_context_help(&menu);else if(mode>=3)draw(&menu);else draw_full_cover(&menu);
+                if(memcmp(actual,preview_screen[front],sizeof(actual))) {
+                    fprintf(stderr,"Full screen mismatch: mode %d margin %d step %d\n",mode,margin,step);abort();
+                }
+                menu.screen.sc_curScreen=current;menu.full_cleared=cleared;
+                menu.full_drawn_decode=decoded;menu.help_drawn=help_drawn;menu.tools_home_drawn=home_drawn;menu.panel_frames=panels;menu.overlay_frames=overlays;menu.preview_drawn_decode=inline_decoded;
+            }
+            menu.help_hold.active=0;menu.full_view=0;
+        }
+        if(idle<2000 || !changes || !audio_restarts)abort();
+        fprintf(stderr,"Static/video rendering: 65 mode/margin combinations match forced redraws; %d idle polls draw nothing; audio loops continue\n",idle);
+        /* Returning from Help must invalidate it before opening it again. */
+        menu.preview_cel=NULL;menu.help_hold.active=0;menu.tools=0;draw(&menu);
+        if(menu.help_drawn)abort();
+        menu.help_hold.active=1;preview_primitives=0;draw(&menu);
+        if(!preview_primitives || menu.help_drawn!=1)abort();
+        return 0;
+    }
+    if (argc>1 && !strcmp(argv[1],"idle-draw-bench")) {
+        static CCB video={2,0,0,0};
+        int mode,step;
+        video.ccb_Width=160;video.ccb_Height=120;
+        for(mode=0;mode<5;++mode) {
+            menu.full_view=mode==0 ? 1 : mode==2 ? 2 : 0;menu.full_cleared=0;
+            menu.help_hold.active=mode==1;menu.tools=mode==3 ? TOOL_HOME : 0;menu.cover=&cover;
+            menu.preview_cel=NULL;menu.preview.table=NULL;menu.panel_frames=menu.overlay_frames=0;
+            if(mode==2 || mode==4) {menu.preview_cel=&video;menu.preview.table=(unsigned char *)"synthetic";menu.preview.frames=1;menu.preview.fps=30;}
+            preview_primitives=0;display_count=0;
+            for(step=0;step<1000;++step)draw(&menu);
+            if(display_count!=(mode==4 ? 4 : 2))abort();
+            fprintf(stderr,"Idle %s: %d drawing calls, %d presentations for 1000 polls\n",mode==0 ? "full cover" : mode==1 ? "help" : mode==2 ? "same video frame" : mode==3 ? "Tools home" : "inline video frame",preview_primitives,display_count);
+        }
         return 0;
     }
     if (argc>1 && !strcmp(argv[1],"browser-render")) {
@@ -1604,6 +1724,9 @@ def main():
         print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
         subprocess.run([str(binary),"font-memory"],stdout=subprocess.DEVNULL,check=True)
         subprocess.run([str(binary),"font-measure-bench"],stdout=subprocess.DEVNULL,check=True)
+        subprocess.run([str(binary),"tools-return"],stdout=subprocess.DEVNULL,check=True)
+        subprocess.run([str(binary),"idle-draw-bench"],stdout=subprocess.DEVNULL,check=True)
+        subprocess.run([str(binary),"fullscreen-render"],stdout=subprocess.DEVNULL,check=True)
         playback=subprocess.check_output([str(binary),"gecko-playback"],text=True).split("FRAME ")[1:]
         logos=[sum(line.startswith("I 1 ") for line in frame.splitlines()) for frame in playback]
         assert logos==[1,1,0,0,1], logos  # light frames leave the list panel alone; a new selection redraws it

@@ -43,7 +43,8 @@ struct Inner {
     config: Option<console_config::Loaded>,
     backup: Option<Backup>,
     cleanup: Option<core::recovery::Inventory>,
-    release: Option<updates::Check>,
+    release: Option<updates::Offers>,
+    pending_update: Option<(self_update::Install, PathBuf, String)>,
     cheats: save_cheats::Database,
     cheats_original: Option<Vec<u8>>,
     cheats_path: Option<PathBuf>,
@@ -69,6 +70,7 @@ impl Backend {
                 backup: None,
                 cleanup: None,
                 release: None,
+                pending_update: None,
                 cheats: save_cheats::Database::bundled(),
                 cheats_original: None,
                 cheats_path: None,
@@ -223,10 +225,6 @@ pub async fn request(
     request_id: Option<String>,
 ) -> Result<Value, String> {
     let backend = state.0.clone();
-    if action == "quit" {
-        app.exit(0);
-        return Ok(Value::Null);
-    }
     if action == "pick" {
         return tauri::async_runtime::spawn_blocking(move || pick(&args))
             .await
@@ -288,24 +286,40 @@ fn dispatch(
     job: &Job,
 ) -> Result<Value> {
     match action {
+        "quit" => {
+            if let Some((plan, path, _)) = &mut s.pending_update {
+                plan.restart = false;
+                f::atomic(path, &serde_json::to_vec_pretty(plan)?)?;
+                self_update::start(plan, path)?;
+                s.pending_update = None;
+            }
+            app.exit(0);
+            Ok(Value::Null)
+        }
         "ready" => {
             let args: Vec<_> = std::env::args().collect();
             if let Some(i) = args.iter().position(|a| a == "--update-ready") {
                 if let Some(path) = args.get(i + 1) {
                     fs::write(path, b"ready")?;
+                    if args.iter().any(|a| a == "--update-exit") { app.exit(0); }
                 }
             }
             Ok(Value::Null)
         }
         "init" => Ok(
-            json!({"prefs":s.prefs,"version":env!("CARGO_PKG_VERSION"),"categories":CATEGORIES,"args":std::env::args().skip(1).collect::<Vec<_>>()}),
+            json!({"prefs":s.prefs,"version":env!("CARGO_PKG_VERSION"),"categories":CATEGORIES,"args":std::env::args().skip(1).collect::<Vec<_>>(),
+                "update_report":self_update::last_report(&state.cache, &std::env::current_exe()?)}),
         ),
+        "installed_versions" => updates::installed_menu(&path(a, "root")?, &state.cache, job),
         "preferences" => {
             let prefs: Preferences = serde_json::from_value(a.clone())?;
             f::atomic(
                 &state.cache.join("native-settings.json"),
                 &serde_json::to_vec_pretty(&prefs)?,
             )?;
+            if prefs.developer_mode != s.prefs.developer_mode || prefs.developer_updates_directory != s.prefs.developer_updates_directory {
+                s.release = None;
+            }
             s.prefs = prefs;
             Ok(json!(s.prefs))
         }
@@ -521,11 +535,16 @@ fn dispatch(
             let settings: console_config::Settings =
                 serde_json::from_value(a["settings"].clone()).unwrap_or_default();
             s.last = Some(if a["release"].as_bool() == Some(true) {
+                if s.prefs.developer_mode {
+                    ensure!(!s.prefs.developer_updates_directory.is_empty(), "Choose a local update directory in Settings & tools");
+                    setup::install_developer(Path::new(&s.prefs.developer_updates_directory), &dest, &state.cache, &settings, job)?
+                } else {
                 ensure!(
                     !s.prefs.offline,
                     "Turn off offline mode to download the menu"
                 );
                 setup::install_release(&dest, &state.cache, &settings, job)?
+                }
             } else {
                 setup::install_local(&dest, &state.cache, &path(a, "source")?, &settings, job)?
             });
@@ -917,26 +936,32 @@ fn dispatch(
         }
         "updates_check" => {
             ensure!(
-                !s.prefs.offline,
+                s.prefs.developer_mode || !s.prefs.offline,
                 "Turn off offline mode to check for updates"
             );
-            let check = updates::check(
-                &[
+            let roots = [
                     PathBuf::from(&s.prefs.library),
                     PathBuf::from(&s.prefs.destination),
-                ],
-                job,
-            )?;
-            let newer = updates::is_newer(&check.desktop.version, env!("CARGO_PKG_VERSION"))?;
+                    a["root"].as_str().map(PathBuf::from).unwrap_or_default(),
+                ];
+            let check: updates::Offers = if s.prefs.developer_mode {
+                ensure!(!s.prefs.developer_updates_directory.is_empty(), "Choose a local update directory in Settings & tools");
+                updates::check_local(Path::new(&s.prefs.developer_updates_directory), &roots, job)?
+            } else { updates::check(&roots, job)?.into() };
+            if let (Some(menu), Some(digest)) = (&check.menu, &check.boot_digest) {
+                updates::remember_menu(&state.cache, digest, &menu.version)?;
+            }
+            let newer = check.desktop.as_ref().map(|r|r.desktop_available(&std::env::current_exe()?, env!("CARGO_PKG_VERSION"), job)).transpose()?.unwrap_or(false);
             let targets = check
                 .targets
                 .iter()
-                .filter(|t| t.digest.as_deref() != Some(check.boot_digest.as_str()))
+                .filter(|t| t.digest != check.boot_digest)
                 .map(|t| json!({"root":t.root,"installed":t.digest.is_some()}))
                 .collect::<Vec<_>>();
-            let out = json!({"desktop":newer,
-                "menu_release":{"tag":check.menu.tag,"version":check.menu.version,"notes":check.menu.notes,"url":check.menu.page()},
-                "desktop_release":{"tag":check.desktop.tag,"version":check.desktop.version,"notes":check.desktop.notes,"url":check.desktop.page()},
+            let describe = |release: &updates::Release| json!({"tag":release.tag,"version":release.version,"notes":release.notes,"url":release.page(),"local":release.is_local()});
+            let out = json!({"desktop":newer,"local":s.prefs.developer_mode,
+                "menu_release":check.menu.as_ref().map(describe),
+                "desktop_release":check.desktop.as_ref().map(describe),
                 "targets":targets,"warnings":check.warnings});
             s.release = Some(check);
             Ok(out)
@@ -951,22 +976,37 @@ fn dispatch(
                 .find(|t| t.root == target)
                 .context("Check this drive for updates first")?;
             s.last = Some(updates::install_boot(
-                &check.menu,
+                check.menu.as_ref().context("No menu update was found")?,
                 expected,
-                &check.boot_digest,
+                check.boot_digest.as_deref().context("Missing menu checksum")?,
                 &state.cache,
                 job,
             )?);
             Ok(json!({"journal":s.last}))
         }
+        "self_update_cancel" => {
+            if let Some((plan, path, _)) = &s.pending_update { self_update::discard(plan, path)?; }
+            s.pending_update = None;
+            Ok(Value::Null)
+        }
+        "self_update_apply" => {
+            let (plan, path, _) = s.pending_update.as_mut().context("No update is waiting to install")?;
+            plan.restart = true;
+            f::atomic(path, &serde_json::to_vec_pretty(plan)?)?;
+            self_update::start(plan, path)?;
+            s.pending_update = None;
+            app.exit(0);
+            Ok(Value::Null)
+        }
         "self_update" => {
+            ensure!(s.pending_update.is_none(), "An update is already ready to install");
             let release = &s
                 .release
                 .as_ref()
                 .context("Check for updates first")?
-                .desktop;
+                .desktop.as_ref().context("No desktop update was found")?;
             ensure!(
-                updates::is_newer(&release.version, env!("CARGO_PKG_VERSION"))?,
+                release.desktop_available(&std::env::current_exe()?, env!("CARGO_PKG_VERSION"), job)?,
                 "The latest desktop version is already installed"
             );
             let work = state.cache.join("self-update");
@@ -981,7 +1021,19 @@ fn dispatch(
             let (plan, path) =
                 self_update::stage(&zip, &std::env::current_exe()?, &state.cache, job)?;
             let _ = fs::remove_file(zip);
-            job.check()?;
+            if release.binary_digest().is_some_and(|expected|expected != plan.new_sha256) {
+                self_update::discard(&plan, &path)?;
+                bail!("Local executable checksum does not match the offered build. Check local builds again.");
+            }
+            if let Err(error) = job.check() {
+                self_update::discard(&plan, &path)?;
+                return Err(error);
+            }
+            if a["on_exit"].as_bool().unwrap_or(false) {
+                let version = release.version.clone();
+                s.pending_update = Some((plan, path, version.clone()));
+                return Ok(json!({"version":version,"local":release.is_local()}));
+            }
             self_update::start(&plan, &path)?;
             app.exit(0);
             Ok(Value::Null)

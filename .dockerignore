@@ -15,6 +15,7 @@
 !tools/
 !tools/prepare-runtime.py
 !tools/release.py
+!tools/write-update-manifest.py
 !tools/index-media.py
 !tools/organize-library.py
 !tools/library-maintenance.py

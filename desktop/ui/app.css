@@ -70,3 +70,6 @@ dialog[open]{display:flex;flex-direction:column;overflow:hidden}.dialog-head,.di
 .operation-meter-label{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--notice-text);margin-bottom:5px}.dialog-toast{flex-shrink:0;padding:12px 25px;background:var(--notice);color:var(--notice-text);overflow-wrap:anywhere;white-space:pre-wrap}.dialog-toast.error{background:var(--error);color:var(--error-text)}#operation-meter{width:110px;height:8px;flex-shrink:0;accent-color:#327545}#operation-percent{font-variant-numeric:tabular-nums}
 
 dialog[data-operation-busy=true] .dialog-foot [data-action]:not([data-action=cancel]){display:none}
+
+#update-notice:not([hidden]){flex-shrink:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 30px;background:var(--notice);color:var(--notice-text);border-bottom:1px solid var(--border)}
+#update-notice strong{flex:1;min-width:200px}.nav[data-count]::after{content:attr(data-count);margin-left:auto;border-radius:10px;background:#bdd9a8;color:#203d27;padding:1px 7px;font-size:11px}.update-failure{border-color:#ab6d4b}.installed-versions select{max-width:100%}.update-card button+.quiet,.card>button+button{margin-left:8px}

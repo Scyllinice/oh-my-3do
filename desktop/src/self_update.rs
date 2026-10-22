@@ -26,8 +26,44 @@ pub struct Install {
     pub original_sha256: String,
     pub new_sha256: String,
     pub parent: u32,
+    #[serde(default = "restart_default")]
+    pub restart: bool,
     #[serde(default)]
     pub assets: Vec<Asset>,
+}
+fn restart_default() -> bool { true }
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Report {
+    pub executable: PathBuf,
+    pub success: bool,
+    pub previous_intact: bool,
+    pub detail: String,
+    pub log: PathBuf,
+}
+/// Persist failures before attempting to reopen the old app, including failures
+/// during an update on exit (which must leave the application closed).
+pub fn record_result(plan: &Install, result: &Result<()>) -> Result<()> {
+    let detail = match result { Ok(()) => "Updated and startup verified successfully.".into(), Err(e) => format!("{e:#}") };
+    fs::write(&plan.log, &detail)?;
+    let report = Report { executable: plan.executable.clone(), success: result.is_ok(),
+        previous_intact: f::sha256(&plan.executable, &Job::default()).ok().as_deref() == Some(&plan.original_sha256),
+        detail, log: plan.log.clone() };
+    let directory = plan.log.parent().and_then(Path::parent).context("Missing update cache directory")?;
+    f::atomic(&directory.join("last-result.json"), &serde_json::to_vec_pretty(&report)?)
+}
+pub fn last_report(cache: &Path, executable: &Path) -> Option<Report> {
+    let bytes = fs::read(cache.join("self-update/last-result.json")).ok()?;
+    if bytes.len() > 64 * 1024 { return None; }
+    let report: Report = serde_json::from_slice(&bytes).ok()?;
+    (report.executable == executable.canonicalize().ok()?).then_some(report)
+}
+pub fn discard(plan: &Install, path: &Path) -> Result<()> {
+    ensure!(f::sha256(&plan.staged, &Job::default())? == plan.new_sha256,
+        "Staged update changed; keep its recovery files and check updates again");
+    fs::remove_file(&plan.staged)?;
+    let _ = fs::remove_file(path);
+    Ok(())
 }
 /// The ZIP has already passed the release's published SHA-256 verification.
 /// Extract the executable and allowlisted program documentation/licenses, never settings or game files.
@@ -166,6 +202,7 @@ pub fn stage(
         original_sha256: f::sha256(&executable, job)?,
         new_sha256: f::sha256(&staged, job)?,
         parent: std::process::id(),
+        restart: true,
         assets,
     };
     let path = work.join("install.json");
@@ -285,10 +322,10 @@ pub fn apply(plan: &Install) -> Result<()> {
             f::sha256(&plan.executable, &job)? == plan.new_sha256,
             "Installed executable readback failed"
         );
-        Ok(Command::new(&plan.executable)
-            .arg("--update-ready")
-            .arg(&plan.ready)
-            .spawn()?)
+        let mut command = Command::new(&plan.executable);
+        command.arg("--update-ready").arg(&plan.ready);
+        if !plan.restart { command.arg("--update-exit"); }
+        Ok(command.spawn()?)
     })();
     let mut child = match launch {
         Ok(child) => child,
@@ -327,7 +364,7 @@ pub fn apply(plan: &Install) -> Result<()> {
 /// Recover the UI after a failed installation, but never launch a changed executable
 /// or start a duplicate when the original process is still alive.
 pub fn restart_previous(plan: &Install) -> Result<()> {
-    if alive(plan.parent) {
+    if !plan.restart || alive(plan.parent) {
         return Ok(());
     }
     ensure!(

@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "oh-my-3do-desktop"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2399,7 +2399,7 @@ dependencies = [
 
 [[package]]
 name = "oh-my-3do-library"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

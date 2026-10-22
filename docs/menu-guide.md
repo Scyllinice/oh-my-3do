@@ -38,7 +38,9 @@ and direction buttons; P is the pad's Start button). Under the list, prompts
 show what A and C (or Start) do for the selected entry, with `B Back` (inside a
 folder or the queue) and `L+R Tools` below them. Beside the channel number, `QUEUE n` shows queued discs and `UNSAVED`
 marks unsaved settings. The Tools screen has two
-columns with seven cards; the arrows move between them. Cover images and video
+columns with seven cards; the arrows move between them. Tools remembers the
+highlight during the current session, including when returning from a tool or
+reopening Tools. Cover images and video
 previews share the larger artwork panel.
 
 **Save Manager** contains **Console saves** and **USB backups** views; use

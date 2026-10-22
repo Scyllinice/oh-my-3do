@@ -159,10 +159,26 @@
     },
     "desktop-updates.png": {
       "component": "desktop",
-      "version": "1.0.1",
-      "capture": "build/release-1.0.1-desktop-gallery/shots/desktop-updates.png",
-      "sha256": "2fc908d9855e1c63f0a0ee5d813ebd63a63758792e7008d4e1d0c0d7b5fc782e",
-      "note": "Live check of published releases; combined v1.0.0 is still the available fallback. No download or install performed."
+      "version": "1.0.2",
+      "working_tree_dirty": true,
+      "capture": "build/update-polish-gallery/shots/updates-versions.png",
+      "sha256": "0af09240739910e2e2757d9ce523454ca3f0d3d0b37832f7902a5fc76d311fbf",
+      "note": "Live menu-v1.0.1 check: PC library identified by checksum; disposable Console SD fixture has no boot image."
+    },
+    "desktop-update-notice.png": {
+      "component": "desktop",
+      "version": "1.0.2",
+      "working_tree_dirty": true,
+      "capture": "build/update-polish-gallery/shots/update-notice.png",
+      "sha256": "3bd2d7c9dcaa4032412710f3f94718cf58a264024b3aa3f2e40cfe130fb559dd"
+    },
+    "desktop-update-recovery.png": {
+      "component": "desktop",
+      "version": "1.0.2",
+      "working_tree_dirty": true,
+      "capture": "build/update-polish-gallery/shots/recovery-details.png",
+      "sha256": "50a26778ea88b47d3a28a558c1f121c4398f57a90e0ce726cae813658af07949",
+      "note": "Actual restored app after the forced launch-error updater test."
     }
   }
 }

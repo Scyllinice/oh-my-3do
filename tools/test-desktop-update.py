@@ -11,8 +11,8 @@ def cleanup(exe):
    command=(p/'cmdline').read_bytes().split(b'\0')[0]
    if command==str(exe).encode():os.kill(int(p.name),15)
   except (OSError,ValueError):pass
-for fail in [False,True]:
- work=base/('rollback' if fail else 'success');work.mkdir(parents=True,exist_ok=True);exe=work/'OhMy3DOLibrary';stage=work/'staged';previous=work/'previous';ready=work/'ready';log=work/'install.log';support=work/'asset-readme';readme=work/'README.md'
+for restart,fail in [(True,False),(True,True),(False,False),(False,True)]:
+ work=base/(('restart-' if restart else 'on-exit-')+('rollback' if fail else 'success'));work.mkdir(parents=True,exist_ok=True);exe=work/'OhMy3DOLibrary';stage=work/'staged';previous=work/'previous';ready=work/'ready';log=work/'install.log';support=work/'asset-readme';readme=work/'README.md'
  for p in [exe,stage,previous,ready,log]:
   if p.exists():p.unlink()
  shutil.copy2(binary,exe)
@@ -21,7 +21,8 @@ for fail in [False,True]:
  if fail:stage.write_bytes(b'\x7fELF'+bytes(100));stage.chmod(0o755)
  support.write_text('Updated release documentation');readme.write_text('Original release documentation');(work/'native-settings.json').write_text('Personal preferences must stay unchanged')
  cache=work/'cache/oh-my-3do';cache.mkdir(parents=True,exist_ok=True);(cache/'native-settings.json').write_text(json.dumps(dict(offline=True,disable_update_checks=True)))
- plan=dict(executable=str(exe),staged=str(stage),previous=str(previous),ready=str(ready),log=str(log),original_sha256=original,new_sha256=sha(stage),parent=99999999,assets=[dict(relative='README.md',staged=str(support),sha256=sha(support))]);path=work/'install.json';path.write_text(json.dumps(plan))
+ update_work=cache/'self-update/test';update_work.mkdir(parents=True,exist_ok=True);log=update_work/'install.log'
+ plan=dict(restart=restart,executable=str(exe),staged=str(stage),previous=str(previous),ready=str(ready),log=str(log),original_sha256=original,new_sha256=sha(stage),parent=99999999,assets=[dict(relative='README.md',staged=str(support),sha256=sha(support))]);path=work/'install.json';path.write_text(json.dumps(plan))
  env=os.environ.copy();env.update(XDG_CACHE_HOME=str(work/'cache'),XDG_CONFIG_HOME=str(work/'config'),XDG_DATA_HOME=str(work/'data'),WEBKIT_DISABLE_DMABUF_RENDERER='1',LIBGL_ALWAYS_SOFTWARE='1')
  helper=subprocess.Popen([str(binary),'--apply-desktop-update',str(path)],env=env,stdout=open(work/'process.log','w'),stderr=subprocess.STDOUT)
  try:
@@ -30,6 +31,15 @@ for fail in [False,True]:
    assert result!=0;assert sha(exe)==original;assert readme.read_text()=='Original release documentation';assert not previous.exists();print('Updater failure: launch error restored original executable and support files.',flush=True)
   else:
    assert result==0,(result,(work/'process.log').read_text());assert ready.exists();assert sha(exe)==plan['new_sha256'];assert sha(previous)==original;assert readme.read_text()=='Updated release documentation';print('Updater success: replaced executable and docs, relaunched actual Tauri UI, received frontend-ready acknowledgement; previous executable retained.',flush=True)
+  report=json.loads((cache/'self-update/last-result.json').read_text());assert report['success']==(not fail);assert report['previous_intact']==fail
+  assert report['executable']==str(exe);assert report['detail']
+  if not restart:
+   time.sleep(2)
+   for proc in Path('/proc').iterdir():
+    if not proc.name.isdigit():continue
+    try:assert (proc/'cmdline').read_bytes().split(b'\0')[0]!=str(exe).encode(), 'Update on exit left the UI running'
+    except OSError:pass
+   print('Update on exit: hidden startup check completed and no application process remains; result persisted.',flush=True)
   assert (work/'native-settings.json').read_text()=='Personal preferences must stay unchanged'
  finally:
   cleanup(exe)

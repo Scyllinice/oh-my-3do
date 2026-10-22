@@ -71,7 +71,8 @@ Hold **P** for 750 ms to open Help. The button stays visible beneath the game li
 
 ## Desktop library and USB copying
 
-Actual 1280×900 captures of the Tauri desktop app v1.0.1. The Library uses real covers;
+Actual 1280×900 captures of the Tauri desktop app: v1.0.2 for the update screens,
+v1.0.1 for the other desktop examples. The Library uses real covers;
 the library, transfer and save screens use disposable test fixtures.
 
 ![Tauri Library with real game covers](images/desktop-library.png)
@@ -98,7 +99,11 @@ Choose Light, Dark, or System under **Settings & tools → Appearance**.
 
 ## Desktop updates
 
-![Boot-only update offer with verified download and installation, without desktop update information](images/desktop-updates.png)
+![Installed desktop and menu versions, with a boot ISO offer for a separate drive](images/desktop-updates.png)
+
+![Dismissible update notice above the library, without opening another window](images/desktop-update-notice.png)
+
+![Persistent update failure details after a forced launch error restored the previous executable](images/desktop-update-recovery.png)
 
 ## Desktop slot search
 

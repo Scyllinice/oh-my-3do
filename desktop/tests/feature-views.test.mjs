@@ -66,3 +66,78 @@ test('update cards show independent versions and only relevant release notes',()
  state.updates.desktop=true;html=render();assert.ok(html.includes('desktop-v3.4.0'));assert.ok(html.includes('menu-v1.2.0'));
  state.updates.desktop=false;state.updates.targets=[];html=render();assert.ok(html.includes('up to date'));assert.ok(!html.includes('Release notes'));
 });
+
+test('update notices are dismissible, optional and never create a modal',()=>{
+ const state={prefs:{},updates:{desktop:true,desktop_release:{tag:'desktop-v1.0.3'},menu_release:{tag:'menu-v1.0.1'},targets:[]}};
+ const render=view('updateNotice',{state});
+ assert.ok(render().includes('A desktop update is available.'));assert.ok(!render().includes('<dialog'));
+ state.noticeDismissed=JSON.stringify(['desktop-v1.0.3',[],'menu-v1.0.1']);assert.equal(render(),'');
+ state.updates.desktop_release.tag='desktop-v1.0.4';assert.ok(render().includes('Review updates'));
+ state.prefs.hide_update_notifications=true;assert.equal(render(),'');
+ state.pendingUpdate={version:'1.0.4<test>'};assert.ok(render().includes('1.0.4&lt;test&gt;'));
+ state.updateReport={success:false,previous_intact:false};assert.ok(render().includes('Recovery needs attention'));
+ state.reportDismissed=true;state.pendingUpdate=null;assert.equal(render(),'');
+});
+
+test('installed version labels never reuse a stale or unrecognized menu version',()=>{
+ const state={version:'1.0.2',prefs:{library:'/pc',destination:'/card',browser_drives:[]},installedMenu:{installed:true,version:'1.0.1'}};
+ const render=view('installedVersionsView',{state,versionRoot:()=>'/card',displayPath,option:(v,label)=>`<option>${e(label)}</option>`});
+ assert.ok(render().includes('v1.0.2'));assert.ok(render().includes('v1.0.1'));
+ state.installedMenu={installed:true,version:null};assert.ok(render().includes('Version unknown'));assert.ok(!render().includes('v1.0.1'));
+ state.installedMenu={installed:false};assert.ok(render().includes('Not installed'));
+ state.installedMenu={error:'<unplugged>'};assert.ok(render().includes('Drive unavailable'));assert.ok(render().includes('&lt;unplugged&gt;'));
+});
+
+test('update recovery text distinguishes intact executables from unconfirmed recovery',()=>{
+ const state={updateReport:{success:false,previous_intact:true,detail:'Error <details>',log:'/log'}};
+ const render=view('updateResultView',{state});assert.ok(render().includes('previous version is intact'));assert.ok(render().includes('Error &lt;details&gt;'));
+ state.updateReport.previous_intact=false;assert.ok(render().includes('Recovery could not be confirmed'));assert.ok(!render().includes('version is intact'));
+ state.updateReport.success=true;assert.ok(render().includes('startup check'));
+});
+
+test('automatic update checks leave the active page and dialogs alone',async()=>{
+ const line=source.split('\n').find(l=>l.startsWith('async function checkUpdates('));
+ const state={page:'saves'};let refreshed=0,notices=0;
+ const check=runInNewContext(`${line};checkUpdates`,{state,versionRoot:()=>'/card',call:async()=>({desktop:true,targets:[]}),refreshInstalledVersions:async()=>{refreshed++;},renderUpdateNotice:()=>{notices++;},render:()=>{throw Error('Active editor must not be rerendered');},dialog:()=>{throw Error('No modal');},toast:()=>{throw Error('No toast for an available update');},recordActivity:()=>{}});
+ await check(true);assert.equal(state.page,'saves');assert.equal(refreshed,1);assert.equal(notices,1);assert.equal(state.updates.desktop,true);
+});
+
+test('scheduling an update preserves open edits and does not quit',async()=>{
+ const line=source.split('\n').find(l=>l.startsWith('async function prepareDesktopUpdate('));
+ const state={updates:{desktop_release:{tag:'desktop-v1.0.3'}},backup:{dirty:true}};const calls=[];
+ const prepare=runInNewContext(`${line};prepareDesktopUpdate`,{state,prepareClose:()=>{throw Error('Downloading must not close editors');},confirmAction:async()=>true,call:async(action,args)=>{calls.push([action,args.on_exit]);return {version:'1.0.3'};},closeDialog:()=>{},render:()=>{},toast:()=>{}});
+ await prepare(true);assert.deepEqual(calls,[['self_update',true]]);assert.equal(state.pendingUpdate.version,'1.0.3');assert.equal(state.backup.dirty,true);
+});
+
+test('local desktop-only offers render without menu metadata and remain explicit about the source',()=>{
+ const state={prefs:{developer_mode:true},updates:{local:true,desktop:true,desktop_release:{tag:'desktop-v1.0.2',local:true,notes:'Directory: <build>'},menu_release:null,targets:[],warnings:[]}};
+ const html=view('updateCards',{state})();
+ assert.ok(html.includes('verified local package'));assert.ok(html.includes('Local build'));assert.ok(html.includes('&lt;build&gt;'));assert.ok(!html.includes('GitHub'));
+ assert.ok(view('updateNotice',{state})().includes('Local build: A desktop update is available.'));
+ state.updates=null;assert.ok(view('updateCards',{state})().includes('local build directory'));
+});
+test('developer settings expose the source directory safely and local checks stay enabled offline',()=>{
+ const state={prefs:{developer_mode:true,developer_updates_directory:'C:\\<build>',offline:true}};
+ const html=view('developerSettingsView',{state,checkbox:()=>'<input type="checkbox" checked>'})();
+ assert.ok(html.includes('C:\\&lt;build&gt;'));assert.ok(html.includes('same version'));assert.ok(html.includes('never fall back to GitHub'));
+ const render=view('updatesView',{state,heading:(title,note,actions)=>e(note)+actions,installedVersionsView:()=>'',updateResultView:()=>'',pendingUpdateView:()=>'',updateCards:()=>''});
+ assert.ok(!render().includes('disabled'));assert.ok(render().includes('local builds from'));
+ state.prefs.developer_mode=false;assert.ok(render().includes('disabled'));
+});
+
+test('boot updates keep the Updates page open for the other destination',async()=>{
+ const line=source.split('\n').find(l=>l.startsWith('async function installBootUpdate('));
+ const state={page:'library',updates:{menu_release:{tag:'menu-v1.0.2'},targets:[{root:'/library'},{root:'/card'}]}};
+ let selected,closed=0;const rendered=[];
+ const install=runInNewContext(`${line};installBootUpdate`,{state,displayPath,inspectWriteDrive:async root=>({root,token:'identity'}),confirmAction:async()=>true,call:async(action,args)=>{assert.equal(action,'boot_update');selected=args.root;},closeDialog:()=>{closed++;},render:()=>rendered.push(state.page),checkUpdates:async()=>{assert.equal(state.page,'updates');state.updates.targets=state.updates.targets.filter(t=>t.root!==selected);},toast:()=>{}});
+ await install({dataset:{root:'/library'}});
+ assert.equal(closed,1);assert.deepEqual(rendered,['updates']);assert.deepEqual(state.updates.targets,[{root:'/card'}]);
+ await install({dataset:{root:'/card'}});
+ assert.equal(state.page,'updates');assert.equal(state.updates.targets.length,0);
+});
+test('failed boot updates leave the current page and update offers available',async()=>{
+ const line=source.split('\n').find(l=>l.startsWith('async function installBootUpdate('));
+ const state={page:'library',updates:{menu_release:{tag:'menu-v1.0.2'},targets:[{root:'/card'}]}};
+ const install=runInNewContext(`${line};installBootUpdate`,{state,displayPath,inspectWriteDrive:async root=>({root,token:'identity'}),confirmAction:async()=>true,call:async()=>{throw Error('Write failed');},closeDialog:()=>{throw Error('Must keep failure visible');},render:()=>{throw Error('Must keep current page');}});
+ await assert.rejects(install({dataset:{root:'/card'}}),/Write failed/);assert.equal(state.page,'library');assert.equal(state.updates.targets.length,1);
+});
