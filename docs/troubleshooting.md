@@ -1,64 +1,63 @@
-# Diagnostics and recovery
+# Troubleshooting
 
-Use **L+R → Diagnostics** to inspect the connection and last media operation.
-Support-file paths below are relative to `.ohmy3do/` at the USB root.
+## Missing support files or backups folder
 
-L+R → Diagnostics has five pages (Left/Right): reported identity/revision and
-raw `93` reply; active settings and session results; XBUS replies, command
-count, last fault, timeout and navigation state; a preview loading breakdown;
-and the last requested USB filename with media index counts. Use the preview
-page after a slow preview to distinguish reading from checks, folder restoration
-and audio setup. The filename remains visible after a timeout, when export is
-unavailable. Viewing diagnostics sends no
-commands and remains available after a transport failure. USB write-check
-results appear only after the automatic check has run.
+In the desktop app, choose **Drive setup → Repair installed support** for the
+drive containing `boot.iso`. Saves belong in `.ohmy3do/saves/`, not `/saves`.
+Use **Check drive** afterward for any remaining problems.
 
-After a failed folder restoration, **B** attempts to return to the remembered
-USB root if the ODE is still responding with complete replies. Recovery walks
-fresh parent entries, selects the original storage volume, and checks two fresh
-root listings against the root recorded earlier in this session. It resumes
-browsing only when those checks pass. Covers, previews and automatic position
-saving remain off until restart; settings on USB are unchanged. A timeout,
-partial exchange, unknown root or failed recovery requires a console power cycle.
+## Covers, previews or descriptions do not appear
 
-To test this on a console without provoking a crash, enter a nested game folder,
-open **L+R → Diagnostics**, and press **X: Test return**. This runs the same recovery
-path and should return to the USB root with `MEDIA OFF`. Check that folders and
-Back work, then restart to re-enable media. This validates the recovery path on
-your ODE, but cannot prove recovery from a genuinely hung firmware. Host tests
-inject rejected and stuck navigation, wrong roots, malformed replies and I/O
-failures, using the reference firmware's directory implementation as well as
-the production menu controller.
+1. Check **Tools → Settings** for Show covers and Video previews.
+2. In the desktop app, prepare missing media in the PC library.
+3. View the console drive and use **Update media & information…**.
+4. Run **Check drive**, then safely eject and cold boot the console.
 
-**C** exports a verified `.ohmy3do/diagnostics.txt`. The report includes
-the raw identity reply, command/reply and retained fault, active settings, queue
-state, save results, and position/history results. It snapshots these values
-before export I/O changes the bus counters. Export is unavailable after a
-transport timeout or failed directory restoration, with startup bypass, or at
-the virtual volume selector; viewing the screens still works. Result codes are
-`1` for success, `0` for not attempted, and `-1` for failure. Export replaces
-the previous report. It is padded to a fixed 4 KiB, so blank lines at the end
-are expected.
+After manual file changes, rebuild the indexes too. See the [media guide](media-guide.md).
 
-`LOCODE 1.1.0` matches the reference source but is hard-coded there, along with
-boot flags. It does not identify the exact firmware binary, board or flash size.
-USB file operations are gated to `LOCODE`; that gate is not proof that every
-binary using the name behaves identically. Hold X at boot for recovery without
-these optional file operations. No firmware dumping or flashing is performed.
+## Folder navigation fails
 
-The reference firmware opens files with read/write access and creates missing
-files even on reads. Reads can misreport EOF and writes can misreport short
-writes. Text buffers are fully cleared before reading; binary inputs are bounded
-and checksummed. Verified writes poison every requested readback byte with the
-complement of its expected value before comparing actual data. No unsupported
-create/seek/truncate/rename commands are used. Read-only USB storage can reject
-these operations. All XBUS requests have a three-second timeout; a partial FIFO
-exchange requires console restart rather than blind retries.
+Leave **Folder workaround** on **Auto** and keep files named
+`Oh My 3DO - Folder Navigation Helper (Keep).iso`. If the menu says
+**No safe folder workaround here**, repair the drive with desktop **Drive setup**.
 
-Other limits: 2,048 entries per directory, 32 navigation levels, ASCII natural
-sorting/case folding, and `?` display for unsupported characters. Queue paths
-are bounded. No in-game overlay, automatic return-to-menu, NVRAM
-formatting, defragmentation, save deletion or Unicode collation is provided.
-Image formats visible to the browser depend on the installed firmware.
+If a failed media load leaves the menu in the wrong folder, use **B: Return to
+library** when offered. Successful recovery disables media and position saving
+until restart; it does not change settings on the drive. If recovery fails or
+the ODE times out, power-cycle the console.
+
+For startup problems, **hold X while booting** to bypass optional USB settings
+and media. Check the SD card, reader and any extender if the console does not
+recognize the disc at all.
+
+## Restore failed
+
+Keep the recovery backup. Do not assume the selected save was restored.
+Copy the slot and recovery archives to a PC before making further changes.
+Check the drive and available console save space, and record the diagnostics
+before retrying. See the [Save Manager guide](saves.md).
+
+## Safely eject failed
+
+Close files and other programs using the drive, then try the operating system's
+eject controls. Some readers do not support ejecting one card independently.
+Keep the app and its cache off the drive being removed.
+
+## Collect diagnostics
+
+Open **L+R → Diagnostics** on the console. Use Left/Right to view the connection,
+settings and last media operation. After a failure, note the last requested
+filename and fault message or take a photo.
+
+Press **C** to export `.ohmy3do/diagnostics.txt` when export is available. A hung
+connection may prevent export even though the diagnostics screen still works.
+
+In the desktop app, **Drive setup → Export support report…** combines drive
+checks, console diagnostics and recent app activity. Review the report before
+sharing: it includes paths, but no game or save contents.
+
+For protocol and firmware details, see the [firmware reference](../firmware/README.md).
+For builds and test procedures, see [building](building.md) and
+[emulator testing](emulator-and-bench.md).
 
 [Project overview](../README.md)

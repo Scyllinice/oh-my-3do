@@ -17,7 +17,7 @@ that menu release.
 ## Build and stage
 
 Run the relevant checks from [the build guide](building.md) and
-[desktop guide](../desktop/README.md#development). Finish and commit
+[desktop guide](desktop-development.md). Finish and commit
 changes before preparing published assets; use that commit as the package revision.
 
 Inspect versions and expected assets without building or writing anything:
@@ -37,14 +37,14 @@ python3 tools/package-media-tools.py --require-native
 ```
 
 The media package requires the native Windows/Linux codec and preview encoder
-libraries; build these as described in the [desktop guide](../desktop/README.md#development).
+libraries; build these as described in the [desktop guide](desktop-development.md).
 `iso/ohmy3do.ini` must contain the source defaults for publication. Menu builds
 preserve edits to this generated file, so check it before staging.
 
 For a desktop release, build the desired platforms, package each executable with
 `tools/package-desktop.py --revision COMMIT --platform PLATFORM BINARY`, then
 create its installer with `tools/package-installers.py`. The
-[desktop guide](../desktop/README.md#development) has the container commands
+[desktop guide](desktop-development.md) has the container commands
 and prerequisites. Menu images do not need rebuilding for a desktop-only release.
 
 Stage exactly one stream:

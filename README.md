@@ -23,21 +23,14 @@ Get the menu/support files and desktop app from [Releases](https://github.com/Sc
 | `media-tools.zip` | Optional Python command-line tools |
 | `menu-demo.iso` | Offline interface demo; does not launch games |
 
-1. Back up the drive's existing `boot.iso`, then replace it with the download.
-2. On a fresh drive, create `.ohmy3do/` and copy the supplied `ohmy3do.ini` into it.
-   Preserve an existing INI when updating. Games can stay in their current folders.
-3. Disconnect the prepared drive from the PC, install it with the console powered
-   off, then cold boot the console.
+1. Install the desktop app and use **Drive setup** to prepare your USB/SD drive.
+   No games need to be copied for initial setup.
+2. Add games through the Library and choose **Copy selected to USB…**.
+3. Safely eject, install the drive with console power off, and cold boot.
 
-The optional desktop app runs without Python or Docker. It can organize discs,
-prepare covers and previews, edit console settings and save backups, and prepare a USB drive.
-Browse PC and drive libraries, copy selected games, or remove titles after a
-file review.
-It also manages game descriptions and metadata, with bulk editing, portable
-custom-edit backups and a review for unmatched games.
-It also offers verified updates for the app and `boot.iso`.
-See [installation and drive layout](docs/installation.md) or the
-[desktop guide](desktop/README.md) for the full workflow.
+The desktop app also manages covers, previews, descriptions, console settings,
+save backups and updates. See [drive setup](docs/installation.md) for manual
+installation, or the [desktop guide](desktop/README.md) for app instructions.
 
 ## Basic controls
 

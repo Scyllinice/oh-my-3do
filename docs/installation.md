@@ -1,119 +1,74 @@
-# Installation and support files
+# Set up a console drive
 
-Menu and desktop releases have independent versions. In [Releases](https://github.com/Scyllinice/oh-my-3do/releases), choose `menu-v…` for the boot ISO and support/media tools, or `desktop-v…` for desktop installers and portable apps.
+Download from [Releases](https://github.com/Scyllinice/oh-my-3do/releases).
+Choose a **menu** release for `boot.iso` and support tools, and a **desktop**
+release for the PC app. Their versions are independent.
 
 ## Install
 
-Download `boot.iso` from the latest stable **menu** release. Back up the
-existing `boot.iso` on the USB drive, replace it with the download, and cold
-boot the console. Keep games in their existing folders.
+The desktop app is the easiest way to prepare a fresh USB/SD drive:
 
-The [v1.0.0 release](https://github.com/Scyllinice/oh-my-3do/releases/tag/v1.0.0)
-contains the menu, Windows and Linux desktop apps, and portable media tools.
+1. Open **Drive setup** and choose the drive root.
+2. Choose **Download released menu**, **Use library boot.iso**, or **Choose boot.iso…**.
+3. Wait for completion. The app installs the menu and its required support files;
+   no games need to be copied.
+4. Safely eject, install the drive with the console powered off, and cold boot.
 
-Keep existing settings when upgrading. Favorites, covers, previews, and save
-backups are optional.
+If `boot.iso` is already installed, **Repair installed support** adds missing
+support files while keeping settings, media and save backups.
 
-The release also includes `menu-demo.iso`, an offline interface demo. Copy it to
-the USB drive as `boot.iso` to preview the layout without sending ODE commands.
-It does not launch games. Stock emulators may run the demo but lack the vendor
-commands needed by the normal browser.
+To add games, select them in the desktop Library and choose **Copy selected to
+USB…**. Review the destination and space needed, then copy. Games already on the
+drive remain available. See the [desktop guide](../desktop/README.md).
 
 ## Support files
 
-Keep `boot.iso` at the USB root. Menu-owned files live under `.ohmy3do/`:
-`ohmy3do.ini`, favorites, recent history, saved position, diagnostics, search
-index, covers, previews, and NVRAM backups. Databases, transaction journals, and
-ignored CUE files also live there. Game paths stay relative to the USB volume.
-Paths below are relative to `.ohmy3do/` unless shown as full USB paths.
+Keep `boot.iso` at the drive root. Settings, artwork, search indexes and backups
+live under `.ohmy3do/`; leave that folder in place. The saves folder is
+`.ohmy3do/saves/`, not `/saves`.
 
-On a fresh drive, create `.ohmy3do/` at the USB root and copy `ohmy3do.ini` from
-the media-tools ZIP into it; the desktop app does this when it first imports
-into a library. When `.ohmy3do/ohmy3do.ini` cannot be opened, the menu reports
-it and uses default settings.
-
-The menu and tools read support files from `.ohmy3do/`. Game files stay in
-their category, region and game folders.
-
-The optional `save-cheats.json` source and compact `save-cheats.3db` database
-also live in `.ohmy3do/`. Desktop setup and USB preparation install them when
-missing; use **Settings & tools → Open database editor…** to edit and install
-changes independently of the boot ISO. See the [database guide](save-cheats.md).
+Leave `Oh My 3DO - Folder Navigation Helper (Keep).iso` files in place too.
+They are hidden in the console menu and help folder navigation work reliably.
+Drive setup repairs them if needed.
 
 ## PC-assisted setup
 
-The [desktop app](../desktop/README.md) can prepare a drive **without copying a
-library or adding any games**:
+A separate PC library is optional. Choose its folder in the desktop app, then
+use **Settings & tools → Set up a PC staging library** before importing games.
+Use **Add discs** to import, and copy only the games you want on the console.
 
-1. Open **Drive setup** and select the USB drive root as **USB / SD destination**.
-2. Choose **Use library
-   boot.iso**, **Choose boot.iso…** for a local download/test build, or
-   **Download released menu**. Only the download option needs internet access.
-3. Wait for verification. The drive now has `boot.iso`, initial settings,
-   `.ohmy3do/saves/`, the cheat database, artwork/preview folders, and initial
-   search/catalog support. You can boot the menu and use Save Manager with no
-   games installed.
-
-If the drive already has `boot.iso`, **Repair installed support** completes
-the layout without downloading an image or copying games. Empty files left by
-firmware probes are initialized. The save catalog is refreshed from existing backups. Existing nonempty settings,
-Find indexes, save
-backups, custom cheat definitions and media are preserved. Installations have
-an undo journal. Paths are under `.ohmy3do/`; the backup directory is
-`.ohmy3do/saves/`, not a top-level `/saves` folder.
-
-A staging library remains optional: under **Settings & tools**, use **Set up a PC staging library**, choose its folder, and download the latest stable menu there.
-In **Library**, use **Add discs** to import games. Select the game tiles you
-want (or filter by title, category or region and **Select all shown**), then
-choose **Copy selected to USB…**. In the dialog, choose the USB destination,
-**Review copy**, and **Copy to USB**. The review breaks down games, covers,
-previews and support files, distinguishes reviewed bytes from bytes to copy,
-and shows free space now and estimated free space after copying. It reserves
-working space for filesystem allocation and temporary/support files. An
-insufficient-space review disables copying; free space is checked again before
-the copy starts. Each game folder
-includes all its discs and referenced CUE tracks, with covers/previews copied
-automatically. Games already on the USB remain available when unselected; the
-menu indexes retain them. Selecting all library tiles copies the full library.
-Drive-only setup and repair remain under **Drive setup**. The app needs neither
-Python nor Docker at runtime.
+Use **Update media & information…** while viewing a console drive to refresh its
+covers, previews and descriptions without copying game discs again.
 
 ## Check a prepared drive
 
-In **Drive setup**, select the destination and choose **Check drive**. This is
-read only: it checks the boot image's volume header and size, settings,
-categories, game/track paths, search indexes, navigation helpers, save archives
-and their catalog, the cheat database, and indexed covers/previews. Each failed
-check includes a suggested fix; repair remains a separate action. Missing
-optional media is a warning when that media is enabled in console settings.
+Choose **Drive setup → Check drive** for a report of missing files, stale indexes
+and media problems. Follow its suggested fixes. The check does not change files
+or replace a console test.
 
-The report is a snapshot. Run it again after changing the drive. It does not
-boot the console, check firmware behavior, or checksum entire game images.
-Safely eject the drive after preparing it and install it with console power off.
-
-Use **Export support report…** on the same page to save the app version,
-platform, a fresh readiness report, console-exported `.ohmy3do/diagnostics.txt`
-(if present), and recent desktop activity in one text file. Paths and diagnostic
-text are included, so review the file before sharing. Save/game contents are
-excluded. Export does not upload anything or replace the console diagnostics.
+**Export support report…** saves the report, any console diagnostics and recent
+app activity. Review it before sharing: it includes file paths, but no game or
+save contents.
 
 ## Keeping the app and menu current
 
-The desktop app checks GitHub's latest stable release at startup. **Updates**
-can check manually. **Update and restart** downloads the desktop package,
-verifies the published SHA-256 checksum, replaces the app after it exits and
-relaunches it. Settings and game/save files stay in place. A failed launch restores
-the previous executable and program support files. The portable app folder must
-be writable.
+The desktop app's **Updates** page offers desktop and boot ISO updates separately.
+Choose **Update and restart** or **Update on exit** for the app, and update each
+library or drive that needs a new boot ISO. Existing games, saves and settings
+are preserved.
 
-Boot ISO updates are offered separately, with only relevant actions shown.
-Direct installation creates missing support files and preserves existing files,
-with an undo journal. Startup checks can be disabled; Offline mode disables
-checks and downloads. See [desktop updates](../desktop/README.md#app-and-menu-updates).
+Startup checks can be disabled in Settings. Offline mode disables GitHub
+updates; developer mode can use a local build folder instead. See
+[desktop updates](../desktop/README.md#app-and-menu-updates).
+
+To update manually, back up the existing `boot.iso` and replace it with the
+new download. Keep the existing `.ohmy3do/` folder and settings.
 
 ## Manual drive layout
 
-A minimal drive can look like this; games can also stay in other folders:
+For a basic manual installation, create `.ohmy3do/` and copy the supplied
+`ohmy3do.ini` into it. Create `.ohmy3do/saves/` before using backups.
+Games can remain in their existing folders:
 
 ```text
 USB/
@@ -122,13 +77,11 @@ USB/
     Example.iso
   .ohmy3do/
     ohmy3do.ini
-    categories.json   # Created by desktop setup; controls category visibility
     saves/
 ```
 
-Create `.ohmy3do/saves/` before using save backups. See the
-[menu guide](menu-guide.md) for controls and settings, the
-[media guide](media-guide.md) for covers and previews, and the
-[save guide](saves.md) for backup/restore instructions.
+Use desktop **Drive setup** for search, media and the complete support layout.
+The optional `menu-demo.iso` can be copied as `boot.iso` for an offline interface
+demo; it does not launch games.
 
-[Project overview](../README.md)
+[Menu guide](menu-guide.md) · [Media guide](media-guide.md) · [Save Manager](saves.md)

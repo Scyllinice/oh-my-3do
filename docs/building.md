@@ -89,7 +89,7 @@ it does not patch the original compiled Fixel menu.
 
 ## Desktop builds
 
-See the [desktop build instructions](../desktop/README.md#development)
+See the [desktop build instructions](desktop-development.md)
 for Rust requirements, native builds and Windows cross-compilation.
 
 ## Emulator captures and decoder timing
