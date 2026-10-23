@@ -19,7 +19,7 @@ body:
     id: tested
     attributes:
       label: What worked?
-      description: List what you actually tried, such as booting, browsing, previews, game launching, saves, copying, updates or ejecting.
+      description: List specific tasks that passed, such as booting, browsing, previews, game launching, saves, copying, updates or ejecting. Do not include untried features.
     validations:
       required: true
   - type: textarea

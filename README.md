@@ -64,7 +64,7 @@ boot; existing settings are preserved.
 | Command-line organization and audio bonus discs | [Library organizer](docs/library-organizer.md) |
 | Incremental media updates and USB copying | [Library maintenance](docs/library-maintenance.md) |
 | ODE errors and recovery | [Diagnostics](docs/troubleshooting.md) |
-| Tested setups and hardware quirks | [Compatibility reports](docs/compatibility.md) |
+| Tested setups and hardware quirks | [Confirmed working setups](docs/compatibility.md) |
 | Building, tests and emulator setup | [Build guide](docs/building.md) · [Emulator and timing](docs/emulator-and-bench.md) |
 | Binary media layouts | [Format reference](docs/media-format.md) |
 

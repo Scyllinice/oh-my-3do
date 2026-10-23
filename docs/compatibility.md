@@ -1,37 +1,53 @@
-# Compatibility reports
+# Confirmed working setups
 
-These are reports from setups actually used with Oh My 3DO. A working result
-covers the listed setup and tasks; untested combinations still need reports.
+This list records what was actually tried on each setup. A result applies to
+those tests, not every feature or every device with the same name.
 
-## Console hardware
+## Console setup
 
-| Setup | Reported result | Known limits or quirks |
+| Part | Recorded setup |
+| --- | --- |
+| Console | Panasonic 3DO FZ-1 |
+| ODE | Purchased from AliExpress; exact manufacturer/model unidentified |
+| Reported ODE identity | `LOCODE 1.1.0`; exact firmware build unidentified |
+| Controller | 8BitDo M30 through a BlueRetro 3DO adapter |
+| SD card | PNY Pro Elite, 512 GB |
+| USB reader | Reader supplied with a Samsung PRO Plus 512 GB microSDXC card |
+
+The PNY card and Samsung-supplied reader were used together.
+
+Confirmed during console testing:
+
+| Test | Result |
+| --- | --- |
+| Boot the menu from the prepared drive | Passed |
+| Browse folders and select games | Passed |
+| Load covers and play video previews | Passed |
+| View covers and previews full-screen | Passed |
+| Launch a game without showing its disc folder during handoff | Passed |
+| Run Diagnostics → Test return and resume browsing at the library root | Passed |
+| Use the folder-navigation workaround | Passed |
+
+Exact menu builds were not recorded for these individual hardware tests.
+They should not be read as a complete test of every feature in the latest release.
+
+**Controller quirk:** the M30/BlueRetro setup was reported to need an initial
+button press before the menu responds. Its cause remains unconfirmed.
+
+## Desktop setups
+
+| Tested setup | Confirmed working | Version information |
 | --- | --- | --- |
-| FCare/SataTo3DO ODE on the project's console | Browsing, game launching, covers, previews and return-to-library recovery tested on hardware | Reports `LOCODE 1.1.0`; exact firmware build and console model were not recorded. Keep Folder workaround on Auto and leave navigation helpers in place. |
-| 8BitDo M30 through a BlueRetro 3DO adapter | Menu use reported | An initial button press may be needed before the menu responds. The cause has not been isolated. Hold P help needs about three quarters of a second; release after help opens. |
+| Windows 11, installed app | Install, launch and uninstall | Exact Windows build and desktop version not recorded for this test |
+| Linux x64 development container | Native app interaction, local desktop update on exit, startup verification and failed-update rollback | Desktop 1.0.2 test builds; this is a container result, not a desktop-distribution report |
 
-No model-specific storage or reader compatibility list has been established yet.
-One SD extender caused an insert-disc screen during testing; its model was not
-recorded. Check the card connection and extender if a prepared drive will not boot.
-
-## Desktop app
-
-| Platform | Reported result | Scope |
-| --- | --- | --- |
-| Windows | Installer, app launch and uninstallation reported working | Exact Windows build and app version were not recorded in that report. |
-| Linux x64 | Native app interaction and updater/recovery checks passed in the development container | Desktop-distribution reports are welcome. |
-
-These initial reports were collected before detailed compatibility tracking.
-New reports should include versions and device models so the list becomes more useful.
-
-## Share a result
+## Add a tested setup
 
 Use the [compatibility report form](https://github.com/Scyllinice/oh-my-3do/issues/new?template=compatibility_report.yml).
-Include versions, hardware models, tasks tried and any settings or quirks.
-Unknown firmware details are fine; the diagnostics screen can show the reported identity.
+Include exact versions, device models, tasks that passed, and any failures or
+settings needed. A partial test is useful; leave untried features out.
 
-For a reproducible problem, use the [bug report form](https://github.com/Scyllinice/oh-my-3do/issues/new?template=bug_report.yml).
-The [troubleshooting guide](troubleshooting.md#collect-diagnostics) explains how
-to collect diagnostics or a desktop support report.
+For reproducible failures, use the [bug report form](https://github.com/Scyllinice/oh-my-3do/issues/new?template=bug_report.yml).
+See [collecting diagnostics](troubleshooting.md#collect-diagnostics) for reports or photos.
 
 [Project overview](../README.md)
