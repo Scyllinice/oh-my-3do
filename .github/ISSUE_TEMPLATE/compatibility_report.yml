@@ -1,0 +1,34 @@
+name: Compatibility report
+description: Share a working setup or a hardware-specific quirk.
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Menu and desktop versions tested
+      placeholder: "Menu 1.0.2; Desktop 1.0.2"
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Hardware and operating system
+      description: Include the console, ODE and firmware if known, controller/adapters, storage and reader models. For desktop results, include the OS and installer or portable app. List only the details relevant to your test.
+    validations:
+      required: true
+  - type: textarea
+    id: tested
+    attributes:
+      label: What worked?
+      description: List what you actually tried, such as booting, browsing, previews, game launching, saves, copying, updates or ejecting.
+    validations:
+      required: true
+  - type: textarea
+    id: quirks
+    attributes:
+      label: Problems, quirks or settings needed
+      description: Include any workarounds. For a reproducible failure, use the bug-report form as well.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Optional report or photos
+      description: Attach diagnostics, a desktop support report or photos if useful. Review personal information first; do not upload game images, personal saves or credentials.

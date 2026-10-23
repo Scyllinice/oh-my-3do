@@ -56,6 +56,10 @@ In the desktop app, **Drive setup → Export support report…** combines drive
 checks, console diagnostics and recent app activity. Review the report before
 sharing: it includes paths, but no game or save contents.
 
+Use the [bug report form](https://github.com/Scyllinice/oh-my-3do/issues/new?template=bug_report.yml)
+to share the versions, setup, steps and report or photo. Check
+[compatibility reports](compatibility.md) for known hardware quirks.
+
 For protocol and firmware details, see the [firmware reference](../firmware/README.md).
 For builds and test procedures, see [building](building.md) and
 [emulator testing](emulator-and-bench.md).

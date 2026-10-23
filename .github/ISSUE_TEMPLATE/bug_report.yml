@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a problem with the console menu or desktop app.
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where is the problem?
+      options:
+        - Console menu
+        - Desktop app
+        - Both / not sure
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Menu and desktop versions
+      description: Include both versions if the problem involves copying or updating a drive.
+      placeholder: "Menu 1.0.2; Desktop 1.0.2"
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup
+      description: For desktop issues, include the operating system and installer or portable app. For console issues, include the console, ODE/firmware, controller/adapters and USB/SD card or reader. Unknown details are fine.
+      placeholder: "Windows 11, installed app; console model, ODE, controller and storage if relevant."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What were you doing immediately before the problem? Include whether it happens every time.
+      placeholder: |
+        1.
+        2.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+      description: Include the exact error message, if any.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Support report, diagnostics or screenshots
+      description: Attach a desktop Drive setup → Export support report file, console diagnostics export, or a photo. Review paths and personal information before sharing. Do not attach game images, personal saves or credentials. Reports are optional if export is unavailable.

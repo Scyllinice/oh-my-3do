@@ -1,12 +1,16 @@
 # Contributing
 
-Build/test instructions are in [the build guide](docs/building.md), menu usage
-is in [the menu guide](docs/menu-guide.md), and hardware limits are in
-[Diagnostics](docs/troubleshooting.md). Please include the
-menu version, console model, reported ODE identity/revision, compatibility setting,
-and a small directory/file-name example when reporting a problem. Report whether
-an operation failed before launch, during a disc swap, or during USB/NVRAM I/O.
-Never upload game ISOs, personal saves, or credentials with an issue.
+Use the [issue forms](https://github.com/Scyllinice/oh-my-3do/issues/new/choose)
+for bugs and compatibility reports. Include the versions, relevant hardware or
+operating system, steps and exact error message. A diagnostics photo or desktop
+support report helps when available; see [collecting diagnostics](docs/troubleshooting.md#collect-diagnostics).
+Review reports before sharing and omit game images, personal saves and credentials.
+
+Working setups and known quirks are listed in [compatibility reports](docs/compatibility.md).
+Report only the tasks actually tested and include device models where known.
+
+Build/test instructions are in [the build guide](docs/building.md); menu usage
+is in [the menu guide](docs/menu-guide.md).
 
 Run `make test` for changes to portable logic. Use `./tools/fetch-references`,
 `make test-firmware` and `python3 tools/preview-menu.py` for navigation/UI work.
