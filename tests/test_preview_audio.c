@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static int calls,fail_at,opened,resources;
+static int calls,fail_at,opened,resources,ring,paused;
 static unsigned char pcm[32];
 static int fault(void) { return ++calls==fail_at; }
 long OpenAudioFolio(void) { if (fault()) return -1; assert(!opened);opened=1;return 0; }
@@ -14,7 +14,11 @@ long CreateSample(TagArg *tags)
     assert(tags[1].ta_Tag==AF_TAG_FRAMES && (long)tags[1].ta_Arg==32);
     assert(tags[2].ta_Tag==AF_TAG_NUMBITS && (long)tags[2].ta_Arg==8);
     assert(tags[3].ta_Tag==AF_TAG_CHANNELS && (long)tags[3].ta_Arg==1);
-    assert(tags[4].ta_Tag==AF_TAG_SAMPLE_RATE && (long)tags[4].ta_Arg==(11025L<<16) && !tags[5].ta_Tag);
+    assert(tags[4].ta_Tag==AF_TAG_SAMPLE_RATE && (long)tags[4].ta_Arg==(11025L<<16));
+    /* A ring sustains over the whole sample, so it repeats until stopped. */
+    if (ring) assert(tags[5].ta_Tag==AF_TAG_SUSTAINBEGIN && !tags[5].ta_Arg &&
+                     tags[6].ta_Tag==AF_TAG_SUSTAINEND && (long)tags[6].ta_Arg==32 && !tags[7].ta_Tag);
+    else assert(!tags[5].ta_Tag);
     if (fault()) return -1;
     resources|=2;return 1;
 }
@@ -39,6 +43,8 @@ long AttachSample(long instrument,long sample,char *hook)
     resources|=16;return 4;
 }
 long DetachSample(long item) { assert(item==4 && (resources&16));resources&=~16;return 0; }
+long PauseInstrument(long item) { assert(item==3 && !paused);paused=1;return 0; }
+long ResumeInstrument(long item) { assert(item==3 && paused);paused=0;return 0; }
 long StopInstrument(long item,TagArg *tags) { assert((item==2 || item==3) && !tags);return fault() ? -1 : 0; }
 long StartInstrument(long item,TagArg *tags)
 {
@@ -71,6 +77,13 @@ int main(void)
     assert(!preview_audio_start(&audio,pcm,32,11025));
     fail_at=calls+1;
     assert(preview_audio_restart(&audio)<0 && !resources && !opened);
-    puts("Preview audio: signed PCM, stereo routing, synchronized restart, every startup failure and borrowed-buffer cleanup passed");
+    preview_audio_close(&audio);
+    /* The streaming ring loops; pausing reaches the player only while it plays. */
+    ring=1;fail_at=0;calls=0;
+    assert(!preview_audio_start_ring(&audio,pcm,32,11025) && audio.status==1);
+    preview_audio_pause(&audio,1);assert(paused);
+    preview_audio_pause(&audio,0);assert(!paused);
+    preview_audio_close(&audio);preview_audio_pause(&audio,1);assert(!paused && !resources && !opened);
+    puts("Preview audio: looping ring and pause, signed PCM, stereo routing, synchronized restart, every startup failure and borrowed-buffer cleanup passed");
     return 0;
 }

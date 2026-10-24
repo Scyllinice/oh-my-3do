@@ -9,6 +9,7 @@
 #include "usb_art.h"
 #include "cover_cache.h"
 #include "usb_media.h"
+#include "preview_stream.h"
 #include "art_navigation.h"
 #include "save_usb.h"
 #include "nvram_io.h"
@@ -36,7 +37,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "1.0.2"
+#define MENU_VERSION "1.0.3"
 #define ROWS 10
 #define TOOL_HOME 1
 #define TOOL_SAVES 2
@@ -199,6 +200,13 @@ typedef struct Menu {
     unsigned long art_index_volume;
     LibraryMetadata metadata;
     UsbPreview preview;
+    /* An OM3DVID7 preview streams instead (stream.open). Full screen draws it
+     * straight into the back screen; sport then copies that screen into the
+     * other buffer during the vertical blank that shows it. */
+    PreviewStream stream;
+    Item sport;
+    int sport_pending;
+    unsigned long stream_shown; /* stream frames decoded when last shown */
     CCB *preview_cel;
     int preview_attempted, media_cancelled, preview_priming;
     /* Directions that cancelled a media read; the main loop still moves by
@@ -230,6 +238,8 @@ typedef struct Menu {
     /* Playback passes: light (picture side only) and full redraws, the time
      * they spend after decoding, and the longest gap between passes. */
     unsigned long preview_full_view_decodes, preview_full_view_skipped; /* while X shows it full screen */
+    unsigned long playback_static_key;
+    unsigned int playback_static_frames;
     unsigned long preview_video_draws, preview_video_ms; /* time the cel engine spends drawing the video */
     unsigned long preview_light_draws, preview_full_draws, preview_draw_ms, preview_pass_max_ms, preview_pass_at;
     int preview_result;
@@ -424,9 +434,20 @@ static const char *workaround_name(int value)
 {
     return value == MENU_WORKAROUND_AUTO ? "AUTO" : (value == MENU_WORKAROUND_ON ? "ON" : "OFF");
 }
+/* Wait until the screen copy queued after the last full-screen frame is done. */
+static void sport_wait(Menu *menu)
+{
+#ifdef OH3DO_SDK
+    if (menu->sport_pending) { WaitIO(menu->sport); menu->sport_pending=0; }
+#else
+    menu->sport_pending=0;
+#endif
+}
 static void stop_preview(Menu *menu)
 {
     menu->preview_priming=0;
+    sport_wait(menu);
+    preview_stream_close(&menu->stream);
     preview_audio_close(&menu->preview_audio);
     if (menu->preview_cel) UnloadCel(menu->preview_cel);
     menu->preview_cel = NULL;
@@ -1229,11 +1250,56 @@ static void media_placeholder(Menu *menu,int folder)
 }
 
 
+/* Count a streamed frame decoded for display, and frames passed over. */
+static void stream_shown(Menu *menu,unsigned long spent)
+{
+    unsigned long frames=menu->stream.frame;
+    if (frames==menu->stream_shown) return;
+    if (frames>menu->stream_shown+1) {
+        menu->preview_skipped+=frames-menu->stream_shown-1;
+        if (menu->full_view) menu->preview_full_view_skipped+=frames-menu->stream_shown-1;
+    }
+    if (menu->full_view) ++menu->preview_full_view_decodes;
+    menu->stream_shown=frames;
+    ++menu->preview_decodes; menu->preview_decode_ms+=spent;
+    if (spent>menu->preview_decode_max_ms) menu->preview_decode_max_ms=spent;
+}
+/* Decode the streamed preview up to the frame due, timing it per frame
+ * decoded, also apart for passes when the reader was idle throughout. */
+static int decode_stream(Menu *menu,unsigned long now,int picture,unsigned char *screen)
+{
+    PreviewStream *s=&menu->stream;
+    unsigned long started=now_ms(menu),before=s->frame,chunks=s->chunks_read,spent,frames;
+    int idle=!s->reading,result;
+    result=preview_stream_decode(s,preview_stream_due(s,now),picture,screen);
+    spent=now_ms(menu)-started; frames=s->frame-before;
+    if (frames) {
+        s->decode_ms+=spent; s->decode_frames+=frames;
+        if (idle && !s->reading && chunks==s->chunks_read) { s->idle_ms+=spent; s->idle_frames+=frames; }
+        if (picture==PREVIEW7_SCREEN) { s->full_ms+=spent; s->full_frames+=frames; }
+    }
+    return result;
+}
+/* The streamed preview in the browser's TV picture; full screen decodes in
+ * draw_full_stream. */
+static void advance_stream(Menu *menu,unsigned long now)
+{
+    unsigned long started;
+    int result;
+    if (menu->preview_priming || menu->full_view) return;
+    if (preview_stream_due(&menu->stream,now)<menu->stream.frame) { preview_stream_audio(&menu->stream,now,0); return; }
+    started=now_ms(menu);
+    result=decode_stream(menu,now,PREVIEW7_TV,NULL);
+    preview_stream_audio(&menu->stream,now,result==PREVIEW_STREAM_NOT_READY);
+    if (result<0) { stop_preview(menu); menu->preview_result=-3; return; }
+    stream_shown(menu,now_ms(menu)-started);
+}
 /* Advance the playing preview to the frame due now, looping audio with it. */
 static void advance_preview(Menu *menu,unsigned long now)
 {
     unsigned long elapsed,tick;
     unsigned int frame;
+    if (menu->stream.open) { advance_stream(menu,now); return; }
     if (menu->preview_priming || !menu->preview_cel || !menu->preview.table) return;
     elapsed=now-menu->preview_since;
     tick=(elapsed/1000)*menu->preview.fps+((elapsed%1000)*menu->preview.fps)/1000;
@@ -1528,7 +1594,7 @@ static void badge_restore(Menu *menu,size_t selected)
     osd(menu,selected);
 }
 /* What the playback overlays look like now, short of drawing them. */
-static unsigned long overlay_key(Menu *menu,const char *message)
+static unsigned long playback_overlay_key(Menu *menu,const char *message,int scrolling)
 {
     unsigned long key=2166136261UL,elapsed=menu->scroll_elapsed;
     int i;
@@ -1536,9 +1602,13 @@ static unsigned long overlay_key(Menu *menu,const char *message)
     if (message) for (c=message;*c;++c) key=(key^(unsigned char)*c)*16777619UL;
     key=(key^(unsigned long)menu->notice_active)*16777619UL;
     key=(key^(unsigned long)menu->osd_hidden)*16777619UL;
-    for (i=0;i<menu->scroll_count;++i)
+    for (i=0;scrolling && i<menu->scroll_count;++i)
         key=(key^(unsigned long)menu_scroll_offset(menu->scroll_length[i],menu->scroll_visible[i],elapsed))*16777619UL;
     return key;
+}
+static unsigned long overlay_key(Menu *menu,const char *message)
+{
+    return playback_overlay_key(menu,message,1);
 }
 /* Everything the list panel shows, so playback can tell when it is unchanged. */
 static unsigned long panel_hash(const Menu *menu,size_t selected,size_t total)
@@ -1559,11 +1629,11 @@ static unsigned long panel_hash(const Menu *menu,size_t selected,size_t total)
     for (i=0;i<2;++i) { const char *c; for (c=text[i];*c;++c) hash=(hash^(unsigned char)*c)*16777619UL; hash*=31UL; }
     return hash;
 }
-static void draw_title_card(Menu *menu,const MenuEntry *chosen,size_t total,const char *message,int scale)
+static void draw_title_card(Menu *menu,const MenuEntry *chosen,size_t total,const char *message,int scale,int title_only)
 {
     /* Title card: a lower-third band, flush with the picture's left, bottom
      * and right edges so no sliver of video shows around it. */
-    rectangle(menu,152,178,168,62,BG);
+    rectangle(menu,152,178,168,title_only ? 24 : 62,BG);
     {
         const LibraryGameInfo *info=game_info(menu,chosen);
         const char *title=NULL,*second=NULL,*third=NULL;
@@ -1590,6 +1660,7 @@ static void draw_title_card(Menu *menu,const MenuEntry *chosen,size_t total,cons
             if (!title_length) title_length=menu_title_length(title,chosen ? chosen->is_directory : 1);
             scroll_label(menu,160,181,152,title,title_length,UI_FONT_HEADING,TEXT,BG,1);
         }
+        if (title_only) return;
         if (message && *message) {
             size_t split=card_split(message,152*scale/320);
             memcpy(details,message,split<95 ? split : 95); details[split<95 ? split : 95]=0;
@@ -1811,7 +1882,7 @@ static void draw(Menu *menu)
                 osd(menu,selected);
             } else if (frame->gecko!=menu->gecko_frame) draw_channel_gecko(menu);
             if (frame->controls!=controls) browser_controls(menu,chosen,total);
-            draw_title_card(menu,chosen,total,message,scale);
+            draw_title_card(menu,chosen,total,message,scale,0);
             if (menu->alphabet_active) draw_alphabet(menu);
             browser_save(menu,frame,shell,picture,controls,selected,start,message);
             DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
@@ -1825,6 +1896,10 @@ static void draw(Menu *menu)
          * only until both buffers hold their current look. Drawing them
          * every frame would take most of a 30 fps frame. */
         unsigned long key=overlay_key(menu,message);
+        unsigned long fixed=playback_overlay_key(menu,message,0);
+        if (fixed!=menu->playback_static_key) {
+            menu->playback_static_key=fixed;menu->playback_static_frames=0;
+        }
         if (key!=menu->overlay_key) { menu->overlay_key=key; menu->overlay_frames=0; }
         if (menu->overlay_frames>=2 && menu->preview_drawn_decode==menu->preview_decodes) {
             /* The front already holds this video frame and both buffers have
@@ -1837,9 +1912,15 @@ static void draw(Menu *menu)
             ++menu->overlay_frames;
             menu->scroll_count=0;
             if (menu->view_valid && total) draw_row(menu,selected,start,selected,style,row_height);
-            osd(menu,selected);
-            draw_title_card(menu,chosen,total,message,scale);
-            badge_save(menu);
+            if (menu->playback_static_frames<2) {
+                osd(menu,selected);
+                draw_title_card(menu,chosen,total,message,scale,0);
+                badge_save(menu);
+                ++menu->playback_static_frames;
+            } else {
+                draw_title_card(menu,chosen,total,message,scale,1);
+                badge_restore(menu,selected);
+            }
             menu->overlay_key=overlay_key(menu,message);
         } else badge_restore(menu,selected);
         DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
@@ -1847,6 +1928,7 @@ static void draw(Menu *menu)
         return;
     }
 
+    menu->playback_static_frames=0;
     /* Picture: the preview or cover fills the screen behind everything else. */
     menu->scroll_count=0;
     crt_cels(menu);
@@ -1902,7 +1984,7 @@ static void draw(Menu *menu)
 
     if (!menu->review) osd(menu,selected);
 
-    draw_title_card(menu,chosen,total,message,scale);
+    draw_title_card(menu,chosen,total,message,scale,0);
     if (menu->alphabet_active) draw_alphabet(menu);
     if (frame) browser_save(menu,frame,shell,picture,controls,selected,start,message);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
@@ -2173,6 +2255,10 @@ static int read_large_cover(void *context)
 static void close_full_cover(Menu *menu)
 {
     if (!menu->full_view) return;
+    sport_wait(menu);
+    /* The TV picture missed the full-screen frames: redraw it from the map. */
+    if (menu->stream.open && menu->stream.frame && menu->full_view==2 &&
+        preview_stream_decode(&menu->stream,menu->stream.frame-1,PREVIEW7_TV,NULL)<0) stop_preview(menu);
     if (menu->full_cover) UnloadCel(menu->full_cover);
     menu->full_cover = NULL; menu->full_view = 0; menu->full_cleared = 0;
     menu->clear_frames = 2; menu->panel_frames = 0;
@@ -2213,9 +2299,52 @@ static void open_full_cover(Menu *menu)
     }
     menu->full_cover = cel; menu->full_view = 1;
 }
+/* A screen buffer's pixels (the host renderer has no bitmaps). */
+static unsigned char *screen_pixels(Menu *menu,int screen)
+{
+#ifndef UI_PREVIEW_GLASS
+    return (unsigned char *)menu->screen.sc_Bitmaps[screen]->bm_Buffer;
+#else
+    static unsigned char pixels[2][PREVIEW7_FRAME_BYTES];
+    (void)menu;
+    return pixels[screen];
+#endif
+}
+/* Full screen for a streamed preview: decoded 1:1 straight into the back
+ * screen, whatever the margin, which the video fills. Only a new frame is
+ * drawn. After the flip, the SPORT hardware copies the new screen into the
+ * other buffer in the same vertical blank, so the next frame starts from it
+ * and draws only what changed. Without the copy, each frame redraws whole. */
+static void draw_full_stream(Menu *menu)
+{
+    unsigned long now=now_ms(menu),started;
+    int back=menu->screen.sc_curScreen^1,result;
+    if (menu->full_cleared && preview_stream_due(&menu->stream,now)<menu->stream.frame) {
+        preview_stream_audio(&menu->stream,now,0);
+        return;
+    }
+    sport_wait(menu);
+    if (!menu->full_cleared) preview_stream_invalidate(&menu->stream,PREVIEW7_SCREEN);
+    started=now_ms(menu);
+    result=decode_stream(menu,now,PREVIEW7_SCREEN,screen_pixels(menu,back));
+    preview_stream_audio(&menu->stream,now,result==PREVIEW_STREAM_NOT_READY);
+    if (result<0) { close_full_cover(menu); stop_preview(menu); menu->preview_result=-3; return; }
+    stream_shown(menu,now_ms(menu)-started);
+    menu->screen.sc_curScreen=back;
+    DisplayScreen(menu->screen.sc_Screens[back],0);
+#ifdef OH3DO_SDK
+    if (menu->sport>=0 && CopyVRAMPagesDefer(menu->sport,screen_pixels(menu,back^1),screen_pixels(menu,back),
+            PREVIEW7_FRAME_BYTES/GetPageSize(MEMTYPE_VRAM),0xffffffffUL)>=0)
+        menu->sport_pending=1;
+    else
+#endif
+        preview_stream_invalidate(&menu->stream,PREVIEW7_SCREEN);
+    menu->full_cleared=1;
+}
 static void draw_full_cover(Menu *menu)
 {
     CCB copy;
+    if (menu->full_view==2 && menu->stream.open) { draw_full_stream(menu); return; }
     if (menu->full_view==2) {
         advance_preview(menu,now_ms(menu));
         if (!menu->preview_cel) { close_full_cover(menu); return; }
@@ -2376,6 +2505,18 @@ static int reclaim_preview_covers(void *context)
     if (!menu->cover_cache.clock) return 0;
     cover_cache_clear(&menu->cover_cache); return 1;
 }
+/* Play a streamed clip whose header the loader found: beside the discs only,
+ * since the reader reopens the file from the current folder on every loop. */
+static int start_stream(Menu *menu,const char *file,const char *folder)
+{
+    int result;
+    if (!menu->usb_previews.beside) return -1;
+    result=preview_stream_open(&menu->stream,&menu->ode,ode_bus_read_buffer,folder,file,menu->preview.stream_block,
+                               menu->config.preview_sound,media_cancel,menu,reclaim_preview_covers,menu);
+    usb_preview_free(&menu->preview);
+    if (result==-5) menu->media_cancelled=1;
+    return result==-4 ? USB_PREVIEW_NO_MEMORY : result;
+}
 static int read_usb_preview(void *context)
 {
     PreviewRead *read = (PreviewRead *)context;
@@ -2513,6 +2654,7 @@ static void update_preview(Menu *menu)
     menu->ode.media_folder=game ? entry->name : NULL;
     result=media_read(menu,route,menu->usb_previews.beside,read_usb_preview,&read);
     menu->ode.media_folder=NULL;
+    if (result==USB_PREVIEW_STREAM) result=start_stream(menu,file,game ? entry->name : "");
     menu->tuning=0; menu->clear_frames=2;
     menu->message=message;
     setup_started=now_ms(menu);
@@ -2520,9 +2662,12 @@ static void update_preview(Menu *menu)
     menu->preview_result=result==USB_PREVIEW_NO_MEMORY ? -4 : (result ? -1 : 1);
     if (menu->media_cancelled && result!=-2) { usb_preview_free(&menu->preview); result=-1; menu->preview_result=-5; }
     if (!result) {
-        menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,menu->preview.frame_buffer);
+        /* A stream shows its 160x120 TV picture in the browser. */
+        unsigned char *pixels=menu->stream.open ? menu->stream.thumb : menu->preview.frame_buffer;
+        unsigned int width=menu->stream.open ? 160 : menu->preview.width,height=menu->stream.open ? 120 : menu->preview.height;
+        menu->preview_cel=CreateCel(width,height,16,CREATECEL_UNCODED,pixels);
         if (!menu->preview_cel && reclaim_preview_covers(menu))
-            menu->preview_cel=CreateCel(menu->preview.width,menu->preview.height,16,CREATECEL_UNCODED,menu->preview.frame_buffer);
+            menu->preview_cel=CreateCel(width,height,16,CREATECEL_UNCODED,pixels);
         if (menu->preview_cel) {
             /* The loader has already decoded frame 0 into the cel's pixels. */
             menu->preview_cel->ccb_Flags |= CCB_LAST|CCB_BGND;
@@ -2531,15 +2676,23 @@ static void update_preview(Menu *menu)
             menu->preview_frames=menu->preview.frames; menu->preview_fps=menu->preview.fps;
             menu->preview_chunks=menu->preview.chunk_count;
             menu->preview_source_frames=menu->preview.source_frames; menu->preview_vram_bytes=menu->preview.vram_bytes;
+            if (menu->stream.open) {
+                unsigned int i;
+                menu->preview_frames=menu->preview_source_frames=menu->stream.header.frames;
+                menu->preview_fps=PREVIEW7_FPS; menu->preview_chunks=menu->stream.slots;
+                for (i=0;i<menu->stream.slots;++i) if (menu->stream.slot_vram[i]) menu->preview_vram_bytes+=menu->stream.slot_bytes;
+            }
             /* Prepare both list panels with frame zero before starting either
              * timeline. Playback then begins on the light picture-only path. */
             menu->preview_priming=1; menu->panel_frames=0;
             draw(menu); draw(menu);
             menu->preview_priming=0;
-            if (menu->config.preview_sound && menu->preview.audio)
+            if (menu->config.preview_sound && menu->preview.audio && !menu->stream.open)
                 preview_audio_start(&menu->preview_audio,menu->preview.audio,menu->preview.audio_frames,menu->preview.audio_rate);
+            menu->stream_shown=menu->stream.frame;
             menu->preview_since=now_ms(menu);
-        } else { usb_preview_free(&menu->preview); menu->preview_result=-4; }
+            preview_stream_play(&menu->stream,menu->preview_since);
+        } else { preview_stream_close(&menu->stream); usb_preview_free(&menu->preview); menu->preview_result=-4; }
     }
     menu->preview_setup_ms=now_ms(menu)-setup_started;
     menu->preview_load_ms=now_ms(menu)-started;
@@ -3218,6 +3371,17 @@ static void export_diagnostics(Menu *menu)
     format(line,"preview_video_draws=%lu\npreview_video_ms=%lu\n",menu->preview_video_draws,menu->preview_video_ms); strcat(data,line);
     format(line,"preview_light_draws=%lu\npreview_full_draws=%lu\npreview_draw_ms=%lu\npreview_pass_max_ms=%lu\n",menu->preview_light_draws,menu->preview_full_draws,menu->preview_draw_ms,menu->preview_pass_max_ms); strcat(data,line);
     format(line,"preview_tuning_draws=%lu\n",menu->tuning_draws); strcat(data,line);
+    format(line,"stream_chunks=%lu\nstream_read_ms=%lu\nstream_read_max_ms=%lu\nstream_stalls=%lu\nstream_stall_ms=%lu\n",
+           menu->stream.chunks_read,menu->stream.read_ms,menu->stream.read_max_ms,menu->stream.stalls,menu->stream.stall_ms); strcat(data,line);
+    format(line,"stream_slots=%u\nstream_error=%d\nstream_reader_error=%08lx\n",menu->stream.slots,menu->stream.error,
+           (unsigned long)menu->stream.reader_error_code&0xffffffffUL); strcat(data,line);
+    format(line,"stream_decode_ms=%lu\nstream_decode_frames=%lu\nstream_idle_ms=%lu\nstream_idle_frames=%lu\n",
+           menu->stream.decode_ms,menu->stream.decode_frames,menu->stream.idle_ms,menu->stream.idle_frames); strcat(data,line);
+    format(line,"stream_full_ms=%lu\nstream_full_frames=%lu\n",menu->stream.full_ms,menu->stream.full_frames); strcat(data,line);
+    for (i=0;i<4 && i<menu->stream.stalls;++i) {
+        format(line,"stream_stall%d=%lu %lu %08lx %lu\n",(int)i,menu->stream.stall_log[i][0],menu->stream.stall_log[i][1],
+               menu->stream.stall_log[i][2],menu->stream.stall_log[i][3]); strcat(data,line);
+    }
     format(line,"preview_free_bytes=%lu\npreview_largest_bytes=%lu\n",menu->preview_free_bytes,menu->preview_largest_bytes); strcat(data,line);
     format(line,"preview_vram_free_bytes=%lu\npreview_vram_largest_bytes=%lu\n",menu->preview_vram_free_bytes,menu->preview_vram_largest_bytes); strcat(data,line);
     memory_available(0,&free_bytes,&largest);
@@ -4947,6 +5111,9 @@ int main(int argc, char **argv)
     if (menu.vbl < 0) { DeleteBasicDisplay(&menu.screen); KillControlPad(); return 1; }
     menu.clock = GetTimerIOReq();
     if (menu.clock < 0) { DeleteIOReq(menu.vbl); DeleteBasicDisplay(&menu.screen); KillControlPad(); return 1; }
+    /* Copies between the screen buffers for full-screen streamed video; without
+     * one, each such frame is drawn whole. */
+    menu.sport = GetVRAMIOReq();
     {
         Font *font = GetCurrentFont();
         if (font && font->font_CCB) { menu.font_ccb = *font->font_CCB; menu.have_font = 1; }

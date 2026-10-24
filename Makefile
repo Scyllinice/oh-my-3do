@@ -2,7 +2,7 @@ CC = cc
 CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 
 .PHONY: test test-firmware test-covers test-sdk test-media clean
-test: build/test_game_info build/test_menu_help build/test_menu_categories build/test_save_catalog build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
+test: build/test_game_info build/test_menu_help build/test_menu_categories build/test_save_catalog build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names build/test_preview7_encoder build/test_preview_stream
 	python3 tools/build-save-names.py --check
 	./build/test_game_info tests/fixtures/game-info.txt
 	./build/test_menu_help
@@ -44,6 +44,10 @@ test: build/test_game_info build/test_menu_help build/test_menu_categories build
 	./build/test_cover_cache
 	./build/test_ui_font
 	./build/test_preview_audio
+	./build/test_preview7_encoder build/test-preview7.3dv
+	./build/test_preview_stream build/test-preview7.3dv
+	./build/test_usb_media streamvideo build/test-preview7.3dv
+	./build/test_usb_media_sdk streamvideo build/test-preview7.3dv
 	./build/test_usb_art
 
 test-covers: test-cover-resize build/test_usb_media
@@ -73,7 +77,7 @@ build/test_usb_art: src/usb_art.c src/usb_art.h src/menu_config.h src/ode.h src/
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c tests/test_usb_art.c $(LDFLAGS) -o $@
 
 clean:
-	rm -f build/test_game_info build/test_menu_help build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
+	rm -f build/test_preview7_encoder build/test_preview_stream build/test-preview7.3dv build/test_game_info build/test_menu_help build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
 
 build/test_saves: src/save_archive.c src/save_archive.h src/save_usb.c src/save_usb.h src/usb_art.c src/usb_file.h src/menu_ui.c src/menu_categories.c src/menu_ui.h src/cover_catalog.c src/menu_settings.c src/menu_settings.h src/menu_config.c tests/test_saves.c
 	mkdir -p build
@@ -92,6 +96,7 @@ test-sdk:
 	python3 tests/test_stack_usage.py
 	python3 tests/test_runtime.py
 	python3 tests/test_preview_asm.py
+	python3 tests/test_preview_v7.py
 
 build/test_library_features: src/library_features.c src/library_features.h src/ode.c src/ode.h src/menu_ui.c src/menu_categories.c tests/test_library_features.c
 	mkdir -p build
@@ -109,13 +114,22 @@ build/test_menu_position: src/menu_position.c src/menu_position.h tests/test_men
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc src/menu_position.c tests/test_menu_position.c $(LDFLAGS) -o $@
 
-build/test_usb_media: src/library_index.c src/library_index.h tests/test_usb_media.c src/usb_media.c src/preview_v5.c src/preview_v5.h src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
+build/test_usb_media: src/library_index.c src/library_index.h tests/test_usb_media.c src/usb_media.c src/preview_v5.c src/preview_v7.c src/preview_v5.h src/preview_v7.h src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/preview_v5.c src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/preview_v5.c src/preview_v7.c src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
 
-build/test_usb_media_sdk: src/library_index.c src/library_index.h tests/test_usb_media.c tests/media_sdk/mem.h src/usb_media.c src/preview_v5.c src/preview_v5.h src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
+build/test_usb_media_sdk: src/library_index.c src/library_index.h tests/test_usb_media.c tests/media_sdk/mem.h src/usb_media.c src/preview_v5.c src/preview_v7.c src/preview_v5.h src/preview_v7.h src/usb_media.h src/usb_art.c src/png_decode.c src/png_inflate.c $(wildcard vendor/pngle/*)
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DOH3DO_SDK=1 -Itests/media_sdk -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/preview_v5.c src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DOH3DO_SDK=1 -Itests/media_sdk -Isrc tests/test_usb_media.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c src/usb_media.c src/preview_v5.c src/preview_v7.c src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/png_decode.c src/png_inflate.c $(LDFLAGS) -o $@
+
+# The encoder test writes the synthetic clip the streaming test plays.
+build/test_preview7_encoder: tools/preview7-encoder.c src/preview_v7.c src/preview_v7.h tests/test_preview7_encoder.c
+	mkdir -p build
+	$(CC) $(CPPFLAGS) -O2 -std=c99 -pedantic -Wall -Wextra -Werror -Isrc tests/test_preview7_encoder.c tools/preview7-encoder.c $(LDFLAGS) -lm -o $@
+
+build/test_preview_stream: src/preview_stream.c src/preview_stream.h src/preview_v7.c src/preview_v7.h tests/test_preview_stream.c src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc tests/test_preview_stream.c src/preview_stream.c src/preview_v7.c src/usb_art.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c $(LDFLAGS) -o $@
 
 test-media: build/test_usb_media build/test_usb_media_sdk
 	python3 tests/test_media_tools.py

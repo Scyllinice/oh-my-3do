@@ -28,4 +28,6 @@ long AttachSample(long instrument, long sample, char *hook);
 long DetachSample(long attachment);
 long StartInstrument(long item, TagArg *tags);
 long StopInstrument(long item, TagArg *tags);
+long PauseInstrument(long item);
+long ResumeInstrument(long item);
 #endif

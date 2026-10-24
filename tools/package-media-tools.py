@@ -24,14 +24,19 @@ files={'index-media.py':'tools/index-media.py',
        'build-sector-codec.py':'tools/build-sector-codec.py',
        'prepare-preview.py':'tools/prepare-preview.py',
        'preview-encoder.c':'tools/preview-encoder.c',
+       'preview7-encoder.c':'tools/preview7-encoder.c',
+       'preview_v7.c':'src/preview_v7.c',
+       'preview_v7.h':'src/preview_v7.h',
        'build-preview-encoder.py':'tools/build-preview-encoder.py',
        'resize-covers.py':'tools/resize-covers.py',
        'prepare-audio-disc.py':'tools/prepare-audio-disc.py',
        'README.txt':'assets/media-tools-README.txt','LICENSE':'LICENSE'}
-# The preview encoder has no Python fallback; without it, prepare-preview.py
-# builds it from preview-encoder.c when a C compiler is available.
+# The preview encoders have no Python fallback; without them, prepare-preview.py
+# builds them from preview-encoder.c and preview7-encoder.c (with the menu's
+# preview_v7.c beside it) when a C compiler is available.
 for name in ('sector-codec-win64.dll','sector-codec.so','sector-codec.dylib',
-             'preview-encoder-win64.dll','preview-encoder.so','preview-encoder.dylib'):
+             'preview-encoder-win64.dll','preview-encoder.so','preview-encoder.dylib',
+             'preview7-encoder-win64.dll','preview7-encoder.so','preview7-encoder.dylib'):
     path=args.native_dir/name
     if path.is_file(): files[name]=path
     elif args.require_native and not name.endswith('.dylib'):

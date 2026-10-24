@@ -79,7 +79,7 @@ int ode_bus_transfer(void *context, const unsigned char *command,
     if (error < 0) {
         return bus_failure(bus, error);
     }
-    while (!CheckIO(bus->request)) {
+    while (!bus->blocking && !CheckIO(bus->request)) {
         /* Most status replies arrive quickly. Yield on slower media and
          * bound every request so an absent ODE cannot freeze the menu. */
         if (++spins >= 128) {
@@ -144,7 +144,7 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
     if (ode_bus_transfer(context, packet, reply, sizeof(reply), &length) < 0 ||
         length != 2 || reply[0] != 0xe7 || (reply[1] & 0x10)) goto done;
     started = (unsigned long)GetMSecTime(bus->timer);
-    while (!CheckIO(data_request)) {
+    while (!bus->blocking && !CheckIO(data_request)) {
         if ((unsigned long)GetMSecTime(bus->timer) - started >= 3000UL) goto done;
         SleepMSec(bus->timer, 1);
     }

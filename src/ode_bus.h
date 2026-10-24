@@ -18,6 +18,9 @@ typedef struct OdeBus {
     unsigned char failed_command;
     unsigned char failed_status;
     Err failure_error;
+    /* Wait for each request's completion signal instead of polling it.
+     * Only the stream bench's reader thread sets this. */
+    int blocking;
 } OdeBus;
 
 int ode_bus_open(OdeBus *bus);

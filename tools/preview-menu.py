@@ -39,6 +39,7 @@ STUBS = r'''
 #include "menu_position.h"
 #include "ui_font.h"
 #include "preview_audio.h"
+#include "preview_stream.h"
 #include "channel_gecko_data.h"
 static unsigned long preview_width_calls;
 static int preview_font_width(const char *value,int style) { ++preview_width_calls;return ui_font_width(value,style); }
@@ -48,6 +49,8 @@ static unsigned long preview_now,preview_load_delay,preview_display_delay;
 int preview_audio_start(PreviewAudio *a,unsigned char *p,unsigned long n,unsigned long rate) { (void)p;(void)n;(void)rate;++audio_starts;audio_start_displays=display_count;a->status=audio_fail ? -1 : 1;return audio_fail ? -1 : 0; }
 int preview_audio_restart(PreviewAudio *a) { ++audio_restarts; return a->status==1 ? 0 : -1; }
 void preview_audio_close(PreviewAudio *a) { a->status=0; }
+int preview_audio_start_ring(PreviewAudio *a,unsigned char *p,unsigned long n,unsigned long rate) { (void)p;(void)n;(void)rate;a->status=1;return 0; }
+void preview_audio_pause(PreviewAudio *a,int pause) { (void)a;(void)pause; }
 #define UI_PREVIEW_TEXT(s) printf("L %s\n",s)
 /* Glass: screen*keep/8 + colour*(8-keep)/8, placed exactly as rectangle() places fills. */
 #define UI_PREVIEW_GLASS(menu,x,y,w,h,colour,keep) do { int m_=(menu)->config.screen_margin; \
@@ -637,7 +640,7 @@ int main(int argc, char **argv) {
                 title_variant(&titles,1)!=1 || title_variant(&titles,3)!=2 || title_variant(&titles,4)) abort();
             titles.selected=2;draw_row(&titles,2,0,2,UI_FONT_SMALL,14);
             if (strcmp(titles.text_cache[0].value,"Game [2]")) abort();
-            titles.text_cursor=0;draw_title_card(&titles,entries+2,5,NULL,320);
+            titles.text_cursor=0;draw_title_card(&titles,entries+2,5,NULL,320,0);
             if (strcmp(titles.text_cache[0].value,"Game [2]")) abort();
             strcpy(titles.filter,"Europe");if (title_variant(&titles,0)) abort();
             titles.filter[0]=0;if (title_variant(&titles,2)!=2) abort();
@@ -1714,7 +1717,7 @@ def main():
         subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
                         str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
                         str(ROOT / "src/menu_help.c"), str(ROOT / "src/game_info.c"), str(ROOT / "src/menu_ui.c"), str(ROOT / "src/menu_categories.c"), str(ROOT / "src/ui_font.c"),
-                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/preview_v5.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
+                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/preview_v5.c"), str(ROOT / "src/preview_v7.c"), str(ROOT / "src/preview_stream.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
                         str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_cheats.c"), str(ROOT / "src/save_cheats_usb.c"), str(ROOT / "src/save_usb.c"), str(ROOT / "src/save_names.c"), str(ROOT / "src/save_catalog.c"),
                         str(ROOT / "src/library_index.c"), str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
                         str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),

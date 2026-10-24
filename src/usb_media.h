@@ -6,6 +6,9 @@
 #define USB_PREVIEW_HEIGHT 120
 #define USB_PREVIEW_FRAME_BYTES (USB_PREVIEW_WIDTH * USB_PREVIEW_HEIGHT * 2UL)
 #define USB_PREVIEW_NO_MEMORY (-3)
+/* The clip streams (OM3DVID7): nothing was loaded; its header block is in
+ * UsbPreview.stream_block for preview_stream_open. */
+#define USB_PREVIEW_STREAM 2
 /* Clips are stored in a few large chunks (VRAM first, then DRAM),
  * each holding whole frames plus the decoder's read-ahead. */
 #define USB_PREVIEW_MAX_BYTES (4096UL * 1024UL)
@@ -23,6 +26,8 @@ typedef struct UsbPreview {
     unsigned long table_bytes;
     unsigned int frames, fps;
     unsigned int width, height;
+    unsigned int format; /* 5: 160x120 block codec, loaded; 7: streamed */
+    unsigned char stream_block[2048];
     unsigned long frame_bytes;
     unsigned long video_bytes, audio_bytes, audio_frames, audio_rate;
     unsigned char *audio, *frame_buffer;

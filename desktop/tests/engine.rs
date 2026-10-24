@@ -1095,12 +1095,12 @@ fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existin
     let hash = f::sha256(&source, &Job::default()).unwrap();
     let key = format!(
         "{:x}",
-        Sha256::digest(format!("{hash}:preview:om3dvid5-160x120-30fps-cap15-1400k").as_bytes())
+        Sha256::digest(format!("{hash}:preview:{}", media::PREVIEW_KEY).as_bytes())
     );
     put(
         &cache,
         &format!("converted-native/{key}.3dv"),
-        &synthetic_preview(),
+        &synthetic_stream(),
     );
     let prefs = Preferences {
         emumovies: emu.to_string_lossy().into_owned(),
@@ -1129,6 +1129,38 @@ fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existin
     assert_eq!(snapshot(&root), before);
 }
 
+/// A short streamed (OM3DVID7) clip: a sliding gradient with a tone.
+fn synthetic_stream() -> Vec<u8> {
+    let count = 12;
+    let mut frames = Vec::with_capacity(count * 320 * 240 * 3);
+    for f in 0..count {
+        for y in 0..240usize {
+            for x in 0..320usize {
+                frames.extend_from_slice(&[(x + f * 4) as u8, y as u8, ((x ^ y) & 0x3f) as u8 * 4]);
+            }
+        }
+    }
+    let audio: Vec<u8> = (0..count * 11025 / 30).map(|i| ((i % 25) * 4) as u8).collect();
+    media::encode_stream(&frames, Some(&audio)).unwrap()
+}
+#[test]
+fn streamed_preview_validates_and_damage_is_rejected() {
+    let t = tempfile::tempdir().unwrap();
+    let data = synthetic_stream();
+    let path = put(t.path(), "stream.3dv", &data);
+    media::validate(&path).unwrap();
+    // The header, its sum, the chunk table and a chunk's body.
+    for pos in [7, 14, 22, 40, 64, 2048 + 4, 2048 + 100, data.len() - 1] {
+        let mut bad = data.clone();
+        bad[pos] ^= 1;
+        fs::write(&path, &bad).unwrap();
+        assert!(media::validate(&path).is_err(), "byte {pos}");
+    }
+    let mut short = data.clone();
+    short.truncate(data.len() - 2048);
+    fs::write(&path, &short).unwrap();
+    assert!(media::validate(&path).is_err());
+}
 #[test]
 fn preview_validation_checks_dimensions_and_rate() {
     let t = tempfile::tempdir().unwrap();

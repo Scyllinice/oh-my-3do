@@ -287,7 +287,7 @@ def inflate_exact(data, size):
 
 
 def validate_media(path):
-    limit = 512 * 1024 if path.suffix.lower() == '.png' else (4096 if path.suffix.lower() == '.3dv' else 1024) * 1024 + 48
+    limit = 512 * 1024 if path.suffix.lower() == '.png' else (16384 if path.suffix.lower() == '.3dv' else 1024) * 1024 + 48
     if path.stat().st_size > limit:
         raise ValueError('Oversized media: ' + str(path))
     data = path.read_bytes()
@@ -333,6 +333,8 @@ def validate_media(path):
             raise ValueError('Invalid native cover')
         inflate_exact(data[24:-8],w*h*2)
         return
+    if path.suffix.lower() == '.3dv' and data[:8] == b'OM3DVID7':
+        return validate_stream(data)
     if path.suffix.lower() != '.3dv' or data[:8] != b'OM3DVID5':
         raise ValueError('Invalid preview signature')
     if len(data) < 48:
@@ -355,6 +357,39 @@ def validate_media(path):
     # Packets are checked by the menu's decoder as they play.
     if any(begin >= end for begin,end in zip(offsets, offsets[1:])):
         raise ValueError('Invalid preview frame offset')
+
+
+def validate_stream(data):
+    """OM3DVID7 (src/preview_v7.h), as the menu checks it: the header block and
+    its sum, the chunk table against the file, every chunk's sum, numbering,
+    entries and frame table. Packets are checked by the decoder as they play."""
+    if len(data) < 2048:
+        raise ValueError('Truncated streamed preview')
+    w,h,fps,per,frames,chunks,preroll,e4,e2,rate,largest,_,check,slots = struct.unpack_from('>HHHHIHHHHIIIIH', data, 8)
+    if ((w,h,fps) != (320,240,30) or not 1 <= per <= 30 or not 1 <= frames <= 1800 or chunks != -(-frames//per) or
+            chunks > (2048-64)//2 or not 1 <= preroll <= chunks or slots < preroll or e4 > 8192 or e2 > 4096 or
+            rate not in (0,11025) or not largest or largest % 2048 or any(data[46:64]) or any(data[64+2*chunks:2048])):
+        raise ValueError('Invalid streamed preview header')
+    if word_sum(data[:40]+bytes(4)+data[44:2048]) != check:
+        raise ValueError('Streamed preview header checksum mismatch')
+    at, first4, first2 = 2048, 0, 0
+    for c, (blocks,) in enumerate(struct.iter_unpack('>H', data[64:64+2*chunks])):
+        size = blocks*2048
+        if not size or size > largest or at+size > len(data):
+            raise ValueError('Invalid streamed preview chunk table')
+        chunk = data[at:at+size]
+        total, number, count, f4, n4, f2, n2, audio, video = struct.unpack_from('>IHHHHHHII', chunk)
+        first = c*per
+        entries = 24+(audio+3&~3)+n4*40+n2*12
+        if (word_sum(chunk[4:]) != total or number != c or count != min(per, frames-first) or (f4,f2) != (first4,first2) or
+                first4+n4 > e4 or first2+n2 > e2 or
+                audio != ((first+count)*11025//30-first*11025//30 if rate else 0) or entries+video > size or
+                video < (count+1)*4 or struct.unpack_from('>I', chunk, entries)[0] != (count+1)*4 or
+                struct.unpack_from('>I', chunk, entries+count*4)[0] != video):
+            raise ValueError('Invalid streamed preview chunk ' + str(c))
+        first4 += n4; first2 += n2; at += size
+    if at != len(data):
+        raise ValueError('Streamed preview has trailing data')
 
 
 def word_sum(data):

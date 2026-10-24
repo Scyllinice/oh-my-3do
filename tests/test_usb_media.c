@@ -1,5 +1,6 @@
 #include "usb_media.h"
 #include "preview_v5.h"
+#include "preview_v7.h"
 #include "library_index.h"
 #include <assert.h>
 #include <stdio.h>
@@ -131,7 +132,7 @@ static unsigned char *load(const char *name,size_t *size)
 }
 int main(int argc,char **argv)
 {
-    Fake f; Ode ode; UsbPreview preview; unsigned char pixels[PREVIEW_V5_WIDTH*PREVIEW_V5_HEIGHT*2], *expected;
+    Fake f; Ode ode; UsbPreview preview; unsigned char pixels[USB_PREVIEW_FRAME_BYTES], *expected;
     size_t bytes, original; int calls, i;
     int (*decode)(Ode *,OdeReadBuffer,const char *,unsigned char *,MediaCancel,void *)=usb_png_cover;
     assert(argc >= 3); memset(&f,0,sizeof(f)); memset(&preview,0,sizeof(preview));
@@ -176,6 +177,16 @@ int main(int argc,char **argv)
         reset(&f,&ode); assert(usb_large_cover(&ode,reader,"Game",large,cancel,&f) < 0);
         reset(&f,&ode); f.data[original-1]^=1;
         assert(usb_large_cover(&ode,reader,"Game.3dc",large,cancel,&f) < 0 && f.closed);
+    } else if (!strcmp(argv[1],"streamvideo")) {
+        /* OM3DVID7 loads nothing: the header block comes back for the stream,
+         * and the file is closed. A damaged header fails. */
+        assert(usb_preview_load_options(&ode,reader,"Game.3dv",&preview,cancel,&f,NULL,NULL,1)==USB_PREVIEW_STREAM);
+        assert(preview.format==7 && preview.width==320 && preview.height==240 && preview.frames);
+        assert(!preview.decoder && !preview.frame_buffer && !preview.table && !preview.chunk_count && !preview.audio);
+        assert(!memcmp(preview.stream_block,f.data,2048) && !f.opened && f.closed);
+        usb_preview_free(&preview);
+        reset(&f,&ode); f.data[100]^=1;
+        assert(usb_preview_load_options(&ode,reader,"Game.3dv",&preview,cancel,&f,NULL,NULL,1)<0 && !f.opened);
     } else if (!strcmp(argv[1],"video") || !strcmp(argv[1],"budgetvideo")) {
         /* argv[3], if given, holds every frame as the encoder's reference decoder drew it. */
         unsigned long frame_bytes;

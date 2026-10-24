@@ -126,6 +126,21 @@ int usb_file_read(Ode *ode, OdeReadBuffer reader, unsigned char *out, size_t siz
     return 0;
 }
 
+int usb_file_read_block(Ode *ode, OdeReadBuffer reader, unsigned char *out)
+{
+    unsigned char packet[7], reply[32];
+    memset(packet, 0, sizeof(packet));
+    packet[0] = 0xe3;
+    packet[1] = 2048 >> 8;
+    if (exchange(ode, packet, reply, 4) < 0 || reply[1] != packet[1] || reply[2] != packet[2]) return -1;
+    if (reader(ode->context, out, 2048) < 0) {
+        ode->transport_uncertain = 1;
+        ode->navigation_failed = 1;
+        return -1;
+    }
+    return 0;
+}
+
 int usb_file_probe(Ode *ode, OdeReadBuffer reader, unsigned char *out, size_t size, unsigned char fill)
 {
     unsigned char word[4];

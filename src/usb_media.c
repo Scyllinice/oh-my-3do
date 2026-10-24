@@ -1,6 +1,7 @@
 #include "usb_media.h"
 #include "usb_file.h"
 #include "preview_v5.h"
+#include "preview_v7.h"
 #include "../vendor/pngle/pngle.h"
 #include <stdlib.h>
 #include <string.h>
@@ -280,7 +281,7 @@ int usb_preview_load_reclaim(Ode *ode,OdeReadBuffer reader,const char *filename,
 {
     unsigned char header[40];
     UsbPreview next;
-    unsigned long bytes,source_video,source_audio,source_rate,source_samples,expected,pad;
+    unsigned long bytes,source_video,source_audio,source_rate,source_samples,expected,pad,decoder_bytes;
     PreviewCheck check;
     unsigned int frame;
     char path[128];
@@ -289,7 +290,21 @@ int usb_preview_load_reclaim(Ode *ode,OdeReadBuffer reader,const char *filename,
     if (!usb_media_filename(filename) || menu_path_compare(filename+strlen(filename)-4,".3dv")) return -1;
     media_path(ode,path,"previews",filename);
     if (usb_file_open(ode,path)<0) return -1;
-    if (usb_file_read(ode,reader,header,40,1)<0 || memcmp(header,"OM3DVID5",8)) goto done;
+    if (usb_file_read(ode,reader,header,40,1)<0) goto done;
+    if (!memcmp(header,"OM3DVID7",8)) {
+        /* Streamed: hand back the header block; the stream reads the rest. */
+        Preview7Header check7;
+        memcpy(next.stream_block,header,40);
+        if (usb_file_read(ode,reader,next.stream_block+40,sizeof(next.stream_block)-40,USB_FILE_CRC_CHECKED)<0 ||
+            preview7_header(next.stream_block,&check7)) goto done;
+        next.format=7; next.width=PREVIEW7_WIDTH; next.height=PREVIEW7_HEIGHT; next.fps=PREVIEW7_FPS;
+        next.frames=next.source_frames=(unsigned int)check7.frames;
+        result=USB_PREVIEW_STREAM;
+        goto done;
+    }
+    if (memcmp(header,"OM3DVID5",8)) goto done;
+    next.format=5;
+    decoder_bytes=sizeof(PreviewV5);
     check_start(&check,1);
     next.width=header[8]*256U+header[9]; next.height=header[10]*256U+header[11];
     next.frames=next.source_frames=header[20]*256U+header[21]; next.fps=header[22]*256U+header[23];
@@ -306,10 +321,10 @@ int usb_preview_load_reclaim(Ode *ode,OdeReadBuffer reader,const char *filename,
     expected=(((next.source_frames*11025UL+next.fps-1)/next.fps)+3)&~3UL;
     if (source_audio ? (source_rate!=11025 || source_audio!=source_samples || source_samples!=expected) : (source_rate || source_samples)) goto done;
     /* Account for all fixed buffers and the full clip before keeping caches. */
-    expected=source_video+(source_audio && sound ? source_audio : 0)+next.frame_bytes+sizeof(PreviewV5)+USB_PREVIEW_CHUNKS*READ_AHEAD;
+    expected=source_video+(source_audio && sound ? source_audio : 0)+next.frame_bytes+decoder_bytes+USB_PREVIEW_CHUNKS*READ_AHEAD;
     if (expected>chunk_capacity() && reclaim) reclaim(reclaim_context);
-    next.decoder=calloc(1,sizeof(PreviewV5));
-    if (!next.decoder && reclaim && reclaim(reclaim_context)) next.decoder=calloc(1,sizeof(PreviewV5));
+    next.decoder=calloc(1,(size_t)decoder_bytes);
+    if (!next.decoder && reclaim && reclaim(reclaim_context)) next.decoder=calloc(1,(size_t)decoder_bytes);
     next.frame_buffer=frame_memory(next.frame_bytes);
     if (!next.frame_buffer && reclaim && reclaim(reclaim_context)) next.frame_buffer=frame_memory(next.frame_bytes);
     next.table=(unsigned char *)malloc((size_t)next.table_bytes);
@@ -333,7 +348,7 @@ int usb_preview_load_reclaim(Ode *ode,OdeReadBuffer reader,const char *filename,
 done:
     if (usb_file_close(ode)<0) result=-1;
     if (phase) phase(phase_context,2);
-    if (!result) { usb_preview_free(preview);*preview=next;memset(&next,0,sizeof(next)); }
+    if (!result || result==USB_PREVIEW_STREAM) { usb_preview_free(preview);*preview=next;memset(&next,0,sizeof(next)); }
     usb_preview_free(&next);return result;
 }
 int usb_preview_load_options(Ode *ode,OdeReadBuffer reader,const char *filename,

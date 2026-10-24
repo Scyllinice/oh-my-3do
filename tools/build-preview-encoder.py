@@ -9,33 +9,56 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def library_name(windows=False):
+def library_name(windows=False, stem='preview-encoder'):
     if windows:
-        return 'preview-encoder-win64.dll'
-    return 'preview-encoder.dylib' if sys.platform == 'darwin' else 'preview-encoder.so'
+        return stem + '-win64.dll'
+    return stem + ('.dylib' if sys.platform == 'darwin' else '.so')
 
 
-def build(output, windows=False):
-    output.mkdir(parents=True, exist_ok=True)
-    source = Path(__file__).with_name('preview-encoder.c')
-    target = output/library_name(windows)
+# Each library: its source, C standard, and where else its includes live.
+LIBRARIES = (('preview-encoder', 'preview-encoder.c', 'c89', ()),
+             # The streamed-preview encoder includes the menu's decoder.
+             ('preview7-encoder', 'preview7-encoder.c', 'c99', ('src',)))
+
+
+def source_dir(name):
+    """Beside this script in a media-tools package; tools/ and src/ in a checkout."""
+    here = Path(__file__).resolve().parent
+    return here if (here/name).is_file() else ROOT/'tools'
+
+
+def include_flags(extra):
+    here = Path(__file__).resolve().parent
+    return ['-I'+str(here)] + ['-I'+str(ROOT/folder) for folder in extra if (ROOT/folder).is_dir()]
+
+
+def build_one(output, stem, source_name, standard, extra, windows=False):
+    source = source_dir(source_name)/source_name
+    target = output/library_name(windows, stem)
+    includes = include_flags(extra)
     if windows:
         clang = shutil.which('clang') or shutil.which('clang-21')
         linker = shutil.which('lld-link') or shutil.which('lld-link-21')
         if not clang or not linker:
             raise ValueError('Windows build requires clang and lld-link')
-        obj = output/'preview-encoder-win64.obj'
+        obj = output/(stem+'-win64.obj')
         subprocess.run([clang, '--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding',
-                        '-fno-builtin', '-fno-stack-protector', '-std=c89', '-Wall', '-Wextra', '-Werror', '-DOH3DO_PREVIEW_DLL',
-                        '-c', str(source), '-o', str(obj)], check=True)
+                        '-fno-builtin', '-fno-stack-protector', '-std='+standard, '-Wall', '-Wextra', '-Werror', '-DOH3DO_PREVIEW_DLL',
+                        *includes, '-c', str(source), '-o', str(obj)], check=True)
         subprocess.run([linker, '/dll', '/noentry', '/nodefaultlib', '/timestamp:0',
                         '/out:'+str(target), str(obj)], check=True)
     else:
-        subprocess.run(['cc', '-O2', '-std=c89', '-pedantic', '-Wall', '-Wextra', '-Werror',
+        subprocess.run(['cc', '-O2', '-std='+standard, '-pedantic', '-Wall', '-Wextra', '-Werror', *includes,
                         '-dynamiclib' if sys.platform == 'darwin' else '-shared', '-fPIC',
                         str(source), '-o', str(target)], check=True)
     print(target)
     return target
+
+
+def build(output, windows=False):
+    output.mkdir(parents=True, exist_ok=True)
+    targets = [build_one(output, stem, name, standard, extra, windows) for stem, name, standard, extra in LIBRARIES]
+    return targets[0]
 
 
 if __name__ == '__main__':

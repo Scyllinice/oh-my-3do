@@ -21,4 +21,16 @@ fn main() {
         .opt_level(2)
         .warnings(true)
         .compile("preview_encoder");
+    // The streamed-preview encoder keeps no static state and includes the
+    // menu's decoder, which checks every file it writes.
+    let streamed = "../tools/preview7-encoder.c";
+    println!("cargo:rerun-if-changed={streamed}");
+    println!("cargo:rerun-if-changed=../src/preview_v7.c");
+    println!("cargo:rerun-if-changed=../src/preview_v7.h");
+    let mut build = cc::Build::new();
+    build.file(streamed).include("../src").opt_level(2).warnings(true);
+    if !msvc {
+        build.flag("-std=c99");
+    }
+    build.compile("preview7_encoder");
 }

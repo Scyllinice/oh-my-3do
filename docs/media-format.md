@@ -125,8 +125,8 @@ checks against it.
 The encoder also keeps every frame within a decode budget: about 200,000 ARM60
 clocks, roughly 20 ms on a console, measured against the assembly decoder.
 
-The menu accepts only `OM3DVID5` previews; other formats must be converted from
-the original videos.
+The menu accepts `OM3DVID5` and the streamed `OM3DVID7` format below. Older
+formats must be converted from the original videos.
 
 The menu reads the audio first, then places whole packets in up to eight
 allocations, video RAM before DRAM, each followed by 1,024 readable bytes so a
@@ -146,6 +146,122 @@ and releases the entire clip on input. Sound-off skips PCM allocation. The
 footer is read into a poisoned buffer because firmware reports requested read
 lengths even at EOF. Playback never streams from USB, and loading never
 modifies `.3dv` files.
+
+## Streamed preview (`OM3DVID7`)
+
+The format the desktop app makes: 320×240 RGB555 at 30 fps, the whole source
+up to a minute (1,800 frames), with optional sound, about 200 KB per second.
+The menu streams it from the drive while it plays rather than loading it
+first, so it needs the media-beside-the-discs layout (`.ohmy3do` in each
+game's folder): the menu reopens the file by the same relative path on every
+loop. `src/preview_v7.h` is the reference.
+
+The file is read from the start in 2 KiB blocks and never seeks (the
+firmware's seek does nothing). It is a 2,048-byte header block, then chunks,
+each padded with zeros to a multiple of 2,048 bytes.
+
+| Offset | Bytes | Meaning |
+| --- | --- | --- |
+| 0 | 8 | `OM3DVID7` |
+| 8 | 2 | Width, 320 |
+| 10 | 2 | Height, 240 |
+| 12 | 2 | Frames per second, 30 |
+| 14 | 2 | Frames per chunk, 1–30 (10) |
+| 16 | 4 | Frames, 1–1800 |
+| 20 | 2 | Chunks: frames ÷ frames per chunk, rounded up |
+| 22 | 2 | Preroll: chunks to read before playing |
+| 24 | 2 | 4×4 entries the clip defines, at most 8,192 |
+| 26 | 2 | 2×2 entries the clip defines, at most 4,096 |
+| 28 | 4 | Sound rate, 11025 or zero when silent |
+| 32 | 4 | Largest chunk in bytes, a multiple of 2,048 |
+| 36 | 4 | Nominal bytes per second |
+| 40 | 4 | Word checksum of the whole header block, with this field zero |
+| 44 | 2 | Chunk slots the encoder assumed the player has, at least the preroll |
+| 46 | 18 | Zero |
+| 64 | 2 × chunks | Each chunk's length in 2 KiB blocks |
+
+The rest of the block is zero. The word checksum is the preview checksum
+described above.
+
+A chunk holds its frames' sound, the dictionary entries first used in it, and
+its frames' packets:
+
+| Offset | Bytes | Meaning |
+| --- | --- | --- |
+| 0 | 4 | Word checksum of the rest of the padded chunk |
+| 4 | 2 | Chunk number |
+| 6 | 2 | Frames in this chunk (the last may hold fewer) |
+| 8 | 2 | First 4×4 entry it defines |
+| 10 | 2 | 4×4 entries it defines |
+| 12 | 2 | First 2×2 entry it defines |
+| 14 | 2 | 2×2 entries it defines |
+| 16 | 4 | Sound samples, `floor(end × 11025 / 30) − floor(start × 11025 / 30)` for its frames, or zero |
+| 20 | 4 | Video bytes: the frame table and packets |
+| 24 | | Signed 8-bit sound, padded with zeros to a word |
+| | 40 each | 4×4 entries, ready to copy: two screen line pairs of four words (the upper line's pixel in each word's high half), then the TV picture's two rows of two pixels, each the rounded average of a 2×2 square |
+| | 12 each | 2×2 entries: one line pair of two words, then the average of the four pixels in the high half of a word |
+| | 4 × (frames + 1) | Packet offsets from the start of this table |
+| | | Packets, then zero padding |
+
+Entries are numbered in the order the chunks define them and never change.
+A packet may use the entries its chunk or earlier chunks define. On every
+loop the numbering starts again from zero, and the same entries are defined
+again with the same pixels.
+
+A packet is big-endian 16-bit words covering the 4,800 blocks of 4×4 pixels
+in raster order (80 across, 60 down):
+
+| Word | Meaning |
+| --- | --- |
+| `0x0000`–`0x1fff` | The block shows that 4×4 entry. |
+| `0x2000`–`0x3fff` | `(word & 0x1fff) + 1` blocks stay as they are. |
+| `0x4000`–`0x5fff` | `(word & 0x1fff) + 1` 4×4 entry numbers follow, one word each, below `0x2000`. |
+| `0x6000`–`0x7fff` | `(word & 0x1fff) + 1` quad blocks follow, 3 words each: four 12-bit 2×2 entry numbers (top-left, top-right, bottom-left, bottom-right), most significant first. |
+
+Other words are invalid, and a packet must cover exactly 4,800 blocks. Each
+loop starts from a black picture.
+
+### Playing
+
+A reader thread with its own XBUS requests reads chunks into fixed-size
+slots (as many as the clip assumed, up to eight, video RAM first). It
+transfers at a priority above the menu's, so each finished transfer is
+followed up at once, and checks a chunk and stores its entries below the
+menu's priority, in the menu's spare time between frames. Playback starts
+when every slot holds a chunk. A slot is reused once its frames are decoded
+and its sound is in the sound ring. If a chunk is late, the picture and the
+sound pause together until it arrives, and Diagnostics counts the stall.
+
+Sound plays from a three-second ring that the DSP loops over; the menu copies
+each chunk's samples into it ahead of the play position. The clock that
+picks the frame due comes from the sound's start, less any pauses.
+
+The decoder keeps what each block shows (the map) and draws only changed
+blocks. The browser's TV picture is drawn from 2×2 averages of each entry,
+160×120, which the cel engine shows at its native size. Full screen ignores
+`screen_margin` and draws the video 1:1, as the game itself fills the TV: each
+new frame is decoded straight into the back screen, then shown, and the SPORT
+hardware copies that screen into the other buffer in the same vertical blank,
+so the next frame starts from it. Switching between the two redraws the
+picture from the map once.
+
+The console's decoder, `src/preview_v7_arm.s`, checks each op against the
+blocks and bytes left, so a damaged packet cannot write outside the picture;
+entry numbers need no check, because the dictionaries always have room for
+every number the format can express (8,192 and 4,096). Every chunk's checksum
+is checked before use. `tests/test_preview_v7.py` runs the assembly against
+the C decoder, `src/preview_v7.c`.
+
+### Encoding
+
+`tools/preview7-encoder.c` trains the two dictionaries on the clip, finds
+each block's nearest 4×4 entry and its nearest four 2×2 entries, and chooses
+per block whatever costs least in error plus bytes plus decode time. It
+searches for the setting that averages the requested rate, keeps every frame
+within about 230,000 ARM60 clocks of decoding, keeps chunks within the slot
+size, and picks the preroll from a model of a reader managing 300 KB/s. It
+checks every file it writes by decoding it with `src/preview_v7.c`. The
+desktop app and `tools/prepare-preview.py` use the same settings.
 
 ## Save names
 

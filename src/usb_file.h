@@ -12,6 +12,9 @@ int usb_file_close(Ode *ode);
  * The clears cost about a fifth of the read time. */
 #define USB_FILE_CRC_CHECKED 2
 int usb_file_read(Ode *ode, OdeReadBuffer reader, unsigned char *out, size_t size, int header);
+/* The next 2048 bytes straight into out, with no clears and no copy: only for
+ * data whose checksum the caller verifies (a stale EOF buffer fails it). */
+int usb_file_read_block(Ode *ode, OdeReadBuffer reader, unsigned char *out);
 /* Read a small header against a nonzero sentinel, exposing true EOF despite
  * firmware reporting the requested length on short reads. */
 int usb_file_probe(Ode *ode, OdeReadBuffer reader, unsigned char *out, size_t size, unsigned char fill);

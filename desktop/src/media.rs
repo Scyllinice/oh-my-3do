@@ -327,119 +327,284 @@ pub fn encode_preview(frames: &[u8], budget: usize, job: &Job) -> Result<Vec<u8>
     out.truncate(n);
     Ok(out)
 }
+/// OM3DVID7: streamed 320x240 at 30 fps, the whole clip up to a minute, at
+/// about 200 KB/s (see src/preview_v7.h). The settings match the console's
+/// reader and decoder: tools/prepare-preview.py uses the same ones.
+const STREAM_WIDTH: usize = 320;
+const STREAM_HEIGHT: usize = 240;
+const STREAM_FRAME: usize = STREAM_WIDTH * STREAM_HEIGHT * 3;
+const STREAM_MAX_FRAMES: usize = 1800;
+#[repr(C)]
+struct Preview7Params {
+    rate: u32,
+    read_rate: u32,
+    slot_bytes: u32,
+    max_chunk: u32,
+    chunk_frames: u32,
+    entries4: u32,
+    entries2: u32,
+    cycle_cap: u32,
+}
+const STREAM_PARAMS: Preview7Params = Preview7Params {
+    rate: 200 * 1024,
+    read_rate: 300 * 1024,
+    slot_bytes: 768 * 1024,
+    max_chunk: 128 * 1024,
+    chunk_frames: 10,
+    entries4: 8192,
+    entries2: 4096,
+    cycle_cap: 230_000,
+};
+/// Part of the cached file's name: a change of format or settings re-encodes.
+pub const PREVIEW_KEY: &str = "om3dvid7-320x240-30fps-full-200k";
+extern "C" {
+    // tools/preview7-encoder.c, compiled in by build.rs
+    fn oh3do_preview7_workspace(frames: u32) -> u64;
+    fn oh3do_preview7_begin(workspace: *mut u8, bytes: u64, frames: u32) -> i32;
+    fn oh3do_preview7_frame(workspace: *mut u8, rgb: *const u8) -> i32;
+    fn oh3do_preview7_encode(
+        workspace: *mut u8,
+        params: *const Preview7Params,
+        audio: *const i8,
+        samples: u64,
+        out: *mut u8,
+        capacity: u64,
+        stats: *mut u32,
+    ) -> i64;
+}
+
+/// Physical memory free now, or 8 GiB where the platform will not say.
+fn memory_available() -> u64 {
+    #[cfg(target_os = "linux")]
+    if let Ok(text) = fs::read_to_string("/proc/meminfo") {
+        if let Some(kb) = text
+            .lines()
+            .find(|l| l.starts_with("MemAvailable:"))
+            .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+        {
+            return kb * 1024;
+        }
+    }
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct Status {
+            length: u32,
+            load: u32,
+            total_phys: u64,
+            avail_phys: u64,
+            total_page: u64,
+            avail_page: u64,
+            total_virtual: u64,
+            avail_virtual: u64,
+            avail_extended: u64,
+        }
+        extern "system" {
+            fn GlobalMemoryStatusEx(status: *mut Status) -> i32;
+        }
+        let mut status = Status { length: std::mem::size_of::<Status>() as u32, load: 0, total_phys: 0, avail_phys: 0,
+            total_page: 0, avail_page: 0, total_virtual: 0, avail_virtual: 0, avail_extended: 0 };
+        // SAFETY: status is a MEMORYSTATUSEX with its length set.
+        if unsafe { GlobalMemoryStatusEx(&mut status) } != 0 {
+            return status.avail_phys;
+        }
+    }
+    8 << 30
+}
+/// Encodes at once are limited by memory: a minute-long clip needs about
+/// 600 MB of workspace while it encodes. The limit is set once, from the
+/// memory free when the first encode starts.
+struct EncodeSlot;
+static ENCODES: (std::sync::Mutex<(usize, usize)>, std::sync::Condvar) =
+    (std::sync::Mutex::new((0, 0)), std::sync::Condvar::new());
+impl EncodeSlot {
+    fn take(job: &Job) -> Result<EncodeSlot> {
+        let mut state = ENCODES.0.lock().unwrap();
+        if state.1 == 0 {
+            state.1 = ((memory_available() / (900 << 20)) as usize).clamp(1, 16);
+        }
+        while state.0 >= state.1 {
+            job.check()?;
+            state = ENCODES.1.wait_timeout(state, Duration::from_millis(200)).unwrap().0;
+        }
+        state.0 += 1;
+        Ok(EncodeSlot)
+    }
+}
+impl Drop for EncodeSlot {
+    fn drop(&mut self) {
+        ENCODES.0.lock().unwrap().0 -= 1;
+        ENCODES.1.notify_one();
+    }
+}
+
+/// Encode the count frames added to a workspace, with signed 8-bit 11025 Hz
+/// sound for exactly those frames, if any.
+fn encode_workspace(workspace: &mut [u8], count: usize, audio: Option<&[u8]>) -> Result<Vec<u8>> {
+    let samples = count * 11025 / PREVIEW_FPS;
+    if audio.is_some_and(|a| a.len() != samples) {
+        bail!("Preview sound does not match its frames")
+    }
+    let capacity = STREAM_PARAMS.rate as usize * count / PREVIEW_FPS * 11 / 10 + (2 << 20);
+    let mut out = vec![0u8; capacity];
+    let mut stats = [0u32; 8];
+    // SAFETY: the workspace holds count frames; audio holds samples bytes;
+    // out holds capacity writable bytes; stats has room for 8 words.
+    let n = unsafe {
+        oh3do_preview7_encode(
+            workspace.as_mut_ptr(),
+            &STREAM_PARAMS,
+            audio.map_or(std::ptr::null(), |a| a.as_ptr() as *const i8),
+            audio.map_or(0, |_| samples as u64),
+            out.as_mut_ptr(),
+            capacity as u64,
+            stats.as_mut_ptr(),
+        )
+    };
+    if n < 0 {
+        bail!("Preview encoder failed (error {n})")
+    }
+    out.truncate(n as usize);
+    Ok(out)
+}
+/// A streamed preview of 320x240 RGB24 frames already in memory (tests and
+/// tools; preview() streams frames from FFmpeg instead).
+pub fn encode_stream(frames: &[u8], audio: Option<&[u8]>) -> Result<Vec<u8>> {
+    let count = frames.len() / STREAM_FRAME;
+    if count == 0 || count > STREAM_MAX_FRAMES || frames.len() % STREAM_FRAME != 0 {
+        bail!("Invalid preview frames")
+    }
+    // SAFETY: plain arithmetic in the encoder.
+    let bytes = unsafe { oh3do_preview7_workspace(count as u32) } as usize;
+    let mut workspace = vec![0u8; bytes];
+    // SAFETY: workspace holds bytes writable bytes; each frame is a whole picture.
+    unsafe {
+        if oh3do_preview7_begin(workspace.as_mut_ptr(), bytes as u64, count as u32) != 0 {
+            bail!("Preview encoder setup failed")
+        }
+        for frame in frames.chunks(STREAM_FRAME) {
+            if oh3do_preview7_frame(workspace.as_mut_ptr(), frame.as_ptr()) != 0 {
+                bail!("Preview encoder rejected a frame")
+            }
+        }
+    }
+    encode_workspace(&mut workspace, count, audio)
+}
+/// Run exe and hand each complete `size`-byte block of its output to each(),
+/// up to `max` blocks. Returns how many.
+fn stream(exe: &Path, args: &[String], size: usize, max: usize, job: &Job, mut each: impl FnMut(&[u8]) -> Result<()>) -> Result<usize> {
+    let mut child = command(exe)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()?;
+    let mut stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.take(64 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let mut block = vec![0u8; size];
+    let mut count = 0;
+    let result = (|| -> Result<()> {
+        loop {
+            job.check()?;
+            let mut filled = 0;
+            while filled < size {
+                let n = stdout.read(&mut block[filled..])?;
+                if n == 0 {
+                    break;
+                }
+                filled += n;
+            }
+            if filled < size {
+                return Ok(()); // the end; a partial block is dropped
+            }
+            if count == max {
+                bail!("Video output exceeds expected bounds")
+            }
+            each(&block)?;
+            count += 1;
+        }
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait()?;
+    let stderr = err.join().map_err(|_| anyhow::anyhow!("Video error thread failed"))??;
+    result?;
+    if !status.success() {
+        bail!("Video tool failed: {}", String::from_utf8_lossy(&stderr))
+    }
+    Ok(count)
+}
+
 pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> Result<()> {
     let (ffmpeg, ffprobe) = video_exes(prefs)?;
-    let mut a = args(&[
-        "-v",
-        "error",
-        "-show_streams",
-        "-show_format",
-        "-of",
-        "json",
-    ]);
+    let mut a = args(&["-v", "error", "-show_streams", "-show_format", "-of", "json"]);
     a.push(source.to_string_lossy().into_owned());
     let info: Value = serde_json::from_slice(&capture(&ffprobe, &a, 1024 * 1024, job)?)?;
-    if !info["streams"]
-        .as_array()
-        .context("No video streams")?
-        .iter()
-        .any(|s| s["codec_type"] == "video")
-    {
+    let streams = info["streams"].as_array().context("No video streams")?;
+    if !streams.iter().any(|s| s["codec_type"] == "video") {
         bail!("Source has no video stream")
     }
-    let sound = info["streams"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|s| s["codec_type"] == "audio");
+    let sound = streams.iter().any(|s| s["codec_type"] == "audio");
     let seconds = info["format"]["duration"]
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|n| n.is_finite() && *n > 0.)
-        .unwrap_or(15.)
-        .min(15.);
+        .unwrap_or(60.)
+        .min((STREAM_MAX_FRAMES / PREVIEW_FPS) as f64);
+    let reserve = ((seconds * PREVIEW_FPS as f64).ceil() as usize + 2).min(STREAM_MAX_FRAMES);
+    let _slot = EncodeSlot::take(job)?;
+    // SAFETY: plain arithmetic in the encoder.
+    let bytes = unsafe { oh3do_preview7_workspace(reserve as u32) } as usize;
+    let mut workspace = vec![0u8; bytes];
+    // SAFETY: workspace holds bytes writable bytes.
+    if unsafe { oh3do_preview7_begin(workspace.as_mut_ptr(), bytes as u64, reserve as u32) } != 0 {
+        bail!("Preview encoder setup failed")
+    }
     let mut a = args(&["-v", "error", "-nostdin", "-i"]);
     a.push(source.to_string_lossy().into_owned());
     let filter = format!(
-        "fps={PREVIEW_FPS},scale={PREVIEW_WIDTH}:{PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:flags=area,\
-         pad={PREVIEW_WIDTH}:{PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x081021"
+        "fps={PREVIEW_FPS},scale={STREAM_WIDTH}:{STREAM_HEIGHT}:force_original_aspect_ratio=decrease:flags=area,\
+         pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x081021"
     );
-    let limit = PREVIEW_FRAMES.to_string();
-    a.extend(args(&["-map","0:v:0","-an","-sn","-t",&seconds.to_string(),"-vf",&filter,"-frames:v",&limit,"-pix_fmt","rgb24","-f","rawvideo","pipe:1"]));
-    let raw = capture(&ffmpeg, &a, PREVIEW_FRAMES * PREVIEW_FRAME, job)?;
-    if raw.is_empty() || raw.len() % PREVIEW_FRAME != 0 {
+    a.extend(args(&["-map", "0:v:0", "-an", "-sn", "-t", &seconds.to_string(), "-vf", &filter,
+        "-frames:v", &reserve.to_string(), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]));
+    job.say("Reading preview frames");
+    let count = stream(&ffmpeg, &a, STREAM_FRAME, reserve, job, |frame| {
+        // SAFETY: frame is one 320x240 RGB24 picture; begin reserved room.
+        if unsafe { oh3do_preview7_frame(workspace.as_mut_ptr(), frame.as_ptr()) } != 0 {
+            bail!("Preview encoder rejected a frame")
+        }
+        Ok(())
+    })?;
+    if count == 0 {
         bail!("Incomplete video frames")
     }
-    let count = raw.len() / PREVIEW_FRAME;
-    let audio_size = if sound {
-        ((count * 11025).div_ceil(PREVIEW_FPS) + 3) & !3
-    } else {
-        0
-    };
-    if PREVIEW_BYTES < audio_size + (count + 1) * 4 + count * 8 {
-        bail!("Preview cannot fit RAM budget")
-    }
-    job.say(format!("Encoding preview: {count} frames"));
-    let video = encode_preview(&raw, PREVIEW_BYTES - audio_size, job)?;
-    let video_bytes = video.len();
+    let samples = count * 11025 / PREVIEW_FPS;
     let mut audio = vec![];
     if sound {
         let seconds = count as f64 / PREVIEW_FPS as f64;
         let mut a = args(&["-v", "error", "-nostdin", "-i"]);
         a.push(source.to_string_lossy().into_owned());
-        a.extend(args(&[
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-sn",
-            "-t",
-            &seconds.to_string(),
-            "-ac",
-            "1",
-            "-ar",
-            "11025",
-            "-af",
-            &format!(
-                "volume=0.8,afade=t=in:d=0.01,afade=t=out:st={}:d=0.01",
-                (seconds - 0.01).max(0.)
-            ),
-            "-f",
-            "s8",
-            "pipe:1",
-        ]));
-        audio = capture(&ffmpeg, &a, 15 * 11025 + 8192, job)?;
-        audio.resize(audio_size, 0);
-        audio.truncate(audio_size);
+        a.extend(args(&["-map", "0:a:0", "-vn", "-sn", "-t", &seconds.to_string(), "-ac", "1", "-ar", "11025",
+            "-af", &format!("volume=0.8,afade=t=in:d=0.01,afade=t=out:st={}:d=0.01", (seconds - 0.01).max(0.)),
+            "-f", "s8", "pipe:1"]));
+        audio = capture(&ffmpeg, &a, samples + 8192, job)?;
+        audio.resize(samples, 0);
     }
-    // Frame table, audio, video packets, then zero padding to a word boundary:
-    // the menu reads the audio first, then splits the packets across its memory.
-    let table = (count + 1) * 4;
-    let mut payload = video[..table].to_vec();
-    payload.extend(&audio);
-    payload.extend(&video[table..]);
-    payload.resize(payload.len().next_multiple_of(4), 0);
-    let mut data = b"OM3DVID5".to_vec();
-    data.extend_from_slice(&(PREVIEW_WIDTH as u16).to_be_bytes());
-    data.extend_from_slice(&(PREVIEW_HEIGHT as u16).to_be_bytes());
-    data.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    data.extend_from_slice(&word_sum(&payload).to_be_bytes());
-    data.extend_from_slice(&(count as u16).to_be_bytes());
-    data.extend_from_slice(&(PREVIEW_FPS as u16).to_be_bytes());
-    for n in [
-        video_bytes,
-        audio_size,
-        if sound { 11025 } else { 0 },
-        audio_size,
-    ] {
-        data.extend_from_slice(&(n as u32).to_be_bytes());
-    }
-    data.extend(payload);
-    data.extend_from_slice(b"END3DV05");
-    f::atomic(target, &data)?;
+    job.say(format!("Encoding preview: {count} frames"));
+    let out = encode_workspace(&mut workspace, count, sound.then_some(&audio[..]))?;
+    drop(workspace);
+    f::atomic(target, &out)?;
     job.say(format!(
-        "Preview: {:.1} seconds at {PREVIEW_FPS} fps{}",
+        "Preview: {:.1} seconds at {PREVIEW_FPS} fps{}, {} KB",
         count as f64 / PREVIEW_FPS as f64,
-        if sound { " with audio" } else { "" }
+        if sound { " with audio" } else { "" },
+        out.len() / 1024
     ));
     Ok(())
 }
@@ -735,7 +900,7 @@ pub fn prepare_missing(
                             if kind == "cover" {
                                 "native-v3-160x120-fast96-cap15-512k"
                             } else {
-                                "om3dvid5-160x120-30fps-cap15-1400k"
+                                PREVIEW_KEY
                             }
                         )
                         .as_bytes()
@@ -821,7 +986,7 @@ pub fn validate(path: &Path) -> Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .eq_ignore_ascii_case("3dv");
-    if fs::metadata(path)?.len() > if preview { 4096 } else { 1024 } * 1024 + 48 {
+    if fs::metadata(path)?.len() > if preview { 16384 } else { 1024 } * 1024 + 48 {
         bail!("Oversized media")
     };
     let data = fs::read(path)?;
@@ -880,6 +1045,9 @@ pub fn validate(path: &Path) -> Result<()> {
         }
         return inflate(&data[24..24 + bytes], width * height * 2);
     }
+    if data.starts_with(b"OM3DVID7") {
+        return validate_stream(&data);
+    }
     if !data.starts_with(b"OM3DVID5") || data.len() < 48 {
         bail!("Invalid preview signature")
     };
@@ -921,6 +1089,79 @@ pub fn validate(path: &Path) -> Result<()> {
         if be(table, frame * 4)? >= be(table, (frame + 1) * 4)? {
             bail!("Invalid frame offset")
         };
+    }
+    Ok(())
+}
+/// OM3DVID7, as the menu's preview7_header and preview7_chunk check it: the
+/// header block and its sum, the chunk table against the file, and every
+/// chunk's sum, numbering, entries and frame table. Packets are checked by
+/// the decoder as they play.
+fn validate_stream(data: &[u8]) -> Result<()> {
+    let h16 = |p: usize| -> usize { u16::from_be_bytes([data[p], data[p + 1]]) as usize };
+    if data.len() < 2048 {
+        bail!("Truncated streamed preview")
+    }
+    let (chunk_frames, frames, chunks, preroll) = (h16(14), be(data, 16)? as usize, h16(20), h16(22));
+    let (entries4, entries2, rate, max_chunk, slots) = (h16(24), h16(26), be(data, 28)?, be(data, 32)? as usize, h16(44));
+    if (h16(8), h16(10), h16(12)) != (STREAM_WIDTH, STREAM_HEIGHT, PREVIEW_FPS)
+        || !(1..=30).contains(&chunk_frames)
+        || !(1..=STREAM_MAX_FRAMES).contains(&frames)
+        || chunks != frames.div_ceil(chunk_frames)
+        || chunks > (2048 - 64) / 2
+        || preroll == 0
+        || preroll > chunks
+        || slots < preroll
+        || entries4 > 8192
+        || entries2 > 4096
+        || (rate != 0 && rate != 11025)
+        || max_chunk == 0
+        || max_chunk % 2048 != 0
+        || data[46..64].iter().any(|&b| b != 0)
+        || data[64 + 2 * chunks..2048].iter().any(|&b| b != 0)
+    {
+        bail!("Invalid streamed preview header")
+    }
+    let mut block = data[..2048].to_vec();
+    block[40..44].fill(0);
+    if word_sum(&block) != be(data, 40)? {
+        bail!("Streamed preview header checksum mismatch")
+    }
+    let samples_to = |f: usize| f * 11025 / PREVIEW_FPS;
+    let (mut at, mut first4, mut first2) = (2048usize, 0usize, 0usize);
+    for c in 0..chunks {
+        let size = h16(64 + 2 * c) * 2048;
+        if size == 0 || size > max_chunk || at + size > data.len() {
+            bail!("Invalid streamed preview chunk table")
+        }
+        let chunk = &data[at..at + size];
+        let c16 = |p: usize| u16::from_be_bytes([chunk[p], chunk[p + 1]]) as usize;
+        let first = c * chunk_frames;
+        let count = (frames - first).min(chunk_frames);
+        let audio = be(chunk, 16)? as usize;
+        let video = be(chunk, 20)? as usize;
+        let (n4, n2) = (c16(10), c16(14));
+        let entries = 24 + audio.next_multiple_of(4) + n4 * 40 + n2 * 12;
+        if word_sum(&chunk[4..]) != be(chunk, 0)?
+            || c16(4) != c
+            || c16(6) != count
+            || c16(8) != first4
+            || c16(12) != first2
+            || first4 + n4 > entries4
+            || first2 + n2 > entries2
+            || audio != if rate != 0 { samples_to(first + count) - samples_to(first) } else { 0 }
+            || entries + video > size
+            || video < (count + 1) * 4
+            || be(chunk, entries)? as usize != (count + 1) * 4
+            || be(chunk, entries + count * 4)? as usize != video
+        {
+            bail!("Invalid streamed preview chunk {c}")
+        }
+        first4 += n4;
+        first2 += n2;
+        at += size;
+    }
+    if at != data.len() {
+        bail!("Streamed preview has trailing data")
     }
     Ok(())
 }

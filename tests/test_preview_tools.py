@@ -147,4 +147,30 @@ class PreviewV5Test(unittest.TestCase):
             self.assertEqual(source.read_bytes(),before)
 
 
+
+class PreviewStreamTest(unittest.TestCase):
+    """OM3DVID7: the streamed converter makes a file the validator accepts,
+    with its sound and every frame, and the validator rejects damage."""
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'needs FFmpeg')
+    def test_streamed_conversion_validates(self):
+        spec=importlib.util.spec_from_file_location('maintenance',ROOT/'tools/library-maintenance.py')
+        maintenance=importlib.util.module_from_spec(spec);spec.loader.exec_module(maintenance)
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);source=root/'source.mp4'
+            subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=640x480:rate=30:duration=2','-f','lavfi',
+                            '-i','sine=frequency=440:duration=2','-shortest','-pix_fmt','yuv420p',str(source)],check=True)
+            result=converter.convert_stream(source,root/'clip.3dv')
+            data=(root/'clip.3dv').read_bytes()
+            self.assertEqual(data[:8],b'OM3DVID7')
+            self.assertEqual((result['frames'],result['audio_bytes']),(60,60*11025//30))
+            frames,chunks=struct.unpack_from('>IH',data,16)
+            self.assertEqual((frames,chunks),(60,6))
+            maintenance.validate_media(root/'clip.3dv')
+            damaged=bytearray(data);damaged[2048+64]^=1
+            (root/'damaged.3dv').write_bytes(damaged)
+            with self.assertRaises(ValueError):
+                maintenance.validate_media(root/'damaged.3dv')
+            with self.assertRaises(ValueError):
+                converter.convert_stream(source,root/'late.3dv',start=5)
+
 if __name__=='__main__':unittest.main()
