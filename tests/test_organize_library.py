@@ -932,6 +932,24 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         tx.undo()
         self.assertEqual(before,snapshot(self.root))
 
+    def test_cue_tracks_may_be_any_file_with_any_type(self):
+        # The drive's firmware boots .img data and WAVE audio tracks as raw data.
+        self.put('Old/game.cue',b'FILE "data.img" BINARY\r\n  TRACK 01 MODE1/2352\r\nFILE "audio.wav" WAVE\r\n  TRACK 02 AUDIO\r\n')
+        self.put('Old/data.img',b'img data');self.put('Old/audio.wav',b'wav audio')
+        self.catalog['games'].append(game('Example (USA)',[b'img data',b'wav audio']))
+        plan=self.scan()
+        self.assertEqual([r['status'] for r in plan['entries']],['ready'])
+        tx=self.apply(plan)
+        cue=next((self.root/'Games/USA').rglob('*.cue'))
+        lines=[l for l in cue.read_bytes().split(b'\r\n') if l.startswith(b'FILE')]
+        self.assertTrue(lines[0].endswith(b'" BINARY') and lines[1].endswith(b'" WAVE'),lines)
+        refs,*_=organizer.cue_files(self.root,cue.relative_to(self.root).as_posix())
+        self.assertEqual(len(refs),2)
+        tx.undo()
+        self.put('Old/game.cue',b'FILE "other.cue" BINARY\r\n');self.put('Old/other.cue',b'FILE "data.img" BINARY\r\n')
+        with self.assertRaises(ValueError):
+            organizer.cue_files(self.root,'Old/game.cue')
+
     def test_redundant_iso_cue_archives_and_remaps_links_with_complete_undo(self):
         cue='Old/Example (USA).cue';iso='Old/data.iso';data=b'synthetic ISO'
         raw=b'CATALOG 4984824063921\r\nFILE "data.iso" BINARY\r\n  TRACK 01 MODE1/2048\r\n    INDEX 01 00:00:00\r\n'

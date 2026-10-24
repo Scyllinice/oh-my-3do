@@ -263,8 +263,9 @@ def cue_files(root, relative):
             raise ValueError('CUE references a root menu boot image; keep it separate')
         if not target.is_file():
             raise ValueError(f'CUE data file is missing: {ref}')
-        if target.suffix.lower() not in ('.bin', '.iso', '.wav', '.aiff', '.aif'):
-            raise ValueError(f'Unsupported CUE data file: {ref}')
+        # The drive's firmware reads any track file as raw sectors.
+        if target.suffix.lower() == '.cue':
+            raise ValueError(f'A CUE track cannot be another CUE: {ref}')
         if ref not in refs:
             refs.append(ref)
     if not refs:
