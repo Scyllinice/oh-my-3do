@@ -27,7 +27,9 @@ USB/SD drives. **PC folder…** changes the source library; **Browse another dri
 adds a drive. Each library remembers its own selection and filters.
 
 Use search and filters to find games. Click tiles to select them; Shift-click
-selects a range and Ctrl+A selects all shown games. **Refresh** rereads a drive
+selects a range and Ctrl+A selects all shown games. Use arrow keys to move between
+game tiles and Space to select; Tab moves to the selection actions. In narrow
+windows, those actions are grouped under **Actions…**. **Refresh** rereads a drive
 after changes. **Already on drive** indicates which games are present at the
 copy destination; it does not verify their contents.
 
@@ -193,7 +195,7 @@ it before sharing; the app does not upload it.
 ## Settings and cheat database
 
 **Settings & tools** includes Light/Dark/System appearance, offline mode,
-startup update preferences, console settings, index rebuilding, library review
+text size (100–200%), startup update preferences, console settings, index rebuilding, library review
 and undo. Software graphics is available for display problems and needs an app restart.
 
 **Open database editor…** manages known save fields and cheat presets. Install

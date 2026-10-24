@@ -43,3 +43,19 @@ desktop app's self-update protocol.
 Native interaction and updater-recovery smoke tests are in
 `tools/test-desktop-ui.py` and `tools/test-desktop-update.py`. They run in the
 provided Linux image under D-Bus/Xvfb and use disposable build-directory fixtures.
+
+## Accessibility checks
+
+`tools/test-desktop-accessibility.py` runs the real frontend in WebKitGTK with a
+mock native bridge and disposable fixtures. It checks keyboard focus, dialog
+cancellation, control labels, text contrast and reflow at 100–200% text size.
+Run it in the desktop build image under D-Bus and a virtual display:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src -e HOME=/tmp -e DISPLAY=:99 -e LIBGL_ALWAYS_SOFTWARE=1 -e WEBKIT_DISABLE_DMABUF_RENDERER=1 oh3do-desktop-tauri sh -c 'Xvfb :99 -screen 0 1600x1200x24 -ac >/tmp/display.log 2>&1 & sleep 1; exec dbus-run-session -- python3 tools/test-desktop-accessibility.py'
+```
+
+Results and screenshots are under `build/desktop-accessibility/`. This browser
+test complements the native app smoke test; it does not verify Windows Narrator
+output, Windows display scaling or operating-system file dialogs. Check those
+on Windows before claiming assistive-technology compatibility.

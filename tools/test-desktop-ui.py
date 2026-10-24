@@ -9,6 +9,7 @@ parser.add_argument('--binary',type=__import__('pathlib').Path)
 parser.add_argument('--library',type=__import__('pathlib').Path)
 parser.add_argument('--gallery',action='store_true')
 parser.add_argument('--features',action='store_true',help='Exercise save comparison and the read-only drive check')
+parser.add_argument('--keyboard',action='store_true',help='Copy one game using keyboard input only')
 parser.add_argument('--fixture',type=__import__('pathlib').Path)
 args=parser.parse_args()
 import os,time,json,subprocess,shutil,struct,zlib
@@ -70,6 +71,22 @@ try:
  time.sleep(3)
  if args.library:
   time.sleep(4);shot('library-real.png');print('Read-only library screenshot captured.',flush=True)
+ elif args.keyboard:
+  # Start at the page heading, then Tab through actions, filters and categories
+  # to the single game-grid Tab stop. No mouse input is used in this branch.
+  for _ in range(12):press('Tab')
+  shot('keyboard-game-focus.png');press('space');time.sleep(.5);shot('keyboard-selected.png')
+  for _ in range(6):press('Tab')
+  press('Return');time.sleep(.5);shot('keyboard-copy-open.png')
+  chord('Shift_L','Tab');press('Return');time.sleep(2);shot('keyboard-copy-review.png')
+  chord('Shift_L','Tab');press('Return');time.sleep(3);shot('keyboard-copy-complete.png')
+  assert (dest/'Games/USA/Example/Disc 1.iso').is_file()
+  assert (dest/'Games/USA/Example/Disc 2.iso').is_file()
+  assert not (dest/'Games/USA/Other').exists()
+  assert not (dest/'Games/Japan/Third').exists()
+  assert (dest/'boot.iso').read_bytes()==(source/'boot.iso').read_bytes()
+  press('Escape');time.sleep(.3);press('Return');time.sleep(.5);shot('keyboard-copy-reopened.png')
+  print('Native keyboard-only test: Tab reached games; Space selected one multidisc title; Tab/Enter opened, reviewed and copied it. Only that title was copied, boot image verified, and Escape/Enter exercised return focus.',flush=True)
  else:
   shot('native-library.png');click(280,500);shot('native-selected.png');primary();shot('native-copy-dialog.png');primary();time.sleep(1.5);shot('native-copy-review.png');primary();time.sleep(2)
   assert (dest/'Games/USA/Example/Disc 1.iso').is_file();assert (dest/'Games/USA/Example/Disc 2.iso').is_file();assert not (dest/'Games/USA/Other').exists();assert b'Other' not in (dest/'.ohmy3do/library.3di').read_bytes();assert (dest/'boot.iso').read_bytes()==(source/'boot.iso').read_bytes();assert (dest/'.ohmy3do/saves/slot-catalog.3di').is_file();shot('native-copy-complete.png');print('Actual Tauri mouse test: selected one multi-disc title, reviewed and copied it; filtered index, boot and save support verified.',flush=True)

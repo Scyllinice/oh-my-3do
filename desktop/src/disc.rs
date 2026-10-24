@@ -162,7 +162,9 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
     }
     let raw = fs::read(p)?;
     let text = decode_cue(&raw)?;
-    let pattern = rx(r#"(?im)^\s*FILE\s+(?:"([^"\r\n]+)"|(\S+))\s+BINARY\s*$"#);
+    // Like the drive's firmware, accept any type word (BINARY, WAVE, MOTOROLA)
+    // and any track file: it reads every track as raw sectors.
+    let pattern = rx(r#"(?im)^\s*FILE\s+(?:"([^"\r\n]+)"|(\S+))\s+\S+\s*$"#);
     let parent = p.parent().context("CUE parent missing")?;
     let mut refs = vec![];
     let mut siblings: Option<HashMap<String, Vec<PathBuf>>> = None;
@@ -188,14 +190,8 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
             bail!("Missing or ambiguous CUE track: {name}")
         }
         let q = matches[0].canonicalize()?;
-        if !["bin", "iso", "wav", "aiff", "aif"].contains(
-            &q.extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_ascii_lowercase()
-                .as_str(),
-        ) {
-            bail!("Unsupported CUE track type")
+        if q.extension().unwrap_or_default().eq_ignore_ascii_case("cue") {
+            bail!("A CUE track cannot be another CUE")
         }
         if !refs.contains(&q) {
             refs.push(q)
@@ -204,7 +200,7 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
     if refs.is_empty()
         || rx(r"(?im)^\s*FILE\b").find_iter(&text).count() != pattern.captures_iter(&text).count()
     {
-        bail!("Unsupported CUE directives; use BINARY tracks")
+        bail!("Unsupported CUE: each FILE line needs a file name and a type")
     }
     Ok((text, refs))
 }

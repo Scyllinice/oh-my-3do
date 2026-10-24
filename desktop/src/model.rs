@@ -113,6 +113,7 @@ pub struct Preferences {
     pub download_covers: bool,
     pub software_rendering: bool,
     pub theme: Theme,
+    pub text_scale: Option<u16>,
     pub drives: std::collections::BTreeMap<String, crate::drive_identity::Identity>,
     pub browser_drives: Vec<String>,
     pub library_views: std::collections::BTreeMap<String, LibraryView>,

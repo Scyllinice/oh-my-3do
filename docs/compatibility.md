@@ -39,7 +39,7 @@ button press before the menu responds. Its cause remains unconfirmed.
 | Tested setup | Confirmed working | Version information |
 | --- | --- | --- |
 | Windows 11 | Desktop app operation | Every released build through 1.0.2: versions 1.0.0, 1.0.1 and 1.0.2 |
-| Linux x64 development container | Native app interaction, local desktop update on exit, startup verification and failed-update rollback | Desktop 1.0.2 test builds; this is a container result, not a desktop-distribution report |
+| Linux x64 development container | Native keyboard-only game copy, save editing, local desktop update on exit, startup verification and failed-update rollback | Desktop 1.0.2 and 1.0.3 test builds; this is a container result, not a desktop-distribution report |
 
 Installation, launch and uninstallation have also been confirmed on Windows 11.
 

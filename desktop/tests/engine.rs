@@ -245,6 +245,44 @@ fn cue_import_renames_tracks_and_undo_checks_original_bytes() {
     assert!(cue.exists());
 }
 #[test]
+fn cue_import_keeps_track_types_and_any_track_file_name() {
+    // Dumps with .img data and WAVE audio tracks boot on the drive's own menu.
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("library");
+    fs::create_dir(&root).unwrap();
+    let cue = put(
+        t.path(),
+        "incoming/source.cue",
+        b"FILE \"data.img\" BINARY\n TRACK 01 MODE1/2352\n INDEX 01 00:00:00\nFILE audio.wav WAVE\n TRACK 02 AUDIO\n INDEX 01 00:00:00\n",
+    );
+    put(t.path(), "incoming/data.img", b"fictional");
+    put(t.path(), "incoming/audio.wav", b"music");
+    // The catalog knows both tracks, so the two-file disc is identified.
+    let mut cat = catalog(b"fictional");
+    cat.games[0].roms = [("Example (USA) (Track 1).bin", &b"fictional"[..]), ("Example (USA) (Track 2).bin", b"music")]
+        .into_iter()
+        .map(|(name, data)| Rom {
+            name: name.into(),
+            size: data.len() as u64,
+            sha1: format!("{:x}", Sha1::digest(data)),
+            serial: String::new(),
+        })
+        .collect();
+    catalog::prepare(&mut cat);
+    let plan = library::scan(&root, &[cue], cat, false, &Job::default()).unwrap();
+    library::import(&plan, &Preferences::default(), &t.path().join("cache"), &Job::default()).unwrap();
+    let text = fs::read_to_string(root.join(&plan.entries[0].target)).unwrap();
+    let files: Vec<_> = text.lines().filter(|l| l.starts_with("FILE")).collect();
+    assert_eq!(files.len(), 2, "{text}");
+    assert!(files[0].starts_with("FILE \"") && files[0].ends_with("\" BINARY"), "{text}");
+    assert!(files[1].starts_with("FILE \"") && files[1].ends_with("\" WAVE"), "{text}");
+    let folder = root.join(&plan.entries[0].target).parent().unwrap().to_path_buf();
+    for line in files {
+        let name = line.split('"').nth(1).unwrap();
+        assert!(folder.join(name).is_file(), "{name} was not copied beside the CUE");
+    }
+}
+#[test]
 fn mult_disc_sets_consolidate_into_one_folder() {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("library");

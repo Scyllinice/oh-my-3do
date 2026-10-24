@@ -34,7 +34,19 @@ fn cue_inventory_preserves_order_duplicates_and_fresh_lookups() {
     assert_eq!(disc::cue_refs(&cue).unwrap().1, expected);
     fs::write(&cue, "FILE \"../outside.bin\" BINARY\n").unwrap();
     assert!(disc::cue_refs(&cue).is_err());
-    fs::write(&cue, "FILE \"Track 01.bin\" WAVE\n").unwrap();
+    // The drive's firmware reads every track as raw data, whatever its type
+    // word or file name, so dumps with .img tracks or WAVE/MOTOROLA audio boot.
+    for name in ["Data.img", "Audio.wav", "Audio.raw"] {
+        fs::write(root.join(name), b"track").unwrap();
+    }
+    fs::write(&cue, "FILE \"Data.img\" BINARY\n  TRACK 01 MODE1/2352\nFILE \"Audio.wav\" WAVE\n  TRACK 02 AUDIO\nFILE Audio.raw MOTOROLA\n  TRACK 03 AUDIO\n").unwrap();
+    let expected: Vec<_> = ["Data.img", "Audio.wav", "Audio.raw"]
+        .into_iter().map(|name| root.join(name).canonicalize().unwrap()).collect();
+    assert_eq!(disc::cue_refs(&cue).unwrap().1, expected);
+    // Still rejected: a CUE naming another CUE, and a FILE line without a type.
+    fs::write(&cue, "FILE \"Game.cue\" BINARY\n").unwrap();
+    assert!(disc::cue_refs(&cue).is_err());
+    fs::write(&cue, "FILE \"Data.img\"\n").unwrap();
     assert!(disc::cue_refs(&cue).is_err());
 }
 

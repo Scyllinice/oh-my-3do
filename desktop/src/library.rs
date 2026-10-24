@@ -1471,7 +1471,7 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
                         )
                     })
                     .collect::<HashMap<_, _>>();
-                let text = rx(r#"(?im)^(\s*FILE\s+)(?:"([^"\r\n]+)"|(\S+))(\s+BINARY[^\r\n]*)"#)
+                let text = rx(r#"(?im)^(\s*FILE\s+)(?:"([^"\r\n]+)"|(\S+))(\s+\S+[^\r\n]*)"#)
                     .replace_all(&text, |c: &regex::Captures<'_>| {
                         format!(
                             "{}\"{}\"{}",

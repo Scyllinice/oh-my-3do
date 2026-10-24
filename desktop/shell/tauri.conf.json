@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Oh My 3DO Library",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "identifier": "com.ohmy3do.library",
   "build": { "frontendDist": "../ui" },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "label": "main", "title": "Oh My 3DO Library", "width": 1280, "height": 900, "minWidth": 900, "minHeight": 650 }],
+    "windows": [{ "label": "main", "title": "Oh My 3DO Library", "width": 1280, "height": 900, "minWidth": 640, "minHeight": 480 }],
     "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'" }
   },
   "bundle": { "active": false, "icon": ["../../assets/app-icon.png", "../../assets/app-icon.ico"] }
