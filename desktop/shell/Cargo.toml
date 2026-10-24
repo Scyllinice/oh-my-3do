@@ -1,6 +1,6 @@
 [package]
 name = "oh-my-3do-desktop"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 license = "MIT"
 rust-version = "1.88"

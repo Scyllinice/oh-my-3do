@@ -229,6 +229,27 @@ pub fn assign(entry: &mut Entry, game: &Game, index: Option<usize>, category: Op
         .map(|f| f.target.clone())
         .unwrap_or_default();
 }
+/// A category is also an explicit destination choice for an unmatched title.
+/// Preserve its entered name/region without claiming catalog identification.
+pub fn choose_import_category(entry: &mut Entry, catalog: &Catalog, category: &str) {
+    // Changing folders may resolve an occupied destination. The caller checks
+    // collisions again against the newly assigned paths.
+    if entry.reason == "Destination is already occupied" {
+        entry.blocked = false;
+        entry.selected = false;
+    }
+    if let Some(index) = entry.game {
+        assign(entry, &catalog.games[index], Some(index), Some(category));
+    } else {
+        let game = Game {
+            name: entry.title.clone(), release: entry.title.clone(),
+            region: Some(entry.region.clone()), ..Default::default()
+        };
+        assign(entry, &game, None, Some(category));
+        entry.confidence = "unverified".into();
+        entry.reason = "Title kept as entered; no catalog match verified".into();
+    }
+}
 fn serials(game: &Game) -> HashSet<String> {
     std::iter::once(game.serial.as_str())
         .chain(game.roms.iter().map(|r| r.serial.as_str()))
@@ -505,6 +526,7 @@ pub fn scan(
             category_reason: "".into(),
             blocked: false,
         };
+        let mut audio_only = false;
         if source
             .extension()
             .unwrap_or_default()
@@ -516,14 +538,7 @@ pub fn scan(
                 .captures_iter(&text)
                 .map(|c| c[1].to_ascii_uppercase())
                 .collect::<Vec<_>>();
-            if !modes.is_empty() && modes.iter().all(|m| m == "AUDIO") {
-                entry.reason =
-                    "Audio-only disc: use the audio-disc workflow; no game identity assigned"
-                        .into();
-                entry.blocked = true;
-                entries.push(entry);
-                continue;
-            }
+            audio_only = !modes.is_empty() && modes.iter().all(|m| m == "AUDIO");
         }
         for file in files {
             let size = fs::metadata(file)?.len();
@@ -554,7 +569,15 @@ pub fn scan(
                 target: String::new(),
             });
         }
-        identify(&mut entry, &catalog, quick);
+        if audio_only {
+            // Keep the CUE and every track available for explicit import, but
+            // do not match an audio disc against the game catalog.
+            entry.region = d::primary_region(&entry.title);
+            entry.confidence = "audio-only".into();
+            entry.reason = "Audio-only disc: choose a category to import without a verified catalog match".into();
+        } else {
+            identify(&mut entry, &catalog, quick);
+        }
         entries.push(entry);
     }
     let mut plan = Plan {
@@ -1368,7 +1391,8 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
     let mut sources = HashSet::new();
     for entry in &entries {
         if !entry.resolvable() {
-            bail!("Resolve {} first", entry.title)
+            bail!("Choose a category or identify {} before importing{}", entry.title,
+                if entry.blocked { format!(": {}", entry.reason) } else { String::new() })
         }
         for file in &entry.files {
             let path = f::safe(&root, &file.target)?;

@@ -44,14 +44,15 @@ window.__TAURI__={event:{listen:async(name,fn)=>{listeners[name]=fn;return ()=>{
  }
  if(window.__a11yMock.fail===action)throw 'Fixture operation failed';
  switch(action){
- case 'init':return {prefs,version:VERSION,categories:['Games'],args:[],update_report:null};
+ case 'init':return {prefs,version:VERSION,categories:['Games','Bonus Discs','Music'],args:[],update_report:null};
  case 'ready':return true;
  case 'preferences':prefs={...a};return prefs;
- case 'library':return {root:prefs.library,records,categories:['Games']};
- case 'drive_browser':return {root:prefs.destination,records,categories:['Games'],identity:{token:'fixture'},warnings:[],game_bytes:12288,available:1048576,capacity:2097152};
+ case 'library':return {root:prefs.library,records,categories:['Games','Bonus Discs','Music']};
+ case 'drive_browser':return {root:prefs.destination,records,categories:['Games','Bonus Discs','Music'],identity:{token:'fixture'},warnings:[],game_bytes:12288,available:1048576,capacity:2097152};
  case 'installed_versions':return {installed:true,version:VERSION};
  case 'pick':return a.kind==='discs'?['/fixture/source.iso']:a.kind==='archive'?backup.path:'/fixture/usb';
- case 'scan':return {entries:[{source:'/fixture/source.iso',title:'Example import',category:'Games',region:'USA',target:'Games/USA/Example/Example.iso',selected:true,blocked:false,confidence:'name',reason:'Fixture match',files:[],candidates:[],game:0}],catalog:{games:[{release:'Example import'}]}};
+ case 'scan':return window.__a11yMock.plan={entries:[{source:'/fixture/source.iso',title:'Example import',category:'',region:'USA',target:'',selected:false,blocked:false,confidence:'audio-only',reason:'Choose a category',files:[],candidates:[],game:null}],catalog:{games:[{release:'Example import'}]}};
+ case 'edit_import':{const entry=window.__a11yMock.plan.entries[a.index];if(a.category){entry.category=a.category;entry.target=a.category+'/USA/Example/Example.cue';entry.confidence='unverified';}if(a.selected!==undefined)entry.selected=a.selected;return window.__a11yMock.plan;}
  case 'drive_inspect':return {root:a.root,token:'fixture',identity:{name:'Fixture drive'},mismatch:false};
  case 'copy_preview':return {destination:prefs.destination,drive:{identity:{name:'Fixture drive'}},games:1,files:[{path:'Games/USA/Alpha/Alpha.iso',status:'copy'}],folders_to_move:0,storage};
  case 'copy':return {copied:1};
@@ -224,6 +225,17 @@ try:
     activate('[data-action="scan"]')
     wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, '[data-import-check]'))
     audit_labels('Import review')
+    check(not element('[data-import-check]').is_enabled(), 'Unresolved imports cannot be selected')
+    check(element('[data-import-category]').get_attribute('value') == '', 'Missing category has an explicit placeholder')
+    js('const select=document.querySelector("[data-import-category]");select.value="Bonus Discs";select.dispatchEvent(new Event("change",{bubbles:true}));')
+    wait.until(lambda _: element('[data-import-check]').is_enabled())
+    check(element('[data-import-category]').get_attribute('value') == 'Bonus Discs', 'Unmatched import retains Bonus Discs after refresh')
+    js('const select=document.querySelector("[data-import-category]");select.value="Music";select.dispatchEvent(new Event("change",{bubbles:true}));')
+    wait.until(lambda _: 'Music/USA' in element('td.path').text)
+    check(element('[data-import-category]').get_attribute('value') == 'Music', 'Custom import category remains selectable')
+    element('[data-import-check]').send_keys(Keys.SPACE)
+    wait.until(lambda _: 'Import 1 selected' in element('[data-action="import-apply"]').text)
+    check(element('[data-import-check]').is_selected(), 'Resolved import can be selected')
     page('saves')
     activate('[data-action="backup-open"]')
     wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, '#hex-editor'))

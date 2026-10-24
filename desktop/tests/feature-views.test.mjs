@@ -141,3 +141,14 @@ test('failed boot updates leave the current page and update offers available',as
  const install=runInNewContext(`${line};installBootUpdate`,{state,displayPath,inspectWriteDrive:async root=>({root,token:'identity'}),confirmAction:async()=>true,call:async()=>{throw Error('Write failed');},closeDialog:()=>{throw Error('Must keep failure visible');},render:()=>{throw Error('Must keep current page');}});
  await assert.rejects(install({dataset:{root:'/card'}}),/Write failed/);assert.equal(state.page,'library');assert.equal(state.updates.targets.length,1);
 });
+
+test('import review shows an empty category explicitly and disables unresolved selection',()=>{
+ const state={prefs:{library:'/library'},paths:['/incoming/example.cue'],plan:{entries:[{title:'Example',source:'/incoming/example.cue',category:'',target:'',selected:false,blocked:false,reason:'Choose category',confidence:'unmatched'}]}};
+ const ready=runInNewContext(`${source.split('\n').find(l=>l.startsWith('function importReady('))};importReady`);
+ const start=source.indexOf('function importView('),end=source.indexOf('\nfunction savesView(',start);
+ const render=runInNewContext(`${source.slice(start,end)};importView`,{state,e,bytes,pathLabel:e,importReady:ready,categories:['Games','Bonus Discs','Music'],option:(value,label,selected)=>`<option value="${e(value)}" ${selected?'selected':''}>${e(label)}</option>`,heading:()=>'',action:()=>'',checkbox:()=>''});
+ let html=render();assert.match(html,/<option value="" selected disabled>Choose a category…/);assert.match(html,/data-import-check="0"[^>]*disabled/);
+ const entry=state.plan.entries[0];entry.category='Music';entry.target='Music/Unknown/Example/Example.cue';entry.confidence='unverified';
+ html=render();assert.match(html,/<option value="Music" selected>/);assert.ok(!/data-import-check="0"[^>]*disabled/.test(html));
+ entry.blocked=true;html=render();assert.match(html,/data-import-check="0"[^>]*disabled/);
+});

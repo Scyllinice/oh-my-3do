@@ -46,7 +46,9 @@ Save backups and copies in other libraries are kept.
 
 You can also drag source files onto the app. Imports leave the originals intact.
 **Fast name-only scan** is quicker but does not verify disc contents. Use
-**Identify…** for an incorrect or missing match.
+**Identify…** for an incorrect or missing match. To keep a title without a
+catalog match, choose its category and check it for import; it is marked
+**unverified**. Audio-only CUEs can be imported this way with all referenced tracks.
 
 Select games and use **Move category…** to move them within an organized library.
 **Settings & tools → Undo last change** can undo supported library operations.

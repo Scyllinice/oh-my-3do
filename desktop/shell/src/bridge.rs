@@ -379,9 +379,6 @@ fn dispatch(
             let plan = s.import.as_mut().context("Scan discs first")?;
             let i = a["index"].as_u64().context("Choose an import")? as usize;
             let entry = plan.entries.get_mut(i).context("Import changed")?;
-            if let Some(v) = a["selected"].as_bool() {
-                entry.selected = v;
-            }
             if let Some(n) = a["game"].as_u64() {
                 entry.blocked = false;
                 entry.confidence = "manual".into();
@@ -396,9 +393,7 @@ fn dispatch(
             }
             if let Some(category) = a["category"].as_str() {
                 ensure!(config.contains(category), "Invalid category");
-                if let Some(n) = entry.game {
-                    library::assign(entry, &plan.catalog.games[n], Some(n), Some(category));
-                }
+                library::choose_import_category(entry, &plan.catalog, category);
             }
             if a["unverified"].as_bool() == Some(true) {
                 let title = text(a, "title")?.trim();
@@ -415,6 +410,10 @@ fn dispatch(
                 entry.confidence = "unverified".into();
                 library::assign(entry, &game, None, Some(text(a, "category")?));
                 entry.selected = entry.resolvable();
+            }
+            if let Some(v) = a["selected"].as_bool() {
+                ensure!(!v || entry.resolvable(), "Choose a category or identify this disc before selecting it");
+                entry.selected = v;
             }
             library::collisions(plan)?;
             Ok(json!(plan))

@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "oh-my-3do-library"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
