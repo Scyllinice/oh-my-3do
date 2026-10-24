@@ -17,8 +17,13 @@
 /* The reader runs above the menu's own task (150), so a finished transfer
  * is followed up at once. It spends nearly all its time waiting for the
  * drive: blocks land straight in a slot, are summed as they arrive, and a
- * chunk's entries are stored with plain copies. */
+ * chunk's entries are stored with plain copies. The bus moves each byte on
+ * the CPU, though, so while the chunk being read is not needed for a while
+ * the reader drops below the menu and reads only while the menu waits. This
+ * spreads the burst of reading the opening again before a loop. */
 #define READER_PRIORITY 160
+#define READER_SPARE_PRIORITY 140
+#define READER_SPARE_CHUNKS 2 /* ahead of playback by more than this */
 /* Playback holds this many frames before a chunk that has not arrived, so
  * the sound pauses before it runs out and both resume in step. */
 #define LOOKAHEAD 3
@@ -89,6 +94,7 @@ static void *take(unsigned long bytes,int kind,PreviewStreamReclaim reclaim,void
 
 /* Read chunk sequence seq (counting across loops) into its slot, a block at
  * a time, summing it as it arrives. The file must be open at that chunk. */
+static void pace(PreviewStream *s,unsigned long seq);
 static int read_bytes(PreviewStream *s,OdeReadBuffer reader,unsigned long seq)
 {
     unsigned int k=(unsigned int)(seq%s->slots),c=(unsigned int)(seq%s->header.chunks);
@@ -97,6 +103,7 @@ static int read_bytes(PreviewStream *s,OdeReadBuffer reader,unsigned long seq)
     sum.a=sum.b=0;
     s->reading=1;
     for (at=0;at<n;at+=PREVIEW7_BLOCK_BYTES) {
+        pace(s,seq);
         if (usb_file_read_block(&s->ode,reader,s->slot[k]+at)<0) { s->reading=0; return -1; }
         /* The chunk's own check, its first word, is not summed. */
         preview7_sum_add(&sum,s->slot[k]+at+(at ? 0 : 4),PREVIEW7_BLOCK_BYTES-(at ? 0 : 4));
@@ -140,11 +147,22 @@ static int position(PreviewStream *s,OdeReadBuffer reader,unsigned long seq)
 
 #ifdef OH3DO_SDK
 static PreviewStream *reader_stream;
+static int reader_spare;
+static void pace(PreviewStream *s,unsigned long seq)
+{
+    unsigned long need=(seq/s->header.chunks)*s->header.frames+(seq%s->header.chunks)*(unsigned long)s->header.chunk_frames;
+    /* Loading before the first frame or during a wait is always urgent. */
+    int spare=*(volatile int *)&s->playing && !*(volatile int *)&s->paused &&
+        need>*(volatile unsigned long *)&s->frame+READER_SPARE_CHUNKS*(unsigned long)s->header.chunk_frames;
+    if (spare!=reader_spare) { reader_spare=spare; SetItemPri(CURRENTTASK->t.n_Item,(uint8)(spare ? READER_SPARE_PRIORITY : READER_PRIORITY)); }
+    if (spare) ++s->spare_blocks;
+}
 static void reader_main(void)
 {
     PreviewStream *s=reader_stream;
     OdeBus bus;
     unsigned long seq=0;
+    reader_spare=0;
     if (ode_bus_open(&bus)<0) { s->error=1; s->running=0; return; }
     bus.blocking=1;
     s->ode.transfer=ode_bus_transfer; s->ode.context=&bus; s->ode.progress=NULL;
@@ -194,6 +212,7 @@ static void sleep_ms(unsigned long ms)
     if (timer>=0) { SleepMSec(timer,ms); DeleteIOReq(timer); }
 }
 #else
+static void pace(PreviewStream *s,unsigned long seq) { (void)s; (void)seq; }
 /* Hosts: read what the slots have room for, now. */
 static OdeReadBuffer host_reader;
 static void pump(PreviewStream *s)
@@ -261,17 +280,19 @@ void preview_stream_audio(PreviewStream *s,unsigned long now,int waiting)
 {
     if (!s->playing) return;
     if (waiting && !s->paused) {
-        s->paused=1; s->pause_at=now; preview_audio_pause(&s->audio,1);
-        if (s->stalls<4) {
+        s->paused=s->loop_hold ? 2 : 1; s->pause_at=now; preview_audio_pause(&s->audio,1);
+        if (!s->loop_hold && s->stalls<4) {
             unsigned long *log=s->stall_log[s->stalls],slots=0;
             unsigned int k;
             for (k=0;k<s->slots && k<8;++k) slots|=(s->ready[k]&15UL)<<(4*k);
             log[0]=s->frame; log[1]=s->released; log[2]=slots; log[3]=elapsed_ms(s,now);
         }
-        ++s->stalls;
+        if (s->loop_hold) ++s->loop_holds;
+        else ++s->stalls;
     }
     else if (!waiting && s->paused) {
-        s->paused=0; s->audio_paused_ms+=now-s->pause_at; s->stall_ms+=now-s->pause_at;
+        if (s->paused==2) s->loop_hold_ms+=now-s->pause_at; else s->stall_ms+=now-s->pause_at;
+        s->paused=0; s->audio_paused_ms+=now-s->pause_at;
         preview_audio_pause(&s->audio,0);
     }
     if (!s->paused && s->sound) fill(s,now);
@@ -307,7 +328,18 @@ static int decode(PreviewStream *s,unsigned long frame,int picture,unsigned char
 #ifndef OH3DO_SDK
         pump(s);
 #endif
+        s->loop_hold=0;
         if (s->ready[seq%s->slots]!=seq+1 && seq<s->released+s->slots) return s->error ? -1 : PREVIEW_STREAM_NOT_READY;
+        if (s->frame && !(s->frame%s->header.frames)) {
+            /* Start each loop with every slot full, as the first start does,
+             * so its opening chunks are not read while they play. */
+            unsigned long first=(s->frame/s->header.frames)*s->header.chunks,n=s->slots<s->header.chunks ? s->slots : s->header.chunks,j;
+#ifndef OH3DO_SDK
+            pump(s);
+#endif
+            for (j=0;j<n;++j)
+                if (s->ready[(first+j)%s->slots]!=first+j+1) { s->loop_hold=1; return s->error ? -1 : PREVIEW_STREAM_NOT_READY; }
+        }
     }
     while (s->frame<=frame) {
         unsigned long local=s->frame%s->header.frames,seq=(s->frame/s->header.frames)*s->header.chunks+local/s->header.chunk_frames;
@@ -359,6 +391,7 @@ void preview_stream_close(PreviewStream *s)
         memset(&cleared,0,sizeof(cleared));
         cleared.chunks_read=s->chunks_read; cleared.read_ms=s->read_ms; cleared.read_max_ms=s->read_max_ms;
         cleared.stalls=s->stalls; cleared.stall_ms=s->stall_ms; cleared.error=s->error;
+        cleared.loop_holds=s->loop_holds; cleared.loop_hold_ms=s->loop_hold_ms; cleared.spare_blocks=s->spare_blocks;
         memcpy(cleared.stall_log,s->stall_log,sizeof(cleared.stall_log));
         cleared.reader_error_code=s->reader_error_code; cleared.bus_commands=s->bus_commands;
         cleared.slots=s->slots;

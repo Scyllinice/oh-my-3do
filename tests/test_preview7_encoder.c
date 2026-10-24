@@ -41,7 +41,7 @@ static void synthesize(uint8_t *rgb,int f)
 
 int main(int argc,char **argv)
 {
-    Preview7Params p={204800,307200,786432,131072,10,1024,512,230000};
+    Preview7Params p={204800,307200,655360,163840,10,1024,512,230000};
     uint64_t bytes=oh3do_preview7_workspace(FRAMES),samples=(uint64_t)FRAMES*11025/30,capacity=4u<<20;
     uint8_t *ws=(uint8_t *)malloc(bytes),*rgb=(uint8_t *)malloc(W*H*3),*out=(uint8_t *)malloc(capacity);
     int8_t *audio=(int8_t *)malloc(samples);
@@ -61,7 +61,7 @@ int main(int argc,char **argv)
     for (f=0;f<FRAMES;++f) { synthesize(rgb,f); assert(!oh3do_preview7_frame(ws,rgb)); }
     assert(oh3do_preview7_frame(ws,rgb)<0);
     assert(oh3do_preview7_encode(ws,&p,audio,samples-1,out,capacity,stats)==-1);
-    p.max_chunk=1000; assert(oh3do_preview7_encode(ws,&p,audio,samples,out,capacity,stats)==-1); p.max_chunk=131072;
+    p.max_chunk=1000; assert(oh3do_preview7_encode(ws,&p,audio,samples,out,capacity,stats)==-1); p.max_chunk=163840;
     assert(oh3do_preview7_encode(ws,&p,audio,samples,out,4096,stats)==-2);
 
     n=oh3do_preview7_encode(ws,&p,audio,samples,out,capacity,stats);
@@ -69,7 +69,7 @@ int main(int argc,char **argv)
     assert(!preview7_header(out,&h));
     assert(h.frames==FRAMES && h.chunk_frames==10 && h.chunks==8 && h.audio_rate==11025);
     assert(h.entries4==stats[2] && h.entries2==stats[3] && h.entries4<=1024 && h.entries2<=512);
-    assert(stats[1]<=p.cycle_cap && h.preroll>=1 && h.preroll<=h.slots && h.slots==6 && h.max_chunk<=p.max_chunk);
+    assert(stats[1]<=p.cycle_cap && h.preroll>=1 && h.preroll<=h.slots && h.slots==4 && h.max_chunk<=p.max_chunk);
     assert((uint64_t)n<=(uint64_t)p.rate*FRAMES/30+2048);
 
     /* Decode: every chunk checks, and the picture is close to the source. */

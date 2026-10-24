@@ -51,7 +51,7 @@ typedef struct PreviewStream {
     /* Sound */
     signed char *ring;
     PreviewAudio audio;
-    int sound, paused;
+    int sound, paused; /* paused: 1 waiting for a chunk, 2 holding at a loop */
     unsigned long audio_since, audio_paused_ms, pause_at;
     /* Reading */
     Ode ode;
@@ -60,6 +60,10 @@ typedef struct PreviewStream {
     unsigned long bus_commands;
     /* Diagnostics */
     unsigned long chunks_read, read_ms, read_max_ms, stalls, stall_ms;
+    /* Waits at a loop for every slot to fill (not stalls). */
+    int loop_hold;
+    unsigned long loop_holds, loop_hold_ms;
+    unsigned long spare_blocks; /* blocks read below the menu's priority */
     /* The first stalls: frame, chunks released, the slots' sequences, ms played. */
     unsigned long stall_log[4][4];
     long reader_error_code;

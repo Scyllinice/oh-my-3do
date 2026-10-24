@@ -25,7 +25,7 @@ V5_PACKET = 1200 * 12   # worst-case packet: every block GRAD with literal colou
 # about 200 KB/s. The same settings as the desktop app (desktop/src/media.rs).
 STREAM_WIDTH, STREAM_HEIGHT = 320, 240
 STREAM_MAX_SECONDS = 60
-STREAM_PARAMS = dict(rate=200*1024, read_rate=300*1024, slot_bytes=768*1024, max_chunk=128*1024,
+STREAM_PARAMS = dict(rate=200*1024, read_rate=300*1024, slot_bytes=640*1024, max_chunk=160*1024,
                      chunk_frames=10, entries4=8192, entries2=4096, cycle_cap=230000)
 
 

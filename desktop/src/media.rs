@@ -348,15 +348,15 @@ struct Preview7Params {
 const STREAM_PARAMS: Preview7Params = Preview7Params {
     rate: 200 * 1024,
     read_rate: 300 * 1024,
-    slot_bytes: 768 * 1024,
-    max_chunk: 128 * 1024,
+    slot_bytes: 640 * 1024,
+    max_chunk: 160 * 1024,
     chunk_frames: 10,
     entries4: 8192,
     entries2: 4096,
     cycle_cap: 230_000,
 };
 /// Part of the cached file's name: a change of format or settings re-encodes.
-pub const PREVIEW_KEY: &str = "om3dvid7-320x240-30fps-full-200k";
+pub const PREVIEW_KEY: &str = "om3dvid7-320x240-30fps-full-200k-160c";
 extern "C" {
     // tools/preview7-encoder.c, compiled in by build.rs
     fn oh3do_preview7_workspace(frames: u32) -> u64;

@@ -3378,6 +3378,7 @@ static void export_diagnostics(Menu *menu)
     format(line,"stream_decode_ms=%lu\nstream_decode_frames=%lu\nstream_idle_ms=%lu\nstream_idle_frames=%lu\n",
            menu->stream.decode_ms,menu->stream.decode_frames,menu->stream.idle_ms,menu->stream.idle_frames); strcat(data,line);
     format(line,"stream_full_ms=%lu\nstream_full_frames=%lu\n",menu->stream.full_ms,menu->stream.full_frames); strcat(data,line);
+    format(line,"stream_loop_holds=%lu\nstream_loop_hold_ms=%lu\nstream_spare_blocks=%lu\n",menu->stream.loop_holds,menu->stream.loop_hold_ms,menu->stream.spare_blocks); strcat(data,line);
     for (i=0;i<4 && i<menu->stream.stalls;++i) {
         format(line,"stream_stall%d=%lu %lu %08lx %lu\n",(int)i,menu->stream.stall_log[i][0],menu->stream.stall_log[i][1],
                menu->stream.stall_log[i][2],menu->stream.stall_log[i][3]); strcat(data,line);
