@@ -15,10 +15,14 @@
 
 void ode_bus_close(OdeBus *bus)
 {
-    if (bus->data_request > 0) DeleteIOReq(bus->data_request);
-    if (bus->request > 0) DeleteIOReq(bus->request);
-    if (bus->timer > 0) DeleteIOReq(bus->timer);
-    if (bus->device > 0) CloseNamedDevice(bus->device);
+    if (bus->data_request > 0)
+        DeleteIOReq(bus->data_request);
+    if (bus->request > 0)
+        DeleteIOReq(bus->request);
+    if (bus->timer > 0)
+        DeleteIOReq(bus->timer);
+    if (bus->device > 0)
+        CloseNamedDevice(bus->device);
     bus->data_request = bus->request = bus->timer = bus->device = -1;
 }
 
@@ -52,13 +56,15 @@ static int bus_failure(OdeBus *bus, Err error)
 
 int ode_bus_kind(unsigned char command)
 {
-    if ((command & 0xf8) == 0xe0) return command & 7;
-    if ((command & 0xf8) == 0xc0) return 8 + (command & 7);
+    if ((command & 0xf8) == 0xe0)
+        return command & 7;
+    if ((command & 0xf8) == 0xc0)
+        return 8 + (command & 7);
     return 16;
 }
 
-int ode_bus_transfer(void *context, const unsigned char *command,
-                     unsigned char *reply, size_t capacity, size_t *length)
+int ode_bus_transfer(void *context, const unsigned char *command, unsigned char *reply,
+                     size_t capacity, size_t *length)
 {
     OdeBus *bus = (OdeBus *)context;
     IOInfo info;
@@ -66,7 +72,8 @@ int ode_bus_transfer(void *context, const unsigned char *command,
     Err error;
     unsigned long started;
     unsigned int spins = 0;
-    if (bus->timed_out || bus->request < 0) return -1;
+    if (bus->timed_out || bus->request < 0)
+        return -1;
     bus->last_error = 0;
     bus->last_command = command[0];
     bus->last_length = 0;
@@ -133,11 +140,15 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
     unsigned long started;
     Err error;
     int result = -1;
-    if (bus->timed_out || bus->device < 0 || size != 2048) return -1;
+    if (bus->timed_out || bus->device < 0 || size != 2048)
+        return -1;
     if (bus->data_request <= 0)
         bus->data_request = CreateIOReq("Oh My 3DO USB data", 0, bus->device, 0);
     data_request = bus->data_request;
-    if (data_request < 0) { bus->last_error = data_request; return -1; }
+    if (data_request < 0) {
+        bus->last_error = data_request;
+        return -1;
+    }
     memset(&info, 0, sizeof(info));
     info.ioi_Command = CMD_READ;
     info.ioi_Unit = ODE_XBUS_UNIT;
@@ -150,11 +161,13 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
         bus->last_error = error;
         return -1;
     }
-    if (ode_bus_transfer(context, packet, reply, sizeof(reply), &length) < 0 ||
-        length != 2 || reply[0] != 0xe7 || (reply[1] & 0x10)) goto done;
+    if (ode_bus_transfer(context, packet, reply, sizeof(reply), &length) < 0 || length != 2 ||
+        reply[0] != 0xe7 || (reply[1] & 0x10))
+        goto done;
     started = (unsigned long)GetMSecTime(bus->timer);
     while (!bus->blocking && !CheckIO(data_request)) {
-        if ((unsigned long)GetMSecTime(bus->timer) - started >= 3000UL) goto done;
+        if ((unsigned long)GetMSecTime(bus->timer) - started >= 3000UL)
+            goto done;
         SleepMSec(bus->timer, 1);
     }
     error = WaitIO(data_request);
@@ -163,7 +176,8 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
         bus->last_error = error < 0 ? error : (request ? request->io_Error : -1);
         goto done;
     }
-    if ((size_t)request->io_Actual != size) goto done;
+    if ((size_t)request->io_Actual != size)
+        goto done;
     result = 0;
 done:
     if (result < 0) {

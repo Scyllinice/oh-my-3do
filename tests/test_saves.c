@@ -12,63 +12,107 @@ typedef struct Fake {
     int is_test, is_blank, opened, calls, fail_at, short_write, short_read, no_write;
     int forbidden, writes;
 } Fake;
-static int fault(Fake *f) { return ++f->calls == f->fail_at; }
-static int transfer(void *context, const unsigned char *p, unsigned char *r, size_t cap, size_t *len)
+static int fault(Fake *f)
+{
+    return ++f->calls == f->fail_at;
+}
+static int transfer(void *context, const unsigned char *p, unsigned char *r, size_t cap,
+                    size_t *len)
 {
     Fake *f = (Fake *)context;
     size_t n, off;
-    if (fault(f)) return -1;
-    assert(cap >= 4); memset(r, 0, cap); r[0] = p[0]; *len = 2;
+    if (fault(f))
+        return -1;
+    assert(cap >= 4);
+    memset(r, 0, cap);
+    r[0] = p[0];
+    *len = 2;
     if (p[0] == 0xe6) {
-        off = ((size_t)p[1] * 256 + p[2]) * 4; assert(off + 4 <= 2048); memcpy(f->buffer + off, p + 3, 4);
+        off = ((size_t)p[1] * 256 + p[2]) * 4;
+        assert(off + 4 <= 2048);
+        memcpy(f->buffer + off, p + 3, 4);
     } else if (p[0] == 0xe1) {
-        const char *name=(const char *)f->buffer;
-        assert(!strncmp(name,".ohmy3do/",9)); name+=9;
-        assert(!strncmp(name, "saves/", 6) || !strcmp(name,"ohmy3do.ini") || !strcmp(name,"favorites.txt") || !strcmp(name,"blank.bin"));
+        const char *name = (const char *)f->buffer;
+        assert(!strncmp(name, ".ohmy3do/", 9));
+        name += 9;
+        assert(!strncmp(name, "saves/", 6) || !strcmp(name, "ohmy3do.ini") ||
+               !strcmp(name, "favorites.txt") || !strcmp(name, "blank.bin"));
         f->is_test = !strcmp(name, "saves/usb-test.bin");
         f->is_blank = !strcmp(name, "blank.bin"); /* the text reader's file of zeros */
-        f->position = 0; f->opened = 1; r[1] = 1; *len = 3;
+        f->position = 0;
+        f->opened = 1;
+        r[1] = 1;
+        *len = 3;
     } else if (p[0] == 0xe4 && f->is_blank) {
-        n = (size_t)p[1] * 256 + p[2]; assert(f->opened && f->position + n <= sizeof(f->blank));
-        memcpy(f->blank + f->position, f->buffer, n); f->position += n;
-        if (f->position > f->blank_size) f->blank_size = f->position;
-        r[1] = p[1]; r[2] = p[2]; *len = 4;
+        n = (size_t)p[1] * 256 + p[2];
+        assert(f->opened && f->position + n <= sizeof(f->blank));
+        memcpy(f->blank + f->position, f->buffer, n);
+        f->position += n;
+        if (f->position > f->blank_size)
+            f->blank_size = f->position;
+        r[1] = p[1];
+        r[2] = p[2];
+        *len = 4;
     } else if (p[0] == 0xe4) {
         unsigned char *file = f->is_test ? f->test : f->file;
         size_t *size = f->is_test ? &f->test_size : &f->size;
         ++f->writes;
-        assert(f->opened); n = (size_t)p[1] * 256 + p[2]; assert(n <= 2048);
-        if (f->short_write && n) --n;
+        assert(f->opened);
+        n = (size_t)p[1] * 256 + p[2];
+        assert(n <= 2048);
+        if (f->short_write && n)
+            --n;
         if (!f->no_write) {
             assert(f->position + n <= (f->is_test ? sizeof(f->test) : sizeof(f->file)));
-            memcpy(file + f->position, f->buffer, n); f->position += n;
-            if (f->position > *size) *size = f->position;
+            memcpy(file + f->position, f->buffer, n);
+            f->position += n;
+            if (f->position > *size)
+                *size = f->position;
         }
         /* Lie about short/failed writes just like the reference can. */
-        r[1] = p[1]; r[2] = p[2]; *len = 4;
+        r[1] = p[1];
+        r[2] = p[2];
+        *len = 4;
     } else if (p[0] == 0xe3) {
         const unsigned char *file = f->is_blank ? f->blank : f->is_test ? f->test : f->file;
         size_t size = f->is_blank ? f->blank_size : f->is_test ? f->test_size : f->size;
-        assert(f->opened); n = (size_t)p[1] * 256 + p[2]; assert(n <= 2048);
-        if (n > size - f->position) n = size - f->position;
-        if (f->short_read && n) --n;
-        memcpy(f->buffer, file + f->position, n); f->position += n;
-        r[1] = p[1]; r[2] = p[2]; *len = 4;
-    } else if (p[0] == 0xe5) f->opened = 0;
-    else { f->forbidden = 1; assert(0); }
+        assert(f->opened);
+        n = (size_t)p[1] * 256 + p[2];
+        assert(n <= 2048);
+        if (n > size - f->position)
+            n = size - f->position;
+        if (f->short_read && n)
+            --n;
+        memcpy(f->buffer, file + f->position, n);
+        f->position += n;
+        r[1] = p[1];
+        r[2] = p[2];
+        *len = 4;
+    } else if (p[0] == 0xe5)
+        f->opened = 0;
+    else {
+        f->forbidden = 1;
+        assert(0);
+    }
     return 0;
 }
 static int reader(void *context, unsigned char *data, size_t size)
 {
     Fake *f = (Fake *)context;
-    if (fault(f)) return -1;
-    assert(size == 2048); memcpy(data, f->buffer, size); return 0;
+    if (fault(f))
+        return -1;
+    assert(size == 2048);
+    memcpy(data, f->buffer, size);
+    return 0;
 }
 static void setup(Fake *f, Ode *ode)
 {
-    memset(f, 0, sizeof(*f)); memset(ode, 0, sizeof(*ode));
+    memset(f, 0, sizeof(*f));
+    memset(ode, 0, sizeof(*ode));
     f->blank_size = sizeof(f->blank);
-    ode->transfer = transfer; ode->context = f; strcpy(ode->identity, "LOCODE");
+    ode->transfer = transfer;
+    ode->context = f;
+    strcpy(ode->identity, "LOCODE");
 }
 static void fix_crc(unsigned char *data, size_t size)
 {
@@ -84,14 +128,22 @@ int main(void)
     unsigned char *broken;
     size_t i;
     int calls, fault_at;
-    memset(&a, 0, sizeof(a)); memset(&loaded, 0, sizeof(loaded)); memset(&one, 0, sizeof(one));
+    memset(&a, 0, sizeof(a));
+    memset(&loaded, 0, sizeof(loaded));
+    memset(&one, 0, sizeof(one));
     memset(entries, 0, sizeof(entries));
-    for (i = 0; i < sizeof(payload); ++i) payload[i] = (unsigned char)(i * 31 + i / 2048);
-    strcpy(entries[0].name, "Road Rash"); entries[0].type = 0x33444f46UL;
-    entries[0].size = sizeof(payload); entries[0].data = payload;
-    strcpy(entries[1].name, "Empty Save"); entries[1].type = 0x12345678UL;
-    assert(!save_archive_build(&a, entries, 2)); assert(a.count == 2);
-    assert(a.entries[0].type == entries[0].type && !memcmp(a.entries[0].data, payload, sizeof(payload)));
+    for (i = 0; i < sizeof(payload); ++i)
+        payload[i] = (unsigned char)(i * 31 + i / 2048);
+    strcpy(entries[0].name, "Road Rash");
+    entries[0].type = 0x33444f46UL;
+    entries[0].size = sizeof(payload);
+    entries[0].data = payload;
+    strcpy(entries[1].name, "Empty Save");
+    entries[1].type = 0x12345678UL;
+    assert(!save_archive_build(&a, entries, 2));
+    assert(a.count == 2);
+    assert(a.entries[0].type == entries[0].type &&
+           !memcmp(a.entries[0].data, payload, sizeof(payload)));
     assert(save_restore_matches(&a, &a, &a.entries[0]));
     assert(!save_archive_build(&one, entries, 1));
     assert(!save_restore_matches(&a, &one, &a.entries[0])); /* unrelated save lost */
@@ -101,162 +153,243 @@ int main(void)
     save_archive_free(&loaded);
     /* Merge one game, retaining destination names, order, types and bytes. */
     {
-        SaveArchive merged={0}, full={0};
-        SaveEntry edit=entries[0], many[SAVE_MAX_FILES];
-        unsigned char changed[3]={9,8,7};
-        edit.data=changed; edit.size=3; edit.type=42;
-        strcpy(edit.name,"ROAD RASH");
-        assert(!save_archive_merge(&merged,&a,&edit));
-        assert(merged.count==2 && !strcmp(merged.entries[0].name,"Road Rash"));
-        assert(save_restore_matches(&a,&merged,&edit));
-        assert(!save_archive_merge(&merged,&merged,&merged.entries[0]));
-        strcpy(edit.name,"New Game");
-        assert(!save_archive_merge(&merged,&merged,&edit) && merged.count==3);
-        assert(!memcmp(merged.entries[0].data,changed,3));
-        for(i=0;i<SAVE_MAX_FILES;++i) {
-            memset(&many[i],0,sizeof(many[i]));
-            sprintf(many[i].name,"Game%lu",(unsigned long)i);
+        SaveArchive merged = {0}, full = {0};
+        SaveEntry edit = entries[0], many[SAVE_MAX_FILES];
+        unsigned char changed[3] = {9, 8, 7};
+        edit.data = changed;
+        edit.size = 3;
+        edit.type = 42;
+        strcpy(edit.name, "ROAD RASH");
+        assert(!save_archive_merge(&merged, &a, &edit));
+        assert(merged.count == 2 && !strcmp(merged.entries[0].name, "Road Rash"));
+        assert(save_restore_matches(&a, &merged, &edit));
+        assert(!save_archive_merge(&merged, &merged, &merged.entries[0]));
+        strcpy(edit.name, "New Game");
+        assert(!save_archive_merge(&merged, &merged, &edit) && merged.count == 3);
+        assert(!memcmp(merged.entries[0].data, changed, 3));
+        for (i = 0; i < SAVE_MAX_FILES; ++i) {
+            memset(&many[i], 0, sizeof(many[i]));
+            sprintf(many[i].name, "Game%lu", (unsigned long)i);
         }
-        assert(!save_archive_build(&full,many,SAVE_MAX_FILES));
-        assert(save_archive_merge(&merged,&full,&edit)<0 && merged.count==3);
-        strcpy(edit.name,"game0");
-        assert(!save_archive_merge(&full,&full,&edit) && full.count==SAVE_MAX_FILES);
-        edit.size=SAVE_MAX_BYTES;
-        assert(save_archive_merge(&merged,&a,&edit)<0 && merged.count==3);
-        save_archive_free(&merged); save_archive_free(&full);
+        assert(!save_archive_build(&full, many, SAVE_MAX_FILES));
+        assert(save_archive_merge(&merged, &full, &edit) < 0 && merged.count == 3);
+        strcpy(edit.name, "game0");
+        assert(!save_archive_merge(&full, &full, &edit) && full.count == SAVE_MAX_FILES);
+        edit.size = SAVE_MAX_BYTES;
+        assert(save_archive_merge(&merged, &a, &edit) < 0 && merged.count == 3);
+        save_archive_free(&merged);
+        save_archive_free(&full);
     }
     {
         SaveDifference d;
-        assert(save_archive_diff_count(&a,&one)==2);
-        assert(!save_archive_diff(&a,&one,0,&d) && d.state==SAVE_DIFF_SAME && !d.changed_bytes);
-        assert(!save_archive_diff(&a,&one,1,&d) && d.state==SAVE_DIFF_REMOVED && !d.changed_bytes);
-        assert(save_archive_diff(&a,&one,2,&d)<0);
-        assert(save_archive_diff_count(&one,&a)==2);
-        assert(!save_archive_diff(&one,&a,1,&d) && d.state==SAVE_DIFF_ADDED);
-        one.entries[0].type^=1;
-        assert(!save_archive_diff(&a,&one,0,&d) && d.state==SAVE_DIFF_CHANGED && d.metadata_changed && !d.changed_bytes);
-        one.entries[0].type^=1;
+        assert(save_archive_diff_count(&a, &one) == 2);
+        assert(!save_archive_diff(&a, &one, 0, &d) && d.state == SAVE_DIFF_SAME &&
+               !d.changed_bytes);
+        assert(!save_archive_diff(&a, &one, 1, &d) && d.state == SAVE_DIFF_REMOVED &&
+               !d.changed_bytes);
+        assert(save_archive_diff(&a, &one, 2, &d) < 0);
+        assert(save_archive_diff_count(&one, &a) == 2);
+        assert(!save_archive_diff(&one, &a, 1, &d) && d.state == SAVE_DIFF_ADDED);
+        one.entries[0].type ^= 1;
+        assert(!save_archive_diff(&a, &one, 0, &d) && d.state == SAVE_DIFF_CHANGED &&
+               d.metadata_changed && !d.changed_bytes);
+        one.entries[0].type ^= 1;
     }
     /* True empty files are distinct from damaged zero or sentinel headers. */
-    setup(&f,&ode);
-    assert(save_usb_load_target(&ode,reader,"saves/slot01.3ds",&loaded)==1 && !loaded.bytes);
-    calls=f.calls;
-    for(fault_at=1;fault_at<=calls;++fault_at) {
-        setup(&f,&ode); f.fail_at=fault_at;
-        assert(save_usb_load_target(&ode,reader,"saves/slot01.3ds",&loaded)<0);
+    setup(&f, &ode);
+    assert(save_usb_load_target(&ode, reader, "saves/slot01.3ds", &loaded) == 1 && !loaded.bytes);
+    calls = f.calls;
+    for (fault_at = 1; fault_at <= calls; ++fault_at) {
+        setup(&f, &ode);
+        f.fail_at = fault_at;
+        assert(save_usb_load_target(&ode, reader, "saves/slot01.3ds", &loaded) < 0);
         assert(!f.writes);
     }
-    for(i=1;i<=SAVE_HEADER;++i) {
-        setup(&f,&ode); f.size=i;
-        assert(save_usb_load_target(&ode,reader,"saves/slot01.3ds",&loaded)<0);
-        memset(f.file,0xa5,i);
-        assert(save_usb_load_target(&ode,reader,"saves/slot01.3ds",&loaded)<0);
+    for (i = 1; i <= SAVE_HEADER; ++i) {
+        setup(&f, &ode);
+        f.size = i;
+        assert(save_usb_load_target(&ode, reader, "saves/slot01.3ds", &loaded) < 0);
+        memset(f.file, 0xa5, i);
+        assert(save_usb_load_target(&ode, reader, "saves/slot01.3ds", &loaded) < 0);
     }
-    setup(&f,&ode); memcpy(f.file,a.bytes,a.length); f.size=a.length;
-    assert(!save_usb_load_target(&ode,reader,"saves/slot01.3ds",&loaded));
-    assert(loaded.length==a.length && !memcmp(loaded.bytes,a.bytes,a.length));
-    assert(save_usb_store_checked(&ode,reader,"saves/slot01.3ds",&one,NULL)<0 && !f.writes);
-    f.file[0]^=1;
-    assert(save_usb_store_checked(&ode,reader,"saves/slot01.3ds",&one,&a)<0 && !f.writes);
-    assert(loaded.length==a.length && !memcmp(loaded.bytes,a.bytes,a.length));
-    memcpy(f.file,one.bytes,one.length); f.size=one.length;
-    assert(save_usb_store_checked(&ode,reader,"saves/slot01.3ds",&one,&a)<0 && !f.writes);
-    memcpy(f.file,a.bytes,a.length); f.size=a.length;
-    assert(!save_usb_store_checked(&ode,reader,"saves/slot01.3ds",&one,&a) && f.writes);
-    setup(&f,&ode);
-    assert(!save_usb_store_checked(&ode,reader,"saves/slot01.3ds",&one,NULL) && f.writes);
+    setup(&f, &ode);
+    memcpy(f.file, a.bytes, a.length);
+    f.size = a.length;
+    assert(!save_usb_load_target(&ode, reader, "saves/slot01.3ds", &loaded));
+    assert(loaded.length == a.length && !memcmp(loaded.bytes, a.bytes, a.length));
+    assert(save_usb_store_checked(&ode, reader, "saves/slot01.3ds", &one, NULL) < 0 && !f.writes);
+    f.file[0] ^= 1;
+    assert(save_usb_store_checked(&ode, reader, "saves/slot01.3ds", &one, &a) < 0 && !f.writes);
+    assert(loaded.length == a.length && !memcmp(loaded.bytes, a.bytes, a.length));
+    memcpy(f.file, one.bytes, one.length);
+    f.size = one.length;
+    assert(save_usb_store_checked(&ode, reader, "saves/slot01.3ds", &one, &a) < 0 && !f.writes);
+    memcpy(f.file, a.bytes, a.length);
+    f.size = a.length;
+    assert(!save_usb_store_checked(&ode, reader, "saves/slot01.3ds", &one, &a) && f.writes);
+    setup(&f, &ode);
+    assert(!save_usb_store_checked(&ode, reader, "saves/slot01.3ds", &one, NULL) && f.writes);
     /* Every truncated length and every single-byte corruption is rejected. */
-    for (i = 0; i < a.length; ++i) assert(save_archive_parse(&loaded, a.bytes, i) < 0);
-    broken = (unsigned char *)malloc(a.length); assert(broken);
+    for (i = 0; i < a.length; ++i)
+        assert(save_archive_parse(&loaded, a.bytes, i) < 0);
+    broken = (unsigned char *)malloc(a.length);
+    assert(broken);
     for (i = 0; i < a.length; ++i) {
-        memcpy(broken, a.bytes, a.length); broken[i] ^= 1;
+        memcpy(broken, a.bytes, a.length);
+        broken[i] ^= 1;
         assert(save_archive_parse(&loaded, broken, a.length) < 0);
     }
-    memcpy(broken, a.bytes, a.length); broken[24] = '/'; fix_crc(broken, a.length);
+    memcpy(broken, a.bytes, a.length);
+    broken[24] = '/';
+    fix_crc(broken, a.length);
     assert(save_archive_parse(&loaded, broken, a.length) < 0);
-    memcpy(broken, a.bytes, a.length); save_put_word(broken + 24 + 36, 0xffffffffUL); fix_crc(broken, a.length);
+    memcpy(broken, a.bytes, a.length);
+    save_put_word(broken + 24 + 36, 0xffffffffUL);
+    fix_crc(broken, a.length);
     assert(save_archive_parse(&loaded, broken, a.length) < 0);
-    strcpy(entries[1].name, "ROAD RASH"); assert(save_archive_build(&loaded, entries, 2) < 0);
-    strcpy(entries[1].name, "../bad"); assert(save_archive_build(&loaded, entries, 2) < 0);
-    entries[0].size = SAVE_MAX_BYTES; assert(save_archive_build(&loaded, entries, 1) < 0);
+    strcpy(entries[1].name, "ROAD RASH");
+    assert(save_archive_build(&loaded, entries, 2) < 0);
+    strcpy(entries[1].name, "../bad");
+    assert(save_archive_build(&loaded, entries, 2) < 0);
+    entries[0].size = SAVE_MAX_BYTES;
+    assert(save_archive_build(&loaded, entries, 1) < 0);
     entries[0].size = sizeof(payload);
     assert(!save_archive_build(&one, entries, 1));
-    setup(&f, &ode); assert(!save_usb_test(&ode, reader)); assert(!f.forbidden);
-    setup(&f, &ode); f.no_write = 1; assert(save_usb_test(&ode, reader) < 0);
-    setup(&f, &ode); f.short_write = 1; assert(save_usb_test(&ode, reader) < 0);
-    setup(&f, &ode); assert(!save_usb_store(&ode, reader, "saves/slot01.3ds", &a)); calls = f.calls;
+    setup(&f, &ode);
+    assert(!save_usb_test(&ode, reader));
+    assert(!f.forbidden);
+    setup(&f, &ode);
+    f.no_write = 1;
+    assert(save_usb_test(&ode, reader) < 0);
+    setup(&f, &ode);
+    f.short_write = 1;
+    assert(save_usb_test(&ode, reader) < 0);
+    setup(&f, &ode);
+    assert(!save_usb_store(&ode, reader, "saves/slot01.3ds", &a));
+    calls = f.calls;
     assert(!save_usb_load(&ode, reader, "saves/slot01.3ds", &loaded));
     assert(loaded.length == a.length && !memcmp(loaded.bytes, a.bytes, a.length));
-    assert(!save_usb_load(&ode,reader,"saves/slot09.3ds",&loaded));
-    assert(!save_usb_load(&ode,reader,"saves/slot999999999.3ds",&loaded));
-    assert(save_usb_load(&ode,reader,"saves/slot001.3ds",&loaded)<0);
-    assert(save_usb_load(&ode,reader,"saves/slot1000000000.3ds",&loaded)<0);
+    assert(!save_usb_load(&ode, reader, "saves/slot09.3ds", &loaded));
+    assert(!save_usb_load(&ode, reader, "saves/slot999999999.3ds", &loaded));
+    assert(save_usb_load(&ode, reader, "saves/slot001.3ds", &loaded) < 0);
+    assert(save_usb_load(&ode, reader, "saves/slot1000000000.3ds", &loaded) < 0);
     /* Replacing a larger slot with a smaller self-delimiting archive is valid. */
     assert(!save_archive_build(&one, NULL, 0));
     assert(!save_usb_store(&ode, reader, "saves/slot01.3ds", &one));
-    assert(f.size > one.length); assert(!save_usb_load(&ode, reader, "saves/slot01.3ds", &loaded)); assert(!loaded.count);
+    assert(f.size > one.length);
+    assert(!save_usb_load(&ode, reader, "saves/slot01.3ds", &loaded));
+    assert(!loaded.count);
     for (fault_at = 1; fault_at <= calls; ++fault_at) {
-        setup(&f, &ode); f.fail_at = fault_at;
+        setup(&f, &ode);
+        f.fail_at = fault_at;
         assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
         assert(!f.forbidden);
     }
-    setup(&f, &ode); f.short_write = 1; assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
-    setup(&f, &ode); f.short_read = 1; assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
-    /* Even an all-zero repeated tail must not pass a lying EOF read. */
-    memset(payload, 0, sizeof(payload)); assert(!save_archive_build(&a, entries, 1));
-    setup(&f, &ode); memcpy(f.file, a.bytes, a.length - 1); f.size = a.length - 1; f.no_write = 1;
+    setup(&f, &ode);
+    f.short_write = 1;
     assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
-    setup(&f, &ode); strcpy(ode.identity, "OTHER!"); assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0); assert(!f.calls);
-    assert(save_usb_load(&ode, reader, "saves/../boot.iso", &loaded) < 0); assert(!f.calls);
+    setup(&f, &ode);
+    f.short_read = 1;
+    assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
+    /* Even an all-zero repeated tail must not pass a lying EOF read. */
+    memset(payload, 0, sizeof(payload));
+    assert(!save_archive_build(&a, entries, 1));
+    setup(&f, &ode);
+    memcpy(f.file, a.bytes, a.length - 1);
+    f.size = a.length - 1;
+    f.no_write = 1;
+    assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
+    setup(&f, &ode);
+    strcpy(ode.identity, "OTHER!");
+    assert(save_usb_store(&ode, reader, "saves/slot01.3ds", &a) < 0);
+    assert(!f.calls);
+    assert(save_usb_load(&ode, reader, "saves/../boot.iso", &loaded) < 0);
+    assert(!f.calls);
     {
         MenuConfig config, parsed;
-        char text[8192]; size_t length;
-        menu_config_defaults(&config); config.folder_workaround=1; config.usb_covers=0;
-        config.screen_margin=12; config.large_titles=1;
-        setup(&f,&ode);
-        strcpy((char *)f.file,"folder_workaround=1\n"); f.size=MENU_CONFIG_BYTES;
-        assert(!menu_config_load(&ode,reader,&parsed) && parsed.folder_workaround);
-        assert(!menu_settings_save(&ode,reader,&config));
+        char text[8192];
+        size_t length;
+        menu_config_defaults(&config);
+        config.folder_workaround = 1;
+        config.usb_covers = 0;
+        config.screen_margin = 12;
+        config.large_titles = 1;
+        setup(&f, &ode);
+        strcpy((char *)f.file, "folder_workaround=1\n");
+        f.size = MENU_CONFIG_BYTES;
+        assert(!menu_config_load(&ode, reader, &parsed) && parsed.folder_workaround);
+        assert(!menu_settings_save(&ode, reader, &config));
         assert(f.size == MENU_CONFIG_BYTES);
-        for (i=0;i<MENU_CONFIG_BYTES;++i) assert((f.file[i]>=32 && f.file[i]<=126) || f.file[i]=='\r' || f.file[i]=='\n');
-        assert(!memchr(f.file,0,MENU_CONFIG_BYTES));
-        assert(!menu_config_load(&ode,reader,&parsed));
-        assert(parsed.folder_workaround && parsed.screen_margin==12);
-        assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
-        assert(parsed.folder_workaround == 1 && !parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles);
+        for (i = 0; i < MENU_CONFIG_BYTES; ++i)
+            assert((f.file[i] >= 32 && f.file[i] <= 126) || f.file[i] == '\r' || f.file[i] == '\n');
+        assert(!memchr(f.file, 0, MENU_CONFIG_BYTES));
+        assert(!menu_config_load(&ode, reader, &parsed));
+        assert(parsed.folder_workaround && parsed.screen_margin == 12);
+        assert(!menu_config_parse(&parsed, (char *)f.file, MENU_CONFIG_BYTES));
+        assert(parsed.folder_workaround == 1 && !parsed.usb_covers && parsed.screen_margin == 12 &&
+               parsed.large_titles);
         /* Rewrite a shorter single-digit margin over the existing 512-byte
          * file, then load through the actual startup USB reader. */
-        config.screen_margin=8;
-        assert(!menu_settings_save(&ode,reader,&config));
-        assert(f.size==MENU_CONFIG_BYTES && !memchr(f.file,0,MENU_CONFIG_BYTES));
-        assert(!menu_config_load(&ode,reader,&parsed) && parsed.screen_margin==8);
-        config.screen_margin=12;
-        config.folder_workaround=0; config.usb_covers=1; config.remember_position=0; config.recent_games=0; config.video_previews=1; config.preview_sound=0;
-        setup(&f,&ode); assert(!menu_settings_save(&ode,reader,&config));
-        assert(!menu_config_load(&ode,reader,&parsed) && parsed.screen_margin==12);
-        assert(!menu_config_parse(&parsed,(char *)f.file,MENU_CONFIG_BYTES));
-        assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 && parsed.large_titles && !parsed.remember_position && !parsed.recent_games && parsed.video_previews && !parsed.preview_sound);
-        setup(&f,&ode); f.short_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
-        setup(&f,&ode); f.no_write=1; assert(menu_settings_save(&ode,reader,&config) < 0);
-        setup(&f,&ode); memcpy(f.file,"Games/D.iso\n",12); f.size=12;
-        memset(f.buffer,0xa5,sizeof(f.buffer));
-        assert(!usb_file_text(&ode,reader,"favorites.txt",text,sizeof(text),&length) && length == 12 && !memcmp(text,f.file,12));
-        setup(&f,&ode); memcpy(f.file,"Old/Longer Game.iso\n",20); f.size=20;
-        assert(!usb_file_text_write(&ode,reader,"favorites.txt","New.iso\n"));
-        assert(!usb_file_text(&ode,reader,"favorites.txt",text,sizeof(text),&length));
-        assert(length == 8 && !strcmp(text,"New.iso\n") && f.size == 20);
-        assert(!usb_file_text_write(&ode,reader,"favorites.txt",""));
-        assert(!usb_file_text(&ode,reader,"favorites.txt",text,sizeof(text),&length) && !length);
-        setup(&f,&ode); f.no_write=1;
-        assert(usb_file_text_write(&ode,reader,"favorites.txt","New.iso\n") < 0);
-        setup(&f,&ode); f.short_write=1;
-        assert(usb_file_text_write(&ode,reader,"favorites.txt","New.iso\n") < 0);
-        setup(&f,&ode); memset(f.file,'a',8192); f.size=8192;
-        assert(usb_file_text(&ode,reader,"favorites.txt",text,sizeof(text),&length) < 0);
-        setup(&f,&ode); f.size=0; memset(f.buffer,0xa5,sizeof(f.buffer));
-        assert(!usb_file_text(&ode,reader,"favorites.txt",text,sizeof(text),&length) && !length);
+        config.screen_margin = 8;
+        assert(!menu_settings_save(&ode, reader, &config));
+        assert(f.size == MENU_CONFIG_BYTES && !memchr(f.file, 0, MENU_CONFIG_BYTES));
+        assert(!menu_config_load(&ode, reader, &parsed) && parsed.screen_margin == 8);
+        config.screen_margin = 12;
+        config.folder_workaround = 0;
+        config.usb_covers = 1;
+        config.remember_position = 0;
+        config.recent_games = 0;
+        config.video_previews = 1;
+        config.preview_sound = 0;
+        setup(&f, &ode);
+        assert(!menu_settings_save(&ode, reader, &config));
+        assert(!menu_config_load(&ode, reader, &parsed) && parsed.screen_margin == 12);
+        assert(!menu_config_parse(&parsed, (char *)f.file, MENU_CONFIG_BYTES));
+        assert(!parsed.folder_workaround && parsed.usb_covers && parsed.screen_margin == 12 &&
+               parsed.large_titles && !parsed.remember_position && !parsed.recent_games &&
+               parsed.video_previews && !parsed.preview_sound);
+        setup(&f, &ode);
+        f.short_write = 1;
+        assert(menu_settings_save(&ode, reader, &config) < 0);
+        setup(&f, &ode);
+        f.no_write = 1;
+        assert(menu_settings_save(&ode, reader, &config) < 0);
+        setup(&f, &ode);
+        memcpy(f.file, "Games/D.iso\n", 12);
+        f.size = 12;
+        memset(f.buffer, 0xa5, sizeof(f.buffer));
+        assert(!usb_file_text(&ode, reader, "favorites.txt", text, sizeof(text), &length) &&
+               length == 12 && !memcmp(text, f.file, 12));
+        setup(&f, &ode);
+        memcpy(f.file, "Old/Longer Game.iso\n", 20);
+        f.size = 20;
+        assert(!usb_file_text_write(&ode, reader, "favorites.txt", "New.iso\n"));
+        assert(!usb_file_text(&ode, reader, "favorites.txt", text, sizeof(text), &length));
+        assert(length == 8 && !strcmp(text, "New.iso\n") && f.size == 20);
+        assert(!usb_file_text_write(&ode, reader, "favorites.txt", ""));
+        assert(!usb_file_text(&ode, reader, "favorites.txt", text, sizeof(text), &length) &&
+               !length);
+        setup(&f, &ode);
+        f.no_write = 1;
+        assert(usb_file_text_write(&ode, reader, "favorites.txt", "New.iso\n") < 0);
+        setup(&f, &ode);
+        f.short_write = 1;
+        assert(usb_file_text_write(&ode, reader, "favorites.txt", "New.iso\n") < 0);
+        setup(&f, &ode);
+        memset(f.file, 'a', 8192);
+        f.size = 8192;
+        assert(usb_file_text(&ode, reader, "favorites.txt", text, sizeof(text), &length) < 0);
+        setup(&f, &ode);
+        f.size = 0;
+        memset(f.buffer, 0xa5, sizeof(f.buffer));
+        assert(!usb_file_text(&ode, reader, "favorites.txt", text, sizeof(text), &length) &&
+               !length);
     }
-    save_archive_free(&a); save_archive_free(&loaded); save_archive_free(&one); free(broken);
-    puts("Saves: archive validation, USB write/read verification, short I/O and every transport failure passed");
+    save_archive_free(&a);
+    save_archive_free(&loaded);
+    save_archive_free(&one);
+    free(broken);
+    puts("Saves: archive validation, USB write/read verification, short I/O and every transport "
+         "failure passed");
     return 0;
 }

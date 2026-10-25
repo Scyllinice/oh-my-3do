@@ -41,24 +41,24 @@
  *                  12-bit 2x2 entry numbers, top-left, top-right,
  *                  bottom-left, bottom-right, packed most significant first
  * Other words are invalid. Frames start black and persist until changed. */
-#define PREVIEW7_WIDTH 320
-#define PREVIEW7_HEIGHT 240
-#define PREVIEW7_FPS 30
-#define PREVIEW7_COLUMNS 80
-#define PREVIEW7_BLOCKS 4800
-#define PREVIEW7_FRAME_BYTES (320UL*240UL*2UL)
-#define PREVIEW7_THUMB_BYTES (160UL*120UL*2UL)
-#define PREVIEW7_BLOCK_BYTES 2048UL
-#define PREVIEW7_HEADER_BYTES 64
-#define PREVIEW7_MAX_CHUNKS ((2048-64)/2)
-#define PREVIEW7_MAX_ENTRIES4 8192
-#define PREVIEW7_MAX_ENTRIES2 4096
-#define PREVIEW7_MAX_FRAMES 1800
+#define PREVIEW7_WIDTH            320
+#define PREVIEW7_HEIGHT           240
+#define PREVIEW7_FPS              30
+#define PREVIEW7_COLUMNS          80
+#define PREVIEW7_BLOCKS           4800
+#define PREVIEW7_FRAME_BYTES      (320UL * 240UL * 2UL)
+#define PREVIEW7_THUMB_BYTES      (160UL * 120UL * 2UL)
+#define PREVIEW7_BLOCK_BYTES      2048UL
+#define PREVIEW7_HEADER_BYTES     64
+#define PREVIEW7_MAX_CHUNKS       ((2048 - 64) / 2)
+#define PREVIEW7_MAX_ENTRIES4     8192
+#define PREVIEW7_MAX_ENTRIES2     4096
+#define PREVIEW7_MAX_FRAMES       1800
 #define PREVIEW7_MAX_CHUNK_FRAMES 30
-#define PREVIEW7_CHUNK_HEADER 24
-#define PREVIEW7_AUDIO_RATE 11025UL
-#define PREVIEW7_ENTRY4 40UL
-#define PREVIEW7_ENTRY2 12UL
+#define PREVIEW7_CHUNK_HEADER     24
+#define PREVIEW7_AUDIO_RATE       11025UL
+#define PREVIEW7_ENTRY4           40UL
+#define PREVIEW7_ENTRY2           12UL
 /* The map value of a block nobody has drawn yet. */
 #define PREVIEW7_BLACK 0x7fffffffUL
 
@@ -94,7 +94,7 @@ typedef struct Preview7Chunk {
  * decoder does not check them (the C decoder does).
  * and sets screen to the bitmap PREVIEW7_SCREEN draws into. */
 #define PREVIEW7_SCREEN 0
-#define PREVIEW7_TV 1
+#define PREVIEW7_TV     1
 typedef struct Preview7 {
     unsigned char *screen, *thumb;
     unsigned long *map;
@@ -107,32 +107,36 @@ typedef struct Preview7 {
 /* Bytes the map and dictionaries need. */
 unsigned long preview7_state_bytes(void);
 /* Parse and check the 2048-byte header block. 0 or -1. */
-int preview7_header(const unsigned char *block,Preview7Header *header);
+int preview7_header(const unsigned char *block, Preview7Header *header);
 /* Check a whole padded chunk read for chunk `number` of a clip with this
  * header (its sum, header fields and frame table, not the packets) and fill
  * info. Does not touch the state. 0 or -1. */
-int preview7_chunk(const Preview7Header *header,unsigned int number,const unsigned char *data,unsigned long bytes,Preview7Chunk *info);
+int preview7_chunk(const Preview7Header *header, unsigned int number, const unsigned char *data,
+                   unsigned long bytes, Preview7Chunk *info);
 /* The same, given the word sum of the chunk after its first 4 bytes. */
-int preview7_chunk_summed(const Preview7Header *header,unsigned int number,const unsigned char *data,unsigned long bytes,
-                          unsigned long sum,Preview7Chunk *info);
+int preview7_chunk_summed(const Preview7Header *header, unsigned int number,
+                          const unsigned char *data, unsigned long bytes, unsigned long sum,
+                          Preview7Chunk *info);
 /* A file's entries from 16 (4x4) or 4 (2x2) BE RGB555 pixels in rows. */
-void preview7_entry4(const unsigned char *rows,unsigned char *entry);
-void preview7_entry2(const unsigned char *rows,unsigned char *entry);
+void preview7_entry4(const unsigned char *rows, unsigned char *entry);
+void preview7_entry2(const unsigned char *rows, unsigned char *entry);
 /* Store a checked chunk's entries (copies). */
-void preview7_define(Preview7 *state,const Preview7Chunk *info);
+void preview7_define(Preview7 *state, const Preview7Chunk *info);
 /* Every block black (the pictures are not drawn). */
 void preview7_reset(Preview7 *state);
 /* Decode packet `frame` of a checked chunk, drawing the blocks it changes
  * into `picture`. 0, or -1 for a malformed packet, which may leave the
  * picture and map partly updated. The C decoder also rejects entry numbers
  * the chunk has not defined; the console's assembly does not. */
-int preview7_frame(Preview7 *state,const Preview7Chunk *info,unsigned int frame,int picture);
+int preview7_frame(Preview7 *state, const Preview7Chunk *info, unsigned int frame, int picture);
 /* Draw every block of `picture` from the map, e.g. after switching. */
-void preview7_render(Preview7 *state,int picture);
+void preview7_render(Preview7 *state, int picture);
 /* The preview word sum (see usb_media.c) of whole words, all at once or a
  * piece at a time (start from zero; add pieces of whole words in order). */
-typedef struct Preview7Sum { unsigned long a, b; } Preview7Sum;
-unsigned long preview7_sum(const unsigned char *data,unsigned long bytes);
-void preview7_sum_add(Preview7Sum *sum,const unsigned char *data,unsigned long bytes);
+typedef struct Preview7Sum {
+    unsigned long a, b;
+} Preview7Sum;
+unsigned long preview7_sum(const unsigned char *data, unsigned long bytes);
+void preview7_sum_add(Preview7Sum *sum, const unsigned char *data, unsigned long bytes);
 unsigned long preview7_sum_value(const Preview7Sum *sum);
 #endif

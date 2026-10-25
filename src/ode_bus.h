@@ -28,8 +28,8 @@ int ode_bus_kind(unsigned char command);
 
 int ode_bus_open(OdeBus *bus);
 void ode_bus_close(OdeBus *bus);
-int ode_bus_transfer(void *context, const unsigned char *command,
-                     unsigned char *reply, size_t capacity, size_t *length);
+int ode_bus_transfer(void *context, const unsigned char *command, unsigned char *reply,
+                     size_t capacity, size_t *length);
 int ode_bus_read_buffer(void *context, unsigned char *data, size_t size);
 
 #endif

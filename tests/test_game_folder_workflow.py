@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the menu's game-folder launch and position code without entering its UI."""
 from pathlib import Path
+import re
 import os
 import subprocess
 import tempfile
@@ -8,8 +9,16 @@ import tempfile
 root = Path(__file__).resolve().parent.parent
 source = (root / 'src/main.c').read_text()
 
+def find(marker, after=0):
+    """Where `marker` appears in main.c, ignoring differences in whitespace."""
+    pattern = r'\s*'.join(re.escape(c) for c in marker if not c.isspace())
+    match = re.compile(pattern).search(source, after)
+    if not match:
+        raise ValueError(f'Not found in main.c: {marker!r}')
+    return match.start()
 def section(start, end):
-    return source[source.index(start):source.index(end)]
+    begin = find(start)
+    return source[begin:find(end, begin)]
 
 stubs = r'''
 #include "library_index.h"

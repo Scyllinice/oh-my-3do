@@ -15,11 +15,10 @@ size_t menu_title_length(const char *name, int directory);
  * Use menu_display_title when retained edition tags follow region tags. */
 size_t menu_short_title_length(const char *name, int directory);
 /* Hide only region/language suffix groups; retain all other designators. */
-size_t menu_display_title(char *out,size_t capacity,const char *name,int directory);
+size_t menu_display_title(char *out, size_t capacity, const char *name, int directory);
 const char *menu_image_format(const char *name, int directory);
 size_t menu_scroll_offset(size_t length, size_t visible, unsigned long elapsed);
-void menu_breadcrumb(char *out, const char *parent, const char *leaf,
-                     unsigned int depth);
+void menu_breadcrumb(char *out, const char *parent, const char *leaf, unsigned int depth);
 const char *menu_cover_lookup(const char *path);
 const char *menu_cover_find(const MenuCover *covers, size_t count, const char *path);
 int menu_support_entry(const char *name, int directory, int root);

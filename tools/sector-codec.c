@@ -21,8 +21,8 @@ static Byte twice(Byte value)
  * interleaving specified by ECMA-130 Annex A. The two syndromes determine
  * parity uniquely: p0 ^ p1 = s0; 2*p0 ^ p1 = 2*s1.
  */
-static void parity(Byte *sector, Word columns, Word rows, Word step,
-                   Word stride, Word output, const Byte *divide_three)
+static void parity(Byte *sector, Word columns, Word rows, Word step, Word stride, Word output,
+                   const Byte *divide_three)
 {
     Word column, row, position, span = columns * rows;
     Byte s0, s1, value, p0;
@@ -46,15 +46,17 @@ static Byte bcd(Word value)
     return (Byte)((value / 10) * 16 + value % 10);
 }
 
-EXPORT Word oh3do_sector_abi(void) { return 1; }
+EXPORT Word oh3do_sector_abi(void)
+{
+    return 1;
+}
 
-EXPORT int oh3do_mode1_encode(const Byte *input, Word count, Word first,
-                             Byte *output)
+EXPORT int oh3do_mode1_encode(const Byte *input, Word count, Word first, Byte *output)
 {
     Word crc_table[256], i, bit, crc, frame, n;
     Byte divide_three[256], *sector;
-    if (!input || !output || count > 512 || first > 449850 ||
-            count > 449850 - first) return -1;
+    if (!input || !output || count > 512 || first > 449850 || count > 449850 - first)
+        return -1;
     for (i = 0; i < 256; ++i) {
         crc = i;
         for (bit = 0; bit < 8; ++bit)
@@ -65,18 +67,22 @@ EXPORT int oh3do_mode1_encode(const Byte *input, Word count, Word first,
     for (n = 0; n < count; ++n) {
         sector = output + n * 2352;
         sector[0] = sector[11] = 0;
-        for (i = 1; i < 11; ++i) sector[i] = 255;
+        for (i = 1; i < 11; ++i)
+            sector[i] = 255;
         frame = first + n + 150; /* LBA 0 is 00:02:00. */
         sector[12] = bcd(frame / 4500);
         sector[13] = bcd((frame / 75) % 60);
         sector[14] = bcd(frame % 75);
         sector[15] = 1;
-        for (i = 0; i < 2048; ++i) sector[16 + i] = input[n * 2048 + i];
+        for (i = 0; i < 2048; ++i)
+            sector[16 + i] = input[n * 2048 + i];
         crc = 0;
         for (i = 0; i < 2064; ++i)
             crc = (crc >> 8) ^ crc_table[(crc ^ sector[i]) & 255];
-        for (i = 0; i < 4; ++i) sector[2064 + i] = (Byte)(crc >> (i * 8));
-        for (i = 2068; i < 2076; ++i) sector[i] = 0;
+        for (i = 0; i < 4; ++i)
+            sector[2064 + i] = (Byte)(crc >> (i * 8));
+        for (i = 2068; i < 2076; ++i)
+            sector[i] = 0;
         parity(sector, 86, 24, 2, 86, 2076, divide_three);
         parity(sector, 52, 43, 86, 88, 2248, divide_three);
     }

@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Exercise the menu's actual lookup/cache functions and owner invalidation."""
 from pathlib import Path
+import re
 import os
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
 source = (root / 'src/main.c').read_text()
+def find(marker, after=0):
+    """Where `marker` appears in main.c, ignoring differences in whitespace."""
+    pattern = r'\s*'.join(re.escape(c) for c in marker if not c.isspace())
+    match = re.compile(pattern).search(source, after)
+    if not match:
+        raise ValueError(f'Not found in main.c: {marker!r}')
+    return match.start()
 def section(start, end):
-    return source[source.index(start):source.index(end)]
+    begin = find(start)
+    return source[begin:find(end, begin)]
 types = section('#define GAME_LOOKUP_SLOTS', '#define SCROLL_MEASURE_SLOTS')
 fields = section('    GameLookup game_lookups[GAME_LOOKUP_SLOTS];', '    ScrollMeasure scroll_measures')
 controller = section('static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{', 'static int compare_title_hash')

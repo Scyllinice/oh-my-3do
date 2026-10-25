@@ -3,11 +3,11 @@
 #include "menu_config.h"
 #include "menu_ui.h"
 
-#define USB_COVER_WIDTH 96
+#define USB_COVER_WIDTH  96
 #define USB_COVER_HEIGHT 120
 #define USB_COVER_PIXELS (USB_COVER_WIDTH * USB_COVER_HEIGHT * 2)
 /* NAME-large.3dc beside NAME.png/.3dc: the same box art at twice the size, for the full-screen view. */
-#define USB_LARGE_COVER_WIDTH 192
+#define USB_LARGE_COVER_WIDTH  192
 #define USB_LARGE_COVER_HEIGHT 240
 #define USB_LARGE_COVER_PIXELS (USB_LARGE_COVER_WIDTH * USB_LARGE_COVER_HEIGHT * 2)
 typedef struct UsbArtIndex {

@@ -4,14 +4,14 @@
 #include "ode.h"
 
 #define MENU_CONFIG_BYTES 512
-#define MENU_CONFIG_NAME "ohmy3do.ini"
-#define MENU_CONFIG_END "; End of Oh My 3DO settings."
+#define MENU_CONFIG_NAME  "ohmy3do.ini"
+#define MENU_CONFIG_END   "; End of Oh My 3DO settings."
 /* The FCare firmware ignores a folder change to the ID it last entered; the
  * menu detours through a file first when that would happen. AUTO (0, the
  * shipped value) applies it to the FCare ODE only. */
 #define MENU_WORKAROUND_AUTO 0
-#define MENU_WORKAROUND_ON 1
-#define MENU_WORKAROUND_OFF 2
+#define MENU_WORKAROUND_ON   1
+#define MENU_WORKAROUND_OFF  2
 typedef struct MenuConfig {
     int folder_workaround; /* MENU_WORKAROUND_AUTO, _ON or _OFF */
     int usb_covers;

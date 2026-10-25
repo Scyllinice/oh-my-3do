@@ -17,8 +17,8 @@
 #include "preview_v7.h"
 #include "preview_audio.h"
 
-#define PREVIEW_STREAM_SLOTS 8
-#define PREVIEW_STREAM_RING 32768UL /* audio samples, about 3 s */
+#define PREVIEW_STREAM_SLOTS     8
+#define PREVIEW_STREAM_RING      32768UL /* audio samples, about 3 s */
 #define PREVIEW_STREAM_NOT_READY 1
 
 typedef int (*PreviewStreamCancel)(void *context);
@@ -43,11 +43,11 @@ typedef struct PreviewStream {
     volatile int stop, running, error;
     volatile int reading; /* the reader is moving a chunk's blocks */
     unsigned long slot_sum[PREVIEW_STREAM_SLOTS];
-    unsigned long next_read;         /* host builds: the next sequence to read */
+    unsigned long next_read; /* host builds: the next sequence to read */
     /* The player: the next frame to decode and audio already in the ring,
      * both counted from the start across loops. */
     unsigned long frame, audio_written;
-    int picture_valid[2];            /* the screen / TV picture shows the map */
+    int picture_valid[2]; /* the screen / TV picture shows the map */
     /* Sound */
     signed char *ring;
     PreviewAudio audio;
@@ -73,7 +73,7 @@ typedef struct PreviewStream {
 } PreviewStream;
 
 /* Bytes the stream allocates for a clip with this header and slot count. */
-unsigned long preview_stream_bytes(const Preview7Header *header,unsigned int slots);
+unsigned long preview_stream_bytes(const Preview7Header *header, unsigned int slots);
 /* Start streaming the clip whose header block the caller has read (and
  * checked with preview7_header). game_folder is the collapsed game folder the
  * file sits in, or "" for the current folder; name the file under .ohmy3do.
@@ -82,24 +82,26 @@ unsigned long preview_stream_bytes(const Preview7Header *header,unsigned int slo
  * frame into the TV picture. reader is used on hosts only (the console's
  * reader thread has its own XBUS requests). 0, -1 error, -4 out of memory,
  * -5 cancelled. On failure the stream is closed. */
-int preview_stream_open(PreviewStream *stream,const Ode *ode,OdeReadBuffer reader,const char *game_folder,const char *name,
-                        const unsigned char *header_block,int sound,PreviewStreamCancel cancel,void *cancel_context,
-                        PreviewStreamReclaim reclaim,void *reclaim_context);
+int preview_stream_open(PreviewStream *stream, const Ode *ode, OdeReadBuffer reader,
+                        const char *game_folder, const char *name,
+                        const unsigned char *header_block, int sound, PreviewStreamCancel cancel,
+                        void *cancel_context, PreviewStreamReclaim reclaim, void *reclaim_context);
 /* Start the clock and the sound, as the first frame shows. */
-void preview_stream_play(PreviewStream *stream,unsigned long now_ms);
+void preview_stream_play(PreviewStream *stream, unsigned long now_ms);
 /* Decode up to and including frame `frame` (counted across loops) into the
  * picture (PREVIEW7_SCREEN into screen, or PREVIEW7_TV), redrawing it whole
  * first if it does not show the map yet. 0, PREVIEW_STREAM_NOT_READY if a
  * chunk has not arrived (nothing was decoded past it), -1 on an error. */
-int preview_stream_decode(PreviewStream *stream,unsigned long frame,int picture,unsigned char *screen);
+int preview_stream_decode(PreviewStream *stream, unsigned long frame, int picture,
+                          unsigned char *screen);
 /* The other picture no longer shows the map (it was drawn over). */
-void preview_stream_invalidate(PreviewStream *stream,int picture);
+void preview_stream_invalidate(PreviewStream *stream, int picture);
 /* Keep the sound ring filled; pause it while the video waits for a chunk.
  * Call every main-loop pass. */
-void preview_stream_audio(PreviewStream *stream,unsigned long now_ms,int waiting);
+void preview_stream_audio(PreviewStream *stream, unsigned long now_ms, int waiting);
 /* The frame due now, counted across loops, from the sound's clock (0 until
  * preview_stream_play). */
-unsigned long preview_stream_due(PreviewStream *stream,unsigned long now_ms);
+unsigned long preview_stream_due(PreviewStream *stream, unsigned long now_ms);
 /* Stop the reader, the sound and free everything; diagnostics stay. Safe on
  * a closed or zeroed stream. */
 void preview_stream_close(PreviewStream *stream);

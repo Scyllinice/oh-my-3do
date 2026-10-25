@@ -2,7 +2,7 @@
 #define OH_MY_3DO_MENU_CATEGORIES_H
 #include <stddef.h>
 #define MENU_CATEGORIES_BYTES 8192
-#define MENU_CATEGORIES_MAX 32
+#define MENU_CATEGORIES_MAX   32
 /* File I/O is performed at the selected volume root by main.c. */
 void menu_categories_reset(void);
 int menu_categories_parse(const char *text, size_t length);

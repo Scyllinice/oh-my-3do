@@ -4,15 +4,15 @@
 #include "menu_sort.h"
 
 #define ODE_MAX_ENTRIES 2048
-#define ODE_MAX_NAME 1024
-#define ODE_TOC_BYTES 2048
-#define ODE_MAX_DISCS 16 /* FCare PLAYLIST_MAX */
+#define ODE_MAX_NAME    1024
+#define ODE_TOC_BYTES   2048
+#define ODE_MAX_DISCS   16 /* FCare PLAYLIST_MAX */
 
 /* Transport returns raw status bytes, including command echo and MEI status.
  * A negative return is a transport error. All commands are seven bytes.
  */
-typedef int (*OdeTransfer)(void *context, const unsigned char *command,
-                          unsigned char *reply, size_t capacity, size_t *length);
+typedef int (*OdeTransfer)(void *context, const unsigned char *command, unsigned char *reply,
+                           size_t capacity, size_t *length);
 typedef void (*OdeProgress)(void *context, size_t count);
 
 typedef struct Ode {
@@ -59,22 +59,22 @@ void ode_listing_init(OdeListing *listing);
 void ode_listing_free(OdeListing *listing);
 int ode_identify(Ode *ode);
 int ode_change_directory(Ode *ode, unsigned long id);
-int ode_enter_directory(Ode *ode, const OdeListing *listing,
-                        const MenuEntry *entry, int workaround);
+int ode_enter_directory(Ode *ode, const OdeListing *listing, const MenuEntry *entry,
+                        int workaround);
 int ode_read_directory(Ode *ode, OdeListing *listing);
 unsigned long ode_listing_fingerprint(const OdeListing *listing);
 /* Read-only, bounded recovery of a known USB root. Never clears a transport
  * fault; output is adopted only after two fresh matching root listings. */
-int ode_recover_root(Ode *ode,unsigned long fingerprint,unsigned long volume,OdeListing *out);
+int ode_recover_root(Ode *ode, unsigned long fingerprint, unsigned long volume, OdeListing *out);
 /* Read only the target directory record at its existing TOC cursor.
  * 1 = ID/name/type verified, 0 = use full enumeration, -1 = I/O failure. */
-int ode_probe_directory(Ode *ode,unsigned long id,const char *name);
+int ode_probe_directory(Ode *ode, unsigned long id, const char *name);
 int ode_launch(Ode *ode, const MenuEntry *entry);
 void ode_playlist_init(OdePlaylist *playlist);
 void ode_playlist_dispose(OdePlaylist *playlist);
 int ode_playlist_clear(Ode *ode, OdePlaylist *playlist);
-int ode_playlist_add(Ode *ode, OdePlaylist *playlist,
-                     const MenuEntry *entry, const char *directory);
+int ode_playlist_add(Ode *ode, OdePlaylist *playlist, const MenuEntry *entry,
+                     const char *directory);
 int ode_playlist_append_local(Ode *ode, OdePlaylist *playlist, const char *path);
 int ode_playlist_remove_local(OdePlaylist *playlist, size_t index);
 int ode_playlist_move_local(OdePlaylist *playlist, size_t from, size_t to);

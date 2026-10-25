@@ -7,8 +7,8 @@
 
 static void check_pair(const char *first, const char *second)
 {
-    MenuEntry a = { 99, 0, NULL };
-    MenuEntry b = { 1, 0, NULL };
+    MenuEntry a = {99, 0, NULL};
+    MenuEntry b = {1, 0, NULL};
     const MenuEntry *view[2];
     a.name = first;
     b.name = second;
@@ -22,22 +22,18 @@ static void check_pair(const char *first, const char *second)
 
 static void check_directory(void)
 {
-    MenuEntry entries[] = {
-        { 6, 0, "Disc 10.iso" },
-        { 2, 1, "zeta" },
-        { 9, 0, "Disc 2.iso" },
-        { 4, 1, "Alpha" },
-        { 3, 0, "alpha.iso" },
-        { 7, 0, "Disc 1.iso" }
-    };
-    const unsigned long expected[] = { 4, 2, 3, 7, 9, 6 };
+    MenuEntry entries[] = {{6, 0, "Disc 10.iso"}, {2, 1, "zeta"},      {9, 0, "Disc 2.iso"},
+                           {4, 1, "Alpha"},       {3, 0, "alpha.iso"}, {7, 0, "Disc 1.iso"}};
+    const unsigned long expected[] = {4, 2, 3, 7, 9, 6};
     const MenuEntry *view[6];
     MenuEntry original[6];
     size_t i;
     memcpy(original, entries, sizeof(entries));
-    for (i = 0; i < 6; ++i) view[i] = &entries[i];
+    for (i = 0; i < 6; ++i)
+        view[i] = &entries[i];
     menu_sort(view, 6);
-    for (i = 0; i < 6; ++i) assert(view[i]->toc_id == expected[i]);
+    for (i = 0; i < 6; ++i)
+        assert(view[i]->toc_id == expected[i]);
     /* Selection must use this ID, not row index 4 + 1 == 5. */
     assert(view[4] == &entries[2] && view[4]->toc_id == 9);
     for (i = 0; i < 6; ++i) {
@@ -70,14 +66,15 @@ static void check_full_listing(void)
             view[j] = temp;
         }
         menu_sort(view, 100);
-        for (i = 0; i < 100; ++i) assert(view[i] == &entries[i]);
+        for (i = 0; i < 100; ++i)
+            assert(view[i] == &entries[i]);
     }
 }
 
 int main(void)
 {
-    MenuEntry duplicate_a = { 1, 0, "Same.iso" };
-    MenuEntry duplicate_b = { 2, 0, "Same.iso" };
+    MenuEntry duplicate_a = {1, 0, "Same.iso"};
+    MenuEntry duplicate_b = {2, 0, "Same.iso"};
     const MenuEntry *duplicates[2];
     const MenuEntry *single = &duplicate_a;
     menu_sort(NULL, 0);
@@ -87,8 +84,7 @@ int main(void)
     check_pair("Alpha.iso", "beta.iso");
     check_pair("disc 2.iso", "Disc 10.iso");
     check_pair("Disc 2 Part 3.iso", "Disc 2 Part 10.iso");
-    check_pair("Game 999999999999999999999.iso",
-               "Game 1000000000000000000000.iso");
+    check_pair("Game 999999999999999999999.iso", "Game 1000000000000000000000.iso");
     check_pair("Disc 02.iso", "Disc 2.iso");
     check_pair("Disc 002 Part 2.iso", "Disc 2 Part 10.iso");
     check_pair("Disc 0.iso", "Disc 1.iso");

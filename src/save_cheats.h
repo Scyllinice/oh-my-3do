@@ -8,7 +8,10 @@ typedef struct SaveCheatField {
     size_t width;
     unsigned long mask;
 } SaveCheatField;
-typedef struct SaveCheatChange { size_t field; unsigned long value; } SaveCheatChange;
+typedef struct SaveCheatChange {
+    size_t field;
+    unsigned long value;
+} SaveCheatChange;
 typedef struct SaveCheatPreset {
     const char *label;
     size_t field;
@@ -33,7 +36,8 @@ typedef struct SaveCheatProfile {
  * offsets, never runtime RAM addresses. Rejected edits never change bytes. */
 const SaveCheatProfile *save_cheats_find(const SaveEntry *entry);
 unsigned long save_cheats_value(const SaveEntry *entry, const SaveCheatField *field);
-int save_cheats_set(SaveEntry *entry, const SaveCheatProfile *profile, size_t field, unsigned long value);
+int save_cheats_set(SaveEntry *entry, const SaveCheatProfile *profile, size_t field,
+                    unsigned long value);
 int save_cheats_preset(SaveEntry *entry, const SaveCheatProfile *profile, size_t preset);
 #define SAVE_CHEAT_DB_MAX_BYTES 65536UL
 /* Installs a fully validated owned copy; failure keeps the previous database. */

@@ -37,8 +37,8 @@ typedef struct FakeOde {
 
 static unsigned long be32(const unsigned char *p)
 {
-    return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) |
-           ((unsigned long)p[2] << 8) | p[3];
+    return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) | ((unsigned long)p[2] << 8) |
+           p[3];
 }
 
 static void put32(unsigned char *p, unsigned long value)
@@ -49,8 +49,8 @@ static void put32(unsigned char *p, unsigned long value)
     p[3] = (unsigned char)value;
 }
 
-static size_t append(FakeOde *fake, size_t position, unsigned long flags,
-                     unsigned long id, const char *name)
+static size_t append(FakeOde *fake, size_t position, unsigned long flags, unsigned long id,
+                     const char *name)
 {
     size_t length = strlen(name) + 1;
     assert(position + 12 + length <= sizeof(fake->cache));
@@ -80,13 +80,15 @@ static void populate(FakeOde *fake, unsigned long index)
          * Numeric order is deliberately opposite to insertion order. */
         sprintf(name, "Game %lu with a long descriptive filename.iso",
                 (unsigned long)fake->total - id + 1);
-        position = append(fake, position, id % 5 == 0 ? 2 : 1,
-                          0x01000000UL | id, name);
+        position = append(fake, position, id % 5 == 0 ? 2 : 1, 0x01000000UL | id, name);
         fake->last_cached = id;
-        if (position > sizeof(fake->cache) - (128 + 13)) break;
+        if (position > sizeof(fake->cache) - (128 + 13))
+            break;
     }
-    if (fake->fault == 1) put32(fake->cache, 77);
-    if (fake->fault == 2) put32(fake->cache + 8, 0x7fffffffUL);
+    if (fake->fault == 1)
+        put32(fake->cache, 77);
+    if (fake->fault == 2)
+        put32(fake->cache + 8, 0x7fffffffUL);
     if (fake->fault == 3) {
         put32(fake->cache, 1);
         put32(fake->cache + 4, 1);
@@ -99,15 +101,16 @@ static void populate(FakeOde *fake, unsigned long index)
     }
 }
 
-static int transfer(void *context, const unsigned char *command,
-                    unsigned char *reply, size_t capacity, size_t *length)
+static int transfer(void *context, const unsigned char *command, unsigned char *reply,
+                    size_t capacity, size_t *length)
 {
     FakeOde *fake = (FakeOde *)context;
     unsigned long id = be32(command + 1);
     unsigned int offset = ((unsigned int)command[5] << 8) | command[6];
     assert(capacity >= 18);
     ++fake->calls;
-    if (fake->failed) return -1;
+    if (fake->failed)
+        return -1;
     memset(reply, 0, capacity);
     reply[0] = command[0];
     *length = 2;
@@ -126,7 +129,8 @@ static int transfer(void *context, const unsigned char *command,
     case 0xc1:
         assert(offset <= 2032);
         assert((offset % 16) == 0);
-        if (!offset) populate(fake, id);
+        if (!offset)
+            populate(fake, id);
         *length = 18;
         memcpy(reply + 1, fake->cache + offset, 16);
         break;
@@ -143,8 +147,9 @@ static int transfer(void *context, const unsigned char *command,
         *length = 4;
         reply[1] = (unsigned char)(id >= fake->first_cached && id <= fake->last_cached);
         reply[2] = reply[1];
-        if (fake->reject_queue || (fake->reject_at &&
-            fake->queue_count + 1 == (size_t)fake->reject_at)) reply[2] = 0;
+        if (fake->reject_queue ||
+            (fake->reject_at && fake->queue_count + 1 == (size_t)fake->reject_at))
+            reply[2] = 0;
         if (reply[1] && reply[2]) {
             assert(fake->queue_count < ODE_MAX_DISCS);
             fake->queued_ids[fake->queue_count] = be32(command + 1);
@@ -157,13 +162,19 @@ static int transfer(void *context, const unsigned char *command,
         fake->launched = 1;
         reply[1] = 0x10; /* Intentional media-change status. */
         break;
-    default: assert(0);
+    default:
+        assert(0);
     }
-    if (fake->short_reply) --*length;
-    if (fake->bad_status) reply[*length - 1] = 0x10;
-    if (fake->wrong_echo) reply[0] ^= 1;
-    if (fake->lose_add_reply && command[0] == 0xc4) return -1;
-    if (fake->lose_clear_reply && command[0] == 0xc3) return -1;
+    if (fake->short_reply)
+        --*length;
+    if (fake->bad_status)
+        reply[*length - 1] = 0x10;
+    if (fake->wrong_echo)
+        reply[0] ^= 1;
+    if (fake->lose_add_reply && command[0] == 0xc4)
+        return -1;
+    if (fake->lose_clear_reply && command[0] == 0xc3)
+        return -1;
     return 0;
 }
 
@@ -200,9 +211,12 @@ static void directory_and_launch(void)
     assert(strstr(listing.entries[0]->name, "Game 1 "));
     for (i = 0; i < listing.count; ++i) {
         const MenuEntry *entry = listing.entries[i];
-        if (!entry->is_directory) files = 1;
-        else assert(!files);
-        if (entry->toc_id == 0x01000002UL) target = entry;
+        if (!entry->is_directory)
+            files = 1;
+        else
+            assert(!files);
+        if (entry->toc_id == 0x01000002UL)
+            target = entry;
     }
     assert(target);
     assert(strstr(target->name, "Game 99 "));
@@ -210,8 +224,8 @@ static void directory_and_launch(void)
     assert(ode_launch(&ode, target) == 0);
     assert(fake.requested_id == 0x01000002UL && fake.launched);
     assert(fake.sequence_length == 4);
-    assert(fake.sequence[0] == 0xc1 && fake.sequence[1] == 0xc3 &&
-           fake.sequence[2] == 0xc4 && fake.sequence[3] == 0xc5);
+    assert(fake.sequence[0] == 0xc1 && fake.sequence[1] == 0xc3 && fake.sequence[2] == 0xc4 &&
+           fake.sequence[3] == 0xc5);
     fake.launched = 0;
     fake.reject_queue = 1;
     assert(ode_launch(&ode, target) < 0 && !fake.launched);
@@ -272,7 +286,7 @@ static void multi_disc_playlist(void)
     Ode ode;
     OdeListing listing;
     OdePlaylist playlist;
-    MenuEntry disc = { 0x01000002UL, 0, "Disc 1.iso" };
+    MenuEntry disc = {0x01000002UL, 0, "Disc 1.iso"};
     int before;
     size_t i;
     setup(&fake, &ode, &listing);
@@ -338,7 +352,7 @@ static void playlist_failures(void)
     Ode ode;
     OdeListing listing;
     OdePlaylist playlist;
-    MenuEntry disc = { 0x01000002UL, 0, "Disc 1.iso" };
+    MenuEntry disc = {0x01000002UL, 0, "Disc 1.iso"};
     int before;
     setup(&fake, &ode, &listing);
     ode_playlist_init(&playlist);
@@ -376,21 +390,32 @@ static void playlist_failures(void)
 
 static void directory_probes(void)
 {
-    FakeOde fake; Ode ode; OdeListing listing;
+    FakeOde fake;
+    Ode ode;
+    OdeListing listing;
     int before;
-    setup(&fake,&ode,&listing); fake.total=100; fake.parent=1;
-    assert(ode_probe_directory(&ode,0x01000005UL,"Game 96 with a long descriptive filename.iso")==1);
-    assert(!fake.changed_id && !fake.queued && !fake.launched && fake.calls<10);
-    assert(ode_probe_directory(&ode,0x01000005UL,"Renamed.iso")==0);
-    assert(ode_probe_directory(&ode,0x02000005UL,"Game 96 with a long descriptive filename.iso")==0);
-    assert(ode_probe_directory(&ode,0x01000002UL,"Game 99 with a long descriptive filename.iso")==0);
-    before=fake.calls; assert(!ode_probe_directory(&ode,0x01000000UL,"Volume") && fake.calls==before);
+    setup(&fake, &ode, &listing);
+    fake.total = 100;
+    fake.parent = 1;
+    assert(ode_probe_directory(&ode, 0x01000005UL,
+                               "Game 96 with a long descriptive filename.iso") == 1);
+    assert(!fake.changed_id && !fake.queued && !fake.launched && fake.calls < 10);
+    assert(ode_probe_directory(&ode, 0x01000005UL, "Renamed.iso") == 0);
+    assert(ode_probe_directory(&ode, 0x02000005UL,
+                               "Game 96 with a long descriptive filename.iso") == 0);
+    assert(ode_probe_directory(&ode, 0x01000002UL,
+                               "Game 99 with a long descriptive filename.iso") == 0);
+    before = fake.calls;
+    assert(!ode_probe_directory(&ode, 0x01000000UL, "Volume") && fake.calls == before);
     /* A first record may be '..'; do not mistake it for the requested folder. */
-    fake.devices=1;
-    assert(!ode_probe_directory(&ode,0x01000001UL,"USB 0")); fake.devices=0;
-    fake.failed=1;
-    assert(ode_probe_directory(&ode,0x01000005UL,"Game 96 with a long descriptive filename.iso")==-1);
-    puts("Directory probes: bounded ID/name/type verification, parent entries, volume mismatch and I/O failure passed");
+    fake.devices = 1;
+    assert(!ode_probe_directory(&ode, 0x01000001UL, "USB 0"));
+    fake.devices = 0;
+    fake.failed = 1;
+    assert(ode_probe_directory(&ode, 0x01000005UL,
+                               "Game 96 with a long descriptive filename.iso") == -1);
+    puts("Directory probes: bounded ID/name/type verification, parent entries, volume mismatch and "
+         "I/O failure passed");
 }
 
 int main(void)
