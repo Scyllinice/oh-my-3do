@@ -13,7 +13,7 @@ root = Path(__file__).resolve().parent.parent
 source = (root / "src/main.c").read_text()
 controller = source[
     source.index("static void restore_selected(") : source.index(
-        "static void tools_input(Menu *menu, u32 pressed)\n{"
+        "/* ==== Tools screens: the buttons ==== */"
     )
 ]
 stubs = r"""

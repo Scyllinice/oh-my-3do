@@ -6132,11 +6132,9 @@ static void search_library(Menu *menu, int rebuild)
     menu->tool_selected = 0;
     menu->selection_since = now_ms(menu);
 }
-/* The Find keyboard: the pad moves around the keys (wrapping), A types,
- * X deletes, C clears and Start searches. */
-static void find_input(Menu *menu, u32 pressed)
+/* Moves the on-screen keyboard's cursor, wrapping at the edges. */
+static void keyboard_move(Menu *menu, u32 pressed)
 {
-    size_t length = strlen(menu->find_query);
     unsigned int row = menu->find_key / FIND_KEY_COLUMNS * FIND_KEY_COLUMNS;
     if (pressed & ControlLeft)
         menu->find_key = row + (menu->find_key + FIND_KEY_COLUMNS - 1) % FIND_KEY_COLUMNS;
@@ -6146,14 +6144,29 @@ static void find_input(Menu *menu, u32 pressed)
         menu->find_key = (menu->find_key + FIND_KEYS - FIND_KEY_COLUMNS) % FIND_KEYS;
     if (pressed & ControlDown)
         menu->find_key = (menu->find_key + FIND_KEY_COLUMNS) % FIND_KEYS;
-    if ((pressed & ControlA) && length < sizeof(menu->find_query) - 1) {
-        menu->find_query[length++] = find_keys[menu->find_key];
-        menu->find_query[length] = 0;
+}
+
+/* Typing into `buffer` (`capacity` bytes) with the on-screen keyboard: A
+ * types the key, X deletes the last character and C clears. */
+static void keyboard_type(Menu *menu, u32 pressed, char *buffer, size_t capacity)
+{
+    size_t length = strlen(buffer);
+    keyboard_move(menu, pressed);
+    if ((pressed & ControlA) && length < capacity - 1) {
+        buffer[length++] = find_keys[menu->find_key];
+        buffer[length] = 0;
     }
     if ((pressed & ControlX) && length)
-        menu->find_query[length - 1] = 0;
+        buffer[length - 1] = 0;
     if (pressed & ControlC)
-        menu->find_query[0] = 0;
+        buffer[0] = 0;
+}
+
+/* The Find keyboard: the pad moves around the keys, A types, X deletes, C
+ * clears and Start searches. */
+static void find_input(Menu *menu, u32 pressed)
+{
+    keyboard_type(menu, pressed, menu->find_query, sizeof(menu->find_query));
     if (pressed & ControlStart)
         search_library(menu, 0);
 }
@@ -7946,15 +7959,13 @@ done:
     save_archive_free(&current);
     save_archive_free(&verified);
 }
-static void tools_input(Menu *menu, u32 pressed)
+/* ==== Tools screens: the buttons ==== */
+
+/* The hex editor: X opens known values if the cheat database knows this
+ * save; everything else is hex_input's. */
+static void hex_screen_input(Menu *menu, u32 pressed)
 {
-    size_t count = 0;
-    int page = menu->tools;
-    if (page == TOOL_CHEATS) {
-        cheats_input(menu, pressed);
-        return;
-    }
-    if (page == TOOL_HEX && !menu->hex_editing && (pressed & ControlX)) {
+    if (!menu->hex_editing && (pressed & ControlX)) {
         if (save_cheats_find(&menu->hex_archive.entries[menu->save_selected])) {
             menu->tools = menu->hex_view = TOOL_CHEATS;
             menu->cheat_selected = 0;
@@ -7963,25 +7974,174 @@ static void tools_input(Menu *menu, u32 pressed)
             menu->tool_message = "No verified cheats match this save.";
         return;
     }
-    if (page == TOOL_HEX) {
-        hex_input(menu, pressed);
+    hex_input(menu, pressed);
+}
+
+/* Find backup slots: choose how to look for slots. */
+static void slot_find_input(Menu *menu, u32 pressed)
+{
+    if (pressed & ControlB) {
+        menu->tools = TOOL_SLOTS;
+        menu->tool_message = NULL;
         return;
     }
-    if (page == TOOL_HEX_DISCARD) {
-        if (pressed & ControlB)
-            menu->tools = menu->hex_view;
-        else if (pressed & ControlA) {
-            close_hex(menu);
+    if (pressed & ControlUp)
+        menu->slot_find_option = (menu->slot_find_option + 3) % 4;
+    if (pressed & ControlDown)
+        menu->slot_find_option = (menu->slot_find_option + 1) % 4;
+    if (!(pressed & ControlA))
+        return;
+    if (menu->slot_find_option == 0) {
+        /* Occupied slots: a search that matches everything. */
+        menu->slot_query[0] = 0;
+        menu->slot_results.offset = 0;
+        slot_search(menu);
+    } else if (menu->slot_find_option == 1) {
+        menu->tools = TOOL_SLOT_QUERY;
+        menu->find_key = 0;
+        menu->tool_message = NULL;
+    } else if (menu->slot_find_option == 2) {
+        menu->slot_jump[0] = 0;
+        menu->find_key = 1;
+        menu->tools = TOOL_SLOT_JUMP;
+        menu->tool_message = NULL;
+    } else {
+        menu->slot_filtered = 0;
+        menu->tools = TOOL_SLOTS;
+        menu->tool_selected = 0;
+        save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
+    }
+}
+
+/* Typing a slot search; Start searches. */
+static void slot_query_input(Menu *menu, u32 pressed)
+{
+    if (pressed & ControlB) {
+        menu->tools = TOOL_SLOT_FIND;
+        menu->tool_message = NULL;
+        return;
+    }
+    keyboard_type(menu, pressed, menu->slot_query, sizeof(menu->slot_query));
+    if (pressed & ControlStart) {
+        menu->slot_results.offset = 0;
+        slot_search(menu);
+    }
+}
+
+/* Typing a slot number on a row of digits; Start goes to that slot. */
+static void slot_jump_input(Menu *menu, u32 pressed)
+{
+    size_t length = strlen(menu->slot_jump);
+    if (pressed & ControlB) {
+        menu->tools = TOOL_SLOTS;
+        return;
+    }
+    if (pressed & ControlLeft)
+        menu->find_key = (menu->find_key + 9) % 10;
+    if (pressed & ControlRight)
+        menu->find_key = (menu->find_key + 1) % 10;
+    if ((pressed & ControlA) && length < 9) {
+        menu->slot_jump[length++] = (char)('0' + menu->find_key);
+        menu->slot_jump[length] = 0;
+    }
+    if ((pressed & ControlX) && length)
+        menu->slot_jump[length - 1] = 0;
+    if (pressed & ControlC)
+        menu->slot_jump[0] = 0;
+    if (pressed & ControlStart) {
+        unsigned long number = 0;
+        size_t i;
+        for (i = 0; menu->slot_jump[i]; ++i)
+            number = number * 10 + (unsigned long)(menu->slot_jump[i] - '0');
+        if (!number || number > SAVE_SLOT_LIMIT)
+            menu->tool_message = "Enter a slot number from 1-999999999.";
+        else {
+            menu->slot_filtered = 0;
+            slot_select(menu, (unsigned int)(number - 1));
+            menu->tools = TOOL_SLOTS;
+            memset(&menu->slot_labels, 0, sizeof(menu->slot_labels));
+            save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
         }
+    }
+}
+
+/* Typing a slot's label; Start saves it. A blank label removes it. */
+static void slot_name_input(Menu *menu, u32 pressed)
+{
+    if (pressed & ControlB) {
+        menu->tools = TOOL_SLOTS;
+        menu->tool_message = NULL;
         return;
     }
-    if (page == TOOL_ARCHIVE && (pressed & ControlStart) && menu->backup.count) {
+    keyboard_type(menu, pressed, menu->slot_label_edit, SAVE_SLOT_LABEL_BYTES);
+    if (!(pressed & ControlStart))
+        return;
+    menu->slot_labels_before = menu->slot_labels;
+    strcpy(menu->slot_labels.labels[menu->slot_name_slot % 8], menu->slot_label_edit);
+    if (!save_root_operation(menu, SAVE_WRITE_LABELS, NULL, NULL)) {
+        menu->tools = TOOL_SLOTS;
+        menu->tool_message = "Slot name saved and verified.";
+        if (menu->slot_filtered) {
+            menu->slot_results.offset = 0;
+            slot_search(menu);
+        }
+    } else {
+        menu->slot_labels = menu->slot_labels_before;
+        menu->tool_message = "Name failed. Reload before retrying.";
+        menu->tools = TOOL_SLOTS;
+    }
+}
+
+/* Comparing backups: choose a save and A to see its bytes, which page with
+ * Left/Right (7 a page). B goes back a step. */
+static void compare_input(Menu *menu, u32 pressed)
+{
+    size_t count = save_archive_diff_count(&menu->compare_archive, &menu->backup);
+    if (pressed & ControlB) {
+        if (menu->tools == TOOL_COMPARE_BYTES)
+            menu->tools = TOOL_COMPARE;
+        else {
+            save_archive_free(&menu->compare_archive);
+            menu->tools = TOOL_SLOTS;
+            slot_select(menu, menu->backup_slot);
+        }
+    } else if (menu->tools == TOOL_COMPARE) {
+        if ((pressed & ControlUp) && count)
+            menu->tool_selected = menu->tool_selected ? menu->tool_selected - 1 : count - 1;
+        if ((pressed & ControlDown) && count)
+            menu->tool_selected = (menu->tool_selected + 1) % count;
+        if ((pressed & ControlA) && count) {
+            menu->tools = TOOL_COMPARE_BYTES;
+            menu->compare_offset = 0;
+        }
+    } else {
+        SaveDifference diff;
+        if (!save_archive_diff(&menu->compare_archive, &menu->backup, menu->tool_selected, &diff)) {
+            if ((pressed & ControlLeft) && menu->compare_offset)
+                menu->compare_offset -= 7;
+            if ((pressed & ControlRight) && menu->compare_offset + 7 < diff.changed_bytes)
+                menu->compare_offset += 7;
+        }
+    }
+}
+
+/*
+ * A backup's list of saves: Start copies the selected save to another slot,
+ * X opens its known values and C the hex editor. Returns 1 if the press was
+ * used.
+ */
+static int archive_input(Menu *menu, u32 pressed)
+{
+    if (!menu->backup.count)
+        return 0;
+    if (pressed & ControlStart) {
         menu->save_selected = menu->tool_selected;
         save_archive_free(&menu->pending);
         if (save_archive_build(&menu->pending, &menu->backup.entries[menu->save_selected], 1) < 0) {
             menu->tool_message = "Cannot prepare copy.";
-            return;
+            return 1;
         }
+        /* Keep the source backup aside while choosing where to copy to. */
         save_archive_free(&menu->copy_original);
         menu->copy_original = menu->backup;
         memset(&menu->backup, 0, sizeof(menu->backup));
@@ -7990,136 +8150,61 @@ static void tools_input(Menu *menu, u32 pressed)
         menu->slot_filtered = 0;
         menu->tools = TOOL_SLOTS;
         menu->tool_selected = 0;
-        return;
+        return 1;
     }
-    if (page == TOOL_ARCHIVE && (pressed & ControlX) && menu->backup.count) {
+    if (pressed & ControlX) {
         menu->save_selected = menu->tool_selected;
         if (!save_cheats_find(&menu->backup.entries[menu->save_selected])) {
             menu->tool_message = "No verified cheats match this save.";
-            return;
+            return 1;
         }
         if (!open_hex(menu)) {
             menu->tools = menu->hex_view = TOOL_CHEATS;
             menu->cheat_selected = 0;
         }
-        return;
+        return 1;
     }
-    if (page == TOOL_ARCHIVE && (pressed & ControlC) && menu->backup.count) {
+    if (pressed & ControlC) {
         menu->save_selected = menu->tool_selected;
         open_hex(menu);
-        return;
+        return 1;
     }
-    if (page == TOOL_GAME_DETAILS && !(pressed & ControlB)) {
-        if ((pressed & ControlRight) && menu->game_details_page + 1 < menu->game_details_pages)
-            ++menu->game_details_page;
-        if ((pressed & ControlLeft) && menu->game_details_page)
-            --menu->game_details_page;
-        return;
+    return 0;
+}
+
+/* Left/Right on the Save Manager's tabs: between console saves and USB
+ * backups. */
+static void switch_save_tab(Menu *menu)
+{
+    menu->tool_selected = 0;
+    menu->tool_message = NULL;
+    save_archive_free(&menu->pending);
+    if (menu->tools == TOOL_SAVES) {
+        menu->tools = TOOL_SLOTS;
+        menu->backup_mode = 0;
+        load_save_names(menu);
+    } else {
+        menu->tools = TOOL_SAVES;
+        scan_nvram(menu);
     }
-    if (page == TOOL_SLOT_FIND) {
-        if (pressed & ControlB) {
-            menu->tools = TOOL_SLOTS;
-            menu->tool_message = NULL;
-            return;
-        }
-        if (pressed & ControlUp)
-            menu->slot_find_option = (menu->slot_find_option + 3) % 4;
-        if (pressed & ControlDown)
-            menu->slot_find_option = (menu->slot_find_option + 1) % 4;
-        if (pressed & ControlA) {
-            if (!menu->slot_find_option) {
-                menu->slot_query[0] = 0;
-                menu->slot_results.offset = 0;
-                slot_search(menu);
-            } else if (menu->slot_find_option == 1) {
-                menu->tools = TOOL_SLOT_QUERY;
-                menu->find_key = 0;
-                menu->tool_message = NULL;
-            } else if (menu->slot_find_option == 2) {
-                menu->slot_jump[0] = 0;
-                menu->find_key = 1;
-                menu->tools = TOOL_SLOT_JUMP;
-                menu->tool_message = NULL;
-            } else {
-                menu->slot_filtered = 0;
-                menu->tools = TOOL_SLOTS;
-                menu->tool_selected = 0;
-                save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
-            }
-        }
-        return;
+}
+
+/*
+ * The Slots screen's own buttons: Start finds slots, L and R turn the page
+ * (of slots, or of search results), Left/Right switch tabs, C names the
+ * selected slot and X picks it to compare with another. Returns 1 if the
+ * press was used.
+ */
+static int slots_input(Menu *menu, u32 pressed)
+{
+    int browsing = !menu->backup_mode && !menu->compare_choosing;
+    if (pressed & ControlStart) {
+        menu->slot_find_option = 0;
+        menu->tools = TOOL_SLOT_FIND;
+        menu->tool_message = NULL;
+        return 1;
     }
-    if (page == TOOL_SLOT_QUERY) {
-        size_t length = strlen(menu->slot_query);
-        if (pressed & ControlB) {
-            menu->tools = TOOL_SLOT_FIND;
-            menu->tool_message = NULL;
-            return;
-        }
-        if (pressed & ControlLeft)
-            menu->find_key = menu->find_key / 10 * 10 + (menu->find_key + 9) % 10;
-        if (pressed & ControlRight)
-            menu->find_key = menu->find_key / 10 * 10 + (menu->find_key + 1) % 10;
-        if (pressed & ControlUp)
-            menu->find_key = (menu->find_key + 30) % 40;
-        if (pressed & ControlDown)
-            menu->find_key = (menu->find_key + 10) % 40;
-        if ((pressed & ControlA) && length < sizeof(menu->slot_query) - 1) {
-            menu->slot_query[length++] = find_keys[menu->find_key];
-            menu->slot_query[length] = 0;
-        }
-        if ((pressed & ControlX) && length)
-            menu->slot_query[length - 1] = 0;
-        if (pressed & ControlC)
-            menu->slot_query[0] = 0;
-        if (pressed & ControlStart) {
-            menu->slot_results.offset = 0;
-            slot_search(menu);
-        }
-        return;
-    }
-    if (page == TOOL_SLOT_JUMP) {
-        size_t length = strlen(menu->slot_jump);
-        if (pressed & ControlB) {
-            menu->tools = TOOL_SLOTS;
-            return;
-        }
-        if (pressed & ControlLeft)
-            menu->find_key = (menu->find_key + 9) % 10;
-        if (pressed & ControlRight)
-            menu->find_key = (menu->find_key + 1) % 10;
-        if ((pressed & ControlA) && length < 9) {
-            menu->slot_jump[length++] = (char)('0' + menu->find_key);
-            menu->slot_jump[length] = 0;
-        }
-        if ((pressed & ControlX) && length)
-            menu->slot_jump[length - 1] = 0;
-        if (pressed & ControlC)
-            menu->slot_jump[0] = 0;
-        if (pressed & ControlStart) {
-            unsigned long number = 0;
-            size_t i;
-            for (i = 0; menu->slot_jump[i]; ++i)
-                number = number * 10 + (unsigned long)(menu->slot_jump[i] - '0');
-            if (!number || number > SAVE_SLOT_LIMIT)
-                menu->tool_message = "Enter a slot number from 1-999999999.";
-            else {
-                menu->slot_filtered = 0;
-                slot_select(menu, (unsigned int)(number - 1));
-                menu->tools = TOOL_SLOTS;
-                memset(&menu->slot_labels, 0, sizeof(menu->slot_labels));
-                save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
-            }
-        }
-        return;
-    }
-    if (page == TOOL_SLOTS && (pressed & (ControlLeftShift | ControlRightShift | ControlStart))) {
-        if (pressed & ControlStart) {
-            menu->slot_find_option = 0;
-            menu->tools = TOOL_SLOT_FIND;
-            menu->tool_message = NULL;
-            return;
-        }
+    if (pressed & (ControlLeftShift | ControlRightShift)) {
         if (menu->slot_filtered) {
             if ((pressed & ControlLeftShift) && menu->slot_results.offset)
                 menu->slot_results.offset -= 8;
@@ -8127,9 +8212,9 @@ static void tools_input(Menu *menu, u32 pressed)
                      menu->slot_results.offset + 8 < menu->slot_results.total)
                 menu->slot_results.offset += 8;
             else
-                return;
+                return 1;
             slot_search(menu);
-            return;
+            return 1;
         }
         if ((pressed & ControlLeftShift) && menu->slot_page)
             --menu->slot_page;
@@ -8138,104 +8223,21 @@ static void tools_input(Menu *menu, u32 pressed)
         menu->tool_selected = 0;
         memset(&menu->slot_labels, 0, sizeof(menu->slot_labels));
         save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
-        return;
+        return 1;
     }
-    if ((page == TOOL_SAVES ||
-         (page == TOOL_SLOTS && !menu->backup_mode && !menu->compare_choosing)) &&
-        (pressed & (ControlLeft | ControlRight))) {
-        menu->tool_selected = 0;
-        menu->tool_message = NULL;
-        save_archive_free(&menu->pending);
-        if (page == TOOL_SAVES) {
-            menu->tools = TOOL_SLOTS;
-            menu->backup_mode = 0;
-            load_save_names(menu);
-        } else {
-            menu->tools = TOOL_SAVES;
-            scan_nvram(menu);
-        }
-        return;
+    if (!browsing)
+        return 0;
+    if (pressed & (ControlLeft | ControlRight)) {
+        switch_save_tab(menu);
+        return 1;
     }
-    if (page == TOOL_SLOT_NAME) {
-        size_t length = strlen(menu->slot_label_edit);
-        if (pressed & ControlB) {
-            menu->tools = TOOL_SLOTS;
-            menu->tool_message = NULL;
-            return;
-        }
-        if (pressed & ControlLeft)
-            menu->find_key = menu->find_key / 10 * 10 + (menu->find_key + 9) % 10;
-        if (pressed & ControlRight)
-            menu->find_key = menu->find_key / 10 * 10 + (menu->find_key + 1) % 10;
-        if (pressed & ControlUp)
-            menu->find_key = (menu->find_key + 30) % 40;
-        if (pressed & ControlDown)
-            menu->find_key = (menu->find_key + 10) % 40;
-        if ((pressed & ControlA) && length < SAVE_SLOT_LABEL_BYTES - 1) {
-            menu->slot_label_edit[length++] = find_keys[menu->find_key];
-            menu->slot_label_edit[length] = 0;
-        }
-        if ((pressed & ControlX) && length)
-            menu->slot_label_edit[length - 1] = 0;
-        if (pressed & ControlC)
-            menu->slot_label_edit[0] = 0;
-        if (pressed & ControlStart) {
-            menu->slot_labels_before = menu->slot_labels;
-            strcpy(menu->slot_labels.labels[menu->slot_name_slot % 8], menu->slot_label_edit);
-            if (!save_root_operation(menu, SAVE_WRITE_LABELS, NULL, NULL)) {
-                menu->tools = TOOL_SLOTS;
-                menu->tool_message = "Slot name saved and verified.";
-                if (menu->slot_filtered) {
-                    menu->slot_results.offset = 0;
-                    slot_search(menu);
-                }
-            } else {
-                menu->slot_labels = menu->slot_labels_before;
-                menu->tool_message = "Name failed. Reload before retrying.";
-                menu->tools = TOOL_SLOTS;
-            }
-        }
-        return;
-    }
-    if (page == TOOL_COMPARE || page == TOOL_COMPARE_BYTES) {
-        size_t count = save_archive_diff_count(&menu->compare_archive, &menu->backup);
-        if (pressed & ControlB) {
-            if (page == TOOL_COMPARE_BYTES)
-                menu->tools = TOOL_COMPARE;
-            else {
-                save_archive_free(&menu->compare_archive);
-                menu->tools = TOOL_SLOTS;
-                slot_select(menu, menu->backup_slot);
-            }
-        } else if (page == TOOL_COMPARE) {
-            if ((pressed & ControlUp) && count)
-                menu->tool_selected = menu->tool_selected ? menu->tool_selected - 1 : count - 1;
-            if ((pressed & ControlDown) && count)
-                menu->tool_selected = (menu->tool_selected + 1) % count;
-            if ((pressed & ControlA) && count) {
-                menu->tools = TOOL_COMPARE_BYTES;
-                menu->compare_offset = 0;
-            }
-        } else {
-            SaveDifference diff;
-            if (!save_archive_diff(&menu->compare_archive, &menu->backup, menu->tool_selected,
-                                   &diff)) {
-                if ((pressed & ControlLeft) && menu->compare_offset)
-                    menu->compare_offset -= 7;
-                if ((pressed & ControlRight) && menu->compare_offset + 7 < diff.changed_bytes)
-                    menu->compare_offset += 7;
-            }
-        }
-        return;
-    }
-    if (page == TOOL_SLOTS && !menu->backup_mode && !menu->compare_choosing &&
-        (pressed & ControlC)) {
+    if (pressed & ControlC) {
         if (!slot_count(menu))
-            return;
+            return 1;
         menu->slot_name_slot = slot_at(menu, menu->tool_selected);
         if (menu->slot_name_slot >= SAVE_SLOT_LIMIT) {
             menu->tool_message = "Recovery backups keep their names.";
-            return;
+            return 1;
         }
         menu->slot_page = menu->slot_name_slot / 8;
         if (!save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL)) {
@@ -8243,13 +8245,12 @@ static void tools_input(Menu *menu, u32 pressed)
             menu->find_key = 0;
             menu->tools = TOOL_SLOT_NAME;
         }
-        return;
+        return 1;
     }
-    if (page == TOOL_SLOTS && !menu->backup_mode && !menu->compare_choosing &&
-        (pressed & ControlX)) {
+    if (pressed & ControlX) {
         char path[40];
         if (!slot_count(menu))
-            return;
+            return 1;
         slot_path(path, slot_at(menu, menu->tool_selected));
         save_archive_free(&menu->compare_archive);
         if (save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->compare_archive) >= 0) {
@@ -8257,132 +8258,127 @@ static void tools_input(Menu *menu, u32 pressed)
             menu->compare_choosing = 1;
             menu->tool_message = "Choose the second slot, then A.";
         }
-        return;
+        return 1;
     }
-    if (page == TOOL_FIND && !(pressed & ControlB)) {
-        find_input(menu, pressed);
-        return;
-    }
-    if (page == TOOL_FAVORITES && menu->favorites_move) {
-        if (pressed & ControlB)
-            cancel_favorites_move(menu);
-        else if (pressed & (ControlRightShift | ControlA))
-            save_favorites_order(menu);
-        else if (pressed & (ControlUp | ControlDown)) {
-            size_t to = menu->tool_selected;
-            if ((pressed & ControlUp) && to)
-                --to;
-            if ((pressed & ControlDown) &&
-                to + 1 < menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult))
-                ++to;
-            {
-                size_t from_index = menu_favorites_visible_index(
-                    &menu->favorites, menu->config.hide_adult, menu->tool_selected);
-                size_t to_index =
-                    menu_favorites_visible_index(&menu->favorites, menu->config.hide_adult, to);
-                if (from_index < menu->favorites.count && to_index < menu->favorites.count) {
-                    const char *path = menu->favorites.paths[from_index];
-                    menu->favorites.paths[from_index] = menu->favorites.paths[to_index];
-                    menu->favorites.paths[to_index] = path;
-                    menu->tool_selected = to;
-                }
-            }
-        }
-        return;
-    }
-    if (page == TOOL_FAVORITES && (pressed & ControlRightShift)) {
-        begin_favorites_move(menu);
-        return;
-    }
-    if (page == TOOL_CATEGORIES && (pressed & ControlB)) {
-        menu->tools = TOOL_CONFIG;
-        menu->tool_selected = 8;
-        menu->tool_message = NULL;
-        return;
-    }
+    return 0;
+}
+
+/* Reordering favorites: Up/Down move the selected favorite, A or R saves
+ * the order and B puts it back. */
+static void favorites_move_input(Menu *menu, u32 pressed)
+{
+    size_t to = menu->tool_selected, from_index, to_index;
     if (pressed & ControlB) {
-        menu->tool_message = NULL;
-        if (page == TOOL_HOME || page == TOOL_GAME_DETAILS) {
-            menu->tools = 0;
-            selection_changed(menu);
-        } else if (page == TOOL_SLOTS && menu->compare_choosing) {
-            menu->compare_choosing = 0;
-            save_archive_free(&menu->compare_archive);
-        } else if (page == TOOL_SLOTS && menu->backup_mode) {
-            save_archive_free(&menu->pending);
-            menu->backup_mode = 0;
-            if (menu->copy_original.bytes)
-                finish_copy(menu);
-            else if (menu->hex_archive.bytes)
-                menu->tools = menu->hex_view;
-            else {
-                menu->tools = TOOL_SAVES;
-                scan_nvram(menu);
-            }
-        } else if (page == TOOL_RESULTS) {
-            menu->tools = TOOL_FIND;
-            menu->tool_selected = 0;
-        } else if (page == TOOL_BACKUP_DETAILS) {
-            menu->tools = TOOL_SLOTS;
-            slot_select(menu, menu->backup_slot);
-        } else if (page == TOOL_ARCHIVE) {
-            menu->tools = TOOL_SLOTS;
-            menu->backup_mode = 0;
-            slot_select(menu, menu->backup_slot);
-        } else if (page == TOOL_CONFIRM_RESTORE) {
-            menu->tools = TOOL_ARCHIVE;
-            menu->tool_selected = menu->save_selected;
-        } else if (page == TOOL_CONFIRM_BACKUP) {
-            menu->tools = TOOL_SLOTS;
-            slot_select(menu, menu->backup_slot);
-        } else {
-            menu->tools = TOOL_HOME;
-            menu->tool_selected = menu->home_selected;
-            save_archive_free(&menu->pending);
-        }
-        if (menu->tools == TOOL_SLOTS && menu->slot_labels_page != menu->slot_page)
-            save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
+        cancel_favorites_move(menu);
         return;
     }
-    if (page == TOOL_RESULTS) {
-        if (pressed & ControlStart) {
-            menu->tools = TOOL_FIND;
-            menu->tool_message = NULL;
-            return;
-        }
-        if (pressed & ControlX) {
-            search_library(menu, 1);
-            return;
-        }
-        count = menu->search_count;
+    if (pressed & (ControlRightShift | ControlA)) {
+        save_favorites_order(menu);
+        return;
     }
-    if (page == TOOL_RESULTS && count) {
-        if (pressed & (ControlRight | ControlRightShift)) {
-            menu->tool_selected += 6;
-            if (menu->tool_selected >= count)
-                menu->tool_selected = count - 1;
-        } else if (pressed & (ControlLeft | ControlLeftShift))
-            menu->tool_selected = menu->tool_selected >= 6 ? menu->tool_selected - 6 : 0;
+    if (!(pressed & (ControlUp | ControlDown)))
+        return;
+    if ((pressed & ControlUp) && to)
+        --to;
+    if ((pressed & ControlDown) &&
+        to + 1 < menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult))
+        ++to;
+    /* Swap it with its neighbor in the whole list (some may be hidden). */
+    from_index = menu_favorites_visible_index(&menu->favorites, menu->config.hide_adult,
+                                              menu->tool_selected);
+    to_index = menu_favorites_visible_index(&menu->favorites, menu->config.hide_adult, to);
+    if (from_index < menu->favorites.count && to_index < menu->favorites.count) {
+        const char *path = menu->favorites.paths[from_index];
+        menu->favorites.paths[from_index] = menu->favorites.paths[to_index];
+        menu->favorites.paths[to_index] = path;
+        menu->tool_selected = to;
     }
-    if (page == TOOL_HOME)
-        count = 7;
-    if (page == TOOL_SAVES)
-        count = menu->nvram.count;
-    if (page == TOOL_ARCHIVE)
-        count = menu->backup.count;
-    if (page == TOOL_SLOTS)
-        count = slot_count(menu);
-    if (page == TOOL_CONFIG)
-        count = 12;
-    if (page == TOOL_CATEGORIES)
-        count = menu_categories_count();
-    if (page == TOOL_FAVORITES)
-        count = menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult);
-    if (page == TOOL_RECENT)
-        count = menu->recent.count;
-    if (page == TOOL_BACKUP_DETAILS)
-        count = menu->details_new ? menu->pending.count : menu->backup.count;
-    if (page == TOOL_HOME) {
+}
+
+/* B on a Tools screen: back one step, to the screen this one was opened
+ * from (or out of Tools from the Tools menu). */
+static void tools_back(Menu *menu)
+{
+    int page = menu->tools;
+    menu->tool_message = NULL;
+    if (page == TOOL_HOME || page == TOOL_GAME_DETAILS) {
+        menu->tools = 0;
+        selection_changed(menu);
+    } else if (page == TOOL_SLOTS && menu->compare_choosing) {
+        menu->compare_choosing = 0;
+        save_archive_free(&menu->compare_archive);
+    } else if (page == TOOL_SLOTS && menu->backup_mode) {
+        /* Stop choosing a slot to back up to: back to what was backed up. */
+        save_archive_free(&menu->pending);
+        menu->backup_mode = 0;
+        if (menu->copy_original.bytes)
+            finish_copy(menu);
+        else if (menu->hex_archive.bytes)
+            menu->tools = menu->hex_view;
+        else {
+            menu->tools = TOOL_SAVES;
+            scan_nvram(menu);
+        }
+    } else if (page == TOOL_RESULTS) {
+        menu->tools = TOOL_FIND;
+        menu->tool_selected = 0;
+    } else if (page == TOOL_BACKUP_DETAILS) {
+        menu->tools = TOOL_SLOTS;
+        slot_select(menu, menu->backup_slot);
+    } else if (page == TOOL_ARCHIVE) {
+        menu->tools = TOOL_SLOTS;
+        menu->backup_mode = 0;
+        slot_select(menu, menu->backup_slot);
+    } else if (page == TOOL_CONFIRM_RESTORE) {
+        menu->tools = TOOL_ARCHIVE;
+        menu->tool_selected = menu->save_selected;
+    } else if (page == TOOL_CONFIRM_BACKUP) {
+        menu->tools = TOOL_SLOTS;
+        slot_select(menu, menu->backup_slot);
+    } else {
+        menu->tools = TOOL_HOME;
+        menu->tool_selected = menu->home_selected;
+        save_archive_free(&menu->pending);
+    }
+    if (menu->tools == TOOL_SLOTS && menu->slot_labels_page != menu->slot_page)
+        save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
+}
+
+/* How many rows the current Tools screen's list has, for moving through it
+ * (0 for screens without a list). */
+static size_t tool_list_length(Menu *menu)
+{
+    switch (menu->tools) {
+    case TOOL_HOME:
+        return 7;
+    case TOOL_SAVES:
+        return menu->nvram.count;
+    case TOOL_ARCHIVE:
+        return menu->backup.count;
+    case TOOL_SLOTS:
+        return slot_count(menu);
+    case TOOL_CONFIG:
+        return SETTING_ROWS;
+    case TOOL_CATEGORIES:
+        return menu_categories_count();
+    case TOOL_FAVORITES:
+        return menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult);
+    case TOOL_RECENT:
+        return menu->recent.count;
+    case TOOL_BACKUP_DETAILS:
+        return menu->details_new ? menu->pending.count : menu->backup.count;
+    case TOOL_RESULTS:
+        return menu->search_count;
+    }
+    return 0;
+}
+
+/* Up/Down through a list (wrapping). The Tools menu is a grid of two
+ * columns of four (the last missing): Left/Right switch columns. */
+static void tool_list_move(Menu *menu, u32 pressed)
+{
+    size_t count = tool_list_length(menu);
+    if (menu->tools == TOOL_HOME) {
         size_t column = menu->tool_selected / 4, row = menu->tool_selected % 4;
         if (pressed & (ControlLeft | ControlRight))
             column = !column;
@@ -8400,233 +8396,417 @@ static void tools_input(Menu *menu, u32 pressed)
         if (pressed & ControlDown)
             menu->tool_selected = (menu->tool_selected + 1) % count;
     }
-    if (page == TOOL_HELP) {
-        if (pressed & (ControlLeft | ControlRight))
-            menu->tool_selected = !menu->tool_selected;
+}
+
+/*
+ * A on a category: shows or hides it and saves categories.json at once.
+ * If the browser is inside a category that is now hidden, it goes back out
+ * of it; at the top, the folder is reloaded to show or hide it.
+ */
+static void toggle_category(Menu *menu)
+{
+    unsigned int root = menu->depth && !(menu->path_ids[0] & 0xffffffUL) ? 1 : 0;
+    if (!menu->categories_valid) {
+        menu->tool_message = "Invalid categories.json. Repair on PC.";
         return;
     }
-    if (page == TOOL_CATEGORIES && (pressed & ControlA)) {
-        unsigned int root = menu->depth && !(menu->path_ids[0] & 0xffffffUL) ? 1 : 0;
-        if (!menu->categories_valid) {
-            menu->tool_message = "Invalid categories.json. Repair on PC.";
+    if (menu_category_toggle(menu->tool_selected) < 0) {
+        menu->tool_message = "Invalid category data.";
+        return;
+    }
+    if (text_at_root(menu, "categories.json", menu_categories_text(), NULL, 0, NULL) < 0) {
+        menu_category_toggle(menu->tool_selected);
+        menu->tool_message = "Visibility save failed. Check USB.";
+        return;
+    }
+    menu->tool_message = "Visibility saved and verified.";
+    if (menu->depth > root && menu_categories_hidden_name(menu->path[root])) {
+        while (menu->ready && menu->depth > root) {
+            unsigned int before = menu->depth;
+            go_back(menu);
+            if (menu->depth == before)
+                break;
+        }
+    } else if (menu->depth == root)
+        load_directory(menu, menu->selected);
+}
+
+/*
+ * A or C on console saves: backs up the selected save (A) or all of them
+ * (C). NVRAM is read again first, so the backup is of the saves as they
+ * are now; then the person chooses a slot.
+ */
+static void begin_backup(Menu *menu, u32 pressed)
+{
+    size_t selected = menu->tool_selected;
+    int all = (pressed & ControlC) != 0;
+    char selected_name[SAVE_NAME_BYTES];
+    selected_name[0] = 0;
+    if (selected < menu->nvram.count)
+        strcpy(selected_name, menu->nvram.entries[selected].name);
+    scan_nvram(menu);
+    if (menu->tool_message || !menu->nvram.count)
+        return;
+    if (!all) {
+        /* Find the selected save again in the fresh list. */
+        for (selected = 0; selected < menu->nvram.count; ++selected)
+            if (!strcmp(selected_name, menu->nvram.entries[selected].name))
+                break;
+        if (selected == menu->nvram.count) {
+            menu->tool_message = "Save list changed. Select again.";
             return;
         }
-        if (menu_category_toggle(menu->tool_selected) < 0) {
-            menu->tool_message = "Invalid category data.";
-            return;
-        }
-        if (text_at_root(menu, "categories.json", menu_categories_text(), NULL, 0, NULL) < 0) {
-            menu_category_toggle(menu->tool_selected);
-            menu->tool_message = "Visibility save failed. Check USB.";
-            return;
-        }
-        menu->tool_message = "Visibility saved and verified.";
-        if (menu->depth > root && menu_categories_hidden_name(menu->path[root])) {
-            while (menu->ready && menu->depth > root) {
-                unsigned int before = menu->depth;
-                go_back(menu);
-                if (menu->depth == before)
-                    break;
-            }
-        } else if (menu->depth == root)
-            load_directory(menu, menu->selected);
+    }
+    save_archive_free(&menu->pending);
+    if (save_archive_build(&menu->pending,
+                           all ? menu->nvram.entries : &menu->nvram.entries[selected],
+                           all ? menu->nvram.count : 1) < 0) {
+        menu->tool_message = "Cannot prepare backup.";
         return;
     }
-    if (page == TOOL_CONFIG && (pressed & ControlX)) {
-        discard_config(menu);
-        return;
-    }
-    if (page == TOOL_CONFIG && (pressed & ControlC)) {
-        save_config(menu);
-        return;
-    }
-    if (page == TOOL_CONFIG && (pressed & (ControlA | ControlLeft | ControlRight))) {
-        change_config(menu, (pressed & ControlLeft) ? -1 : 1);
-        return;
-    }
-    if (page == TOOL_RECENT && (pressed & ControlStart)) {
-        open_recent(menu);
-        return;
-    }
-    if (page == TOOL_FAVORITES && (pressed & ControlStart)) {
+    menu->backup_merge = !all;
+    menu->save_selected = selected;
+    menu->backup_mode = 1;
+    menu->slot_filtered = 0;
+    menu->tools = TOOL_SLOTS;
+    menu->tool_selected = 0;
+}
+
+/* A on the Tools menu: opens the chosen screen. */
+static void open_tool(Menu *menu)
+{
+    size_t selected = menu->tool_selected;
+    menu->tool_selected = 0;
+    switch (selected) {
+    case 0:
+        menu->tools = TOOL_SAVES;
+        scan_nvram(menu);
+        break;
+    case 1:
+        menu->tools = TOOL_FAVORITES;
         open_favorites(menu);
-        return;
+        break;
+    case 2:
+        menu->tools = TOOL_CONFIG;
+        break;
+    case 3:
+        menu->tools = TOOL_HELP;
+        break;
+    case 4:
+        menu->tools = TOOL_DIAG;
+        break;
+    case 5:
+        menu->tools = TOOL_RECENT;
+        open_recent(menu);
+        break;
+    default:
+        menu->tools = TOOL_FIND;
+        menu->find_key = 0;
+        break;
     }
-    if (page == TOOL_FAVORITES && (pressed & (ControlC | ControlX))) {
-        edit_favorites(menu, (pressed & ControlX) != 0);
+}
+
+/*
+ * A on a slot. Choosing where to back up to: reads the slot (merging the
+ * one save into it, if backing up one) and shows what it will hold.
+ * Comparing: reads it as the second backup and shows the comparison.
+ * Otherwise: opens the backup in it.
+ */
+static void open_slot(Menu *menu)
+{
+    char path[40];
+    if (!slot_count(menu))
         return;
-    }
-    if (page == TOOL_BACKUP_DETAILS && (pressed & ControlC)) {
-        menu->details_new = !menu->details_new;
-        menu->tool_selected = 0;
-        return;
-    }
-    if (page == TOOL_DIAG) {
-        if (pressed & ControlX) {
-            recover_library(menu);
-            return;
-        }
-        if (pressed & ControlC) {
-            export_diagnostics(menu);
-            return;
-        }
-        if (pressed & ControlRight)
-            menu->tool_selected = (menu->tool_selected + 1) % 5;
-        if (pressed & ControlLeft)
-            menu->tool_selected = (menu->tool_selected + 4) % 5;
-        return;
-    }
-    if (page == TOOL_SAVES && (pressed & ControlX)) {
-        scan_nvram(menu);
-        return;
-    }
-    if (page == TOOL_SAVES && (pressed & (ControlA | ControlC))) {
-        /* Snapshot again at the moment the user requests a backup. */
-        size_t selected = menu->tool_selected;
-        char selected_name[SAVE_NAME_BYTES];
-        selected_name[0] = 0;
-        if (selected < menu->nvram.count)
-            strcpy(selected_name, menu->nvram.entries[selected].name);
-        scan_nvram(menu);
-        if (menu->tool_message || !menu->nvram.count)
-            return;
-        if (!(pressed & ControlC)) {
-            for (selected = 0; selected < menu->nvram.count; ++selected)
-                if (!strcmp(selected_name, menu->nvram.entries[selected].name))
-                    break;
-            if (selected == menu->nvram.count) {
-                menu->tool_message = "Save list changed. Select again.";
-                return;
-            }
-        }
-        save_archive_free(&menu->pending);
-        if (save_archive_build(&menu->pending,
-                               (pressed & ControlC) ? menu->nvram.entries
-                                                    : &menu->nvram.entries[selected],
-                               (pressed & ControlC) ? menu->nvram.count : 1) < 0) {
-            menu->tool_message = "Cannot prepare backup.";
-            return;
-        }
-        menu->backup_merge = !(pressed & ControlC);
-        menu->save_selected = selected;
-        menu->backup_mode = 1;
-        menu->slot_filtered = 0;
-        menu->tools = TOOL_SLOTS;
-        menu->tool_selected = 0;
-        return;
-    }
-    if (!(pressed & ControlA))
-        return;
-    menu->tool_message = NULL;
-    if (page == TOOL_HOME) {
-        size_t selected = menu->tool_selected;
-        menu->tool_selected = 0;
-        if (!selected) {
-            menu->tools = TOOL_SAVES;
-            scan_nvram(menu);
-        } else if (selected == 1) {
-            menu->tools = TOOL_FAVORITES;
-            open_favorites(menu);
-        } else if (selected == 2)
-            menu->tools = TOOL_CONFIG;
-        else if (selected == 3)
-            menu->tools = TOOL_HELP;
-        else if (selected == 4)
-            menu->tools = TOOL_DIAG;
-        else if (selected == 5) {
-            menu->tools = TOOL_RECENT;
-            open_recent(menu);
-        } else {
-            menu->tools = TOOL_FIND;
-            menu->find_key = 0;
-        }
-    } else if (page == TOOL_SLOTS) {
-        char path[40];
-        if (!slot_count(menu))
-            return;
-        menu->backup_slot = slot_at(menu, menu->tool_selected);
-        if (menu->backup_mode) {
-            slot_path(path, menu->backup_slot);
-            save_archive_free(&menu->backup);
-            if (menu->backup_merge) {
-                const SaveEntry *entry = backup_entry(menu);
-                int loaded = save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->backup);
-                if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready)
-                    return;
-                if (loaded < 0) {
-                    menu->tool_message = "Slot unreadable. Choose another.";
-                    return;
-                }
-                menu->backup_slot_valid = loaded == 0;
-                if (save_archive_merge(&menu->pending, &menu->backup, entry) < 0) {
-                    menu->tool_message = "Merged slot is full. Choose another.";
-                    return;
-                }
-            } else
-                menu->backup_slot_valid =
-                    !save_root_operation(menu, SAVE_LOAD, path, &menu->backup);
+    menu->backup_slot = slot_at(menu, menu->tool_selected);
+    slot_path(path, menu->backup_slot);
+    save_archive_free(&menu->backup);
+    if (menu->backup_mode) {
+        if (menu->backup_merge) {
+            const SaveEntry *entry = backup_entry(menu);
+            int loaded = save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->backup);
             if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready)
                 return;
-            menu->tools = TOOL_BACKUP_DETAILS;
-            menu->tool_selected = 0;
-            menu->details_new = 0;
-            menu->tool_message = NULL;
-        } else if (menu->compare_choosing) {
-            slot_path(path, menu->backup_slot);
-            save_archive_free(&menu->backup);
-            if (save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->backup) >= 0) {
-                menu->compare_choosing = 0;
-                menu->tools = TOOL_COMPARE;
-                menu->tool_selected = 0;
-            }
-        } else {
-            slot_path(path, menu->backup_slot);
-            save_archive_free(&menu->backup);
-            if (!save_root_operation(menu, SAVE_LOAD, path, &menu->backup)) {
-                menu->tools = TOOL_ARCHIVE;
-                menu->tool_selected = 0;
-            } else if (menu->tool_message &&
-                       !strcmp(menu->tool_message, "USB failed. Check .ohmy3do/saves."))
-                menu->tool_message = "No valid backup in this slot.";
-        }
-    } else if (page == TOOL_RESULTS && count) {
-        const char *path = menu->catalog.paths[menu->search_matches[menu->tool_selected]];
-        if (path)
-            open_saved_path(menu, path);
-    } else if (page == TOOL_FAVORITES || page == TOOL_RECENT)
-        open_favorite(menu);
-    else if (page == TOOL_BACKUP_DETAILS)
-        menu->tools = TOOL_CONFIRM_BACKUP;
-    else if (page == TOOL_ARCHIVE && count) {
-        menu->save_selected = menu->tool_selected;
-        menu->tools = TOOL_CONFIRM_RESTORE;
-    } else if (page == TOOL_CONFIRM_BACKUP) {
-        char path[40];
-        slot_path(path, menu->backup_slot);
-        menu->backup_result = -1;
-        if ((menu->usb_tested == 1 || !test_save_usb(menu)) &&
-            !save_root_operation(menu, menu->backup_merge ? 5 : 1, path, &menu->pending)) {
-            menu->backup_result = 1;
-            menu->tool_message = menu->slot_catalog_stale ? "Saved. Refresh catalog in desktop app."
-                                 : menu->backup_merge     ? "Save merged and verified."
-                                                          : "Backup saved and verified.";
-            if (menu->copy_original.bytes) {
-                finish_copy(menu);
+            if (loaded < 0) {
+                menu->tool_message = "Slot unreadable. Choose another.";
                 return;
             }
-            if (menu->hex_archive.bytes)
-                menu->backup_mode = 0;
-            save_archive_free(&menu->hex_archive);
-            save_archive_free(&menu->hex_original);
-            menu->hex_dirty = 0;
+            menu->backup_slot_valid = loaded == 0;
+            if (save_archive_merge(&menu->pending, &menu->backup, entry) < 0) {
+                menu->tool_message = "Merged slot is full. Choose another.";
+                return;
+            }
+        } else
+            menu->backup_slot_valid = !save_root_operation(menu, SAVE_LOAD, path, &menu->backup);
+        if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready)
+            return;
+        menu->tools = TOOL_BACKUP_DETAILS;
+        menu->tool_selected = 0;
+        menu->details_new = 0;
+        menu->tool_message = NULL;
+    } else if (menu->compare_choosing) {
+        if (save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->backup) >= 0) {
+            menu->compare_choosing = 0;
+            menu->tools = TOOL_COMPARE;
+            menu->tool_selected = 0;
         }
-        menu->tools = TOOL_SLOTS;
-        slot_select(menu, menu->backup_slot);
-    } else if (page == TOOL_CONFIRM_RESTORE) {
+    } else {
+        if (!save_root_operation(menu, SAVE_LOAD, path, &menu->backup)) {
+            menu->tools = TOOL_ARCHIVE;
+            menu->tool_selected = 0;
+        } else if (menu->tool_message &&
+                   !strcmp(menu->tool_message, "USB failed. Check .ohmy3do/saves."))
+            menu->tool_message = "No valid backup in this slot.";
+    }
+}
+
+/*
+ * A on the backup confirmation: checks the drive can be written (once a
+ * session), then writes the slot: the whole new backup, or the slot with
+ * one save merged in, if it still holds what it did when read. Then back
+ * to the slots, or after copying a save, to the backup it came from.
+ */
+static void confirm_backup(Menu *menu)
+{
+    char path[40];
+    slot_path(path, menu->backup_slot);
+    menu->backup_result = -1;
+    if ((menu->usb_tested == 1 || !test_save_usb(menu)) &&
+        !save_root_operation(menu, menu->backup_merge ? SAVE_STORE_CHECKED : SAVE_STORE, path,
+                             &menu->pending)) {
+        menu->backup_result = 1;
+        menu->tool_message = menu->slot_catalog_stale ? "Saved. Refresh catalog in desktop app."
+                             : menu->backup_merge     ? "Save merged and verified."
+                                                      : "Backup saved and verified.";
+        if (menu->copy_original.bytes) {
+            finish_copy(menu);
+            return;
+        }
+        /* Saved from the hex editor: the edits are now in the slot. */
+        if (menu->hex_archive.bytes)
+            menu->backup_mode = 0;
+        save_archive_free(&menu->hex_archive);
+        save_archive_free(&menu->hex_original);
+        menu->hex_dirty = 0;
+    }
+    menu->tools = TOOL_SLOTS;
+    slot_select(menu, menu->backup_slot);
+}
+
+/* A on a Tools screen: does what the selected row offers. */
+static void tools_activate(Menu *menu)
+{
+    menu->tool_message = NULL;
+    switch (menu->tools) {
+    case TOOL_HOME:
+        open_tool(menu);
+        break;
+    case TOOL_SLOTS:
+        open_slot(menu);
+        break;
+    case TOOL_RESULTS:
+        if (menu->search_count) {
+            const char *path = menu->catalog.paths[menu->search_matches[menu->tool_selected]];
+            if (path)
+                open_saved_path(menu, path);
+        }
+        break;
+    case TOOL_FAVORITES:
+    case TOOL_RECENT:
+        open_favorite(menu);
+        break;
+    case TOOL_BACKUP_DETAILS:
+        menu->tools = TOOL_CONFIRM_BACKUP;
+        break;
+    case TOOL_ARCHIVE:
+        if (menu->backup.count) {
+            menu->save_selected = menu->tool_selected;
+            menu->tools = TOOL_CONFIRM_RESTORE;
+        }
+        break;
+    case TOOL_CONFIRM_BACKUP:
+        confirm_backup(menu);
+        break;
+    case TOOL_CONFIRM_RESTORE:
         restore_selected(menu);
         menu->tools = TOOL_ARCHIVE;
         menu->tool_selected = menu->save_selected;
+        break;
     }
+}
+
+/*
+ * The buttons on a Tools screen (menu->tools). Screens that take over the
+ * controller (the editors, keyboards and slot searches) have their own
+ * functions. The others share B (back), moving through a list, and A (do
+ * what the row offers), plus a few buttons of their own.
+ */
+static void tools_input(Menu *menu, u32 pressed)
+{
+    int page = menu->tools;
+    switch (page) {
+    case TOOL_CHEATS:
+        cheats_input(menu, pressed);
+        return;
+    case TOOL_HEX:
+        hex_screen_input(menu, pressed);
+        return;
+    case TOOL_HEX_DISCARD:
+        if (pressed & ControlB)
+            menu->tools = menu->hex_view;
+        else if (pressed & ControlA)
+            close_hex(menu);
+        return;
+    case TOOL_SLOT_FIND:
+        slot_find_input(menu, pressed);
+        return;
+    case TOOL_SLOT_QUERY:
+        slot_query_input(menu, pressed);
+        return;
+    case TOOL_SLOT_JUMP:
+        slot_jump_input(menu, pressed);
+        return;
+    case TOOL_SLOT_NAME:
+        slot_name_input(menu, pressed);
+        return;
+    case TOOL_COMPARE:
+    case TOOL_COMPARE_BYTES:
+        compare_input(menu, pressed);
+        return;
+    }
+
+    /* Buttons particular to a screen, before the shared ones. */
+    if (page == TOOL_ARCHIVE && archive_input(menu, pressed))
+        return;
+    if (page == TOOL_GAME_DETAILS && !(pressed & ControlB)) {
+        if ((pressed & ControlRight) && menu->game_details_page + 1 < menu->game_details_pages)
+            ++menu->game_details_page;
+        if ((pressed & ControlLeft) && menu->game_details_page)
+            --menu->game_details_page;
+        return;
+    }
+    if (page == TOOL_SLOTS && slots_input(menu, pressed))
+        return;
+    if (page == TOOL_SAVES && (pressed & (ControlLeft | ControlRight))) {
+        switch_save_tab(menu);
+        return;
+    }
+    if (page == TOOL_FIND && !(pressed & ControlB)) {
+        find_input(menu, pressed);
+        return;
+    }
+    if (page == TOOL_FAVORITES && menu->favorites_move) {
+        favorites_move_input(menu, pressed);
+        return;
+    }
+    if (page == TOOL_FAVORITES && (pressed & ControlRightShift)) {
+        begin_favorites_move(menu);
+        return;
+    }
+    if (page == TOOL_CATEGORIES && (pressed & ControlB)) {
+        menu->tools = TOOL_CONFIG;
+        menu->tool_selected = SETTING_CATEGORIES;
+        menu->tool_message = NULL;
+        return;
+    }
+
+    if (pressed & ControlB) {
+        tools_back(menu);
+        return;
+    }
+
+    /* Search results: Start edits the search, X reloads the index, and
+     * Left/Right (or L/R) turn the page. */
+    if (page == TOOL_RESULTS) {
+        if (pressed & ControlStart) {
+            menu->tools = TOOL_FIND;
+            menu->tool_message = NULL;
+            return;
+        }
+        if (pressed & ControlX) {
+            search_library(menu, 1);
+            return;
+        }
+        if (menu->search_count) {
+            if (pressed & (ControlRight | ControlRightShift)) {
+                menu->tool_selected += 6;
+                if (menu->tool_selected >= menu->search_count)
+                    menu->tool_selected = menu->search_count - 1;
+            } else if (pressed & (ControlLeft | ControlLeftShift))
+                menu->tool_selected = menu->tool_selected >= 6 ? menu->tool_selected - 6 : 0;
+        }
+    }
+
+    tool_list_move(menu, pressed);
+
+    switch (page) {
+    case TOOL_HELP:
+        if (pressed & (ControlLeft | ControlRight))
+            menu->tool_selected = !menu->tool_selected;
+        return;
+    case TOOL_CATEGORIES:
+        if (pressed & ControlA) {
+            toggle_category(menu);
+            return;
+        }
+        break;
+    case TOOL_CONFIG:
+        if (pressed & ControlX)
+            discard_config(menu);
+        else if (pressed & ControlC)
+            save_config(menu);
+        else if (pressed & (ControlA | ControlLeft | ControlRight))
+            change_config(menu, (pressed & ControlLeft) ? -1 : 1);
+        else
+            break;
+        return;
+    case TOOL_RECENT:
+        if (pressed & ControlStart) {
+            open_recent(menu);
+            return;
+        }
+        break;
+    case TOOL_FAVORITES:
+        if (pressed & ControlStart)
+            open_favorites(menu);
+        else if (pressed & (ControlC | ControlX))
+            edit_favorites(menu, (pressed & ControlX) != 0);
+        else
+            break;
+        return;
+    case TOOL_BACKUP_DETAILS:
+        if (pressed & ControlC) {
+            /* Switch between the slot as it is and as it will be. */
+            menu->details_new = !menu->details_new;
+            menu->tool_selected = 0;
+            return;
+        }
+        break;
+    case TOOL_DIAG:
+        if (pressed & ControlX)
+            recover_library(menu);
+        else if (pressed & ControlC)
+            export_diagnostics(menu);
+        else {
+            if (pressed & ControlRight)
+                menu->tool_selected = (menu->tool_selected + 1) % 5;
+            if (pressed & ControlLeft)
+                menu->tool_selected = (menu->tool_selected + 4) % 5;
+        }
+        return;
+    case TOOL_SAVES:
+        if (pressed & ControlX) {
+            scan_nvram(menu);
+            return;
+        }
+        if (pressed & (ControlA | ControlC)) {
+            begin_backup(menu, pressed);
+            return;
+        }
+        break;
+    }
+
+    if (pressed & ControlA)
+        tools_activate(menu);
 }
 
 static MenuHelpTopic current_help_topic(const Menu *menu)
