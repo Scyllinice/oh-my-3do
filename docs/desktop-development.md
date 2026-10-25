@@ -11,11 +11,9 @@ runs the frontend selection/search tests. Frontend files are embedded directly
 from `desktop/ui`; there is no Node runtime or npm dependency tree to ship.
 
 `desktop/shell` owns the Tauri window, command bridge and locked dependencies;
-`desktop/src` contains the Rust engine. The previous egui shell remains behind
-`--legacy-ui` for development comparisons and is not the default packaged UI.
+`desktop/src` contains the Rust engine.
 Command-line shortcuts include `--library PATH`, `--guided-setup`,
 `--save-backup PATH.3ds` and `--save-slots PATH`. `--software-rendering` selects software graphics before creating the window.
-The legacy automatic screenshot switch belongs to the previous interface.
 
 ## Building installers
 
