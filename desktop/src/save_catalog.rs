@@ -1,4 +1,11 @@
-//! Searchable occupied-slot catalog shared with the console. Archives remain authoritative.
+//! The backup slot catalog: a summary of every backup on the drive (its
+//! label and the saves inside), so the console can list and search slots
+//! without opening every backup. The format is described in
+//! src/save_catalog.h: a linked list of small files in .ohmy3do/saves,
+//! starting at slot-catalog.3di with the highest slot ID and going down.
+//! The backups themselves always win: the catalog can be rebuilt from them
+//! at any time (`refresh`).
+
 use crate::{
     backup::{self, Labels},
     fsutil as f,
@@ -13,22 +20,39 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+/// The file at the start of the list.
 pub const ROOT: &str = "slot-catalog.3di";
+
+/// The ID of the recovery backup (recovery.3ds); recovery2.3ds is one more.
+/// Higher than any slot number, so they come first in the list.
 pub const RECOVERY: u32 = 1_000_000_000;
+
+/// What the catalog knows about one backup.
 #[derive(Clone, Debug)]
 pub struct Slot {
+    /// The slot number, or [`RECOVERY`] (+ 1).
     pub id: u32,
     pub path: PathBuf,
     pub label: String,
+    /// The person's notes (see `slot_notes`).
     pub notes: String,
+    /// The names of the saves inside.
     pub files: Vec<String>,
+    /// Whether the file is a readable backup.
     pub valid: bool,
+    /// The games its saves belong to, from the drive's save-name lists, for
+    /// searching.
     pub aliases: Vec<String>,
+    /// The backup's length and header CRC, as stored in its node so the
+    /// console can tell when a backup changed.
     length: u32,
     crc: u32,
+    /// The file's size and time when scanned: writing refuses a changed one.
     stamp: (u64, u128),
 }
+
 impl Slot {
+    /// The slot's display name, like "Slot 3 — Doom saves".
     pub fn name(&self) -> String {
         let base = if self.id == RECOVERY {
             "Recovery".into()
@@ -43,6 +67,8 @@ impl Slot {
             format!("{base} — {}", self.label)
         }
     }
+    /// Whether every word of `query` appears (ignoring case) in the slot's
+    /// name, file name, save names, their games, or its notes.
     pub fn matches(&self, query: &str) -> bool {
         let mut haystack = format!(
             "{} {} {}",
@@ -64,6 +90,7 @@ impl Slot {
             .split_whitespace()
             .all(|q| haystack.contains(&q.to_ascii_lowercase()))
     }
+    /// What the slot holds, for the slot list: its saves' games (or names).
     pub fn games(&self) -> String {
         if !self.valid {
             return "Invalid backup — inspect before restoring".into();
@@ -77,6 +104,7 @@ impl Slot {
             .collect::<Vec<_>>()
             .join(", ")
     }
+    /// The slot's node file, pointing to `next` (the next lower ID, or 0).
     pub fn node_bytes(&self, next: u32) -> Vec<u8> {
         let mut b = vec![0; 68 + self.files.len() * 32];
         let size = b.len() as u32;
@@ -98,17 +126,21 @@ impl Slot {
         b
     }
 }
+/// Stores a big-endian 32-bit number at `at`.
 fn put(b: &mut [u8], at: usize, value: u32) {
     b[at..at + 4].copy_from_slice(&value.to_be_bytes())
 }
+/// The big-endian 32-bit number at `at`.
 fn word(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
 }
+/// Stores a node's CRC-32 (of the whole node, with the CRC field 0).
 fn seal(b: &mut [u8]) {
     put(b, 20, 0);
     let crc = crc32fast::hash(b);
     put(b, 20, crc)
 }
+/// The file at the start of the list, pointing to `head` (the highest ID).
 pub fn root_bytes(head: u32) -> Vec<u8> {
     let mut b = vec![0; 28];
     b[..8].copy_from_slice(b"OM3DSLC1");
@@ -117,6 +149,7 @@ pub fn root_bytes(head: u32) -> Vec<u8> {
     seal(&mut b);
     b
 }
+/// A backup file's catalog ID; None for other files.
 fn id(path: &Path) -> Option<u32> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     if name == "recovery.3ds" {
@@ -131,6 +164,7 @@ fn id(path: &Path) -> Option<u32> {
         .parse()
         .ok()
 }
+/// The node file's name for an ID.
 pub(crate) fn node_name(id: u32) -> String {
     if id == RECOVERY {
         "recovery.3si".into()
@@ -140,6 +174,8 @@ pub(crate) fn node_name(id: u32) -> String {
         format!("slot{id:02}.3si")
     }
 }
+/// The save-name lists beside the saves folder (saves-learned.txt and
+/// save-names.txt) as (name or prefix, game, is a prefix).
 fn mapping(directory: &Path) -> Vec<(String, String, bool)> {
     let Some(support) = directory.parent() else {
         return vec![];
@@ -170,6 +206,8 @@ fn mapping(directory: &Path) -> Vec<(String, String, bool)> {
         })
         .collect()
 }
+/// Summarizes every backup in `directory` (a drive's .ohmy3do/saves),
+/// lowest ID first. Empty files are skipped.
 pub fn scan(directory: &Path, job: &Job) -> Result<Vec<Slot>> {
     let directory = f::root(directory)?;
     let mappings = mapping(&directory);
@@ -251,7 +289,10 @@ pub fn scan(directory: &Path, job: &Job) -> Result<Vec<Slot>> {
     }
     Ok(slots.into_values().collect())
 }
-/// Write nodes first, root last, using the caller's rollback transaction.
+/// Writes the catalog for `slots` (lowest ID first) through the caller's
+/// undo journal: each node pointing to the one before it, then the start of
+/// the list last, so the list is never left pointing at a missing node.
+/// `prefix` is the saves folder's path in the journal's root.
 pub fn write(slots: &[Slot], tx: &mut Journal, prefix: &str, job: &Job) -> Result<()> {
     let mut next = 0;
     for slot in slots {
@@ -278,6 +319,8 @@ pub fn write(slots: &[Slot], tx: &mut Journal, prefix: &str, job: &Job) -> Resul
     );
     Ok(())
 }
+/// Rebuilds the catalog of `directory` from its backups, undoing the whole
+/// write if any part fails.
 pub fn refresh(directory: &Path, cache: &Path, job: &Job) -> Result<Vec<Slot>> {
     let directory = f::root(directory)?;
     let _lock = library::lock_library(&directory, cache)?;
