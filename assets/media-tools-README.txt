@@ -1,4 +1,4 @@
-Oh My 3DO media tools (menu v1.0.2)
+Oh My 3DO media tools (menu v1.0.3)
 
 Indexing existing PNG covers needs only Python 3.9+ and its standard library.
 Resizing/conversion also needs Pillow; video conversion needs FFmpeg on PATH.
