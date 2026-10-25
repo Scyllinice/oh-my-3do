@@ -1,3 +1,30 @@
+/*
+ * Oh My 3DO: a game browser and launcher for the 3DO with an FCare optical
+ * drive emulator, which plays disc images from a USB drive.
+ *
+ * This file holds the menu's state, its drawing and its controls; the
+ * modules it uses do the rest (see the includes below). In outline:
+ *
+ *   - main() at the bottom connects to the drive emulator (connect_ode),
+ *     then runs the main loop: read the controller, react, draw, wait for
+ *     the next video frame.
+ *   - The browser shows one folder of the drive at a time. Moving the
+ *     selection loads the game's cover and, after a pause, its gameplay
+ *     preview. A launches a game (or opens a folder); C queues discs for
+ *     multi-disc games.
+ *   - L+R together opens Tools: favorites, recent games, Find, settings,
+ *     the save manager (backing up and restoring NVRAM saves), diagnostics.
+ *   - Holding P on any screen shows its controls (menu_help.h).
+ *
+ * Drawing uses two screen buffers: one is shown while the other is drawn,
+ * then they swap. Much of the drawing code avoids redrawing what both
+ * buffers already show, because the 3DO's processor (a 12.5 MHz ARM60) has
+ * little time to spare while a preview plays.
+ *
+ * The screen is 320x240 pixels. Every position below is in that space;
+ * rectangle() and the text functions shrink everything toward the middle by
+ * the "screen margin" setting, for TVs that cut off the picture's edges.
+ */
 #include "ode.h"
 #include "ode_bus.h"
 #include "menu_config.h"
@@ -24,6 +51,7 @@
 #include "menu_position.h"
 #include "channel_gecko_data.h"
 
+/* The 3DO SDK (Portfolio) headers. */
 #include "controlpad.h"
 #include "celutils.h"
 #include "displayutils.h"
@@ -37,38 +65,54 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION         "1.0.3"
-#define ROWS                 10
-#define TOOL_HOME            1
-#define TOOL_SAVES           2
-#define TOOL_SLOTS           3
-#define TOOL_ARCHIVE         4
-#define TOOL_HELP            5
-#define TOOL_DIAG            6
-#define TOOL_CONFIRM_BACKUP  7
-#define TOOL_CONFIRM_RESTORE 8
+#define MENU_VERSION "1.0.3"
+
+/* Rows in the game list with normal titles (large titles fit fewer). */
+#define ROWS 10
+
+/*
+ * The Tools screens. menu->tools holds the one showing, or 0 for the
+ * browser. (Some numbers are unused: screens that were removed.)
+ */
+#define TOOL_HOME            1 /* the Tools menu itself */
+#define TOOL_SAVES           2 /* saves in the console's NVRAM */
+#define TOOL_SLOTS           3 /* backup slots on the USB drive */
+#define TOOL_ARCHIVE         4 /* choosing a slot to write a backup to */
+#define TOOL_HELP            5 /* general controls */
+#define TOOL_DIAG            6 /* diagnostics */
+#define TOOL_CONFIRM_BACKUP  7 /* confirming a backup */
+#define TOOL_CONFIRM_RESTORE 8 /* confirming a restore */
 #define TOOL_FAVORITES       10
-#define TOOL_CONFIG          11
-#define TOOL_BACKUP_DETAILS  13
-#define TOOL_RECENT          14
-#define TOOL_FIND            15
-#define TOOL_RESULTS         16
-#define TOOL_GAME_DETAILS    17
-#define TOOL_HEX             18
-#define TOOL_HEX_DISCARD     19
-#define TOOL_CHEATS          20
-#define TOOL_SLOT_NAME       21
-#define TOOL_COMPARE         22
-#define TOOL_COMPARE_BYTES   23
-#define TOOL_SLOT_JUMP       24
-#define TOOL_SLOT_FIND       25
-#define TOOL_SLOT_QUERY      26
-#define TOOL_CATEGORIES      27
-#define MAX_DEPTH            32
-#define DIRECTIONS           (ControlUp | ControlDown | ControlLeft | ControlRight)
-#define COVER_IDLE_MS        700UL
-#define PREVIEW_IDLE_MS      1600UL
-/* Gecko TV palette: the menu's only theme. */
+#define TOOL_CONFIG          11 /* settings */
+#define TOOL_BACKUP_DETAILS  13 /* the saves inside one backup */
+#define TOOL_RECENT          14 /* recent games */
+#define TOOL_FIND            15 /* typing a search */
+#define TOOL_RESULTS         16 /* search results */
+#define TOOL_GAME_DETAILS    17 /* a game's genre, publisher and description */
+#define TOOL_HEX             18 /* the raw save editor */
+#define TOOL_HEX_DISCARD     19 /* confirming unsaved edits are to be dropped */
+#define TOOL_CHEATS          20 /* known values in a save (save_cheats.h) */
+#define TOOL_SLOT_NAME       21 /* typing a slot label */
+#define TOOL_COMPARE         22 /* comparing two backups: the list of saves */
+#define TOOL_COMPARE_BYTES   23 /* comparing two backups: one save's bytes */
+#define TOOL_SLOT_JUMP       24 /* typing a slot number */
+#define TOOL_SLOT_FIND       25 /* slot search options */
+#define TOOL_SLOT_QUERY      26 /* typing a slot search */
+#define TOOL_CATEGORIES      27 /* which categories are shown */
+
+/* The deepest folder the browser follows. */
+#define MAX_DEPTH 32
+
+/* The four directions on the controller's pad. */
+#define DIRECTIONS (ControlUp | ControlDown | ControlLeft | ControlRight)
+
+/* How long the selection must rest on a game before its cover loads, and
+ * before its preview starts, in milliseconds. Scrolling past does neither. */
+#define COVER_IDLE_MS   700UL
+#define PREVIEW_IDLE_MS 1600UL
+
+/* The "Gecko TV" palette: the menu's only theme. MakeRGB15 takes 5-bit red,
+ * green and blue. */
 #define BG    MakeRGB15(2, 2, 3)
 #define TEXT  MakeRGB15(31, 31, 29)
 #define MUTED MakeRGB15(24, 25, 27)
@@ -86,6 +130,11 @@
 #define INK        MakeRGB15(1, 1, 2)
 #define AMBER      MakeRGB15(30, 22, 9)
 
+/*
+ * What the browser knows about one entry of the current folder: for a folder
+ * that acts as a game (it holds one game's discs), those discs; and the
+ * game's details from metadata.3di. Kept for a few entries at a time.
+ */
 #define GAME_LOOKUP_SLOTS 16
 typedef struct GameLookup {
     const MenuEntry *entry;
@@ -94,14 +143,18 @@ typedef struct GameLookup {
     const LibraryGameInfo *info;
     int info_valid;
 } GameLookup;
+/* Remembered text measurements for names drawn at a given screen position
+ * (see scroll_label), so scrolling names are not measured every frame. */
 #define SCROLL_MEASURE_SLOTS 8
 typedef struct ScrollMeasure {
     int valid, x, y;
     UiFontMeasure measure;
 } ScrollMeasure;
 
+/* Text drawn recently, kept as ready-made CELs (see text()). */
 #define UI_TEXT_CACHE 64
-/* Startup steps timed for diagnostics, in order. */
+
+/* Startup steps, timed for the diagnostics screen, in order. */
 enum {
     BOOT_SPLASH,
     BOOT_ART,
@@ -121,6 +174,8 @@ enum {
 static const char *const boot_step_names[BOOT_STEPS] = {
     "splash",     "art",    "identify", "config",   "saves",    "queue", "folder",
     "categories", "covers", "previews", "metadata", "position", "ready"};
+
+/* One cached piece of text: its picture, and what it was drawn with. */
 typedef struct UiText {
     CCB *cel;
     int style, width, palette_valid, capacity_width, glyph_width;
@@ -128,24 +183,47 @@ typedef struct UiText {
     char value[97];
 } UiText;
 
-/* Each back buffer can hold a different selection while the pad is moving. */
+/*
+ * What one screen buffer currently shows of the browser, so the next draw
+ * into it can skip the parts that are already right. Each back buffer can
+ * hold a different selection while the pad is moving.
+ */
 typedef struct BrowserFrame {
-    unsigned long shell, picture, overlay;
+    unsigned long shell, picture, overlay; /* hashes of the three layers */
     size_t selected, start;
     size_t scroll_length[4], scroll_visible[4];
     int scroll_count, controls, gecko, letter;
     int valid;
 } BrowserFrame;
+
+/* A game title's hash, for telling apart entries with the same title. */
 typedef struct TitleHash {
     unsigned long hash, title;
     size_t index;
 } TitleHash;
 
+/*
+ * Everything the menu knows. There is one Menu, in main(); every function
+ * receives it. Fields are grouped by what they are for.
+ */
 typedef struct Menu {
-    size_t game_details_page, game_details_pages;
-    char game_description[GAME_DESCRIPTION_BYTES];
-    ScreenContext screen;
-    PreviewAudio preview_audio;
+    /* ---- Screen and drawing ---- */
+    ScreenContext screen; /* the two screen buffers */
+    Item vbl;             /* waits for the vertical blank */
+    Item clock;           /* the millisecond timer */
+    CCB font_ccb;
+    int have_font;
+    int large_drawing; /* draw text in the large style */
+    /* Recently drawn text, kept as CELs (see text()). */
+    UiText text_cache[UI_TEXT_CACHE];
+    unsigned int text_cursor;
+    int text_style, text_failed;
+    int text_background_set;
+    Color text_background;
+    /* Screens still to clear (one per buffer) before drawing on a clean slate. */
+    int clear_frames;
+
+    /* ---- Startup ---- */
     CCB *splash;
     int booting, boot_stage;
     int splash_frames; /* full splash draws so far: both buffers need one */
@@ -154,80 +232,120 @@ typedef struct Menu {
     unsigned long boot_at, boot_ms[BOOT_STEPS], boot_commands[BOOT_STEPS];
     unsigned long boot_draws, boot_draw_ms;              /* splash redraws while starting */
     unsigned long boot_kind_count[17], boot_kind_ms[17]; /* the bus's command times when ready */
-    LibraryCatalog catalog;
-    unsigned long catalog_volume;
-    size_t search_matches[LIBRARY_CATALOG_MAX], search_count;
-    unsigned long search_redraw;
-    u32 suppress_buttons;
-    u32 shoulder_pending;
-    int tools_chord_down, tools_requested;
-    UiText text_cache[UI_TEXT_CACHE];
-    unsigned int text_cursor;
-    int text_style, text_failed;
-    int text_background_set;
-    Color text_background;
+
+    /* ---- The drive emulator ---- */
     Ode ode;
     OdeBus bus;
-    OdeListing listing;
-    OdePlaylist playlist;
-    OdePlaylist group;
+    int ready;      /* connected and showing a folder */
+    int demo;       /* running from the demo ISO, without a drive */
+    int view_valid; /* the listing on screen matches the drive */
+    /* After a USB failure the menu can climb back to the drive's top
+     * folder (see ode_recover_root): what that folder looked like at startup. */
+    int root_known, recovery_media_off, recovery_result;
+    unsigned long root_fingerprint, root_volume;
+
+    /* ---- Browsing ---- */
+    OdeListing listing;                   /* the current folder */
+    unsigned int depth;                   /* folders below the drive's top */
+    char path[MAX_DEPTH][ODE_MAX_NAME];   /* the folder names down to here... */
+    unsigned long path_ids[MAX_DEPTH];    /* ...and their ids */
+    size_t previous_selection[MAX_DEPTH]; /* the selection in each parent, for Back */
+    size_t selected;                      /* the selected row */
+    char breadcrumb[35];                  /* the folder heading */
+    char filter[25];                      /* hide names not containing this */
+    unsigned long selection_since;        /* when the selection last changed */
+    size_t read_count;                    /* entries read so far, while a folder loads */
+    int loading, loading_notice;
+    /* Visible listing entries (not hidden, matching the filter), rebuilt only
+     * when the listing or what hides entries changes. */
+    const MenuEntry **visible;
+    size_t visible_count, visible_capacity;
+    unsigned long listing_generation, visible_key;
+    int visible_valid;
+    /* The alphabet strip (hold C + Up): which letters have games. */
+    int jump_letter;
+    int alphabet_active;
+    unsigned char alphabet_letters[27];
+    unsigned long alphabet_key;
+    int alphabet_valid;
+    /* Game lookups (see GameLookup) and the metadata they were made with. */
+    GameLookup game_lookups[GAME_LOOKUP_SLOTS];
+    const LibraryGameInfo *lookup_metadata;
+    size_t lookup_metadata_count;
+    unsigned long lookup_listing_generation;
+    unsigned int lookup_depth, lookup_next;
+    int game_lookups_valid;
+    ScrollMeasure scroll_measures[SCROLL_MEASURE_SLOTS];
+    unsigned int scroll_measure_next;
+    /* Which entries share a title and need a version shown (see title_variant). */
+    unsigned short *title_variants;
+    size_t title_variants_count, title_variants_capacity;
+    unsigned long title_variants_key;
+    int title_variants_valid;
+    /* Long names scroll; their clock pauses while media loads. One scroll
+     * position per rendered frame. */
+    unsigned long scroll_elapsed, scroll_paused_at;
+    int scroll_paused;
+
+    /* ---- The disc queue (multi-disc games) ---- */
+    OdePlaylist playlist; /* the FCare's queue */
+    OdePlaylist group;    /* a matching multi-disc set being offered */
+    int review;           /* the queue screen is showing */
+    size_t queue_selected;
+    int queue_move;  /* moving the selected disc with Up/Down */
+    int single_disc; /* hold C + A: just this disc, not its set */
+    int launching;
+    int c_pending; /* C is held: waiting to see whether it is a combination */
+
+    /* ---- Favorites, recent games, the remembered position and Find ---- */
     MenuFavorites favorites;
     MenuFavorites recent;
     int recent_valid;
-    int favorites_move;
-    char *favorites_original;
-    char filter[25];
-    char find_query[25];
-    int find_key;
+    int favorites_valid;
+    int favorites_move;       /* reordering favorites */
+    char *favorites_original; /* the order before reordering, to cancel back to */
+    char favorites_prefix[ODE_MAX_NAME + 10];
     MenuPosition last_position;
     int position_result;
-    int position_dirty;
+    int position_dirty; /* the position changed and should be saved */
     int recent_result;
-    int diagnostics_result;
-    CCB font_ccb;
-    int have_font;
-    int large_drawing;
-    int single_disc;
-    int queue_move;
-    int c_pending;
-    int backup_slot_valid;
-    int backup_merge;
-    unsigned long slot_page, slot_labels_page;
-    int slot_filtered, slot_catalog_stale, slot_find_option;
-    unsigned int slot_name_slot;
-    char slot_query[25];
-    SaveCatalogResults slot_results;
-    char slot_jump[11];
-    SaveArchive copy_original;
-    unsigned int copy_source_slot;
-    SaveSlotLabels slot_labels, slot_labels_before;
-    int slot_labels_valid;
-    char slot_label_edit[SAVE_SLOT_LABEL_BYTES];
-    SaveArchive compare_archive;
-    int compare_choosing;
-    unsigned int compare_slot;
-    size_t compare_offset;
-    int details_new;
-    int jump_letter;
-    int alphabet_active;
-    char favorites_prefix[ODE_MAX_NAME + 10];
-    int favorites_valid;
-    MenuConfig config;
-    MenuConfig saved_config;
-    /* Stage navigation/artwork changes until reboot, including while saving. */
+    LibraryCatalog catalog; /* every disc on the drive, for Find */
+    unsigned long catalog_volume;
+    size_t search_matches[LIBRARY_CATALOG_MAX], search_count;
+    unsigned long search_redraw;
+    char find_query[25];
+    int find_key; /* the selected key of the on-screen keyboard */
+
+    /* ---- Settings ---- */
+    MenuConfig config;       /* in effect now */
+    MenuConfig saved_config; /* as saved on the drive */
+    /* Navigation and artwork changes only take effect after a restart, so
+     * these keep the values in effect until then. */
     int settings_folder_workaround;
     int settings_usb_covers;
     int settings_remember_position;
     int settings_recent_games;
     int settings_video_previews;
+    int config_result;
+    int categories_valid;
+
+    /* ---- Covers ---- */
     CoverCache cover_cache;
     unsigned long cover_load_ms, cover_commands;
     int cover_cached;
-    UsbArtIndex usb_art;
-    UsbArtIndex usb_previews;
+    UsbArtIndex usb_art;      /* covers/index.3di */
+    UsbArtIndex usb_previews; /* previews/index.3di */
     int art_indexes_valid;
     unsigned long art_index_volume;
     LibraryMetadata metadata;
+    CCB *cover;
+    int cover_attempted;
+    int covers_enabled;
+    int skip_usb_art;
+    const char *cover_file, *cover_folder;
+
+    /* ---- Previews ---- */
+    PreviewAudio preview_audio;
     UsbPreview preview;
     /* An OM3DVID7 preview streams instead (stream.open). Full screen draws it
      * straight into the back screen; sport then copies that screen into the
@@ -253,12 +371,13 @@ typedef struct Menu {
     unsigned long fade_since;
     int full_cleared; /* screen buffers cleared since the view opened */
     unsigned long full_drawn_decode;
-    int x_pending;
+    int x_pending; /* X is held: a tap or, after a while, the full-screen view */
     unsigned long x_since;
     CCB *full_cover;
-    const char *cover_file, *cover_folder;
     unsigned long preview_since;
     unsigned int preview_frame;
+    int preview_result;
+    /* Preview timing and memory, for diagnostics. */
     unsigned long preview_load_ms;
     unsigned long preview_read_ms, preview_check_ms, preview_navigation_ms, preview_setup_ms;
     unsigned long preview_bytes, preview_commands;
@@ -278,22 +397,26 @@ typedef struct Menu {
         preview_video_ms; /* time the cel engine spends drawing the video */
     unsigned long preview_light_draws, preview_full_draws, preview_draw_ms, preview_pass_max_ms,
         preview_pass_at;
-    int preview_result;
+
+    /* ---- The Gecko TV look ---- */
     CCB *logo;
-    CCB *channel_gecko;
+    CCB *channel_gecko; /* the animated gecko on the channel card */
     unsigned long gecko_since;
     int gecko_active, gecko_frame, gecko_uploaded;
-    CCB *cover;
-    /* Gecko TV cels: TV static, the channel digits and the bar. */
+    /* TV static, the channel digits and bar, and the screen's rounded corners. */
     CCB *noise, *osd_digits, *osd_bar, *osd_ch, *screen_corner;
     unsigned short *noise_pixels;
-    int crt_failed, osd_hidden, tuning, tuning_full, clear_frames;
+    int crt_failed, osd_hidden;
+    /* "Tuning": static and a load bar while a preview loads. */
+    int tuning, tuning_full;
     long osd_number, osd_lit;
     unsigned long tuning_bytes, tuning_draws, progress_drawn;
     /* When tuning began. A long selected name holds still until it ends:
      * each screen buffer keeps the list from its last full draw, so a
      * scrolling name would flick between two positions. */
     unsigned long tuning_since;
+
+    /* ---- What the screen buffers already show (to skip redrawing it) ---- */
     unsigned long panel_hash; /* list panel shown in both screen buffers */
     int panel_frames;
     BrowserFrame browser_frames[2];
@@ -302,94 +425,82 @@ typedef struct Menu {
      * Their look depends on the panel, the message and the scroll offsets of
      * the names drawn with scroll_label, whose lengths are kept here. */
     int overlay_frames, scroll_count;
+    unsigned long overlay_key;
+    size_t scroll_length[4], scroll_visible[4];
     unsigned long preview_drawn_decode;
     CCB *badge; /* the X badge as drawn on screen; see badge_save */
     int badge_saved;
-    /* Visible listing entries (not hidden, matching the filter), rebuilt only
-     * when the listing or what hides entries changes. */
-    const MenuEntry **visible;
-    size_t visible_count, visible_capacity;
-    unsigned long listing_generation, visible_key;
-    int visible_valid;
-    unsigned char alphabet_letters[27];
-    unsigned long alphabet_key;
-    int alphabet_valid;
-    GameLookup game_lookups[GAME_LOOKUP_SLOTS];
-    const LibraryGameInfo *lookup_metadata;
-    size_t lookup_metadata_count;
-    unsigned long lookup_listing_generation;
-    unsigned int lookup_depth, lookup_next;
-    int game_lookups_valid;
-    ScrollMeasure scroll_measures[SCROLL_MEASURE_SLOTS];
-    unsigned int scroll_measure_next;
-    unsigned short *title_variants;
-    size_t title_variants_count, title_variants_capacity;
-    unsigned long title_variants_key;
-    int title_variants_valid;
-    unsigned long overlay_key;
-    size_t scroll_length[4], scroll_visible[4];
-    Item vbl;
-    Item clock;
-    size_t selected;
-    size_t previous_selection[MAX_DEPTH];
-    char path[MAX_DEPTH][ODE_MAX_NAME];
-    unsigned long path_ids[MAX_DEPTH];
-    char breadcrumb[35];
-    unsigned int depth;
-    SaveArchive nvram;
-    SaveArchive backup;
-    SaveArchive pending;
-    SaveArchive hex_archive;
-    SaveArchive hex_original;
-    unsigned int hex_source_slot;
-    size_t hex_offset;
-    size_t cheat_selected;
-    int hex_view;
-    int hex_editing, hex_nibble, hex_dirty;
-    unsigned int hex_value;
-    NvramInfo nvram_info;
-    SaveNames save_names;
-    int save_names_loaded;
-    int tools;
+
+    /* ---- Messages and controller input ---- */
+    const char *message; /* the status line, if any */
+    char status[80];
+    char notice[80]; /* a short notice, shown for a few seconds */
+    int notice_active;
+    unsigned long notice_since;
+    u32 suppress_buttons; /* buttons to ignore until they are let go */
+    u32 shoulder_pending; /* L or R held: waiting to see if both are pressed */
+    int tools_chord_down, tools_requested;
+
+    /* ---- Tools ---- */
+    int tools; /* the Tools screen showing (TOOL_...), or 0 */
+    size_t tool_selected;
+    size_t home_selected; /* the selection on the Tools menu */
+    const char *tool_message;
+    int diagnostics_result;
     MenuHelpHold help_hold;
     int help_drawn, help_topic, help_margin;
     unsigned long tools_home_hash;
     int tools_home_drawn;
-    size_t tool_selected;
-    size_t home_selected;
+    /* Game details (hold C + tap P). */
+    size_t game_details_page, game_details_pages;
+    char game_description[GAME_DESCRIPTION_BYTES];
+
+    /* ---- The save manager ---- */
+    SaveArchive nvram; /* the console's saves, as last read */
+    NvramInfo nvram_info;
+    SaveArchive backup;  /* the backup slot being looked at */
+    SaveArchive pending; /* a backup about to be written */
     size_t save_selected;
-    int backup_mode;
+    int backup_mode;  /* backing up: choosing the destination slot */
+    int backup_merge; /* the backup adds one save to a slot, not the whole NVRAM */
     unsigned int backup_slot;
+    int backup_slot_valid;
     int usb_tested;
-    int categories_valid;
-    int config_result;
     int backup_result;
     int restore_result;
-    const char *tool_message;
-    int ready;
-    int demo;
-    int review;
-    int launching;
-    int loading, loading_notice;
-    int view_valid;
-    int root_known, recovery_media_off, recovery_result;
-    unsigned long root_fingerprint, root_volume;
-    int cover_attempted;
-    int covers_enabled;
-    int skip_usb_art;
-    int notice_active;
-    unsigned long selection_since;
-    /* One scroll position per rendered frame; media setup pauses its clock. */
-    unsigned long scroll_elapsed, scroll_paused_at;
-    int scroll_paused;
-    unsigned long notice_since;
-    size_t read_count;
-    size_t queue_selected;
-    char status[80];
-    char notice[80];
-    const char *message;
+    SaveNames save_names;
+    int save_names_loaded;
+    /* The slot list: pages of 8 slots, labels, search and jumping. */
+    unsigned long slot_page, slot_labels_page;
+    int slot_filtered, slot_catalog_stale, slot_find_option;
+    unsigned int slot_name_slot;
+    char slot_query[25];
+    SaveCatalogResults slot_results;
+    char slot_jump[11];
+    SaveSlotLabels slot_labels, slot_labels_before;
+    int slot_labels_valid;
+    char slot_label_edit[SAVE_SLOT_LABEL_BYTES];
+    /* Copying a save to another slot. */
+    SaveArchive copy_original;
+    unsigned int copy_source_slot;
+    /* Comparing two backups. */
+    SaveArchive compare_archive;
+    int compare_choosing; /* choosing the second slot */
+    unsigned int compare_slot;
+    size_t compare_offset;
+    int details_new; /* showing the new contents, not the slot's current ones */
+    /* The raw save editor and the cheat editor. */
+    SaveArchive hex_archive;  /* the edited copy */
+    SaveArchive hex_original; /* as it was, to tell whether it changed */
+    unsigned int hex_source_slot;
+    size_t hex_offset;
+    size_t cheat_selected;
+    int hex_view; /* TOOL_HEX or TOOL_CHEATS: which editor is open */
+    int hex_editing, hex_nibble, hex_dirty;
+    unsigned int hex_value;
 } Menu;
 
+/* Functions used before their definitions further down. */
 static void refresh_usb_art(Menu *menu);
 static void stop_preview(Menu *menu);
 static void draw_tools(Menu *menu);
@@ -414,23 +525,33 @@ static void remember_position(Menu *menu, int force);
 static void record_launch(Menu *menu, const char *path);
 static void learn_saves(Menu *menu);
 static int config_dirty(const Menu *menu);
+
+/* Rows in the game list: fewer with large titles. */
 static size_t menu_rows(const Menu *menu)
 {
     return menu->config.large_titles ? 7 : ROWS;
 }
 
-/* Use quoted SDK headers: Norcroft's built-in <stdarg.h> uses a different
- * va_list layout from Portfolio vsprintf. With built-in headers, the formatter
- * reads a stack address as the first value. A host preview cannot catch this.
- * Norcroft also rewrites sprintf to an unavailable private runtime symbol.
- * All callers use fixed formats bounded below their destination buffers. */
+/* ==== Small helpers ==== */
+
+/*
+ * sprintf into `buffer`. All callers use fixed formats whose output is known
+ * to fit.
+ *
+ * Why not sprintf itself: Norcroft (the 3DO compiler) rewrites sprintf calls
+ * to a private runtime function the console does not have. And this file
+ * uses the SDK's quoted "stdarg.h", not the compiler's built-in <stdarg.h>,
+ * because the built-in one lays out va_list differently from Portfolio's
+ * vsprintf, which would then read a stack address as the first value. A PC
+ * preview cannot catch that, so the SDK build checks the type below.
+ */
 static void format(char *buffer, const char *pattern, ...)
 {
     va_list args;
     va_start(args, pattern);
 #ifdef OH3DO_SDK
     {
-        /* Fail compilation if built-in headers accidentally return. */
+        /* Fails to compile if the built-in header ever comes back. */
         char *portfolio_args = args;
         vsprintf(buffer, pattern, portfolio_args);
     }
@@ -440,10 +561,13 @@ static void format(char *buffer, const char *pattern, ...)
     va_end(args);
 }
 
+/* Milliseconds since the console started. */
 static unsigned long now_ms(Menu *menu)
 {
     return (unsigned long)GetMSecTime(menu->clock);
 }
+
+/* Records that a startup step finished, for diagnostics. */
 static void boot_step(Menu *menu, int step)
 {
     menu->boot_ms[step] = now_ms(menu) - menu->boot_at;
@@ -454,6 +578,8 @@ static void boot_step(Menu *menu, int step)
     }
 }
 
+/* Freezes scrolling names while media loads (the screen is not redrawn), so
+ * they do not jump ahead afterwards. */
 static void pause_scroll(Menu *menu)
 {
     if (!menu->scroll_paused) {
@@ -461,6 +587,7 @@ static void pause_scroll(Menu *menu)
         menu->scroll_paused = 1;
     }
 }
+
 static void resume_scroll(Menu *menu)
 {
     if (menu->scroll_paused) {
@@ -469,18 +596,23 @@ static void resume_scroll(Menu *menu)
     }
 }
 
-/* Whether navigation detours around the FCare folder-ID bug (see menu_config.h). */
+/* Whether navigation detours around the FCare folder-change bug (see menu_config.h). */
 static int folder_workaround(const Menu *menu)
 {
     if (menu->config.folder_workaround == MENU_WORKAROUND_AUTO)
         return !strcmp(menu->ode.identity, "LOCODE");
     return menu->config.folder_workaround == MENU_WORKAROUND_ON;
 }
+
 static const char *workaround_name(int value)
 {
-    return value == MENU_WORKAROUND_AUTO ? "AUTO" : (value == MENU_WORKAROUND_ON ? "ON" : "OFF");
+    if (value == MENU_WORKAROUND_AUTO)
+        return "AUTO";
+    return value == MENU_WORKAROUND_ON ? "ON" : "OFF";
 }
-/* Wait until the screen copy queued after the last full-screen frame is done. */
+
+/* Waits until the screen copy queued after the last full-screen video frame
+ * is done (see Menu.sport). */
 static void sport_wait(Menu *menu)
 {
 #ifdef OH3DO_SDK
@@ -492,6 +624,8 @@ static void sport_wait(Menu *menu)
     menu->sport_pending = 0;
 #endif
 }
+
+/* Stops and frees any preview, loaded or streaming, and its sound. */
 static void stop_preview(Menu *menu)
 {
     menu->preview_priming = 0;
@@ -502,38 +636,52 @@ static void stop_preview(Menu *menu)
         UnloadCel(menu->preview_cel);
     menu->preview_cel = NULL;
     usb_preview_free(&menu->preview);
+    /* Memory freed: text pictures may be created again. */
     menu->text_failed = 0;
 }
-/* Media reads also poll the pad. Keep a chord seen there until the main
- * loop can act on it, even if both buttons have already been released. */
+
+/*
+ * Notices L+R pressed together. Media reads also poll the controller, so a
+ * chord seen there is kept until the main loop can act on it, even if both
+ * buttons have been let go by then.
+ */
 static void observe_tools_chord(Menu *menu, u32 buttons)
 {
     u32 shoulders = buttons & (ControlLeftShift | ControlRightShift);
-    if (!shoulders)
+    if (!shoulders) {
         menu->tools_chord_down = 0;
-    else if (shoulders == (ControlLeftShift | ControlRightShift) && !menu->tools_chord_down) {
+    } else if (shoulders == (ControlLeftShift | ControlRightShift) && !menu->tools_chord_down) {
         menu->tools_chord_down = 1;
         menu->tools_requested = 1;
     }
 }
 
-/* A single shoulder pages on release. The entire hold is available for L+R,
- * so the first half of a chord never moves the list or starts another action. */
+/*
+ * L or R alone pages the list, but only when let go: until then, it may be
+ * the first half of L+R. So the first shoulder of a chord never moves the
+ * list or starts anything. Returns `pressed` with shoulder presses replaced
+ * by their delayed releases.
+ */
 static u32 shoulder_input(Menu *menu, u32 buttons, u32 pressed, u32 released)
 {
-    const u32 mask = ControlLeftShift | ControlRightShift;
-    u32 edges = pressed & mask;
-    pressed &= ~mask;
-    if (menu->tools_chord_down || menu->tools_requested || (buttons & mask) == mask || pressed) {
+    const u32 shoulders = ControlLeftShift | ControlRightShift;
+    u32 shoulder_presses = pressed & shoulders;
+
+    pressed &= ~shoulders;
+    if (menu->tools_chord_down || menu->tools_requested || (buttons & shoulders) == shoulders ||
+        pressed) {
+        /* Part of L+R, or with another button: the shoulders do nothing alone. */
         menu->shoulder_pending = 0;
         return pressed;
     }
-    menu->shoulder_pending |= edges;
+    menu->shoulder_pending |= shoulder_presses;
     pressed |= menu->shoulder_pending & released;
     menu->shoulder_pending &= ~released;
     return pressed;
 }
 
+/* Forgets everything tied to the old selection (cover, preview, full-screen
+ * view...) after the selection moves. */
 static void selection_changed(Menu *menu)
 {
     stop_preview(menu);
@@ -542,14 +690,19 @@ static void selection_changed(Menu *menu)
     menu->preview_has = -1;
     menu->x_pending = 0;
     menu->selection_since = now_ms(menu);
-    /* Keep an in-flight click moving during held scrolling rather than
-     * restarting its anticipation pose at every direction repeat. */
+
+    /*
+     * Start the channel gecko's animation, but while the pad is held and
+     * the selection repeats, keep an animation already playing moving rather
+     * than restarting it at every step.
+     */
     if (menu->channel_gecko && !menu->tools && !menu->review) {
         if (!menu->gecko_active || menu->selection_since - menu->gecko_since >=
                                        CHANNEL_GECKO_FRAMES * CHANNEL_GECKO_FRAME_MS)
             menu->gecko_since = menu->selection_since;
         menu->gecko_active = 1;
     }
+
     menu->scroll_paused = 0;
     menu->position_dirty = 1;
     menu->alphabet_active = 0;
@@ -561,6 +714,7 @@ static void selection_changed(Menu *menu)
     menu->cover_attempted = 0;
 }
 
+/* Shows a short notice on the status line for a few seconds. */
 static void notify(Menu *menu, const char *message)
 {
     strncpy(menu->notice, message, sizeof(menu->notice) - 1);
@@ -570,23 +724,34 @@ static void notify(Menu *menu, const char *message)
     menu->message = NULL;
 }
 
+/* Rebuilds the folder heading from the current path. */
 static void update_breadcrumb(Menu *menu)
 {
-    menu_breadcrumb(menu->breadcrumb, menu->depth > 1 ? menu->path[menu->depth - 2] : "",
-                    menu->depth ? menu->path[menu->depth - 1] : "", menu->depth);
+    const char *parent = menu->depth > 1 ? menu->path[menu->depth - 2] : "";
+    const char *folder = menu->depth ? menu->path[menu->depth - 1] : "";
+    menu_breadcrumb(menu->breadcrumb, parent, folder, menu->depth);
 }
 
+/* ==== Drawing primitives ==== */
+
+/*
+ * Fills a rectangle in the screen buffer being drawn. Positions are in the
+ * 320x240 layout space and are scaled in by the screen margin; only a
+ * full-screen fill ignores the margin.
+ */
 static void rectangle(Menu *menu, int x, int y, int w, int h, Color color)
 {
     GrafCon gc;
     Rect rect;
     int margin = menu->config.screen_margin;
+
     if (x == 0 && y == 0 && w == 320 && h == 240)
         margin = 0;
     rect.rect_XLeft = margin + x * (320 - 2 * margin) / 320;
     rect.rect_YTop = margin + y * (240 - 2 * margin) / 240;
     rect.rect_XRight = margin + (x + w) * (320 - 2 * margin) / 320 - 1;
     rect.rect_YBottom = margin + (y + h) * (240 - 2 * margin) / 240 - 1;
+    /* Never less than one pixel. */
     if (rect.rect_XRight < rect.rect_XLeft)
         rect.rect_XRight = rect.rect_XLeft;
     if (rect.rect_YBottom < rect.rect_YTop)
@@ -595,10 +760,17 @@ static void rectangle(Menu *menu, int x, int y, int w, int h, Color color)
     FillRect(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen], &gc, &rect);
 }
 
+/*
+ * Draws a CEL, scaled in by the screen margin like everything else. A CEL's
+ * position and its HDX/HDY/VDX/VDY step vectors are 16.16 fixed point, so
+ * each is scaled by (320 - 2 * margin) / 320 across and the same with 240
+ * down.
+ */
 static void draw_cel(Menu *menu, CCB *cel)
 {
     CCB copy = *cel;
     int margin = menu->config.screen_margin;
+
     if (margin) {
         copy.ccb_XPos = (margin << 16) + (cel->ccb_XPos / 320) * (320 - 2 * margin);
         copy.ccb_YPos = (margin << 16) + (cel->ccb_YPos / 240) * (240 - 2 * margin);
@@ -607,14 +779,74 @@ static void draw_cel(Menu *menu, CCB *cel)
         copy.ccb_VDX = (cel->ccb_VDX / 240) * (240 - 2 * margin);
         copy.ccb_VDY = (cel->ccb_VDY / 240) * (240 - 2 * margin);
     }
-    copy.ccb_Flags |= CCB_LAST;
+    copy.ccb_Flags |= CCB_LAST; /* draw just this one, not a chain */
     DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen], &copy);
 }
+
+/*
+ * The background behind text at height y, for antialiasing the font's edges
+ * against: what label_on set, or else what the screen normally has there
+ * (the header band, the list panel, or the page).
+ */
+static Color text_background_at(const Menu *menu, int y)
+{
+    if (menu->text_background_set)
+        return menu->text_background;
+    if (y < 52)
+        return HEADER;
+    if (y < 186)
+        return PANEL;
+    return BG;
+}
+
+/*
+ * Makes sure a cached text CEL can hold `width` pixels, creating a bigger one
+ * if needed (rounded up to 16 pixels, as CEL rows must be whole words).
+ * When memory runs out, text_failed is set and the caller falls back to the
+ * SDK's plain font until memory is freed.
+ */
+static void make_room_for_text(Menu *menu, UiText *cached, int width)
+{
+    int capacity = (width + 15) & ~15;
+    CCB *larger;
+
+    if (capacity < 16)
+        capacity = 16;
+    if ((cached->cel && cached->capacity_width >= capacity) || menu->text_failed)
+        return;
+
+    larger = CreateCel(capacity, UI_FONT_HEIGHT, 4, 0, NULL);
+    if (!larger) {
+        menu->text_failed = 1;
+        return;
+    }
+    if (cached->cel)
+        UnloadCel(cached->cel);
+    cached->cel = larger;
+    cached->capacity_width = capacity;
+    cached->width = -1; /* nothing drawn into it yet */
+    cached->palette_valid = 0;
+    memset(larger->ccb_PLUTPtr, 0, 64);
+}
+
+/*
+ * Draws `string` at (x, y) in `color`, in the current text style.
+ *
+ * Text is drawn as a CEL: a small 4-bit picture of the text (from
+ * ui_font_render) with a 16-color palette blending the ink into the
+ * background. Making that picture is the slow part, so recently drawn text
+ * is kept in a small cache of CELs (text_cache) and only redrawn when its
+ * text, style or width changes. Text is drawn at its native size on whole
+ * pixels even with a screen margin, so it stays sharp.
+ *
+ * Characters outside printable ASCII show as '?'. Text is cut off at x = 308.
+ */
 static void text(Menu *menu, int x, int y, const char *string, Color color)
 {
+    /* static: too big for the console's small stack. */
+    static unsigned char bitmap[UI_FONT_STRIDE * UI_FONT_HEIGHT];
     UiText *cached;
     char safe[97];
-    static unsigned char bitmap[UI_FONT_STRIDE * UI_FONT_HEIGHT];
     size_t i;
     int style = menu->large_drawing ? UI_FONT_LARGE : menu->text_style;
     int margin = menu->config.screen_margin;
@@ -622,61 +854,50 @@ static void text(Menu *menu, int x, int y, const char *string, Color color)
     int px = margin + x * (320 - 2 * margin) / 320;
     int py = margin + y * (240 - 2 * margin) / 240;
     int max_width = (308 - x) * (320 - 2 * margin) / 320;
-    Color background = BG;
-    if (menu->text_background_set)
-        background = menu->text_background;
-    else if (y < 52)
-        background = HEADER;
-    else if (y < 186)
-        background = PANEL;
+    Color background = text_background_at(menu, y);
+
     if (max_width > UI_FONT_WIDTH)
         max_width = UI_FONT_WIDTH;
     if (max_width <= 0 || !*string)
         return;
+
     for (i = 0; i < 96 && string[i]; ++i) {
         unsigned char c = (unsigned char)string[i];
         safe[i] = c >= 32 && c <= 126 ? (char)c : '?';
     }
     safe[i] = 0;
 #ifdef UI_PREVIEW_TEXT
-    UI_PREVIEW_TEXT(safe);
+    UI_PREVIEW_TEXT(safe); /* the PC preview records every label */
 #endif
+
+    /*
+     * Each call takes the next cache slot in order, and finds its picture
+     * already made if that slot last held the same text. text_cursor only
+     * goes back to 0 where a screen resets it (the "Reading folder" notice),
+     * so once every slot is used, the last slot serves all later calls and
+     * their text is rendered again each time.
+     */
     cached = &menu->text_cache[menu->text_cursor < UI_TEXT_CACHE ? menu->text_cursor++
                                                                  : UI_TEXT_CACHE - 1];
-    /* Raster and glyph width share the same sanitized text/style key. Keep
-     * the full width so a later margin or clipping change can grow the cel. */
-    glyph_width = cached->cel && cached->style == style && !strcmp(cached->value, safe)
-                      ? cached->glyph_width
-                      : ui_font_width(safe, style);
-    {
-        int needed = glyph_width, capacity;
-        if (needed > max_width)
-            needed = max_width;
-        capacity = (needed + 15) & ~15;
-        if (capacity < 16)
-            capacity = 16;
-        if ((!cached->cel || cached->capacity_width < capacity) && !menu->text_failed) {
-            CCB *next = CreateCel(capacity, UI_FONT_HEIGHT, 4, 0, NULL);
-            if (!next)
-                menu->text_failed = 1;
-            else {
-                if (cached->cel)
-                    UnloadCel(cached->cel);
-                cached->cel = next;
-                cached->capacity_width = capacity;
-                cached->width = -1;
-                cached->palette_valid = 0;
-                memset(next->ccb_PLUTPtr, 0, 64);
-            }
-        }
-    }
+
+    /* The picture and its full width depend only on the text and style. The
+     * full width is kept so a later, wider space can grow the CEL. */
+    if (cached->cel && cached->style == style && !strcmp(cached->value, safe))
+        glyph_width = cached->glyph_width;
+    else
+        glyph_width = ui_font_width(safe, style);
+    make_room_for_text(menu, cached, glyph_width < max_width ? glyph_width : max_width);
+
     if (cached->cel) {
         CCB *cel = cached->cel;
         int width;
+
         if (max_width > cached->capacity_width)
             max_width = cached->capacity_width;
+
+        /* Redraw the picture only if what it shows changed. */
         if (cached->style != style || strcmp(cached->value, safe) || cached->width != max_width) {
-            int row, stride = cached->capacity_width / 2;
+            int row, stride = cached->capacity_width / 2; /* bytes: two pixels each */
             ui_font_render(bitmap, safe, style, max_width);
             for (row = 0; row < ui_font_height(style); ++row)
                 memcpy((unsigned char *)cel->ccb_SourcePtr + row * stride,
@@ -686,22 +907,25 @@ static void text(Menu *menu, int x, int y, const char *string, Color color)
             cached->width = max_width;
         }
         cached->glyph_width = glyph_width;
-        width = glyph_width;
-        if (width > max_width)
-            width = max_width;
+        width = glyph_width < max_width ? glyph_width : max_width;
         if (!width)
             return;
+
+        /* The palette, if the colors changed. */
         if (!cached->palette_valid || cached->ink != color || cached->background != background) {
             ui_font_palette((unsigned short *)cel->ccb_PLUTPtr, color, background);
             cached->ink = color;
             cached->background = background;
             cached->palette_valid = 1;
         }
+
+        /* PRE0 and PRE1 are the CEL's "preamble" words: they hold its
+         * height and width (each minus one). */
         cel->ccb_PRE0 = (cel->ccb_PRE0 & ~0x0000ffc0UL) | ((ui_font_height(style) - 1) << 6);
         cel->ccb_PRE1 = (cel->ccb_PRE1 & ~0x000007ffUL) | (width - 1);
         cel->ccb_Width = width;
         cel->ccb_Height = ui_font_height(style);
-        /* Keep text at native size and integer pixels, including with overscan margins. */
+        /* At native size on whole pixels (16.16 fixed point). */
         cel->ccb_XPos = px << 16;
         cel->ccb_YPos = py << 16;
         cel->ccb_HDX = 1 << 20;
@@ -711,6 +935,7 @@ static void text(Menu *menu, int x, int y, const char *string, Color color)
         cel->ccb_Flags |= CCB_LAST;
         DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen], cel);
     } else {
+        /* Out of memory for CELs: the SDK's plain 8-pixel font, cut to fit. */
         GrafCon gc;
         char fallback[37];
         for (i = 0; i < 36 && i < (size_t)(max_width / 8) && safe[i]; ++i)
@@ -722,6 +947,8 @@ static void text(Menu *menu, int x, int y, const char *string, Color color)
                   (const u8 *)fallback);
     }
 }
+
+/* text() in a given style. */
 static void label(Menu *menu, int x, int y, const char *value, Color color, int style)
 {
     int previous = menu->text_style;
@@ -729,6 +956,8 @@ static void label(Menu *menu, int x, int y, const char *value, Color color, int 
     text(menu, x, y, value, color);
     menu->text_style = previous;
 }
+
+/* label() over a given background color (for text on buttons and badges). */
 static void label_on(Menu *menu, int x, int y, const char *value, Color ink, int style,
                      Color background)
 {
@@ -740,14 +969,24 @@ static void label_on(Menu *menu, int x, int y, const char *value, Color ink, int
     menu->text_background_set = previous;
     menu->text_background = old;
 }
+
+/* A rectangle with its corners cut off: three overlapping rectangles. */
 static void rounded(Menu *menu, int x, int y, int w, int h, Color color)
 {
     rectangle(menu, x + 3, y, w - 6, h, color);
     rectangle(menu, x + 1, y + 1, w - 2, h - 2, color);
     rectangle(menu, x, y + 3, w, h - 6, color);
 }
-/* A few labels animate; ordinary redraws reuse their font measurements.
- * The font cache compares owned text, since most labels use shared scratch. */
+
+/* ==== Names, titles and buttons ==== */
+
+/*
+ * The remembered measurements for a name drawn at (x, y) (see
+ * ScrollMeasure), taking over the oldest slot for a new position. Names
+ * that scroll are measured again every frame otherwise. The measurement
+ * keeps its own copy of the text, since most names are built in shared
+ * scratch buffers.
+ */
 static UiFontMeasure *scroll_measure(Menu *menu, int x, int y)
 {
     unsigned int i;
@@ -765,7 +1004,11 @@ static UiFontMeasure *scroll_measure(Menu *menu, int x, int y)
     slot->y = y;
     return &slot->measure;
 }
-/* One line of a name: scrolls while selected, otherwise ends in "..." when cut. */
+/*
+ * Draws one line of a name in `room` layout pixels. The selected name
+ * scrolls if it is too long (see menu_scroll_offset); any other name that
+ * does not fit is cut short with "...". At most 64 characters are drawn.
+ */
 static void scroll_label(Menu *menu, int x, int y, int room, const char *name, size_t length,
                          int style, Color ink, Color background, int selected)
 {
@@ -773,9 +1016,10 @@ static void scroll_label(Menu *menu, int x, int y, int room, const char *name, s
     size_t visible, offset = 0;
     UiFontMeasure *measure = scroll_measure(menu, x, y);
     int limit = (308 - x) * (320 - 2 * menu->config.screen_margin) / 320;
+    /* From layout pixels to screen pixels, and no further than text() draws. */
     room = room * (320 - 2 * menu->config.screen_margin) / 320;
     if (room > limit)
-        room = limit; /* Match text()'s actual right edge. */
+        room = limit;
     if (room > UI_FONT_WIDTH)
         room = UI_FONT_WIDTH;
     ui_font_measure(measure, name, length, room, style);
@@ -783,17 +1027,22 @@ static void scroll_label(Menu *menu, int x, int y, int room, const char *name, s
     if (visible > 64)
         visible = 64;
     if (selected) {
+        /* Scroll until the name's end shows. The characters shown at the
+         * end are what decides how far to go: the end can be wider than the
+         * beginning in a proportional font. */
         size_t tail = ui_font_measure_tail(measure, name);
         if (length - tail > 64)
             tail = length - 64;
-        /* The end can be wider than the beginning in a proportional font. */
         visible = length - tail;
         offset = menu_scroll_offset(length, visible, menu->scroll_elapsed);
+        /* Remember scrolling names: the screen must keep being redrawn while
+         * they move (see overlay_key). */
         if (menu->scroll_count < 4) {
             menu->scroll_length[menu->scroll_count] = length;
             menu->scroll_visible[menu->scroll_count++] = visible;
         }
     } else if (visible < length) {
+        /* Cut short: as much as fits with "...", without trailing spaces. */
         visible = ui_font_measure_ellipsis(measure, name);
         if (visible > 64)
             visible = 64;
@@ -811,10 +1060,15 @@ static void scroll_label(Menu *menu, int x, int y, int room, const char *name, s
     title[visible] = 0;
     label_on(menu, x, y, title, ink, style, background);
 }
+/*
+ * A game's title as shown (see menu_display_title), with " [N]" added when
+ * several entries share the title (see title_variant). Returns a shared
+ * buffer, valid until the next call.
+ */
 static const char *display_game_variant(const char *name, int directory, unsigned int variant)
 {
-    /* Shared scratch, consumed immediately by the text renderer. Paths in
-     * favorites and the queue can be longer than one directory-entry name. */
+    /* Big enough for full paths from favorites and the queue, not just one
+     * folder entry's name. */
     static char title[9218];
     size_t n = menu_display_title(title, sizeof(title), name, directory);
     if (variant && n + 16 < sizeof(title))
@@ -823,14 +1077,20 @@ static const char *display_game_variant(const char *name, int directory, unsigne
 }
 static const char *display_game_title(const char *name, int directory)
 {
+    /* Variant 0: no number. */
     return display_game_variant(name, directory, 0);
 }
+/*
+ * Draws a game's name in a list row: its title, plus a small "ISO" or "CUE"
+ * badge at the right when the row is wide enough.
+ */
 static void game_label(Menu *menu, int x, int y, int room, const char *name, int directory,
                        int style, Color ink, Color background, int selected)
 {
     const char *kind = menu_image_format(name, directory);
     int scale = 320 - 2 * menu->config.screen_margin;
     if (kind && room > 140) {
+        /* The badge's width in layout pixels, rounded up; centered vertically. */
         int badge_width = (ui_font_width(kind, UI_FONT_SMALL) * 320 + scale - 1) / scale;
         int badge_y = y + (ui_font_height(style) - ui_font_height(UI_FONT_SMALL)) / 2;
         label_on(menu, x + room - badge_width, badge_y, kind, ink, UI_FONT_SMALL, background);
@@ -839,7 +1099,7 @@ static void game_label(Menu *menu, int x, int y, int room, const char *name, int
     name = display_game_title(name, directory);
     scroll_label(menu, x, y, room, name, strlen(name), style, ink, background, selected);
 }
-/* a*num/den + b*(den-num)/den, per channel. */
+/* Blends two colors: num/den of a and the rest b, channel by channel, rounded. */
 static Color mix(unsigned int a, unsigned int b, unsigned int num, unsigned int den)
 {
     unsigned int r = (((a >> 10) & 31U) * num + ((b >> 10) & 31U) * (den - num) + den / 2) / den;
@@ -856,14 +1116,22 @@ static void cap_shape(Menu *menu, int x, int y, int w, int h, int ends, Color co
 {
     int row;
     for (row = 0; row < h; ++row) {
+        /*
+         * How wide the ellipse is at this row's middle: with dy the distance
+         * from the center (in half pixels), the half-width is proportional
+         * to sqrt(h*h - dy*dy). `root` is that square root times 8, found
+         * by counting up (no floating point or square root routine).
+         */
         long dy = 2L * row + 1 - h, inside = (long)h * h - dy * dy, root = 0, half, left, right,
              first, last;
         while ((root + 1) * (root + 1) <= 64L * inside)
             ++root;
-        /* Edges in sixteenths of a pixel. */
+        /* The row's edges, in sixteenths of a pixel from x. */
         half = 8L * (long)(w - ends) + (long)ends * root / h;
         left = 8L * w - half;
         right = 8L * w + half;
+        /* Whole pixels inside, then the partly covered pixel at each edge,
+         * blended by how much of it is inside. */
         first = (left + 15) / 16;
         last = right / 16;
         if (last > first)
@@ -891,13 +1159,15 @@ static int button(Menu *menu, int x, int y, const char *key, const char *action,
                     ? MakeRGB15(22, 23, 26)
                     : TV_ORANGE;
     Color lip = mix((unsigned int)cap, (unsigned int)INK, 9U, 16U);
+    /* The cap's brightness, weighting green most as the eye does. */
     unsigned int rgb = (unsigned int)cap,
                  luma = ((rgb >> 10) & 31U) * 30U + ((rgb >> 5) & 31U) * 59U + (rgb & 31U) * 11U;
     /* Dark letters on light caps, white on the red B. */
     Color ink = luma > 1500U ? INK : TEXT;
     int scale = 320 - 2 * menu->config.screen_margin;
     int key_width = ui_font_width(key, UI_FONT_SMALL_BOLD) * 320 / scale, width, round = !key[1];
-    (void)lit;
+    (void)lit; /* accepted for callers, but currently unused */
+    /* Each shape is drawn twice: the darker lip one pixel lower, then the cap. */
     if (round && (key[0] == 'A' || key[0] == 'B' || key[0] == 'C')) {
         width = 14;
         cap_shape(menu, x, y + 1, 14, 13, 14, lip, BG);
@@ -915,6 +1185,7 @@ static int button(Menu *menu, int x, int y, const char *key, const char *action,
     label(menu, x + width + 4, y + 1, action, TEXT, UI_FONT_SMALL);
     return width + 4 + ui_font_width(action, UI_FONT_SMALL) * 320 / scale + 10;
 }
+/* The plain background behind the Tools screens: the header band and page. */
 static void backdrop(Menu *menu)
 {
     int i;
@@ -924,19 +1195,25 @@ static void backdrop(Menu *menu)
     rectangle(menu, 0, 223, 320, 17, BG);
 }
 
+/* ==== Which entries the browser shows ==== */
+
+/* Whether the current folder is the drive's top (or a volume's top, when
+ * the top level lists volumes), where the menu's support files live. */
 static int storage_root(const Menu *menu)
 {
     return menu->depth == 0 || (menu->depth == 1 && !(menu->path_ids[0] & 0xffffffUL));
 }
+/* Whether an entry is hidden from the list (see menu_support_entry). */
 static int hidden_entry(const Menu *menu, const MenuEntry *entry)
 {
-    /* Zero local IDs denote volume selectors, not support directories. */
+    /* Entries with no entry bits are volumes, never hidden. */
     if (entry->is_directory && !(entry->toc_id & 0xffffffUL))
         return 0;
     return menu_support_entry(entry->name, entry->is_directory, storage_root(menu));
 }
-/* Every listing replacement frees the old one first, so this marks the
- * visible-entry cache stale. */
+/* Frees the current listing and everything derived from it. Every listing
+ * replacement goes through here, so bumping listing_generation tells the
+ * caches below that they are out of date. */
 static void free_listing(Menu *menu)
 {
     free(menu->title_variants);
@@ -947,8 +1224,11 @@ static void free_listing(Menu *menu)
     ode_listing_free(&menu->listing);
     ++menu->listing_generation;
 }
-/* What decides which entries show: the listing, hidden_entry's inputs and
- * the filter. */
+/*
+ * A hash (FNV-1a) of everything that decides which entries show: the
+ * listing, hidden_entry's inputs and the filter. If it is unchanged, the
+ * cached visible list is still right.
+ */
 static unsigned long visible_key(const Menu *menu)
 {
     unsigned long key = 2166136261UL;
@@ -962,9 +1242,12 @@ static unsigned long visible_key(const Menu *menu)
         key = (key ^ (unsigned char)*c) * 16777619UL;
     return key;
 }
-/* The visible entries, or NULL (then callers scan) if memory runs out. A
- * folder used to be scanned several times per drawn frame; at 30 fps
- * playback that cost most of the frame. */
+/*
+ * The entries shown in the list, in order, and how many; or NULL if memory
+ * ran out (callers then scan the listing themselves). Cached, because
+ * scanning a big folder several times per frame used to take most of the
+ * frame time during 30 fps preview playback.
+ */
 static const MenuEntry **visible_entries(const Menu *menu, size_t *count)
 {
     Menu *cache = (Menu *)menu; /* filling the cache changes nothing shown */
@@ -992,12 +1275,14 @@ static const MenuEntry **visible_entries(const Menu *menu, size_t *count)
     *count = cache->visible_count;
     return cache->visible;
 }
+/* The index-th shown entry (not counting the ".." row), or NULL. */
 static const MenuEntry *browser_entry(const Menu *menu, size_t index)
 {
     size_t i, count;
     const MenuEntry **visible = visible_entries(menu, &count);
     if (visible)
         return index < count ? visible[index] : NULL;
+    /* No cache: count through the listing. */
     for (i = 0; i < menu->listing.count; ++i) {
         const MenuEntry *entry = menu->listing.entries[i];
         if (hidden_entry(menu, entry) || !menu_name_matches(entry->name, menu->filter))
@@ -1007,6 +1292,7 @@ static const MenuEntry *browser_entry(const Menu *menu, size_t index)
     }
     return NULL;
 }
+/* Rows in the list: the shown entries plus the ".." row, or the queue's discs. */
 static size_t row_count(const Menu *menu)
 {
     size_t i, count = menu->listing.has_parent ? 1 : 0, visible;
@@ -1021,7 +1307,11 @@ static size_t row_count(const Menu *menu)
     return count;
 }
 
-/* One pass over visible entries; no allocation or ODE commands while drawing. */
+/*
+ * Fills available[0..26]: 1 for each initial (0 '#', 1-26 A-Z) some shown
+ * entry starts with. Cached like the visible list; it never allocates or
+ * talks to the drive, since it runs while drawing.
+ */
 static void alphabet_available(const Menu *menu, unsigned char *available)
 {
     Menu *cache = (Menu *)menu;
@@ -1041,7 +1331,12 @@ static void alphabet_available(const Menu *menu, unsigned char *available)
     cache->alphabet_key = key;
     cache->alphabet_valid = 1;
 }
-/* The letter strip sits just above the title card while a letter is chosen. */
+/*
+ * Draws the alphabet strip, just above the title card. Letters with games
+ * are brighter; the current one is highlighted. With `previous` >= 0 only
+ * the old and new current letters are redrawn (moving along the strip);
+ * with -1 the whole strip is.
+ */
 static void draw_alphabet_change(Menu *menu, int previous)
 {
     unsigned char available[27];
@@ -1090,13 +1385,14 @@ static void draw_alphabet(Menu *menu)
 {
     draw_alphabet_change(menu, -1);
 }
+/* The page heading: the logo, two short colored bars and the title. */
 static void brand(Menu *menu, const char *title)
 {
     if (menu->logo) {
         CCB logo = *menu->logo;
         logo.ccb_XPos = 12 << 16;
         logo.ccb_YPos = 8 << 16;
-        logo.ccb_HDX = (1 << 20) / 2;
+        logo.ccb_HDX = (1 << 20) / 2; /* half size */
         logo.ccb_VDY = (1 << 16) / 2;
         draw_cel(menu, &logo);
     } else
@@ -1105,14 +1401,18 @@ static void brand(Menu *menu, const char *title)
     rectangle(menu, 129, 6, 17, 2, ACCENT);
     label(menu, 88, 9, title, TEXT, UI_FONT_HEADING);
 }
+/* ==== The Gecko TV: the portable TV on the right of the browser ==== */
+
 /* The picture side is a portable TV: previews, covers and static all play on
- * its 160x120 screen, the preview's native size. */
+ * its 160x120 screen, the preview's native size. (VIDEO_X, VIDEO_Y) is the
+ * screen's top-left corner. */
 #define VIDEO_X 152
 #define VIDEO_Y 45
 #define CABINET MakeRGB15(6, 6, 7)
 /* Gecko TV draws its TV furniture from a few small cached cels rather than
  * many rectangles: TV static, the on-screen-display channel digits and its
  * bar. Without them it falls back to plain fills. */
+/* The channel digits 0-9, each 3 dots wide and 5 tall, row by row. */
 static const char *const osd_font[10] = {
     "111101101101111", "010110010010111", "111001111100111", "111001011001111", "101101111001001",
     "111100111001111", "111100111101111", "111001010010010", "111101111101111", "111101111001111"};
@@ -1121,6 +1421,12 @@ static const char *const osd_font[10] = {
  * snow jumps like a real TV's and never spills outside the picture. */
 #define NOISE_W    86
 #define NOISE_ROWS 136
+/*
+ * Creates a blank w x h CEL of 16-bit pixels for drawing into, or NULL
+ * (setting crt_failed, so the plain fallbacks are used) if memory is short.
+ * The cel engine pads rows to whole words: an odd width gets one more pixel,
+ * and rows are at least 4 pixels.
+ */
 static CCB *ui_cel(Menu *menu, int w, int h)
 {
     int stride = (w + 1) & ~1;
@@ -1133,6 +1439,8 @@ static CCB *ui_cel(Menu *menu, int w, int h)
         memset(cel->ccb_SourcePtr, 0, (size_t)stride * (size_t)h * 2);
     return cel;
 }
+/* Creates the TV's CELs once: the static, the channel digits and bar, the
+ * "CH" label and the screen's corner. */
 static void crt_cels(Menu *menu)
 {
     static const unsigned short grays[6] = {
@@ -1171,7 +1479,8 @@ static void crt_cels(Menu *menu)
     }
     if (menu->osd_ch) {
         /* "CH" in the channel digits' blocky style, at 2x2 pixels per dot: font
-         * text over bright video showed a dark fringe once averaging was off. */
+         * text over bright video showed a dark fringe once averaging was off.
+         * Drawn twice, first as a dark shadow one pixel down and right. */
         static const char *const ch[2] = {"111100100100111", "101101111101101"};
         int shadow, g, r, k, a, b;
         pixels = (unsigned short *)menu->osd_ch->ccb_SourcePtr;
@@ -1185,7 +1494,9 @@ static void crt_cels(Menu *menu)
                                     pixels[(r * 2 + a + shadow) * 16 + g * 8 + k * 2 + b + shadow] =
                                         (unsigned short)(shadow ? INK : OSD_GREEN);
     }
-    menu->osd_number = menu->osd_lit = -1;
+    menu->osd_number = menu->osd_lit = -1; /* nothing drawn into them yet */
+    /* Fill the static with random grays (a simple linear congruential
+     * generator; it only needs to look random). */
     if (menu->noise) {
         pixels = menu->noise_pixels;
         for (x = 0; x < NOISE_W * NOISE_ROWS; ++x) {
@@ -1194,6 +1505,7 @@ static void crt_cels(Menu *menu)
         }
     }
 }
+/* Draws a CEL at (x, y) at `scale` times its size, upside down if `flip`. */
 static void draw_ui_cel(Menu *menu, CCB *cel, int x, int y, int scale, int flip)
 {
     CCB copy;
@@ -1206,6 +1518,8 @@ static void draw_ui_cel(Menu *menu, CCB *cel, int x, int y, int scale, int flip)
     copy.ccb_VDY = flip ? -((long)scale << 16) : (long)scale << 16;
     draw_cel(menu, &copy);
 }
+/* The gecko on the channel card plays a short animation (from
+ * channel_gecko_data.h) each time the selection changes. */
 static void init_channel_gecko(Menu *menu)
 {
     menu->channel_gecko = CreateCel(CHANNEL_GECKO_SIZE, CHANNEL_GECKO_SIZE, 4, 0, NULL);
@@ -1214,6 +1528,8 @@ static void init_channel_gecko(Menu *menu)
     memcpy(menu->channel_gecko->ccb_PLUTPtr, channel_gecko_palette, sizeof(channel_gecko_palette));
     menu->gecko_uploaded = -1;
 }
+/* The gecko's animation frame at time `now`; 0 (its resting pose) when it
+ * is not animating. */
 static int channel_gecko_frame(Menu *menu, unsigned long now)
 {
     unsigned long frame;
@@ -1230,13 +1546,13 @@ static void draw_channel_gecko(Menu *menu)
 {
     if (!menu->channel_gecko)
         return;
+    /* Copy the frame's pixels into the CEL only when the frame changes. */
     if (menu->gecko_uploaded != menu->gecko_frame) {
         memcpy(menu->channel_gecko->ccb_SourcePtr, channel_gecko_pixels[menu->gecko_frame], 512);
         menu->gecko_uploaded = menu->gecko_frame;
     }
     draw_ui_cel(menu, menu->channel_gecko, 148, 1, 1, 0);
 }
-/* A 172x240 strip of TV static at x; a new seed picks a new frame. */
 /* The static shows through the splash's screen opening (x 10-309, y 10-229)
  * around its solid logo panel (x 52-267, y 62-173); assets/startup.cel. Once
  * both buffers hold the panel, a frame repaints only these strips, in pieces
@@ -1261,6 +1577,8 @@ static void noise_part(Menu *menu, const short *strip, unsigned long seed)
 {
     CCB copy;
     unsigned long rows = (unsigned long)strip[3] / 2, cols = (unsigned long)strip[2] / 2, row, col;
+    /* Scramble the seed's bits (a standard integer hash finisher), so
+     * consecutive seeds land far apart. */
     seed ^= seed >> 15;
     seed *= 2246822519UL;
     seed ^= seed >> 13;
@@ -1282,6 +1600,8 @@ static void splash_part(Menu *menu, const short *strip)
     copy.ccb_YPos = (long)strip[1] << 16;
     DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen], &copy);
 }
+/* A 172x240 strip of TV static at x, drawn at 2x; a new seed picks a new
+ * frame. */
 static void noise_at(Menu *menu, int x, unsigned long seed)
 {
     CCB copy;
@@ -1320,6 +1640,7 @@ static void tv_corners(Menu *menu)
 static void tv_static(Menu *menu, unsigned long now)
 {
     CCB copy;
+    /* A new frame of static about 15 times a second. */
     unsigned long seed = (now / 67UL + 1UL) * 2654435761UL;
     if (!menu->noise) {
         rectangle(menu, VIDEO_X, VIDEO_Y, USB_PREVIEW_WIDTH, USB_PREVIEW_HEIGHT, DIM);
@@ -1332,6 +1653,7 @@ static void tv_static(Menu *menu, unsigned long now)
     memcpy(&copy, menu->noise, sizeof(copy));
     copy.ccb_SourcePtr =
         (CelData *)(void *)(menu->noise_pixels + (seed % ((NOISE_ROWS - 60) * NOISE_W / 2)) * 2);
+    /* Cut the CEL to 80x60 (the preamble words hold the size minus one). */
     copy.ccb_PRE0 = (copy.ccb_PRE0 & ~0x0000ffc0UL) | (59UL << 6);
     copy.ccb_PRE1 = (copy.ccb_PRE1 & ~0x000007ffUL) | 79UL;
     copy.ccb_Width = 80;
@@ -1358,9 +1680,10 @@ static void rounded_box(Menu *menu, int x, int y, int w, int h, int r, Color col
             row = h - r - 1;
             continue;
         }
+        /* The corner circle's half-width at this row, times 8 (as in cap_shape). */
         while ((root + 1) * (root + 1) <= 64L * (4L * r * r - dy * dy))
             ++root;
-        /* Edges in sixteenths of a pixel. */
+        /* How far in the edge is, in sixteenths of a pixel. */
         inset = 16L * r - root;
         first = (inset + 15) / 16;
         last = (16L * w - inset) / 16;
@@ -1379,13 +1702,13 @@ static void rounded_box(Menu *menu, int x, int y, int w, int h, int r, Color col
 static void tv_set(Menu *menu)
 {
     int i;
-    rounded_box(menu, 146, 34, 172, 143, 9, CABINET, BG);
-    rectangle(menu, 152, 35, 160, 2, MakeRGB15(10, 10, 12));
-    rounded_box(menu, 149, 41, 166, 128, 8, INK, CABINET);
+    rounded_box(menu, 146, 34, 172, 143, 9, CABINET, BG);    /* the cabinet */
+    rectangle(menu, 152, 35, 160, 2, MakeRGB15(10, 10, 12)); /* a highlight along its top */
+    rounded_box(menu, 149, 41, 166, 128, 8, INK, CABINET);   /* the screen's recess */
     for (i = 0; i < 9; ++i)
-        rectangle(menu, 152 + i * 5, 170, 3, 5, MakeRGB15(4, 4, 4));
+        rectangle(menu, 152 + i * 5, 170, 3, 5, MakeRGB15(4, 4, 4)); /* speaker slots */
     rectangle(menu, 246, 170, 22, 5, MakeRGB15(3, 1, 1));
-    rectangle(menu, 262, 171, 4, 3, REMOTE_RED);
+    rectangle(menu, 262, 171, 4, 3, REMOTE_RED); /* the power light */
     for (i = 0; i < 2; ++i) {
         Color knob = MakeRGB15(23, 23, 24);
         int x = 278 + i * 16;
@@ -1400,7 +1723,7 @@ static void tv_set(Menu *menu)
 static void tv_picture(Menu *menu, CCB *source)
 {
     CCB copy;
-    long scale = 1L << 16;
+    long scale = 1L << 16; /* 1.0 in 16.16 fixed point */
     if (!source->ccb_Width || !source->ccb_Height)
         return;
     memcpy(&copy, source, sizeof(copy));
@@ -1423,6 +1746,7 @@ static void tv_picture(Menu *menu, CCB *source)
 static void osd(Menu *menu, size_t selected);
 static void control_badges(Menu *menu, int x, int y, const char *controls, int lit);
 static const char *selected_preview(Menu *menu);
+
 /* The tuning notice over the static, with its loading bar. */
 static void tuning_overlay(Menu *menu, size_t selected)
 {
@@ -1461,6 +1785,8 @@ static void osd(Menu *menu, size_t selected)
             label_on(menu, 236 - width, 14, status, config_dirty(menu) ? AMBER : OSD_GREEN,
                      UI_FONT_SMALL, INK);
         }
+        /* Redraw the three digits' CEL only when the number changes: each dot
+         * 3x3 pixels, with a dark shadow one pixel down and right. */
         if (menu->osd_digits && number != menu->osd_number) {
             unsigned short *pixels = (unsigned short *)menu->osd_digits->ccb_SourcePtr;
             int d, shadow, r, k, a, b;
@@ -1492,6 +1818,7 @@ static void osd(Menu *menu, size_t selected)
         long lit = (long)(menu->tuning_bytes / (1400UL * 1024UL / 16UL));
         if (lit > 15)
             lit = 15;
+        /* Redraw the bar's 16 cells only when the lit count changes. */
         if (menu->osd_bar && lit != menu->osd_lit) {
             unsigned short *pixels = (unsigned short *)menu->osd_bar->ccb_SourcePtr;
             int cell, row, col;
@@ -1524,6 +1851,7 @@ static void osd(Menu *menu, size_t selected)
     }
 }
 
+/* Drawn on the TV when there is no cover: a little picture and a caption. */
 static void media_placeholder(Menu *menu, int folder)
 {
     rounded(menu, 194, 79, 59, 46, LINE);
