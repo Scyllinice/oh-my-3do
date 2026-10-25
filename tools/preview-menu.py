@@ -1708,7 +1708,9 @@ def main():
         )
     ]
     tools = source[
-        source.index("/* ==== Applying the disc queue") : source.index("int main(int argc")
+        source.index("/* ==== Applying the disc queue") : source.index(
+            "/* ==== Starting the menu and the main loop"
+        )
     ]
     font = (ROOT / "third_party/portfolio_os/src/graphics/text_deffont.c").read_text()
     images = {}

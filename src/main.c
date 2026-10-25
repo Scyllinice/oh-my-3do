@@ -623,6 +623,7 @@ static void pause_scroll(Menu *menu)
     }
 }
 
+/* Lets scrolling names move again, from where they stopped. */
 static void resume_scroll(Menu *menu)
 {
     if (menu->scroll_paused) {
@@ -639,6 +640,7 @@ static int folder_workaround(const Menu *menu)
     return menu->config.folder_workaround == MENU_WORKAROUND_ON;
 }
 
+/* The folder workaround setting as Settings and Diagnostics show it. */
 static const char *workaround_name(int value)
 {
     if (value == MENU_WORKAROUND_AUTO)
@@ -1110,9 +1112,10 @@ static const char *display_game_variant(const char *name, int directory, unsigne
         format(title + n, " [%u]", variant);
     return title;
 }
+/* A file or folder name as the list shows it (display_game_variant with no
+ * number). */
 static const char *display_game_title(const char *name, int directory)
 {
-    /* Variant 0: no number. */
     return display_game_variant(name, directory, 0);
 }
 /*
@@ -1416,6 +1419,7 @@ static void draw_alphabet_change(Menu *menu, int previous)
         x += cell;
     }
 }
+/* Draws the whole alphabet strip. */
 static void draw_alphabet(Menu *menu)
 {
     draw_alphabet_change(menu, -1);
@@ -1577,6 +1581,7 @@ static int channel_gecko_frame(Menu *menu, unsigned long now)
     }
     return (int)frame;
 }
+/* Draws the gecko's current frame, if it is showing. */
 static void draw_channel_gecko(Menu *menu)
 {
     if (!menu->channel_gecko)
@@ -3237,9 +3242,11 @@ static void progress(void *context, size_t count)
     menu->progress_drawn = now;
     draw(menu);
 }
+/* The menu while it starts up, for menu_transfer (which is not given it). */
+static Menu *startup_menu;
+
 /* The OdeTransfer the menu uses: every ODE command passes through here, so
  * during startup it can keep the static moving (BOOT_STATIC_MS). */
-static Menu *startup_menu;
 static int menu_transfer(void *context, const unsigned char *command, unsigned char *reply,
                          size_t capacity, size_t *length)
 {
@@ -6032,6 +6039,7 @@ typedef struct SearchIndexRead {
     Menu *menu;
     char prefix[ODE_MAX_NAME + 10];
 } SearchIndexRead;
+/* The search index loader's cancel check: B cancels. */
 static int index_cancel(void *context)
 {
     return search_progress(context, 0);
@@ -8809,6 +8817,10 @@ static void tools_input(Menu *menu, u32 pressed)
         tools_activate(menu);
 }
 
+/* ==== Help and opening Tools ==== */
+
+/* Which help a held P shows: the current Tools screen's, or the browser's
+ * (the alphabet strip, queue review or list). */
 static MenuHelpTopic current_help_topic(const Menu *menu)
 {
     switch (menu->tools) {
@@ -8864,6 +8876,8 @@ static MenuHelpTopic current_help_topic(const Menu *menu)
         return menu->alphabet_active ? HELP_ALPHABET : menu->review ? HELP_QUEUE : HELP_LIBRARY;
     }
 }
+/* Draws the help for the current screen (held P), drawing it into both
+ * screen buffers once and then leaving it. */
 static void draw_context_help(Menu *menu)
 {
     MenuHelpTopic topic = current_help_topic(menu);
@@ -8893,6 +8907,11 @@ static void draw_context_help(Menu *menu)
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
+/*
+ * L+R: opens the Tools menu (with the item last chosen selected), or
+ * closes Tools, putting away whatever was open (a copy, a comparison, an
+ * unsaved backup). With unsaved hex edits, asks first.
+ */
 static void toggle_tools(Menu *menu)
 {
     if (menu->tools == TOOL_HOME)
@@ -8921,6 +8940,8 @@ static void toggle_tools(Menu *menu)
     menu->tool_message = NULL;
     menu->c_pending = menu->alphabet_active = 0;
 }
+/* Opens or closes Tools if L+R asked to (see observe_tools_chord).
+ * Returns 1 if it did. */
 static int dispatch_tools_request(Menu *menu)
 {
     if (!menu->tools_requested)
@@ -8930,13 +8951,415 @@ static int dispatch_tools_request(Menu *menu)
     return 1;
 }
 
+/* ==== Starting the menu and the main loop ==== */
+
+/* Sets up the console: the controller, two screens, a VBL request for
+ * waiting on the display and a timer for the clock. Returns 0, or -1
+ * (having undone what was set up) if any of them fails. */
+static int open_console(Menu *menu)
+{
+    int screen;
+    if (InitControlPad(1) < 0)
+        return -1;
+    if (CreateBasicDisplay(&menu->screen, DI_TYPE_DEFAULT, 2) < 0) {
+        KillControlPad();
+        return -1;
+    }
+    /* The display hardware blends each pixel with its neighbors by default,
+     * which softens text and edges; the menu is drawn for crisp pixels. */
+    for (screen = 0; screen < 2; ++screen) {
+        DisableHAVG(menu->screen.sc_Screens[screen]);
+        DisableVAVG(menu->screen.sc_Screens[screen]);
+    }
+    menu->vbl = CreateVBLIOReq();
+    if (menu->vbl < 0) {
+        DeleteBasicDisplay(&menu->screen);
+        KillControlPad();
+        return -1;
+    }
+    menu->clock = GetTimerIOReq();
+    if (menu->clock < 0) {
+        DeleteIOReq(menu->vbl);
+        DeleteBasicDisplay(&menu->screen);
+        KillControlPad();
+        return -1;
+    }
+    return 0;
+}
+
+/* Loads the splash screen (drawn at once) and the logo from the menu's
+ * disc, and the system font for drawing text. */
+static void load_menu_art(Menu *menu)
+{
+    Font *font = GetCurrentFont();
+    if (font && font->font_CCB) {
+        menu->font_ccb = *font->font_CCB;
+        menu->have_font = 1;
+    }
+    menu->covers_enabled = menu_cover_count != 0;
+#ifndef MENU_DEMO
+    menu->splash = LoadCel("$boot/startup.cel", MEMTYPE_CEL);
+    /* Black pixels in the splash are transparent: the live static shows there. */
+    if (menu->splash) {
+        menu->splash->ccb_Flags |= CCB_LAST;
+        menu->splash->ccb_Flags &= ~CCB_BGND;
+    }
+    menu->booting = 1;
+    draw(menu);
+    boot_step(menu, BOOT_SPLASH);
+#endif
+    menu->logo = LoadCel("$boot/logo.cel", MEMTYPE_CEL);
+    init_channel_gecko(menu);
+    if (menu->logo) {
+        menu->logo->ccb_XPos = 16 << 16;
+        menu->logo->ccb_YPos = 8 << 16;
+        menu->logo->ccb_Flags |= CCB_LAST;
+    }
+    boot_step(menu, BOOT_ART);
+}
+
+/* The controller, as read on one pass of the main loop. */
+typedef struct Pad {
+    u32 buttons;  /* held */
+    u32 pressed;  /* newly pressed, or repeating */
+    u32 released; /* let go since the last pass */
+    u32 repeated; /* directions repeating because they are held */
+    /* Between passes: */
+    u32 previous;            /* the buttons held on the last pass */
+    unsigned long repeat_at; /* when a held direction next repeats */
+} Pad;
+
+/*
+ * Reads the controller into `pad`. Buttons in menu->suppress_buttons (used
+ * by something already) count as up until they are let go. A held
+ * direction repeats after 250 ms, then every 50 ms, by the clock, so the
+ * speed does not change with how long drawing takes. Returns -1 if the
+ * controller could not be read.
+ */
+static int read_pad(Menu *menu, Pad *pad)
+{
+    ControlPadEventData event;
+    if (GetControlPad(1, 0, &event) < 0)
+        return -1;
+    pad->buttons = event.cped_ButtonBits;
+    menu->suppress_buttons &= pad->buttons;
+    pad->buttons &= ~menu->suppress_buttons;
+    /* Directions pressed during a canceled media read count as presses. */
+    pad->pressed =
+        (pad->buttons & ~pad->previous) | (menu->cancel_directions & ~menu->suppress_buttons);
+    menu->cancel_directions = 0;
+    pad->released = pad->previous & ~pad->buttons;
+    pad->repeated = 0;
+    if (pad->buttons & DIRECTIONS) {
+        unsigned long now = now_ms(menu);
+        if (pad->pressed & DIRECTIONS)
+            pad->repeat_at = now + 250UL;
+        else if (now >= pad->repeat_at) {
+            pad->repeated = pad->buttons & DIRECTIONS;
+            pad->pressed |= pad->repeated;
+            pad->repeat_at = now + 50UL;
+        }
+    }
+    pad->previous = pad->buttons;
+    return 0;
+}
+
+/* Draws the screen and waits for the next video frame: the end of a pass
+ * of the main loop. */
+static void next_frame(Menu *menu)
+{
+    draw(menu);
+    WaitVBL(menu->vbl, 1);
+}
+
+/*
+ * Holding P (Start) shows help for the current screen; a tap does P's usual
+ * job. While help shows, B or P closes it. Returns 1 if this pass is used
+ * up (help is showing or just opened); otherwise may change pad->pressed:
+ * P is held back while it may yet become a hold, and passed on after a tap.
+ */
+static int help_input(Menu *menu, Pad *pad)
+{
+    int action;
+    if (menu->help_hold.active) {
+        if (pad->pressed & (ControlB | ControlStart)) {
+            menu->help_hold.active = menu->help_hold.pending = 0;
+            menu->suppress_buttons |= pad->buttons;
+            menu->clear_frames = 2;
+            menu->preview_attempted = 0;
+            menu->selection_since = now_ms(menu);
+        }
+        return 1;
+    }
+    action = menu_help_poll(&menu->help_hold, now_ms(menu), !!(pad->buttons & ControlStart),
+                            !!(pad->pressed & ControlStart), !!(pad->released & ControlStart),
+                            !!(pad->buttons & ~ControlStart));
+    if (menu->help_hold.pending || action == MENU_HELP_OPEN)
+        pad->pressed &= ~ControlStart;
+    if (action == MENU_HELP_TAP)
+        pad->pressed |= ControlStart;
+    if (action == MENU_HELP_OPEN) {
+        stop_preview(menu);
+        menu->browser_frames[0].valid = menu->browser_frames[1].valid = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* In the full-screen view, any button leaves it: video fades out first
+ * (fade_step finishes the job), a cover closes at once. */
+static void full_view_input(Menu *menu, Pad *pad)
+{
+    if (!pad->pressed)
+        return;
+    if (menu->full_view == 2 && FADES) {
+        if (!menu->fade) {
+            menu->fade = 1;
+            menu->fade_since = now_ms(menu);
+        }
+    } else
+        close_full_cover(menu);
+    menu->suppress_buttons |= pad->buttons;
+}
+
+/* Moves the selection in the list (or the queue review) with the pad, L
+ * and R: Up/Down by one (wrapping), Left/Right and L/R by a page. */
+static void move_selection(Menu *menu, u32 pressed, size_t *selection, size_t total)
+{
+    if (pressed & ControlUp)
+        *selection = *selection ? *selection - 1 : total - 1;
+    else if (pressed & ControlDown)
+        *selection = (*selection + 1) % total;
+    else if (pressed & (ControlRight | ControlRightShift)) {
+        *selection += menu_rows(menu);
+        if (*selection >= total)
+            *selection = total - 1;
+    } else if (pressed & (ControlLeft | ControlLeftShift))
+        *selection = *selection >= menu_rows(menu) ? *selection - menu_rows(menu) : 0;
+}
+
+/*
+ * The queue review's buttons: X removes the selected disc (C+X clears the
+ * queue), C starts or ends moving it, A or P plays the queue (or ends
+ * moving), and B ends moving or closes the review.
+ */
+static void queue_review_input(Menu *menu, u32 pressed, u32 buttons)
+{
+    if (pressed & ControlB) {
+        if (menu->queue_move)
+            menu->queue_move = 0;
+        else
+            menu->review = 0;
+        menu->message = NULL;
+    } else if ((pressed & ControlX) && (buttons & ControlC)) {
+        if (ode_playlist_clear(&menu->ode, &menu->playlist) < 0)
+            menu->message = menu->ode.error;
+        else {
+            menu->queue_selected = 0;
+            menu->queue_move = 0;
+            notify(menu, "Queue cleared. B:Back");
+        }
+    } else if (pressed & ControlX) {
+        if (!ode_playlist_remove_local(&menu->playlist, menu->queue_selected)) {
+            if (menu->queue_selected >= menu->playlist.count)
+                menu->queue_selected = menu->playlist.count ? menu->playlist.count - 1 : 0;
+            notify(menu, "Disc removed. A:Play B:Back");
+        } else
+            menu->message = "Queue uncertain. C+X:Clear";
+    } else if (pressed & ControlC) {
+        menu->queue_move = !menu->queue_move;
+        menu->message = menu->queue_move ? "Up/Down:Move C/B:Done" : NULL;
+    } else if (pressed & (ControlA | ControlStart)) {
+        if (menu->queue_move) {
+            menu->queue_move = 0;
+            menu->message = NULL;
+        } else
+            start_queue(menu);
+    }
+}
+
+/*
+ * The browser's buttons, after moving the selection: P reviews the queue,
+ * C queues the selected disc (in the demo, connects to the ODE; with no
+ * ODE, opens the demo), X swaps cover and preview or reloads the folder,
+ * B goes up a folder and A opens or plays the selection.
+ */
+static void browser_input(Menu *menu, u32 pressed, u32 buttons)
+{
+    if ((pressed & ControlStart) && !menu->demo &&
+        (menu->ready || menu->playlist.count || menu->ode.identity[0])) {
+        review_queue(menu);
+    } else if (pressed & ControlC) {
+        if (menu->demo)
+            connect_ode(menu);
+        else if (!menu->ready)
+            show_demo(menu);
+        else
+            queue_selected_disc(menu);
+    } else if ((pressed & ControlX) && !*menu->filter && toggle_preview(menu)) {
+        /* A tap swaps video and cover. Holding X expands either one. */
+    } else if (pressed & ControlX) {
+        /* Reload: clears a filter, or reads the folder (and the media
+         * indexes) again, or retries connecting. */
+        cover_cache_clear(&menu->cover_cache);
+        menu->art_indexes_valid = 0;
+        if (*menu->filter) {
+            menu->filter[0] = 0;
+            menu->selected = 0;
+            menu->message = NULL;
+            selection_changed(menu);
+        } else if (menu->demo)
+            show_demo(menu);
+        else if (menu->ode.identity[0])
+            load_directory(menu, menu->selected);
+        else
+            connect_ode(menu);
+    } else if (pressed & ControlB)
+        go_back(menu);
+    else if (pressed & ControlA) {
+        /* Hold C + A: launch only this disc, not the rest of its set. */
+        menu->single_disc = (buttons & ControlC) != 0;
+        activate(menu);
+    }
+}
+
+/*
+ * One pass of the main loop: reads the controller, hands the buttons to
+ * whatever has the focus (help, the full-screen view, Tools, the alphabet
+ * strip, the queue review or the browser), draws, and when the browser is
+ * idle loads the selected game's cover and preview. Each pass ends with
+ * one wait for the next video frame.
+ */
+static void main_loop_pass(Menu *menu, Pad *pad)
+{
+    size_t total, *selection, old_selection;
+    int old_review;
+    u32 pressed;
+    if (menu->launching) {
+        /* The ODE is rebooting the console into a game. */
+        WaitVBL(menu->vbl, 1);
+        return;
+    }
+    fade_step(menu);
+    if (read_pad(menu, pad) < 0) {
+        menu->message = "Controller read failed";
+        next_frame(menu);
+        return;
+    }
+    if (!menu->full_view && help_input(menu, pad)) {
+        next_frame(menu);
+        return;
+    }
+    if (menu->full_view) {
+        full_view_input(menu, pad);
+        next_frame(menu);
+        return;
+    }
+    pressed = media_x_input(menu, pad->buttons, pad->pressed, pad->released);
+    if (menu->full_view) {
+        next_frame(menu);
+        return;
+    }
+
+    /* L+R opens and closes Tools. */
+    observe_tools_chord(menu, pad->buttons);
+    pressed = shoulder_input(menu, pad->buttons, pressed, pad->released);
+    if (pressed & ~ControlX)
+        stop_preview(menu);
+    if (dispatch_tools_request(menu))
+        pressed = 0;
+    if (menu->tools) {
+        tools_input(menu, pressed);
+        next_frame(menu);
+        return;
+    }
+
+    /* After a transport failure, only B (to try returning to the library)
+     * does anything. */
+    if (menu->ode.navigation_failed) {
+        if ((pressed & ControlB) && can_recover_library(menu))
+            recover_library(menu);
+        else
+            menu->message = can_recover_library(menu) ? "Folder I/O failed. B:Return to library."
+                                                      : "Connection lost. Power cycle console.";
+        next_frame(menu);
+        return;
+    }
+
+    /* A held Up/Down stops at the ends of the list: only a fresh press
+     * moves on to the alphabet strip (or wraps the queue). */
+    if (pad->repeated & (ControlUp | ControlDown)) {
+        size_t rows = row_count(menu), at = menu->review ? menu->queue_selected : menu->selected;
+        if (menu->alphabet_active || ((pad->repeated & ControlUp) && !at))
+            pressed &= ~(pad->repeated & ControlUp);
+        if (menu->alphabet_active || ((pad->repeated & ControlDown) && at + 1 >= rows))
+            pressed &= ~(pad->repeated & ControlDown);
+    }
+    if (alphabet_input(menu, pressed)) {
+        next_frame(menu);
+        return;
+    }
+    pressed = browser_shortcuts(menu, pad->buttons, pressed, pad->released);
+    if (menu->tools) {
+        next_frame(menu);
+        return;
+    }
+
+    /* The list, or the queue review. */
+    total = row_count(menu);
+    selection = menu->review ? &menu->queue_selected : &menu->selected;
+    old_selection = *selection;
+    old_review = menu->review;
+    if (menu->review && menu->queue_move && total && (pressed & (ControlUp | ControlDown))) {
+        /* Moving a queued disc up or down the queue. */
+        size_t to = menu->queue_selected;
+        if ((pressed & ControlUp) && to)
+            --to;
+        if ((pressed & ControlDown) && to + 1 < total)
+            ++to;
+        if (!ode_playlist_move_local(&menu->playlist, menu->queue_selected, to))
+            menu->queue_selected = to;
+        pressed &= ~(ControlUp | ControlDown);
+    }
+    if ((menu->ready || menu->review) && total)
+        move_selection(menu, pressed, selection, total);
+    if (menu->review)
+        queue_review_input(menu, pressed, pad->buttons);
+    else
+        browser_input(menu, pressed, pad->buttons);
+    if (menu->launching) {
+        WaitVBL(menu->vbl, 1);
+        return;
+    }
+    if (old_review != menu->review ||
+        old_selection != (menu->review ? menu->queue_selected : menu->selected))
+        selection_changed(menu);
+
+    /* Show the new selection before allocating artwork or touching USB. */
+    draw(menu);
+    remember_position(menu, 0);
+    /* A shoulder may be the first half of L+R. Do not start blocking
+     * media I/O while it is held and the other shoulder is on its way, nor
+     * while a held direction is still moving through the list. */
+    if (!(pad->buttons & (ControlLeftShift | ControlRightShift | DIRECTIONS)) &&
+        !menu->tools_requested && !menu->help_hold.pending) {
+        update_cover(menu);
+        update_preview(menu);
+    }
+    WaitVBL(menu->vbl, 1);
+}
+
+/* Starts the menu: settings at their defaults until the drive's are read,
+ * the console set up, the splash shown while connecting to the ODE (or the
+ * demo, in the demo build), then the main loop, which never ends: the menu
+ * stops when the console reboots into a game. */
 int main(int argc, char **argv)
 {
     static Menu menu;
-    u32 previous = 0;
-    unsigned long repeat_at = 0;
+    Pad pad;
     (void)argc;
     (void)argv;
+    memset(&pad, 0, sizeof(pad));
     menu_categories_reset();
     menu_config_defaults(&menu.config);
     menu.settings_usb_covers = menu.config.usb_covers;
@@ -8944,321 +9367,24 @@ int main(int argc, char **argv)
     menu.settings_recent_games = menu.config.recent_games;
     menu.settings_video_previews = menu.config.video_previews;
     menu.saved_config = menu.config;
-    menu.config_result = 3;
+    menu.config_result = 3; /* not attempted */
     menu.bus.device = menu.bus.request = menu.bus.timer = -1;
     menu.ode.transfer = menu_transfer;
     menu.ode.context = &menu.bus;
     menu.ode.progress = progress;
     menu.ode.progress_context = &menu;
-    if (InitControlPad(1) < 0)
+    if (open_console(&menu) < 0)
         return 1;
-    if (CreateBasicDisplay(&menu.screen, DI_TYPE_DEFAULT, 2) < 0) {
-        KillControlPad();
-        return 1;
-    }
-    {
-        /* The display hardware blends each pixel with its neighbors by default,
-         * which softens text and edges; the menu is drawn for crisp pixels. */
-        int screen;
-        for (screen = 0; screen < 2; ++screen) {
-            DisableHAVG(menu.screen.sc_Screens[screen]);
-            DisableVAVG(menu.screen.sc_Screens[screen]);
-        }
-    }
-    menu.vbl = CreateVBLIOReq();
-    if (menu.vbl < 0) {
-        DeleteBasicDisplay(&menu.screen);
-        KillControlPad();
-        return 1;
-    }
-    menu.clock = GetTimerIOReq();
-    if (menu.clock < 0) {
-        DeleteIOReq(menu.vbl);
-        DeleteBasicDisplay(&menu.screen);
-        KillControlPad();
-        return 1;
-    }
     menu.boot_at = now_ms(&menu);
-    /* Copies between the screen buffers for full-screen streamed video; without
-     * one, each such frame is drawn whole. */
+    /* Copies between the screen buffers for full-screen streamed video;
+     * without one, each such frame is drawn whole. */
     menu.sport = GetVRAMIOReq();
-    {
-        Font *font = GetCurrentFont();
-        if (font && font->font_CCB) {
-            menu.font_ccb = *font->font_CCB;
-            menu.have_font = 1;
-        }
-    }
-    menu.covers_enabled = menu_cover_count != 0;
-#ifndef MENU_DEMO
-    menu.splash = LoadCel("$boot/startup.cel", MEMTYPE_CEL);
-    /* Black pixels in the splash are transparent: the live static shows there. */
-    if (menu.splash) {
-        menu.splash->ccb_Flags |= CCB_LAST;
-        menu.splash->ccb_Flags &= ~CCB_BGND;
-    }
-    menu.booting = 1;
-    draw(&menu);
-    boot_step(&menu, BOOT_SPLASH);
-#endif
-    menu.logo = LoadCel("$boot/logo.cel", MEMTYPE_CEL);
-    init_channel_gecko(&menu);
-    if (menu.logo) {
-        menu.logo->ccb_XPos = 16 << 16;
-        menu.logo->ccb_YPos = 8 << 16;
-        menu.logo->ccb_Flags |= CCB_LAST;
-    }
-    boot_step(&menu, BOOT_ART);
+    load_menu_art(&menu);
 #ifdef MENU_DEMO
     show_demo(&menu);
 #else
     connect_ode(&menu);
 #endif
-    for (;;) {
-        ControlPadEventData pad;
-        u32 buttons;
-        u32 pressed;
-        u32 released;
-        u32 repeated = 0;
-        size_t total;
-        size_t *selection;
-        size_t old_selection;
-        int old_review;
-        if (menu.launching) {
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        fade_step(&menu);
-        if (GetControlPad(1, 0, &pad) < 0) {
-            menu.message = "Controller read failed";
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        buttons = pad.cped_ButtonBits;
-        menu.suppress_buttons &= buttons;
-        buttons &= ~menu.suppress_buttons;
-        pressed = (buttons & ~previous) | (menu.cancel_directions & ~menu.suppress_buttons);
-        menu.cancel_directions = 0;
-        released = previous & ~buttons;
-        /* Time-based repeat stays consistent as rendering work changes. */
-        if (buttons & DIRECTIONS) {
-            unsigned long now = now_ms(&menu);
-            if (pressed & DIRECTIONS)
-                repeat_at = now + 250UL;
-            else if (now >= repeat_at) {
-                repeated = buttons & DIRECTIONS;
-                pressed |= repeated;
-                repeat_at = now + 50UL;
-            }
-        }
-        previous = buttons;
-        if (!menu.full_view) {
-            int help_action;
-            if (menu.help_hold.active) {
-                if (pressed & (ControlB | ControlStart)) {
-                    menu.help_hold.active = menu.help_hold.pending = 0;
-                    menu.suppress_buttons |= buttons;
-                    menu.clear_frames = 2;
-                    menu.preview_attempted = 0;
-                    menu.selection_since = now_ms(&menu);
-                }
-                draw(&menu);
-                WaitVBL(menu.vbl, 1);
-                continue;
-            }
-            help_action = menu_help_poll(&menu.help_hold, now_ms(&menu), !!(buttons & ControlStart),
-                                         !!(pressed & ControlStart), !!(released & ControlStart),
-                                         !!(buttons & ~ControlStart));
-            if (menu.help_hold.pending || help_action == MENU_HELP_OPEN)
-                pressed &= ~ControlStart;
-            if (help_action == MENU_HELP_TAP)
-                pressed |= ControlStart;
-            if (help_action == MENU_HELP_OPEN) {
-                stop_preview(&menu);
-                menu.browser_frames[0].valid = menu.browser_frames[1].valid = 0;
-                draw(&menu);
-                WaitVBL(menu.vbl, 1);
-                continue;
-            }
-        }
-        if (menu.full_view) {
-            if (pressed) {
-                if (menu.full_view == 2 && FADES) {
-                    if (!menu.fade) {
-                        menu.fade = 1;
-                        menu.fade_since = now_ms(&menu);
-                    }
-                } else
-                    close_full_cover(&menu);
-                menu.suppress_buttons |= buttons;
-            }
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        pressed = media_x_input(&menu, buttons, pressed, released);
-        if (menu.full_view) {
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        observe_tools_chord(&menu, buttons);
-        pressed = shoulder_input(&menu, buttons, pressed, released);
-        if (pressed & ~ControlX) {
-            stop_preview(&menu);
-        }
-        if (dispatch_tools_request(&menu)) {
-            pressed = 0;
-        }
-        if (menu.tools) {
-            tools_input(&menu, pressed);
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        if (menu.ode.navigation_failed) {
-            if ((pressed & ControlB) && can_recover_library(&menu))
-                recover_library(&menu);
-            else
-                menu.message = can_recover_library(&menu)
-                                   ? "Folder I/O failed. B:Return to library."
-                                   : "Connection lost. Power cycle console.";
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        /* A held Up/Down stops at the ends of the list: only a fresh press
-         * moves on to the alphabet strip (or wraps the queue). */
-        if (repeated & (ControlUp | ControlDown)) {
-            size_t rows = row_count(&menu), at = menu.review ? menu.queue_selected : menu.selected;
-            if (menu.alphabet_active || ((repeated & ControlUp) && !at))
-                pressed &= ~(repeated & ControlUp);
-            if (menu.alphabet_active || ((repeated & ControlDown) && at + 1 >= rows))
-                pressed &= ~(repeated & ControlDown);
-        }
-        if (alphabet_input(&menu, pressed)) {
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        pressed = browser_shortcuts(&menu, buttons, pressed, released);
-        if (menu.tools) {
-            draw(&menu);
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        total = row_count(&menu);
-        selection = menu.review ? &menu.queue_selected : &menu.selected;
-        old_selection = *selection;
-        old_review = menu.review;
-        if (menu.review && menu.queue_move && total && (pressed & (ControlUp | ControlDown))) {
-            size_t to = menu.queue_selected;
-            if ((pressed & ControlUp) && to)
-                --to;
-            if ((pressed & ControlDown) && to + 1 < total)
-                ++to;
-            if (!ode_playlist_move_local(&menu.playlist, menu.queue_selected, to))
-                menu.queue_selected = to;
-            pressed &= ~(ControlUp | ControlDown);
-        }
-        if ((menu.ready || menu.review) && total) {
-            if (pressed & ControlUp)
-                *selection = *selection ? *selection - 1 : total - 1;
-            else if (pressed & ControlDown)
-                *selection = (*selection + 1) % total;
-            else if (pressed & (ControlRight | ControlRightShift)) {
-                *selection += menu_rows(&menu);
-                if (*selection >= total)
-                    *selection = total - 1;
-            } else if (pressed & (ControlLeft | ControlLeftShift))
-                *selection = *selection >= menu_rows(&menu) ? *selection - menu_rows(&menu) : 0;
-        }
-        if (menu.review) {
-            if (pressed & ControlB) {
-                if (menu.queue_move) {
-                    menu.queue_move = 0;
-                    menu.message = NULL;
-                } else {
-                    menu.review = 0;
-                    menu.message = NULL;
-                }
-            } else if ((pressed & ControlX) && (buttons & ControlC)) {
-                if (ode_playlist_clear(&menu.ode, &menu.playlist) < 0)
-                    menu.message = menu.ode.error;
-                else {
-                    menu.queue_selected = 0;
-                    menu.queue_move = 0;
-                    notify(&menu, "Queue cleared. B:Back");
-                }
-            } else if (pressed & ControlX) {
-                if (!ode_playlist_remove_local(&menu.playlist, menu.queue_selected)) {
-                    if (menu.queue_selected >= menu.playlist.count)
-                        menu.queue_selected = menu.playlist.count ? menu.playlist.count - 1 : 0;
-                    notify(&menu, "Disc removed. A:Play B:Back");
-                } else
-                    menu.message = "Queue uncertain. C+X:Clear";
-            } else if (pressed & ControlC) {
-                menu.queue_move = !menu.queue_move;
-                menu.message = menu.queue_move ? "Up/Down:Move C/B:Done" : NULL;
-            } else if (pressed & (ControlA | ControlStart)) {
-                if (menu.queue_move) {
-                    menu.queue_move = 0;
-                    menu.message = NULL;
-                } else
-                    start_queue(&menu);
-            }
-        } else if ((pressed & ControlStart) && !menu.demo &&
-                   (menu.ready || menu.playlist.count || menu.ode.identity[0])) {
-            review_queue(&menu);
-        } else if (pressed & ControlC) {
-            if (menu.demo)
-                connect_ode(&menu);
-            else if (!menu.ready)
-                show_demo(&menu);
-            else
-                queue_selected_disc(&menu);
-        } else if ((pressed & ControlX) && !*menu.filter && toggle_preview(&menu)) {
-            /* A tap swaps video and cover. Holding X expands either one. */
-        } else if (pressed & ControlX) {
-            cover_cache_clear(&menu.cover_cache);
-            menu.art_indexes_valid = 0;
-            if (*menu.filter) {
-                menu.filter[0] = 0;
-                menu.selected = 0;
-                menu.message = NULL;
-                selection_changed(&menu);
-            } else if (menu.demo)
-                show_demo(&menu);
-            else if (menu.ode.identity[0])
-                load_directory(&menu, menu.selected);
-            else
-                connect_ode(&menu);
-        } else if (pressed & ControlB)
-            go_back(&menu);
-        else if (pressed & ControlA) {
-            /* Hold C + A: launch only this disc, not the rest of its set. */
-            menu.single_disc = (buttons & ControlC) != 0;
-            activate(&menu);
-        }
-        if (menu.launching) {
-            WaitVBL(menu.vbl, 1);
-            continue;
-        }
-        if (old_review != menu.review ||
-            old_selection != (menu.review ? menu.queue_selected : menu.selected))
-            selection_changed(&menu);
-        /* Show the new selection before allocating artwork or touching USB. */
-        draw(&menu);
-        remember_position(&menu, 0);
-        /* A shoulder may be the first half of L+R. Do not start blocking
-         * media I/O while it is held and the other shoulder is on its way, nor
-         * while a held direction is still moving through the list. */
-        if (!(buttons & (ControlLeftShift | ControlRightShift | DIRECTIONS)) &&
-            !menu.tools_requested && !menu.help_hold.pending) {
-            update_cover(&menu);
-            update_preview(&menu);
-        }
-        WaitVBL(menu.vbl, 1);
-    }
+    for (;;)
+        main_loop_pass(&menu, &pad);
 }
