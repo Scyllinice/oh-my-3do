@@ -574,6 +574,23 @@ static unsigned long now_ms(Menu *menu)
     return (unsigned long)GetMSecTime(menu->clock);
 }
 
+/* format, but appending to the string already in `buffer`. */
+static void append_format(char *buffer, const char *pattern, ...)
+{
+    va_list args;
+    va_start(args, pattern);
+    buffer += strlen(buffer);
+#ifdef OH3DO_SDK
+    {
+        char *portfolio_args = args;
+        vsprintf(buffer, pattern, portfolio_args);
+    }
+#else
+    vsprintf(buffer, pattern, args);
+#endif
+    va_end(args);
+}
+
 /* Records that a startup step finished, for diagnostics. */
 static void boot_step(Menu *menu, int step)
 {
@@ -5149,6 +5166,15 @@ static void load_position(Menu *menu)
     /* A renamed/missing folder simply leaves the boot listing in place. */
     free(location);
 }
+
+/*
+ * Saves the browser's folder and selected entry to last-position.txt, if
+ * they changed since the last save. Unless `force`, waits until the
+ * selection has rested for two seconds with no tool, queue review or
+ * preview showing (a USB write stalls video). Not saved in the device list
+ * or when the settings weren't read; a failed write is reported once and
+ * stops further attempts.
+ */
 static void remember_position(Menu *menu, int force)
 {
     MenuPosition *position;
@@ -5193,12 +5219,17 @@ static void remember_position(Menu *menu, int force)
     free(position);
     free(data);
 }
+/* ==== Launch history and diagnostics ==== */
+
+/* What record_launch writes at the root, through art_at_root. */
 typedef struct RecentLaunch {
     Menu *menu;
     const char *path;
     const char *snapshot;
     int recent;
 } RecentLaunch;
+/* At the root: writes the save snapshot, then puts the launched game at
+ * the top of recent.txt. */
 static int record_recent_at_root(void *context)
 {
     RecentLaunch *op = (RecentLaunch *)context;
@@ -5235,6 +5266,13 @@ done:
     free(data);
     return result;
 }
+/*
+ * Just before a game starts: saves the position, and at the root, the
+ * launched disc's menu path at the top of the recent list (unless it is
+ * already there) and a snapshot of NVRAM (save-snapshot.txt) labeled with
+ * the game's title. The next startup compares NVRAM with the snapshot to
+ * learn which saves the game wrote, and names them after it (learn_saves).
+ */
 static void record_launch(Menu *menu, const char *path)
 {
     ArtRouteStep route[MAX_DEPTH];
@@ -5289,6 +5327,8 @@ static void record_launch(Menu *menu, const char *path)
         menu->message = "History I/O failed. Restart console.";
     }
 }
+/* Opens the Recent screen: reads recent.txt, leaving out games in hidden
+ * categories (and adult games when they are hidden). */
 static void open_recent(Menu *menu)
 {
     char *data = (char *)malloc(FAVORITES_BYTES);
@@ -5316,169 +5356,153 @@ static void open_recent(Menu *menu)
     free(data);
     menu->tool_selected = 0;
 }
+/*
+ * Writes diagnostics.txt at the drive's root: the ODE's identity, the last
+ * command and reply, the settings, and timings and results from startup,
+ * covers, previews and streaming, for bug reports. The values are taken
+ * before the write, which changes some of them.
+ */
 static void export_diagnostics(Menu *menu)
 {
     OdeBus snapshot = menu->bus;
-    char data[4096], line[128];
+    char data[4096];
     unsigned long free_bytes, largest;
     size_t i;
     strcpy(data, "Oh My 3DO diagnostics\n");
-    format(line, "menu=%s\nidentity=%.6s\nrevision=%u.%u.%u\n", MENU_VERSION, menu->ode.identity,
-           menu->ode.revision[0], menu->ode.revision[1], menu->ode.revision[2]);
-    strcat(data, line);
+    append_format(data, "menu=%s\nidentity=%.6s\nrevision=%u.%u.%u\n", MENU_VERSION,
+                  menu->ode.identity, menu->ode.revision[0], menu->ode.revision[1],
+                  menu->ode.revision[2]);
     strcat(data, "identity_reply=");
-    for (i = 0; i < 12; ++i) {
-        format(line, "%02x ", menu->ode.identity_reply[i]);
-        strcat(data, line);
-    }
-    format(line,
-           "\ncommands=%lu\nlast_command=%02x\nreply_length=%lu\nlast_reply=", snapshot.commands,
-           snapshot.last_command, (unsigned long)snapshot.last_length);
-    strcat(data, line);
-    for (i = 0; i < snapshot.last_length && i < 32; ++i) {
-        format(line, "%02x ", snapshot.last_reply[i]);
-        strcat(data, line);
-    }
-    format(
-        line,
+    for (i = 0; i < 12; ++i)
+        append_format(data, "%02x ", menu->ode.identity_reply[i]);
+    append_format(data, "\ncommands=%lu\nlast_command=%02x\nreply_length=%lu\nlast_reply=",
+                  snapshot.commands, snapshot.last_command, (unsigned long)snapshot.last_length);
+    for (i = 0; i < snapshot.last_length && i < 32; ++i)
+        append_format(data, "%02x ", snapshot.last_reply[i]);
+    append_format(
+        data,
         "\nlast_error=%08lx\nlast_fault_command=%02x\nlast_fault_status=%02x\nfault_error=%08lx\n",
         (unsigned long)snapshot.last_error & 0xffffffffUL, snapshot.failed_command,
         snapshot.failed_status, (unsigned long)snapshot.failure_error & 0xffffffffUL);
-    strcat(data, line);
-    format(line, "timeout=%d\nnavigation_blocked=%d\nconfig_result=%d\n", snapshot.timed_out,
-           menu->ode.navigation_failed, menu->config_result);
-    strcat(data, line);
-    format(line, "transport_uncertain=%d\nrecovery_result=%d\nrecovery_media_off=%d\n",
-           menu->ode.transport_uncertain, menu->recovery_result, menu->recovery_media_off);
-    strcat(data, line);
-    format(line, "folder_workaround=%d\nusb_covers=%d\nscreen_margin=%d\nlarge_titles=%d\n",
-           folder_workaround(menu), menu->config.usb_covers, menu->config.screen_margin,
-           menu->config.large_titles);
-    strcat(data, line);
-    format(line, "preview_sound=%d\npreview_audio_status=%d\n", menu->config.preview_sound,
-           menu->preview_audio.status);
-    strcat(data, line);
-    format(line, "cover_index_count=%lu\npreview_index_count=%lu\nmetadata_count=%lu\n",
-           (unsigned long)menu->usb_art.count, (unsigned long)menu->usb_previews.count,
-           (unsigned long)menu->metadata.count);
-    strcat(data, line);
+    append_format(data, "timeout=%d\nnavigation_blocked=%d\nconfig_result=%d\n", snapshot.timed_out,
+                  menu->ode.navigation_failed, menu->config_result);
+    append_format(data, "transport_uncertain=%d\nrecovery_result=%d\nrecovery_media_off=%d\n",
+                  menu->ode.transport_uncertain, menu->recovery_result, menu->recovery_media_off);
+    append_format(data, "folder_workaround=%d\nusb_covers=%d\nscreen_margin=%d\nlarge_titles=%d\n",
+                  folder_workaround(menu), menu->config.usb_covers, menu->config.screen_margin,
+                  menu->config.large_titles);
+    append_format(data, "preview_sound=%d\npreview_audio_status=%d\n", menu->config.preview_sound,
+                  menu->preview_audio.status);
+    append_format(data, "cover_index_count=%lu\npreview_index_count=%lu\nmetadata_count=%lu\n",
+                  (unsigned long)menu->usb_art.count, (unsigned long)menu->usb_previews.count,
+                  (unsigned long)menu->metadata.count);
     strcat(data, "last_usb_file=");
     strcat(data, menu->ode.file_path);
     strcat(data, "\n");
-    format(line, "cover_load_ms=%lu\ncover_commands=%lu\ncover_cached=%d\n", menu->cover_load_ms,
-           menu->cover_commands, menu->cover_cached);
-    strcat(data, line);
-    format(line, "remember_position=%d\nrecent_games=%d\nvideo_previews=%d\nunsaved_settings=%d\n",
-           menu->config.remember_position, menu->config.recent_games, menu->config.video_previews,
-           config_dirty(menu));
-    strcat(data, line);
-    format(line, "queue_count=%lu\nqueue_synchronized=%d\nqueue_dirty=%d\n",
-           (unsigned long)menu->playlist.count, menu->playlist.synchronized, menu->playlist.dirty);
-    strcat(data, line);
-    format(line, "usb_write_check=%d\nbackup_result=%d\nrestore_result=%d\nnvram_error=%08lx\n",
-           menu->usb_tested, menu->backup_result, menu->restore_result,
-           (unsigned long)menu->nvram_info.last_error & 0xffffffffUL);
-    strcat(data, line);
-    format(line, "position_result=%d\nrecent_result=%d\nfolder=%.64s\n", menu->position_result,
-           menu->recent_result, menu->breadcrumb);
-    strcat(data, line);
-    format(line, "boot_at_ms=%lu\nboot_draws=%lu\nboot_draw_ms=%lu\n", menu->boot_at,
-           menu->boot_draws, menu->boot_draw_ms);
-    strcat(data, line);
-    for (i = 0; i < 17; ++i)
-        if (menu->boot_kind_count[i]) {
-            format(line, "boot_ode_%s=%lu/%lu\n",
-                   i < 8    ? (const char *)"e0\0e1\0e2\0e3\0e4\0e5\0e6\0e7" + i * 3
-                   : i < 16 ? (const char *)"c0\0c1\0c2\0c3\0c4\0c5\0c6\0c7" + (i - 8) * 3
-                            : "other",
-                   menu->boot_kind_count[i], menu->boot_kind_ms[i]);
-            strcat(data, line);
-        }
-    for (i = 0; i < BOOT_STEPS; ++i) {
-        format(line, "boot_%s_ms=%lu\nboot_%s_commands=%lu\n", boot_step_names[i], menu->boot_ms[i],
-               boot_step_names[i], menu->boot_commands[i]);
-        strcat(data, line);
+    append_format(data, "cover_load_ms=%lu\ncover_commands=%lu\ncover_cached=%d\n",
+                  menu->cover_load_ms, menu->cover_commands, menu->cover_cached);
+    append_format(data,
+                  "remember_position=%d\nrecent_games=%d\nvideo_previews=%d\nunsaved_settings=%d\n",
+                  menu->config.remember_position, menu->config.recent_games,
+                  menu->config.video_previews, config_dirty(menu));
+    append_format(data, "queue_count=%lu\nqueue_synchronized=%d\nqueue_dirty=%d\n",
+                  (unsigned long)menu->playlist.count, menu->playlist.synchronized,
+                  menu->playlist.dirty);
+    append_format(data,
+                  "usb_write_check=%d\nbackup_result=%d\nrestore_result=%d\nnvram_error=%08lx\n",
+                  menu->usb_tested, menu->backup_result, menu->restore_result,
+                  (unsigned long)menu->nvram_info.last_error & 0xffffffffUL);
+    append_format(data, "position_result=%d\nrecent_result=%d\nfolder=%.64s\n",
+                  menu->position_result, menu->recent_result, menu->breadcrumb);
+    append_format(data, "boot_at_ms=%lu\nboot_draws=%lu\nboot_draw_ms=%lu\n", menu->boot_at,
+                  menu->boot_draws, menu->boot_draw_ms);
+    /* Commands sent during startup, by kind (see ode_bus_kind). */
+    for (i = 0; i < 17; ++i) {
+        if (!menu->boot_kind_count[i])
+            continue;
+        if (i < 16)
+            append_format(data, "boot_ode_%s%u=%lu/%lu\n", i < 8 ? "e" : "c", (unsigned int)(i % 8),
+                          menu->boot_kind_count[i], menu->boot_kind_ms[i]);
+        else
+            append_format(data, "boot_ode_other=%lu/%lu\n", menu->boot_kind_count[i],
+                          menu->boot_kind_ms[i]);
     }
-    format(line, "preview_result=%d\npreview_load_ms=%lu\n", menu->preview_result,
-           menu->preview_load_ms);
-    strcat(data, line);
-    format(line,
-           "preview_read_ms=%lu\npreview_check_ms=%lu\npreview_navigation_ms=%lu\npreview_setup_ms="
-           "%lu\n",
-           menu->preview_read_ms, menu->preview_check_ms, menu->preview_navigation_ms,
-           menu->preview_setup_ms);
-    strcat(data, line);
-    format(line, "preview_bytes=%lu\npreview_commands=%lu\npreview_frames=%u\npreview_fps=%u\n",
-           menu->preview_bytes, menu->preview_commands, menu->preview_frames, menu->preview_fps);
-    strcat(data, line);
-    format(line, "preview_source_frames=%lu\npreview_chunks=%u\npreview_vram_bytes=%lu\n",
-           menu->preview_source_frames, menu->preview_chunks, menu->preview_vram_bytes);
-    strcat(data, line);
-    format(line,
-           "preview_decodes=%lu\npreview_decode_ms=%lu\npreview_decode_max_ms=%lu\npreview_skipped_"
-           "frames=%lu\n",
-           menu->preview_decodes, menu->preview_decode_ms, menu->preview_decode_max_ms,
-           menu->preview_skipped);
-    strcat(data, line);
-    format(line, "preview_full_view_decodes=%lu\npreview_full_view_skipped=%lu\n",
-           menu->preview_full_view_decodes, menu->preview_full_view_skipped);
-    strcat(data, line);
-    format(line, "preview_video_draws=%lu\npreview_video_ms=%lu\n", menu->preview_video_draws,
-           menu->preview_video_ms);
-    strcat(data, line);
-    format(line,
-           "preview_light_draws=%lu\npreview_full_draws=%lu\npreview_draw_ms=%lu\npreview_pass_max_"
-           "ms=%lu\n",
-           menu->preview_light_draws, menu->preview_full_draws, menu->preview_draw_ms,
-           menu->preview_pass_max_ms);
-    strcat(data, line);
-    format(line, "preview_tuning_draws=%lu\n", menu->tuning_draws);
-    strcat(data, line);
-    format(line,
-           "stream_chunks=%lu\nstream_read_ms=%lu\nstream_read_max_ms=%lu\nstream_stalls=%"
-           "lu\nstream_stall_ms=%lu\n",
-           menu->stream.chunks_read, menu->stream.read_ms, menu->stream.read_max_ms,
-           menu->stream.stalls, menu->stream.stall_ms);
-    strcat(data, line);
-    format(line, "stream_slots=%u\nstream_error=%d\nstream_reader_error=%08lx\n",
-           menu->stream.slots, menu->stream.error,
-           (unsigned long)menu->stream.reader_error_code & 0xffffffffUL);
-    strcat(data, line);
-    format(line,
-           "stream_decode_ms=%lu\nstream_decode_frames=%lu\nstream_idle_ms=%lu\nstream_idle_frames="
-           "%lu\n",
-           menu->stream.decode_ms, menu->stream.decode_frames, menu->stream.idle_ms,
-           menu->stream.idle_frames);
-    strcat(data, line);
-    format(line, "stream_full_ms=%lu\nstream_full_frames=%lu\n", menu->stream.full_ms,
-           menu->stream.full_frames);
-    strcat(data, line);
-    format(line, "stream_loop_holds=%lu\nstream_loop_hold_ms=%lu\nstream_spare_blocks=%lu\n",
-           menu->stream.loop_holds, menu->stream.loop_hold_ms, menu->stream.spare_blocks);
-    strcat(data, line);
-    for (i = 0; i < 4 && i < menu->stream.stalls; ++i) {
-        format(line, "stream_stall%d=%lu %lu %08lx %lu\n", (int)i, menu->stream.stall_log[i][0],
-               menu->stream.stall_log[i][1], menu->stream.stall_log[i][2],
-               menu->stream.stall_log[i][3]);
-        strcat(data, line);
-    }
-    format(line, "preview_free_bytes=%lu\npreview_largest_bytes=%lu\n", menu->preview_free_bytes,
-           menu->preview_largest_bytes);
-    strcat(data, line);
-    format(line, "preview_vram_free_bytes=%lu\npreview_vram_largest_bytes=%lu\n",
-           menu->preview_vram_free_bytes, menu->preview_vram_largest_bytes);
-    strcat(data, line);
+    for (i = 0; i < BOOT_STEPS; ++i)
+        append_format(data, "boot_%s_ms=%lu\nboot_%s_commands=%lu\n", boot_step_names[i],
+                      menu->boot_ms[i], boot_step_names[i], menu->boot_commands[i]);
+    append_format(data, "preview_result=%d\npreview_load_ms=%lu\n", menu->preview_result,
+                  menu->preview_load_ms);
+    append_format(data,
+                  "preview_read_ms=%lu\n"
+                  "preview_check_ms=%lu\n"
+                  "preview_navigation_ms=%lu\n"
+                  "preview_setup_ms=%lu\n",
+                  menu->preview_read_ms, menu->preview_check_ms, menu->preview_navigation_ms,
+                  menu->preview_setup_ms);
+    append_format(
+        data, "preview_bytes=%lu\npreview_commands=%lu\npreview_frames=%u\npreview_fps=%u\n",
+        menu->preview_bytes, menu->preview_commands, menu->preview_frames, menu->preview_fps);
+    append_format(data, "preview_source_frames=%lu\npreview_chunks=%u\npreview_vram_bytes=%lu\n",
+                  menu->preview_source_frames, menu->preview_chunks, menu->preview_vram_bytes);
+    append_format(data,
+                  "preview_decodes=%lu\n"
+                  "preview_decode_ms=%lu\n"
+                  "preview_decode_max_ms=%lu\n"
+                  "preview_skipped_frames=%lu\n",
+                  menu->preview_decodes, menu->preview_decode_ms, menu->preview_decode_max_ms,
+                  menu->preview_skipped);
+    append_format(data, "preview_full_view_decodes=%lu\npreview_full_view_skipped=%lu\n",
+                  menu->preview_full_view_decodes, menu->preview_full_view_skipped);
+    append_format(data, "preview_video_draws=%lu\npreview_video_ms=%lu\n",
+                  menu->preview_video_draws, menu->preview_video_ms);
+    append_format(data,
+                  "preview_light_draws=%lu\n"
+                  "preview_full_draws=%lu\n"
+                  "preview_draw_ms=%lu\n"
+                  "preview_pass_max_ms=%lu\n",
+                  menu->preview_light_draws, menu->preview_full_draws, menu->preview_draw_ms,
+                  menu->preview_pass_max_ms);
+    append_format(data, "preview_tuning_draws=%lu\n", menu->tuning_draws);
+    append_format(data,
+                  "stream_chunks=%lu\n"
+                  "stream_read_ms=%lu\n"
+                  "stream_read_max_ms=%lu\n"
+                  "stream_stalls=%lu\n"
+                  "stream_stall_ms=%lu\n",
+                  menu->stream.chunks_read, menu->stream.read_ms, menu->stream.read_max_ms,
+                  menu->stream.stalls, menu->stream.stall_ms);
+    append_format(data, "stream_slots=%u\nstream_error=%d\nstream_reader_error=%08lx\n",
+                  menu->stream.slots, menu->stream.error,
+                  (unsigned long)menu->stream.reader_error_code & 0xffffffffUL);
+    append_format(data,
+                  "stream_decode_ms=%lu\n"
+                  "stream_decode_frames=%lu\n"
+                  "stream_idle_ms=%lu\n"
+                  "stream_idle_frames=%lu\n",
+                  menu->stream.decode_ms, menu->stream.decode_frames, menu->stream.idle_ms,
+                  menu->stream.idle_frames);
+    append_format(data, "stream_full_ms=%lu\nstream_full_frames=%lu\n", menu->stream.full_ms,
+                  menu->stream.full_frames);
+    append_format(data, "stream_loop_holds=%lu\nstream_loop_hold_ms=%lu\nstream_spare_blocks=%lu\n",
+                  menu->stream.loop_holds, menu->stream.loop_hold_ms, menu->stream.spare_blocks);
+    for (i = 0; i < 4 && i < menu->stream.stalls; ++i)
+        append_format(data, "stream_stall%d=%lu %lu %08lx %lu\n", (int)i,
+                      menu->stream.stall_log[i][0], menu->stream.stall_log[i][1],
+                      menu->stream.stall_log[i][2], menu->stream.stall_log[i][3]);
+    append_format(data, "preview_free_bytes=%lu\npreview_largest_bytes=%lu\n",
+                  menu->preview_free_bytes, menu->preview_largest_bytes);
+    append_format(data, "preview_vram_free_bytes=%lu\npreview_vram_largest_bytes=%lu\n",
+                  menu->preview_vram_free_bytes, menu->preview_vram_largest_bytes);
     memory_available(0, &free_bytes, &largest);
-    format(line, "export_dram_free_bytes=%lu\nexport_dram_largest_bytes=%lu\n", free_bytes,
-           largest);
-    strcat(data, line);
+    append_format(data, "export_dram_free_bytes=%lu\nexport_dram_largest_bytes=%lu\n", free_bytes,
+                  largest);
     memory_available(1, &free_bytes, &largest);
-    format(line, "export_vram_free_bytes=%lu\nexport_vram_largest_bytes=%lu\n", free_bytes,
-           largest);
-    strcat(data, line);
-    strcat(data, "Identity/revision may be hard-coded; exact firmware build is unknown.\nSnapshot "
-                 "taken before export file I/O.\n");
-    /* Fixed report extent replaces previous reports without firmware truncate. */
+    append_format(data, "export_vram_free_bytes=%lu\nexport_vram_largest_bytes=%lu\n", free_bytes,
+                  largest);
+    strcat(data, "Identity/revision may be hard-coded; exact firmware build is unknown.\n"
+                 "Snapshot taken before export file I/O.\n");
+    /* Padded to a fixed size with blank lines: the ODE cannot shorten a
+     * file, so a shorter report would leave the end of the last one. */
     i = strlen(data);
     memset(data + i, '\n', sizeof(data) - 1 - i);
     data[sizeof(data) - 1] = 0;
