@@ -6266,13 +6266,19 @@ static void slot_select(Menu *menu, unsigned int slot)
         menu->tool_selected = slot % 8;
     }
 }
+/* The labels file for a page of slots (8 a page). */
+static void labels_path(char *path, unsigned long page)
+{
+    if (!page)
+        strcpy(path, "saves/slot-labels.txt");
+    else
+        format(path, "saves/slot-labels-%lu.txt", page);
+}
+
 /* The labels file for the current slot page. */
 static void slot_labels_path(const Menu *menu, char *path)
 {
-    if (!menu->slot_page)
-        strcpy(path, "saves/slot-labels.txt");
-    else
-        format(path, "saves/slot-labels-%lu.txt", menu->slot_page);
+    labels_path(path, menu->slot_page);
 }
 /* Searches the slot catalog for menu->slot_query, showing the matching
  * slots, or back to the search options if the catalog can't be read. */
@@ -6433,8 +6439,14 @@ static void open_game_details(Menu *menu)
         }
     }
 }
-/* Work only in an owned copy; saving rebuilds archive checksums and uses the
- * normal USB slot review/confirmation. Restoring NVRAM remains separate. */
+/* ==== The hex editor and cheats ==== */
+
+/*
+ * Opens the hex editor on the selected save of the open backup (C in a
+ * backup). Edits are made to a copy; the backup as loaded is kept in
+ * hex_original. Saving goes through the usual choice of slot and
+ * confirmation, and never touches NVRAM: restoring is separate.
+ */
 static int open_hex(Menu *menu)
 {
     save_archive_free(&menu->hex_archive);
@@ -6452,6 +6464,7 @@ static int open_hex(Menu *menu)
     menu->tool_message = NULL;
     return 0;
 }
+/* Leaves the hex editor, dropping the copy, back on the backup's list. */
 static void close_hex(Menu *menu)
 {
     save_archive_free(&menu->backup);
@@ -6464,6 +6477,8 @@ static void close_hex(Menu *menu)
     menu->tools = TOOL_ARCHIVE;
     menu->tool_selected = menu->save_selected;
 }
+/* The hex editor: the save's name, then the 32 bytes (4 rows of 8) on the
+ * cursor's page, with the byte being edited showing its new value. */
 static void draw_hex(Menu *menu)
 {
     const SaveEntry *entry = &menu->hex_archive.entries[menu->save_selected];
@@ -6495,6 +6510,13 @@ static void draw_hex(Menu *menu)
               TEXT);
     tool_line(menu, 9, "Raw edits need game checksums.", AMBER);
 }
+/*
+ * The hex editor's buttons. Moving: the pad moves the cursor by a byte or a
+ * row, L and R by a page; A edits the byte under it. Editing: Up/Down
+ * change the selected digit, Left/Right switch digits, A keeps the value
+ * and B drops it. C saves the edited save to a slot; B leaves (asking
+ * first if there are unsaved edits).
+ */
 static void hex_input(Menu *menu, u32 pressed)
 {
     SaveEntry *entry = &menu->hex_archive.entries[menu->save_selected];
@@ -6573,6 +6595,11 @@ static void hex_input(Menu *menu, u32 pressed)
         menu->hex_value = entry->data[menu->hex_offset];
     }
 }
+/*
+ * Known values (X in the hex editor), for saves of games in the cheat
+ * database: presets that set several values at once, then each known
+ * value, six rows a page. Below: where the selected one lives in the save.
+ */
 static void draw_cheats(Menu *menu)
 {
     const SaveEntry *entry = &menu->hex_archive.entries[menu->save_selected];
@@ -6620,6 +6647,9 @@ static void draw_cheats(Menu *menu)
                                : "Other save bits stay unchanged.",
               ACCENT);
 }
+/* Known values' buttons: Up/Down choose, A applies a preset, Left/Right
+ * step a value within its range. B and C work as in the hex editor; X
+ * returns to it. */
 static void cheats_input(Menu *menu, u32 pressed)
 {
     SaveEntry *entry = &menu->hex_archive.entries[menu->save_selected];
@@ -7542,12 +7572,17 @@ static void draw_tools(Menu *menu)
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
+/* ==== Saves on the drive ==== */
+
+/* A save operation at the drive's root, through art_at_root. */
 typedef struct SaveRootOperation {
     Menu *menu;
     int action; /* SAVE_LOAD, SAVE_STORE, ... */
     const char *path;
     SaveArchive *archive;
 } SaveRootOperation;
+
+/* Shows how much a save operation has moved so far. */
 static void save_progress(void *context, size_t bytes)
 {
     Menu *menu = (Menu *)context;
@@ -7557,93 +7592,130 @@ static void save_progress(void *context, size_t bytes)
     menu->tool_message = menu->status;
     draw(menu);
 }
+
+/*
+ * SAVE_READ_LABELS and SAVE_WRITE_LABELS: reads the current slot page's
+ * labels into the menu, or writes the edited labels, if the file still
+ * holds what it did when editing began. A written label also goes into
+ * the slot catalog.
+ */
+static int slot_labels_at_root(SaveRootOperation *op)
+{
+    Menu *menu = op->menu;
+    Ode *ode = &menu->ode;
+    char text[SAVE_SLOT_LABEL_FILE_BYTES], path[48];
+    size_t length;
+    SaveSlotLabels current;
+    int result;
+    slot_labels_path(menu, path);
+    result = usb_file_text(ode, ode_bus_read_buffer, path, text, sizeof(text), &length);
+    if (!result)
+        result = save_slot_labels_parse(&current, text, length);
+    if (result)
+        return result;
+    if (op->action == SAVE_READ_LABELS) {
+        menu->slot_labels = current;
+        menu->slot_labels_valid = 1;
+        menu->slot_labels_page = menu->slot_page;
+        return 0;
+    }
+    if (memcmp(&current, &menu->slot_labels_before, sizeof(current)) ||
+        save_slot_labels_format(&menu->slot_labels, text, sizeof(text)) < 0)
+        return -1;
+    result = usb_file_text_write(ode, ode_bus_read_buffer, path, text);
+    if (!result &&
+        save_catalog_relabel(ode, ode_bus_read_buffer, menu->slot_name_slot, menu->slot_label_edit))
+        menu->slot_catalog_stale = 1;
+    return result;
+}
+
+/* After a slot is written: records its saves (and its label) in the slot
+ * catalog, which slot searches use. If that fails, the catalog is marked
+ * stale, for the desktop app to rebuild. */
+static void update_slot_catalog(SaveRootOperation *op)
+{
+    Ode *ode = &op->menu->ode;
+    unsigned int slot;
+    char path[48], text[SAVE_SLOT_LABEL_FILE_BYTES];
+    size_t length;
+    SaveSlotLabels labels;
+    const char *label = "";
+    if (save_catalog_slot_from_path(op->path, &slot) < 0) {
+        op->menu->slot_catalog_stale = 1;
+        return;
+    }
+    if (slot < SAVE_SLOT_LIMIT) {
+        labels_path(path, (unsigned long)slot / 8);
+        if (!usb_file_text(ode, ode_bus_read_buffer, path, text, sizeof(text), &length) &&
+            !save_slot_labels_parse(&labels, text, length))
+            label = labels.labels[slot % 8];
+    }
+    if (save_catalog_update(ode, ode_bus_read_buffer, slot, op->archive, label))
+        op->menu->slot_catalog_stale = 1;
+}
+
+/* Does a SaveRootOperation, at the root, showing progress as it goes. */
 static int save_root_callback(void *context)
 {
     SaveRootOperation *op = (SaveRootOperation *)context;
-    Ode *ode = &op->menu->ode;
+    Menu *menu = op->menu;
+    Ode *ode = &menu->ode;
     OdeProgress previous_progress = ode->progress;
     void *previous_context = ode->progress_context;
     int result;
-    op->menu->read_count = 0;
+    menu->read_count = 0;
     if (op->action == SAVE_STORE || op->action == SAVE_STORE_CHECKED ||
         op->action == SAVE_WRITE_LABELS)
-        op->menu->slot_catalog_stale = 0;
+        menu->slot_catalog_stale = 0;
     ode->progress = save_progress;
-    ode->progress_context = op->menu;
-    if (op->action == SAVE_SEARCH_CATALOG)
-        result = save_catalog_search(ode, ode_bus_read_buffer, &op->menu->save_names,
-                                     op->menu->slot_query, !op->menu->backup_mode,
-                                     &op->menu->slot_results);
-    else if (op->action == SAVE_READ_LABELS || op->action == SAVE_WRITE_LABELS) {
-        char text[SAVE_SLOT_LABEL_FILE_BYTES], path[48];
-        size_t length;
-        SaveSlotLabels current;
-        slot_labels_path(op->menu, path);
-        result = usb_file_text(ode, ode_bus_read_buffer, path, text, sizeof(text), &length);
-        if (!result)
-            result = save_slot_labels_parse(&current, text, length);
-        if (!result && op->action == SAVE_READ_LABELS) {
-            op->menu->slot_labels = current;
-            op->menu->slot_labels_valid = 1;
-            op->menu->slot_labels_page = op->menu->slot_page;
-        }
-        if (!result && op->action == SAVE_WRITE_LABELS) {
-            if (memcmp(&current, &op->menu->slot_labels_before, sizeof(current)))
-                result = -1;
-            else if (save_slot_labels_format(&op->menu->slot_labels, text, sizeof(text)) < 0)
-                result = -1;
-            else {
-                result = usb_file_text_write(ode, ode_bus_read_buffer, path, text);
-                if (!result &&
-                    save_catalog_relabel(ode, ode_bus_read_buffer, op->menu->slot_name_slot,
-                                         op->menu->slot_label_edit))
-                    op->menu->slot_catalog_stale = 1;
-            }
-        }
-    } else if (op->action == SAVE_SETTINGS) {
+    ode->progress_context = menu;
+    switch (op->action) {
+    case SAVE_SEARCH_CATALOG:
+        result = save_catalog_search(ode, ode_bus_read_buffer, &menu->save_names, menu->slot_query,
+                                     !menu->backup_mode, &menu->slot_results);
+        break;
+    case SAVE_READ_LABELS:
+    case SAVE_WRITE_LABELS:
+        result = slot_labels_at_root(op);
+        break;
+    case SAVE_SETTINGS: {
         MenuConfig settings;
-        settings_values(op->menu, &settings);
+        settings_values(menu, &settings);
         result = menu_settings_save(ode, ode_bus_read_buffer, &settings);
-    } else if (op->action == SAVE_STORE_CHECKED)
-        result = save_usb_store_checked(ode, ode_bus_read_buffer, op->path, op->archive,
-                                        op->menu->backup_slot_valid ? &op->menu->backup : NULL);
-    else if (op->action == SAVE_LOAD_TARGET)
-        result = save_usb_load_target(ode, ode_bus_read_buffer, op->path, op->archive);
-    else if (op->action == SAVE_TEST)
-        result = save_usb_test(ode, ode_bus_read_buffer);
-    else if (op->action == SAVE_STORE)
-        result = save_usb_store(ode, ode_bus_read_buffer, op->path, op->archive);
-    else
-        result = save_usb_load(ode, ode_bus_read_buffer, op->path, op->archive);
-    if (!result && (op->action == SAVE_STORE || op->action == SAVE_STORE_CHECKED)) {
-        unsigned int slot;
-        char labels_path[48], text[SAVE_SLOT_LABEL_FILE_BYTES];
-        size_t length;
-        SaveSlotLabels labels;
-        const char *label = "";
-        if (save_catalog_slot_from_path(op->path, &slot) < 0) {
-            op->menu->slot_catalog_stale = 1;
-            ode->progress = previous_progress;
-            ode->progress_context = previous_context;
-            return result;
-        }
-        if (slot < SAVE_SLOT_LIMIT) {
-            if (slot / 8)
-                format(labels_path, "saves/slot-labels-%lu.txt", (unsigned long)slot / 8);
-            else
-                strcpy(labels_path, "saves/slot-labels.txt");
-            if (!usb_file_text(ode, ode_bus_read_buffer, labels_path, text, sizeof(text),
-                               &length) &&
-                !save_slot_labels_parse(&labels, text, length))
-                label = labels.labels[slot % 8];
-        }
-        if (save_catalog_update(ode, ode_bus_read_buffer, slot, op->archive, label))
-            op->menu->slot_catalog_stale = 1;
+        break;
     }
+    case SAVE_STORE_CHECKED:
+        result = save_usb_store_checked(ode, ode_bus_read_buffer, op->path, op->archive,
+                                        menu->backup_slot_valid ? &menu->backup : NULL);
+        break;
+    case SAVE_LOAD_TARGET:
+        result = save_usb_load_target(ode, ode_bus_read_buffer, op->path, op->archive);
+        break;
+    case SAVE_TEST:
+        result = save_usb_test(ode, ode_bus_read_buffer);
+        break;
+    case SAVE_STORE:
+        result = save_usb_store(ode, ode_bus_read_buffer, op->path, op->archive);
+        break;
+    default: /* SAVE_LOAD */
+        result = save_usb_load(ode, ode_bus_read_buffer, op->path, op->archive);
+        break;
+    }
+    if (!result && (op->action == SAVE_STORE || op->action == SAVE_STORE_CHECKED))
+        update_slot_catalog(op);
     ode->progress = previous_progress;
     ode->progress_context = previous_context;
     return result;
 }
+
+/*
+ * Does a save operation (SAVE_LOAD, SAVE_STORE, ...) at the drive's root,
+ * going there and back from the current folder. `path` names the slot file
+ * and `archive` holds or receives the saves, for the operations that use
+ * them. Returns the operation's result (0 for success), or -1 if it could
+ * not be done; menu->tool_message says what went wrong. A transport failure
+ * stops the browser.
+ */
 static int save_root_operation(Menu *menu, int action, const char *path, SaveArchive *archive)
 {
     ArtRouteStep route[MAX_DEPTH];
@@ -7688,11 +7760,16 @@ static int save_root_operation(Menu *menu, int action, const char *path, SaveArc
                                     : NULL;
     return result;
 }
+/* Reading the files that name saves, through art_at_root. `disc` holds
+ * save-names.txt (each game's save file names, from the desktop app) and
+ * `learned` saves-learned.txt (names the menu learned itself). */
 typedef struct SaveNamesRead {
     Menu *menu;
     char *disc, *learned;
     size_t disc_length, learned_length;
 } SaveNamesRead;
+/* At the root: loads the cheat database and the current slot page's labels
+ * too, as the Save Manager is opening. Missing files are not an error. */
 static int save_names_at_root(void *context)
 {
     SaveNamesRead *op = (SaveNamesRead *)context;
@@ -7753,8 +7830,13 @@ static void load_save_names(Menu *menu)
     free(op.disc);
     free(op.learned);
 }
-/* After a launch, name the NVRAM files that game created or changed. Runs at
- * startup at the USB root, before any folder is entered. */
+/*
+ * At startup, after a game was played: compares NVRAM with the snapshot
+ * taken at launch (save-snapshot.txt) to name the files that game created
+ * or changed, adds them to saves-learned.txt and clears the snapshot.
+ * Runs at the drive's root, before any folder is entered. Failures only
+ * mean those saves stay unnamed.
+ */
 static void learn_saves(Menu *menu)
 {
     char *snapshot = (char *)malloc(SAVE_SNAPSHOT_BYTES), *disc = (char *)malloc(SAVE_NAMES_BYTES),
@@ -7794,6 +7876,7 @@ done:
     free(disc);
     free(learned);
 }
+/* Reads the saves in NVRAM for the Save Manager. */
 static void scan_nvram(Menu *menu)
 {
     load_save_names(menu);
@@ -7806,12 +7889,21 @@ static void scan_nvram(Menu *menu)
         menu->tool_message = NULL;
     menu->tool_selected = 0;
 }
+/* Checks the drive can be written to and read back, recording the result
+ * for the Diagnostics screen. */
 static int test_save_usb(Menu *menu)
 {
     int result = save_root_operation(menu, SAVE_TEST, NULL, NULL);
     menu->usb_tested = result < 0 ? -1 : 1;
     return result;
 }
+/*
+ * Restores the selected save of the open backup into NVRAM (A, then
+ * confirm). First, all of NVRAM is backed up to a recovery slot (the other
+ * one when restoring from a recovery slot, so it is never overwritten by
+ * itself); then the save is written, and NVRAM is read again to check the
+ * save arrived and nothing else changed.
+ */
 static void restore_selected(Menu *menu)
 {
     SaveArchive current;
