@@ -1,10 +1,29 @@
-//! Optional descriptions are loaded only when the console details view opens.
+//! Game information: each disc's description, genre, publisher, release
+//! date and so on, kept in the library's database (`library::database`).
+//!
+//! Information comes from the downloaded LaunchBox data (`catalog`), matched
+//! to discs by title or chosen by the person, and can be edited by hand.
+//! Hand edits are recorded as "overrides" and are never replaced by
+//! downloaded information. Edits can be exported and imported between
+//! libraries, and are backed up automatically on the PC.
+//!
+//! For the console, each description is written to a small text file
+//! ("OM3DINFO1" format, see `encode`) that the menu reads only when the
+//! person opens a game's details.
+
 use crate::{fsutil as f, library, Job};
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
+/// The longest description written for the console, in bytes.
 pub const MAX: usize = 2048;
+
+// ---- Matching and filling in downloaded information ----
+
+/// The downloaded information for a disc: the entry the person chose, or
+/// else the only entry with the disc's title. None if there is no match or
+/// more than one.
 fn matched_information<'a>(
     record: &Value,
     info: &'a std::collections::HashMap<String, Vec<Value>>,
@@ -23,6 +42,8 @@ fn matched_information<'a>(
     let values = info.get(&crate::disc::title_key(title))?;
     (values.len() == 1).then(|| &values[0])
 }
+/// Copies downloaded information into a disc's record, except fields the
+/// person edited and empty values.
 fn apply_downloaded(record: &mut Value, meta: &Value) -> Result<()> {
     if !record["metadata"].is_object() {
         record["metadata"] = serde_json::json!({});
@@ -46,6 +67,8 @@ fn apply_downloaded(record: &mut Value, meta: &Value) -> Result<()> {
     }
     Ok(())
 }
+/// A disc's description from its metadata: "description", or the older
+/// "overview" field. "" if it has none.
 pub fn description(meta: &Value) -> &str {
     meta["description"]
         .as_str()
@@ -53,6 +76,9 @@ pub fn description(meta: &Value) -> &str {
         .or_else(|| meta["overview"].as_str())
         .unwrap_or("")
 }
+/// A description as the console's font can show it: plain ASCII (curly
+/// quotes and dashes made straight, accents dropped), on one line, cut at a
+/// word to [`MAX`] bytes.
 pub fn console_text(text: &str) -> String {
     let text: String = text
         .nfkd()
@@ -72,6 +98,8 @@ pub fn console_text(text: &str) -> String {
     }
     text
 }
+/// Where a disc's description is kept in the PC library: named by the
+/// CRC-32 of its path (in case-insensitive form).
 pub fn filename(path: &str) -> String {
     format!(
         ".ohmy3do/info/{:08x}.txt",
@@ -104,6 +132,10 @@ pub fn old_drive_file(name: &str, file: &std::path::Path) -> Result<bool> {
     let size = std::fs::metadata(file)?.len();
     Ok(size == 0 || (size <= 16384 && std::fs::read(file)?.starts_with(b"OM3DINFO1\n")))
 }
+/// A description file: "OM3DINFO1", the disc's path, the description (see
+/// `console_text`), and the CRC-32 of the middle two lines in hex, each on
+/// its own line. The path and CRC let the menu reject a file for another
+/// disc or a damaged one.
 pub fn encode(path: &str, description: &str) -> Result<Vec<u8>> {
     ensure!(
         !path.is_empty() && path.len() <= 8192 && !path.contains(['\n', '\r', '\0']),
@@ -116,10 +148,13 @@ pub fn encode(path: &str, description: &str) -> Result<Vec<u8>> {
     )
     .into_bytes())
 }
+/// The description files for every disc that has a description (or an
+/// edited, deliberately blank one), by their path in the library.
 pub fn files(db: &Value) -> Result<BTreeMap<String, Vec<u8>>> {
     files_for(db, None)
 }
-/// Generate only the chosen discs, including descriptions already in the database.
+/// `files` for only the `selected` discs (by case-insensitive path), or all
+/// of them if None.
 pub fn files_for(
     db: &Value,
     selected: Option<&HashSet<String>>,
@@ -142,8 +177,11 @@ pub fn files_for(
     }
     Ok(files)
 }
-/// Optional metadata must not prevent artwork preparation when offline or unavailable.
-/// Existing descriptions and nonempty metadata fields are never replaced here.
+/// Fills in information for discs (the `selected` ones, or all) that have
+/// no description, from the downloaded data, without replacing anything
+/// they already have. Returns how many discs got information. If the
+/// download is unavailable (offline, say), does nothing: preparing covers
+/// and previews goes on without descriptions.
 pub fn fill_missing(
     db: &mut Value,
     prefs: &crate::model::Preferences,
@@ -211,6 +249,9 @@ pub fn fill_missing(
     ));
     Ok(changed)
 }
+/// Applies the latest downloaded information to every disc in the library
+/// at `root` that matches one, keeping hand edits, and rebuilds the indexes.
+/// Returns the undo journal's path.
 pub fn refresh(
     root: &std::path::Path,
     prefs: &crate::model::Preferences,
@@ -245,6 +286,9 @@ pub fn refresh(
     Ok(tx.path)
 }
 
+// ---- Editing by hand ----
+
+/// The fields the information editor can change.
 pub const EDIT_FIELDS: &[&str] = &[
     "description",
     "genre",
@@ -254,17 +298,26 @@ pub const EDIT_FIELDS: &[&str] = &[
     "year",
     "players",
 ];
+/// A disc's information as the editor opened it. Saving checks the library
+/// still holds exactly this, so edits made elsewhere are never overwritten.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct EditRecord {
     pub path: String,
     pub metadata: Value,
+    /// The fields edited by hand, with their values.
     pub overrides: Value,
 }
+
+/// What the editor shows: the discs being edited, and the first one's
+/// values for each of [`EDIT_FIELDS`] as text.
 #[derive(serde::Serialize)]
 pub struct EditView {
     pub records: Vec<EditRecord>,
     pub fields: Value,
 }
+
+/// The current information of the `discs` (by path), failing if any is no
+/// longer in the library.
 fn snapshot(db: &Value, discs: &[String]) -> Result<Vec<EditRecord>> {
     let selected: HashSet<_> = discs.iter().map(|p| f::fold(p)).collect();
     ensure!(!selected.is_empty(), "Choose a game to edit");
@@ -289,6 +342,7 @@ fn snapshot(db: &Value, discs: &[String]) -> Result<Vec<EditRecord>> {
     );
     Ok(records)
 }
+/// Opens the information editor on the `discs` of the library at `root`.
 pub fn edit_view(root: &std::path::Path, discs: &[String]) -> Result<EditView> {
     let records = snapshot(&library::database(root)?, discs)?;
     let meta = &records[0].metadata;
@@ -310,6 +364,10 @@ pub fn edit_view(root: &std::path::Path, discs: &[String]) -> Result<EditView> {
         fields: Value::Object(fields),
     })
 }
+/// Checks edited fields (all given as text): known fields only; year (1 to
+/// 9999) and players (1 to 64) as whole numbers, blank meaning none; text
+/// within its length limit and without control characters (line breaks
+/// and tabs are allowed in descriptions). Returns the values to store.
 fn validate_patch(patch: &Value) -> Result<serde_json::Map<String, Value>> {
     let fields = patch
         .as_object()
@@ -355,7 +413,9 @@ fn validate_patch(patch: &Value) -> Result<serde_json::Map<String, Value>> {
     }
     Ok(out)
 }
-/// Render updated resident metadata without scanning or changing unrelated games.
+/// The library's metadata.3di (the menu's genre, publisher and year list)
+/// for the discs it lists now: those in library.3di if there is one,
+/// otherwise every disc in the database that exists.
 pub fn console_metadata(root: &std::path::Path, db: &Value) -> Result<Vec<u8>> {
     let find = f::safe(root, ".ohmy3do/library.3di")?;
     let names = if find.is_file() {
@@ -372,6 +432,9 @@ pub fn console_metadata(root: &std::path::Path, db: &Value) -> Result<Vec<u8>> {
     };
     library::metadata_bytes(db, &names)
 }
+/// Saves edited fields (`patch`) for the discs in `expected`, if their
+/// information has not changed since the editor opened. Returns the undo
+/// journal's path.
 pub fn save_edits(
     root: &std::path::Path,
     expected: &[EditRecord],
@@ -381,6 +444,8 @@ pub fn save_edits(
 ) -> Result<std::path::PathBuf> {
     save_edits_impl(root, expected, patch, None, cache, job)
 }
+/// `save_edits`, also putting `fields` back to the downloaded values in
+/// `plan` (removing the hand edits there).
 pub fn save_edits_restoring(
     root: &std::path::Path,
     expected: &[EditRecord],
@@ -392,6 +457,7 @@ pub fn save_edits_restoring(
 ) -> Result<std::path::PathBuf> {
     save_edits_impl(root, expected, patch, Some((plan, fields)), cache, job)
 }
+/// `save_edits` and `save_edits_restoring`.
 fn save_edits_impl(
     root: &std::path::Path,
     expected: &[EditRecord],
@@ -423,6 +489,9 @@ fn save_edits_impl(
             "A field cannot be edited and restored at the same time"
         );
     }
+
+    // Apply the edits and restored fields to each disc, making its new
+    // description file.
     let _lock = library::lock_library(&root, cache)?;
     let mut db = library::database(&root)?;
     let discs = expected.iter().map(|r| r.path.clone()).collect::<Vec<_>>();
@@ -479,6 +548,8 @@ fn save_edits_impl(
     }
     commit_information(&root, db, descriptions, cache, job)
 }
+/// Writes changed information through an undo journal: the database, the
+/// metadata index and the `descriptions` files, all or nothing.
 fn commit_information(
     root: &std::path::Path,
     db: Value,
@@ -507,21 +578,29 @@ fn commit_information(
     Ok(tx.path)
 }
 
+// ---- Restoring downloaded information ----
+
+/// The downloaded values for one disc, as previewed.
 #[derive(serde::Serialize)]
 pub struct RestoreRecord {
     pub path: String,
     pub fields: Value,
     pub source: String,
 }
+/// A preview of putting edited fields back to the downloaded values.
 #[derive(serde::Serialize)]
 pub struct RestorePlan {
     pub root: std::path::PathBuf,
     pub original: Vec<EditRecord>,
     pub records: Vec<RestoreRecord>,
+    /// The fields every disc has a downloaded value for: only these can be
+    /// restored.
     pub available: Vec<String>,
 }
-/// A read-only preview retains the exact downloaded values reviewed by the user.
-/// Unavailable fields are excluded instead of clearing existing information.
+
+/// Previews restoring the downloaded information of the discs in
+/// `expected`, keeping the exact values shown so the restore uses them.
+/// Fields with no downloaded value are left out rather than cleared.
 pub fn preview_restore(
     root: &std::path::Path,
     expected: &[EditRecord],
@@ -594,6 +673,10 @@ pub fn preview_restore(
     })
 }
 
+// ---- Exporting, importing and backing up hand edits ----
+
+/// One disc's hand edits in an export file, with what identifies the disc
+/// in another library (title, region and disc number) besides its path.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomEntry {
@@ -603,6 +686,7 @@ pub struct CustomEntry {
     pub disc: Value,
     pub fields: Value,
 }
+/// An export file ("ohmy3do-custom-metadata", version 1).
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CustomArchive {
@@ -610,7 +694,10 @@ struct CustomArchive {
     version: u32,
     games: Vec<CustomEntry>,
 }
+/// The largest export file.
 const TRANSFER_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// A stored field as text ("" for none).
 fn field_text(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -618,6 +705,7 @@ fn field_text(value: &Value) -> String {
         _ => String::new(),
     }
 }
+/// A disc's hand-edited fields.
 fn override_fields(record: &Value) -> Result<Value> {
     let mut fields = serde_json::Map::new();
     for key in EDIT_FIELDS {
@@ -627,7 +715,10 @@ fn override_fields(record: &Value) -> Result<Value> {
     }
     Ok(Value::Object(validate_patch(&Value::Object(fields))?))
 }
-/// Portable backups contain manual overrides only, including intentional blanks.
+/// Exports the hand edits of the `discs` (or of every disc, if none are
+/// given) to the JSON file `target`, outside the library. Only edited
+/// fields are exported, including ones deliberately left blank. Returns how
+/// many discs were exported.
 pub fn export_custom(
     root: &std::path::Path,
     target: &std::path::Path,
@@ -692,22 +783,34 @@ pub fn export_custom(
     )?;
     Ok(count)
 }
+/// One disc an import would change.
 #[derive(serde::Serialize)]
 pub struct ImportRecord {
+    /// The disc in this library.
     pub path: String,
+    /// Its path in the export.
     pub source_path: String,
     pub title: String,
+    /// Its information now, which the import checks is unchanged.
     pub original: EditRecord,
+    /// The fields the import would set.
     pub fields: Value,
+    /// Fields already edited here, with different values.
     pub conflicts: Vec<String>,
+    /// How it was matched: by path, or by title, region and disc.
     pub matching: String,
 }
+
+/// What importing an export file would do: the discs it would change, and
+/// the entries it skips, with why.
 #[derive(serde::Serialize)]
 pub struct ImportPlan {
     pub root: std::path::PathBuf,
     pub records: Vec<ImportRecord>,
     pub skipped: Vec<String>,
 }
+/// Whether a disc in the library and an exported entry have the same
+/// title, region and disc number.
 fn same_identity(a: &Value, b: &CustomEntry) -> bool {
     // Keep edition/region designators: title_key intentionally strips too much for imports.
     a["title"]
@@ -719,6 +822,10 @@ fn same_identity(a: &Value, b: &CustomEntry) -> bool {
             .eq_ignore_ascii_case(&b.region)
         && a["disc"] == b.disc
 }
+/// Previews importing the export file `file` into the library at `root`.
+/// Each entry is matched to a disc by path, or if no disc has that path, by
+/// title, region and disc number; a path match must also agree on those,
+/// and entries that match no disc or several are skipped.
 pub fn preview_import(
     root: &std::path::Path,
     file: &std::path::Path,
@@ -862,6 +969,8 @@ pub fn preview_import(
         skipped,
     })
 }
+/// Imports the `selected` discs (by path) of a previewed import, if their
+/// information has not changed since. Returns the undo journal's path.
 pub fn import_custom(
     root: &std::path::Path,
     plan: &ImportPlan,
@@ -938,13 +1047,23 @@ pub fn import_custom(
     commit_information(&root, db, descriptions, cache, job)
 }
 
+// ---- Reviewing and choosing matches ----
+
+/// Every disc and how its downloaded information was matched, with the
+/// entries the person can choose from instead.
 #[derive(serde::Serialize)]
 pub struct MatchReview {
     pub root: std::path::PathBuf,
     pub records: Vec<Value>,
+    /// Every downloaded entry, by title.
     pub choices: Vec<Value>,
+    /// Each disc's match ("Automatic match", "Ambiguous title" and so on),
+    /// by path.
     pub status: BTreeMap<String, String>,
 }
+
+/// Lists how each disc in the library at `root` is matched to downloaded
+/// information.
 pub fn review_matches(
     root: &std::path::Path,
     prefs: &crate::model::Preferences,
@@ -1009,6 +1128,9 @@ pub fn review_matches(
         status,
     })
 }
+/// Matches the `discs` to the downloaded entry `id` (a LaunchBox ID) the
+/// person chose, applying its information (hand edits kept) and remembering
+/// the choice. Returns the undo journal's path.
 pub fn choose_match(
     root: &std::path::Path,
     review: &MatchReview,
@@ -1080,12 +1202,17 @@ pub fn choose_match(
     commit_information(&root, db, descriptions, cache, job)
 }
 
+// ---- Automatic backups of hand edits ----
+
+/// Where a library's backups of hand edits are kept on the PC: a folder
+/// named by the SHA-256 of the library's path.
 fn backup_directory(root: &std::path::Path, cache: &std::path::Path) -> Result<std::path::PathBuf> {
     use sha2::{Digest, Sha256};
     let root = f::root(root)?;
     let key = format!("{:x}", Sha256::digest(root.to_string_lossy().as_bytes()));
     Ok(cache.join("custom-metadata-backups").join(key))
 }
+/// Whether a file name is a backup's: "metadata-<20-digit time>-<UUID>.json".
 fn backup_name(name: &str) -> bool {
     let Some(rest) = name
         .strip_prefix("metadata-")
@@ -1098,6 +1225,7 @@ fn backup_name(name: &str) -> bool {
         && rest[..20].bytes().all(|b| b.is_ascii_digit())
         && uuid::Uuid::parse_str(&rest[21..]).is_ok()
 }
+/// The backups in `directory`, newest first.
 fn backup_paths(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();
     if !directory.exists() {
@@ -1117,7 +1245,10 @@ fn backup_paths(directory: &std::path::Path) -> Result<Vec<std::path::PathBuf>> 
     files.reverse();
     Ok(files)
 }
-/// Independent of Undo journals and stored on the desktop, never on the console drive.
+/// Backs up the hand edits of the library at `root` to the PC (never to a
+/// console drive), separately from undo journals. Nothing is written if the
+/// newest backup already holds the same edits; the five newest backups are
+/// kept.
 pub fn backup_custom(root: &std::path::Path, cache: &std::path::Path) -> Result<()> {
     if !f::safe(root, ".ohmy3do/library.json")?.is_file() {
         return Ok(());
@@ -1176,18 +1307,23 @@ pub fn backup_custom(root: &std::path::Path, cache: &std::path::Path) -> Result<
     }
     Ok(())
 }
+/// One backup of hand edits, as listed for the person.
 #[derive(serde::Serialize)]
 pub struct MetadataBackup {
     pub name: String,
     pub modified: u64,
     pub bytes: u64,
+    /// How many discs it has edits for.
     pub entries: usize,
 }
+
+/// A library's backups of hand edits, newest first.
 #[derive(serde::Serialize)]
 pub struct MetadataBackups {
     pub directory: std::path::PathBuf,
     pub backups: Vec<MetadataBackup>,
 }
+/// Lists the backups of hand edits of the library at `root`.
 pub fn backups(root: &std::path::Path, cache: &std::path::Path) -> Result<MetadataBackups> {
     let directory = backup_directory(root, cache)?;
     let mut backups = Vec::new();
@@ -1210,6 +1346,7 @@ pub fn backups(root: &std::path::Path, cache: &std::path::Path) -> Result<Metada
     }
     Ok(MetadataBackups { directory, backups })
 }
+/// Previews restoring a backup (by file name), as an import.
 pub fn preview_backup(
     root: &std::path::Path,
     cache: &std::path::Path,
