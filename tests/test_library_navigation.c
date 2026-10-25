@@ -112,6 +112,21 @@ int main(void)
     setup(&ode,&snapshot); location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
     assert(library_open_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Missing",location) == -1);
     assert(current == 4 && !ode.navigation_failed); free(location); ode_listing_free(&snapshot);
+    /* A folder acting as its game: its parent opens with it selected. */
+    setup(&ode,&snapshot); location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+    assert(!library_select_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Games",location));
+    assert(current == 1 && location->depth == 1 && location->selected == 1 && !strcmp(location->names[0],"USB A"));
+    total=calls; ode_listing_free(&location->listing); free(location); ode_listing_free(&snapshot);
+    for(i=1;i<=total;++i) {
+        setup(&ode,&snapshot); fail_at=i;
+        location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+        assert(library_select_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Games",location) == -2);
+        assert(ode.navigation_failed); free(location); ode_listing_free(&snapshot);
+    }
+    setup(&ode,&snapshot); location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
+    assert(library_select_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Missing",location) == -1);
+    assert(library_select_directory(&ode,route,3,&snapshot,1,"/Storage/USB A/Games/D (Disc 1).iso",location) == -1);
+    assert(current == 4 && !ode.navigation_failed); free(location); ode_listing_free(&snapshot);
     setup(&ode,&snapshot); location=(LibraryLocation *)malloc(sizeof(*location)); assert(location);
     assert(!library_open_directory(&ode,route,3,&snapshot,1,"/Storage",location));
     assert(current == 0 && !location->depth && location->listing.count == 2);

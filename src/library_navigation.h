@@ -23,6 +23,10 @@ int library_open(Ode *ode, const ArtRouteStep *route, unsigned int depth,
 int library_open_directory(Ode *ode, const ArtRouteStep *route, unsigned int depth,
                   const OdeListing *current, int workaround, const char *path,
                   LibraryLocation *location);
+/* Like library_open, for a folder: its parent opens with it selected. */
+int library_select_directory(Ode *ode, const ArtRouteStep *route, unsigned int depth,
+                  const OdeListing *current, int workaround, const char *path,
+                  LibraryLocation *location);
 /* Resolve all paths against an already current directory, without I/O.
  * 1 = all local, 0 = includes another directory, -1 = local file missing. */
 int library_current_files(const OdeListing *listing,const char *directory,

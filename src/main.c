@@ -1411,18 +1411,14 @@ static long relative_folder(Menu *menu,char *path,size_t size,size_t room)
  * discs with the disc names in play order and returns how many (0 for an
  * ordinary folder, including any with subfolders of games). The names point
  * into the index, which a volume change reloads. */
-static size_t resolve_folder_game(Menu *menu,const MenuEntry *entry,const char **discs)
+static size_t metadata_folder_game(Menu *menu,const char *prefix,const char **discs)
 {
-    static char prefix[9217], probe[9217];
+    static char probe[9217];
     MenuEntry candidates[ODE_MAX_DISCS];
     const MenuEntry *pointers[ODE_MAX_DISCS], *set[ODE_MAX_DISCS];
     OdeListing listing;
-    size_t used, low=0, high=menu->metadata.count, count=0, position, i;
-    long folder;
-    if (!entry || !entry->is_directory || !menu->metadata.count) return 0;
-    folder=relative_folder(menu,prefix,sizeof(prefix),strlen(entry->name)+1);
-    if (folder<0) return 0;
-    strcpy(prefix+folder,entry->name); strcat(prefix,"/"); used=strlen(prefix);
+    size_t used=strlen(prefix), low=0, high=menu->metadata.count, count=0, position, i;
+    if (used>=sizeof(probe)) return 0;
     /* The index is sorted, so everything inside the folder is one run. */
     while (low<high) {
         size_t mid=low+(high-low)/2;
@@ -1445,6 +1441,17 @@ static size_t resolve_folder_game(Menu *menu,const MenuEntry *entry,const char *
     if (menu_disc_group(&listing,pointers[0],set,ODE_MAX_DISCS,&position)!=count) return 0;
     for (i=0;i<count;++i) discs[i]=set[i]->name;
     return count;
+}
+/* The same for a folder in the current listing. */
+static size_t resolve_folder_game(Menu *menu,const MenuEntry *entry,const char **discs)
+{
+    static char prefix[9217];
+    long folder;
+    if (!entry || !entry->is_directory || !menu->metadata.count) return 0;
+    folder=relative_folder(menu,prefix,sizeof(prefix),strlen(entry->name)+1);
+    if (folder<0) return 0;
+    strcpy(prefix+folder,entry->name); strcat(prefix,"/");
+    return metadata_folder_game(menu,prefix,discs);
 }
 /* Cached pointers borrow their listing/index storage. Invalidate before either
  * owner is released, and after an index reload even if malloc reused its address. */
@@ -1528,7 +1535,11 @@ static unsigned int title_variant(Menu *menu,size_t index)
         memset(menu->title_variants,0,count*sizeof(*menu->title_variants));
         hashes=(TitleHash *)malloc(count*sizeof(*hashes));
         if (!hashes) return 0;
-        for (i=0;i<count;++i) if (game_entry(menu,entries[i])) {
+        /* Every entry is grouped by title first. Whether a folder acts as a
+         * game costs an index search, so only titles shared by several
+         * entries ask, keeping their games: about 300 searches fewer for a
+         * large folder, which took a quarter second on the console. */
+        for (i=0;i<count;++i) {
             const char *c;
             unsigned long hash=2166136261UL;
             menu_display_title(first,sizeof(first),entries[i]->name,0);
@@ -1537,12 +1548,15 @@ static unsigned int title_variant(Menu *menu,size_t index)
         }
         qsort(hashes,n,sizeof(*hashes),compare_title_hash);
         for (i=0;i<n;i=end) {
+            size_t games=i;
             for (end=i+1;end<n && hashes[end].hash==hashes[i].hash;++end) {}
             if (end-i<2) continue;
-            for (j=i;j<end;++j) {
+            /* Keep the group's games at its front, in their order. */
+            for (j=i;j<end;++j) if (game_entry(menu,entries[hashes[j].index])) hashes[games++]=hashes[j];
+            for (j=i;j<games;++j) {
                 size_t k,matches=0,rank=0;
                 menu_display_title(first,sizeof(first),entries[hashes[j].index]->name,0);
-                for (k=i;k<end;++k) {
+                for (k=i;k<games;++k) {
                     menu_display_title(other,sizeof(other),entries[hashes[k].index]->name,0);
                     if (!strcmp(first,other)) { ++matches;if (k<=j) ++rank; }
                 }
@@ -3692,8 +3706,35 @@ select_game:
 too_long:
     menu->tool_message = "Favorite path is too long.";
 }
+/* Whether a saved /Storage disc path lies in a folder that acts as its game;
+ * if so, folder receives that folder's path. The index's paths start below
+ * the volume, so a first part that is a volume label is tried without. */
+static int saved_game_folder(Menu *menu, const char *path, char *folder, size_t size)
+{
+    static char prefix[9217];
+    const char *discs[ODE_MAX_DISCS], *name = strrchr(path, '/'), *relative = path + 9;
+    size_t count, i, n;
+    int attempt;
+    if (!name || strncmp(path,"/Storage/",9) || (size_t)(name - path) >= size) return 0;
+    for (attempt = 0; attempt < 2 && relative && relative < name; ++attempt) {
+        n = (size_t)(name + 1 - relative);
+        if (n >= sizeof(prefix)) return 0;
+        memcpy(prefix,relative,n); prefix[n] = 0;
+        count = metadata_folder_game(menu,prefix,discs);
+        for (i = 0; i < count; ++i) if (!menu_path_compare(discs[i],name + 1)) {
+            memcpy(folder,path,(size_t)(name - path)); folder[name - path] = 0;
+            return 1;
+        }
+        relative = strchr(relative,'/');
+        if (relative) ++relative;
+    }
+    return 0;
+}
+/* Find, favorites and recent games save discs; one in a folder that acts as
+ * its game shows that folder selected, as browsing to the game would. */
 static void open_saved_path(Menu *menu, const char *path)
 {
+    static char folder[9218];
     ArtRouteStep route[MAX_DEPTH];
     LibraryLocation *location;
     int result;
@@ -3702,7 +3743,9 @@ static void open_saved_path(Menu *menu, const char *path)
     if (!location) { menu->tool_message = "Not enough memory."; return; }
     current_route(menu,route);
     menu->tool_message = "Opening saved game folder..."; draw(menu);
-    result = library_open(&menu->ode,route,menu->depth,&menu->listing,folder_workaround(menu),path,location);
+    if (saved_game_folder(menu,path,folder,sizeof(folder)))
+        result = library_select_directory(&menu->ode,route,menu->depth,&menu->listing,folder_workaround(menu),folder,location);
+    else result = library_open(&menu->ode,route,menu->depth,&menu->listing,folder_workaround(menu),path,location);
     if (!result) adopt_location(menu,location);
     else {
         menu->tool_message = result == -2 ? "Folder I/O failed. Restart console." : "Saved path not found on USB.";

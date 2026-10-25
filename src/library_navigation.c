@@ -72,11 +72,12 @@ static int navigate(Ode *ode, const ArtRouteStep *route, unsigned int depth,
         for (j = 0; j < listing.count; ++j)
             if (!menu_path_compare(listing.entries[j]->name,part) && !!listing.entries[j]->is_directory == !!(slash || folder)) break;
         if (j == listing.count) { ode->error = "Queued/favorite path is missing"; goto restore; }
-        if (!slash && !folder) {
+        /* Stop at the last part: a file, or a folder to select (folder 2). */
+        if (!slash && folder != 1) {
             if (keep) {
                 size_t k;
                 int root = entered == 0 || (entered == 1 && !(keep->ids[0] & 0xffffffUL));
-                if (menu_support_entry(listing.entries[j]->name,0,root)) {
+                if (menu_support_entry(listing.entries[j]->name,listing.entries[j]->is_directory,root)) {
                     ode->error = "Favorite is a menu support file"; goto restore;
                 }
                 keep->listing = listing; ode_listing_init(&listing);
@@ -153,6 +154,14 @@ int library_open_directory(Ode *ode, const ArtRouteStep *route, unsigned int dep
 {
     memset(location,0,sizeof(*location));
     return navigate(ode,route,depth,current,workaround,path,NULL,NULL,location,1);
+}
+
+int library_select_directory(Ode *ode, const ArtRouteStep *route, unsigned int depth,
+                  const OdeListing *current, int workaround, const char *path,
+                  LibraryLocation *location)
+{
+    memset(location,0,sizeof(*location));
+    return navigate(ode,route,depth,current,workaround,path,NULL,NULL,location,2);
 }
 
 void library_catalog_free(LibraryCatalog *catalog)
