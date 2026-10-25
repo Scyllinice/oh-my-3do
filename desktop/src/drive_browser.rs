@@ -1,4 +1,8 @@
-//! Read-only snapshots of actual console-drive contents. Never creates support files.
+//! The Drive view: what is actually on a console drive, found by looking at
+//! its files rather than trusting its indexes, with each disc's cover,
+//! preview, description and metadata if the drive has them. Only reads:
+//! it never creates or fixes anything on the drive.
+
 use crate::{
     categories, disc, drive_identity, fsutil as f, game_info, library, model::Preferences,
     usb_selection, Job,
@@ -7,6 +11,9 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, path::Path};
 
+/// The drive's cover or preview index (`folder`), and whether its media sit
+/// beside the discs (true) or in the old root folder. An unreadable index
+/// is reported in `warnings` and treated as empty.
 fn media_index(
     root: &Path,
     folder: &str,
@@ -23,12 +30,16 @@ fn media_index(
         },
     }
 }
-/// Beside the disc, or at the root where desktop 1.0.4 and older put it.
+/// A disc's description: from beside the disc, or from the root where
+/// desktop 1.0.4 and older put it.
 fn description(paths: &mut f::ReadPaths, path: &str) -> Option<String> {
     [game_info::drive_filename(path), game_info::filename(path)]
         .iter()
         .find_map(|name| read_description(paths, name, path))
 }
+/// Reads a description file: four lines ("OM3DINFO1", the disc's path, the
+/// description, and the CRC-32 of the middle two lines in hex). None if it
+/// is missing, too big, for another disc or damaged.
 fn read_description(paths: &mut f::ReadPaths, name: &str, path: &str) -> Option<String> {
     let file = paths.path(name).ok()?;
     if fs::metadata(&file).ok()?.len() > 16384 {
@@ -43,6 +54,10 @@ fn read_description(paths: &mut f::ReadPaths, name: &str, path: &str) -> Option<
     (u32::from_str_radix(lines[3], 16).ok()? == crc32fast::hash(body.as_bytes()))
         .then(|| lines[2].to_owned())
 }
+/// Lists the drive at `root` for the Drive view: a record per disc (path,
+/// title, region, size, metadata, cover and preview, and a group key for
+/// discs of one set), the drive's categories, identity, free space and any
+/// warnings.
 pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
     let root = f::root(root)?;
     let identity = drive_identity::inspect(&root, prefs)?;
@@ -64,6 +79,8 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
         .flatten()
         .filter_map(|r| r["path"].as_str().map(|p| (f::fold(p), r.clone())))
         .collect();
+
+    // One record per disc found on the drive.
     let mut paths = f::ReadPaths::new(&root)?;
     let mut records = vec![];
     let mut total = 0u64;
@@ -85,6 +102,10 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
         let mut record = known.get(&key).cloned().unwrap_or_else(
             || json!({"path":path,"title":stem,"region":disc::primary_region(&stem),"metadata":{}}),
         );
+
+        // A disc the library database does not know: in an organized
+        // drive (Category/Region/Title/disc), take the title and region
+        // from its folders.
         let parts: Vec<_> = path.split('/').collect();
         let organized = parts.len() >= 4 && names.iter().any(|name| name == parts[0]);
         if !known.contains_key(&key) && organized {
@@ -96,6 +117,7 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
         if !record["metadata"].is_object() {
             record["metadata"] = json!({});
         }
+        // One disc of a set: group it with the set's other discs.
         if disc::disc_number(&stem).is_some() {
             let parent = path
                 .rsplit_once('/')
@@ -114,6 +136,7 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
         if let Some(text) = description(&mut paths, &path) {
             record["metadata"]["description"] = json!(text);
         }
+        // The cover and preview, if the file is really there.
         for (field, folder, index, beside) in [
             ("cover", "covers", &covers, cover_beside),
             ("preview", "previews", &previews, preview_beside),
@@ -142,16 +165,25 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
         records.push(record);
         job.report(index as u64 + 1, total_discs, "Reading drive library");
     }
-    Ok(
-        json!({"root":root,"records":records,"categories":names,"identity":identity,"warnings":warnings,"game_bytes":total,"available":fs2::available_space(&root).ok(),"capacity":fs2::total_space(&root).ok()}),
-    )
+    Ok(json!({
+        "root": root,
+        "records": records,
+        "categories": names,
+        "identity": identity,
+        "warnings": warnings,
+        "game_bytes": total,
+        "available": fs2::available_space(&root).ok(),
+        "capacity": fs2::total_space(&root).ok(),
+    }))
 }
-/// Presence comparison checks paths and file sizes, including every CUE track.
-/// It deliberately does not claim to verify file contents.
+/// Whether the library disc at `path` (in `source`) is also on the drive at
+/// `destination`: every file (all of a .cue's tracks) there, at the same
+/// path and size. Contents are not compared.
 pub fn presence(source: &Path, destination: &Path, path: &str) -> Result<bool> {
     PresenceScan::new(source, destination)?.check(path)
 }
-/// Reuse path inventories across every title in one PC-library refresh.
+/// [`presence`] for many discs, reading each folder's listing only once.
+/// Make a new one for each refresh of the library.
 pub struct PresenceScan {
     source: f::ReadPaths,
     target: f::ReadPaths,
