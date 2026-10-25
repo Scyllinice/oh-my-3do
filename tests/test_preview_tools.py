@@ -162,9 +162,11 @@ class PreviewStreamTest(unittest.TestCase):
             result=converter.convert_stream(source,root/'clip.3dv')
             data=(root/'clip.3dv').read_bytes()
             self.assertEqual(data[:8],b'OM3DVID7')
-            self.assertEqual((result['frames'],result['audio_bytes']),(60,60*11025//30))
+            # The test picture does not open from black, so it gains a fade-in.
+            lead=converter.STREAM_LEAD_FRAMES
+            self.assertEqual((result['frames'],result['audio_bytes']),(60+lead,(60+lead)*11025//30))
             frames,chunks=struct.unpack_from('>IH',data,16)
-            self.assertEqual((frames,chunks),(60,6))
+            self.assertEqual((frames,chunks),(60+lead,(60+lead+9)//10))
             maintenance.validate_media(root/'clip.3dv')
             damaged=bytearray(data);damaged[2048+64]^=1
             (root/'damaged.3dv').write_bytes(damaged)
@@ -172,5 +174,8 @@ class PreviewStreamTest(unittest.TestCase):
                 maintenance.validate_media(root/'damaged.3dv')
             with self.assertRaises(ValueError):
                 converter.convert_stream(source,root/'late.3dv',start=5)
+            faded=root/'faded.mp4'
+            subprocess.run(['ffmpeg','-v','error','-i',str(source),'-vf','fade=t=in:d=0.5','-c:a','copy',str(faded)],check=True)
+            self.assertEqual(converter.convert_stream(faded,root/'faded.3dv')['frames'],60)
 
 if __name__=='__main__':unittest.main()

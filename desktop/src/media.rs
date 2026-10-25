@@ -347,7 +347,7 @@ struct Preview7Params {
 }
 const STREAM_PARAMS: Preview7Params = Preview7Params {
     rate: 200 * 1024,
-    read_rate: 300 * 1024,
+    read_rate: 275 * 1024,
     slot_bytes: 640 * 1024,
     max_chunk: 160 * 1024,
     chunk_frames: 10,
@@ -356,7 +356,22 @@ const STREAM_PARAMS: Preview7Params = Preview7Params {
     cycle_cap: 230_000,
 };
 /// Part of the cached file's name: a change of format or settings re-encodes.
-pub const PREVIEW_KEY: &str = "om3dvid7-320x240-30fps-full-200k-160c";
+pub const PREVIEW_KEY: &str = "om3dvid7-320x240-30fps-full-200k-160c-percept-lead";
+/// A source that does not open from black gets this many frames fading in
+/// from black to its first frame, which gives the first picture's dictionary
+/// entries a chunk to arrive in (tools/prepare-preview.py does the same).
+const STREAM_LEAD_FRAMES: usize = 12;
+/// A first frame darker than this mean value already opens from black.
+const DARK_FRAME: u64 = 6;
+/// The fade-in for a source whose first frame is `first`, or none.
+fn lead_frames(first: &[u8]) -> Vec<Vec<u8>> {
+    if first.iter().map(|&v| v as u64).sum::<u64>() < DARK_FRAME * first.len() as u64 {
+        return vec![];
+    }
+    (0..STREAM_LEAD_FRAMES)
+        .map(|i| first.iter().map(|&v| (v as usize * i / STREAM_LEAD_FRAMES) as u8).collect())
+        .collect()
+}
 extern "C" {
     // tools/preview7-encoder.c, compiled in by build.rs
     fn oh3do_preview7_workspace(frames: u32) -> u64;
@@ -557,12 +572,13 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
         .unwrap_or(60.)
         .min((STREAM_MAX_FRAMES / PREVIEW_FPS) as f64);
     let reserve = ((seconds * PREVIEW_FPS as f64).ceil() as usize + 2).min(STREAM_MAX_FRAMES);
+    let room = (reserve + STREAM_LEAD_FRAMES).min(STREAM_MAX_FRAMES);
     let _slot = EncodeSlot::take(job)?;
     // SAFETY: plain arithmetic in the encoder.
-    let bytes = unsafe { oh3do_preview7_workspace(reserve as u32) } as usize;
+    let bytes = unsafe { oh3do_preview7_workspace(room as u32) } as usize;
     let mut workspace = vec![0u8; bytes];
     // SAFETY: workspace holds bytes writable bytes.
-    if unsafe { oh3do_preview7_begin(workspace.as_mut_ptr(), bytes as u64, reserve as u32) } != 0 {
+    if unsafe { oh3do_preview7_begin(workspace.as_mut_ptr(), bytes as u64, room as u32) } != 0 {
         bail!("Preview encoder setup failed")
     }
     let mut a = args(&["-v", "error", "-nostdin", "-i"]);
@@ -574,26 +590,39 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
     a.extend(args(&["-map", "0:v:0", "-an", "-sn", "-t", &seconds.to_string(), "-vf", &filter,
         "-frames:v", &reserve.to_string(), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]));
     job.say("Reading preview frames");
-    let count = stream(&ffmpeg, &a, STREAM_FRAME, reserve, job, |frame| {
-        // SAFETY: frame is one 320x240 RGB24 picture; begin reserved room.
-        if unsafe { oh3do_preview7_frame(workspace.as_mut_ptr(), frame.as_ptr()) } != 0 {
-            bail!("Preview encoder rejected a frame")
+    let (mut lead, mut count) = (0, 0);
+    stream(&ffmpeg, &a, STREAM_FRAME, reserve, job, |frame| {
+        let mut pictures = if count == 0 { lead_frames(frame) } else { vec![] };
+        lead += pictures.len();
+        pictures.push(frame.to_vec());
+        for picture in pictures {
+            if count == room {
+                break;
+            }
+            // SAFETY: picture is one 320x240 RGB24 frame; begin reserved room of them.
+            if unsafe { oh3do_preview7_frame(workspace.as_mut_ptr(), picture.as_ptr()) } != 0 {
+                bail!("Preview encoder rejected a frame")
+            }
+            count += 1;
         }
         Ok(())
     })?;
-    if count == 0 {
+    if count == lead {
         bail!("Incomplete video frames")
     }
     let samples = count * 11025 / PREVIEW_FPS;
     let mut audio = vec![];
     if sound {
-        let seconds = count as f64 / PREVIEW_FPS as f64;
+        let seconds = (count - lead) as f64 / PREVIEW_FPS as f64;
         let mut a = args(&["-v", "error", "-nostdin", "-i"]);
         a.push(source.to_string_lossy().into_owned());
         a.extend(args(&["-map", "0:a:0", "-vn", "-sn", "-t", &seconds.to_string(), "-ac", "1", "-ar", "11025",
             "-af", &format!("volume=0.8,afade=t=in:d=0.01,afade=t=out:st={}:d=0.01", (seconds - 0.01).max(0.)),
             "-f", "s8", "pipe:1"]));
-        audio = capture(&ffmpeg, &a, samples + 8192, job)?;
+        let source = capture(&ffmpeg, &a, samples + 8192, job)?;
+        let silence = samples - (count - lead) * 11025 / PREVIEW_FPS;
+        audio = vec![0; silence];
+        audio.extend_from_slice(&source[..source.len().min(samples - silence)]);
         audio.resize(samples, 0);
     }
     job.say(format!("Encoding preview: {count} frames"));
@@ -1242,4 +1271,16 @@ pub fn install_video_tools(cache: &Path, job: &Job) -> Result<PathBuf> {
     };
     job.say("Video tools installed and checksum verified");
     Ok(bin)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_sources_not_opening_from_black_get_a_fade_in() {
+        assert!(lead_frames(&vec![2u8; STREAM_FRAME]).is_empty());
+        let lead = lead_frames(&vec![200u8; STREAM_FRAME]);
+        assert_eq!(lead.len(), STREAM_LEAD_FRAMES);
+        assert!(lead[0].iter().all(|&v| v == 0));
+        assert!(lead[STREAM_LEAD_FRAMES - 1].iter().all(|&v| v as usize == 200 * 11 / 12));
+    }
 }

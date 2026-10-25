@@ -25,7 +25,11 @@ V5_PACKET = 1200 * 12   # worst-case packet: every block GRAD with literal colou
 # about 200 KB/s. The same settings as the desktop app (desktop/src/media.rs).
 STREAM_WIDTH, STREAM_HEIGHT = 320, 240
 STREAM_MAX_SECONDS = 60
-STREAM_PARAMS = dict(rate=200*1024, read_rate=300*1024, slot_bytes=640*1024, max_chunk=160*1024,
+# A source that does not open from black gets this many frames fading in
+# from black to its first frame. While they play, the encoder sends the
+# first picture's dictionary entries, which one chunk cannot hold.
+STREAM_LEAD_FRAMES = 12
+STREAM_PARAMS = dict(rate=200*1024, read_rate=275*1024, slot_bytes=640*1024, max_chunk=160*1024,
                      chunk_frames=10, entries4=8192, entries2=4096, cycle_cap=230000)
 
 
@@ -93,6 +97,15 @@ def encode_stream(library, frames, reserve, audio=None):
     return out.raw[:n], count
 
 
+# A first frame darker than this mean value (of 255) already opens from black.
+DARK_FRAME = 6
+
+
+def fade_in(frame):
+    """STREAM_LEAD_FRAMES RGB24 frames brightening from black to frame."""
+    return [frame.translate(bytes(v*i//STREAM_LEAD_FRAMES for v in range(256))) for i in range(STREAM_LEAD_FRAMES)]
+
+
 def convert_stream(source, target, start=0, duration=None, sound=True, encoder=None):
     """OM3DVID7: 320x240 at 30 fps, the whole source up to a minute, streamed."""
     source, target = Path(source), Path(target)
@@ -129,19 +142,20 @@ def convert_stream(source, target, start=0, duration=None, sound=True, encoder=N
         '-frames:v', str(reserve), '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], stdout=subprocess.PIPE)
     frames = iter(lambda: reader.stdout.read(size), b'')
     try:
-        whole = (frame for frame in frames if len(frame) == size)
+        kept = [frame for frame in frames if len(frame) == size]
+        lead = fade_in(kept[0]) if kept and sum(kept[0]) >= DARK_FRAME*size else []
+        kept = kept[:STREAM_MAX_SECONDS*FPS-len(lead)]
+        count = len(kept)
         audio = None
         if sound:
-            # The sound needs the frame count, so the frames are kept first.
-            kept = list(whole)
-            count = len(kept)
             audio = subprocess.run([ffmpeg, '-v', 'error', '-nostdin', '-ss', str(start), '-i', str(source),
                 '-map', '0:a:0', '-vn', '-sn', '-t', str(count/FPS), '-ac', '1', '-ar', '11025', '-af',
                 f'volume=0.8,afade=t=in:d=0.01,afade=t=out:st={max(0, count/FPS-0.01)}:d=0.01',
                 '-f', 's8', 'pipe:1'], check=True, stdout=subprocess.PIPE).stdout
             audio = audio[:count*11025//FPS].ljust(count*11025//FPS, b'\0')
-            whole = kept
-        data, count = encode_stream(library, whole, reserve, audio)
+            total = (count+len(lead))*11025//FPS
+            audio = bytes(total-len(audio)) + audio
+        data, count = encode_stream(library, lead+kept, min(STREAM_MAX_SECONDS*FPS, reserve+len(lead)), audio)
     finally:
         reader.stdout.close()
         if reader.wait():

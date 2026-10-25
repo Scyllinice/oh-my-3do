@@ -41,7 +41,7 @@ static void synthesize(uint8_t *rgb,int f)
 
 int main(int argc,char **argv)
 {
-    Preview7Params p={204800,307200,655360,163840,10,1024,512,230000};
+    Preview7Params p={204800,281600,655360,163840,10,1024,512,230000};
     uint64_t bytes=oh3do_preview7_workspace(FRAMES),samples=(uint64_t)FRAMES*11025/30,capacity=4u<<20;
     uint8_t *ws=(uint8_t *)malloc(bytes),*rgb=(uint8_t *)malloc(W*H*3),*out=(uint8_t *)malloc(capacity);
     int8_t *audio=(int8_t *)malloc(samples);

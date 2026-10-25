@@ -256,12 +256,24 @@ the C decoder, `src/preview_v7.c`.
 
 `tools/preview7-encoder.c` trains the two dictionaries on the clip, finds
 each block's nearest 4×4 entry and its nearest four 2×2 entries, and chooses
-per block whatever costs least in error plus bytes plus decode time. It
-searches for the setting that averages the requested rate, keeps every frame
-within about 230,000 ARM60 clocks of decoding, keeps chunks within the slot
-size, and picks the preroll from a model of a reader managing 300 KB/s. It
-checks every file it writes by decoding it with `src/preview_v7.c`. The
-desktop app and `tools/prepare-preview.py` use the same settings.
+per block whatever costs least in error plus bytes plus decode time. Error is
+weighed as the eye sees it: brightness counts more than colour, and blocks in
+flat areas (skies, water, skin) count more than busy ones, which hide
+blockiness. It searches for the setting that averages the requested rate,
+keeps every frame within about 230,000 ARM60 clocks of decoding, and keeps
+chunks within the slot size. When a chunk could only fit by giving up
+quality, as after a scene change, the encoder first sends the entries it
+needs in the previous chunk's spare room; the decoder only needs an entry
+before its first use. The preroll is every slot: the menu fills them all
+before playing, and reads the next loop only once a loop has played, holding
+the last frame silently while the slots refill, so the clip's end never
+competes with reading. The encoder checks a model of a reader that manages
+275 KB/s alongside playback and 400 KB/s during that hold: it must keep ahead
+of playback within a loop, and a loop may hold for at most 2 seconds. It checks every file it
+writes by decoding it with `src/preview_v7.c`. The desktop app and
+`tools/prepare-preview.py` use the same settings, and add a 0.4-second fade-in
+from the first frame to a source that does not start from black, which gives
+that first picture's entries a chunk to arrive in.
 
 ## Save names
 

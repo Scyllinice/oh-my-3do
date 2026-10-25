@@ -19,8 +19,7 @@
  * drive: blocks land straight in a slot, are summed as they arrive, and a
  * chunk's entries are stored with plain copies. The bus moves each byte on
  * the CPU, though, so while the chunk being read is not needed for a while
- * the reader drops below the menu and reads only while the menu waits. This
- * spreads the burst of reading the opening again before a loop. */
+ * the reader drops below the menu and reads only while the menu waits. */
 #define READER_PRIORITY 160
 #define READER_SPARE_PRIORITY 140
 #define READER_SPARE_CHUNKS 2 /* ahead of playback by more than this */
@@ -169,6 +168,11 @@ static void reader_main(void)
     while (!s->stop) {
         unsigned long started,spent;
         if (seq>=s->released+s->slots) { SleepMSec(bus.timer,4); continue; }
+        /* The next loop is read only once this one has played: the clip's
+         * end plays without the reader competing, then the picture holds
+         * while every slot fills (see decode). */
+        if (seq && !(seq%s->header.chunks) &&
+            *(volatile unsigned long *)&s->frame<(seq/s->header.chunks)*s->header.frames) { SleepMSec(bus.timer,4); continue; }
         started=(unsigned long)GetMSecTime(bus.timer);
         if (position(s,ode_bus_read_buffer,seq)<0 || read_bytes(s,ode_bus_read_buffer,seq)<0) {
             s->reader_error_code=(long)bus.last_error; s->error=2; break;
@@ -329,7 +333,9 @@ static int decode(PreviewStream *s,unsigned long frame,int picture,unsigned char
         pump(s);
 #endif
         s->loop_hold=0;
-        if (s->ready[seq%s->slots]!=seq+1 && seq<s->released+s->slots) return s->error ? -1 : PREVIEW_STREAM_NOT_READY;
+        /* Not across a loop: the next loop's chunks wait for this one to end. */
+        if (ahead/s->header.frames==frame/s->header.frames &&
+            s->ready[seq%s->slots]!=seq+1 && seq<s->released+s->slots) return s->error ? -1 : PREVIEW_STREAM_NOT_READY;
         if (s->frame && !(s->frame%s->header.frames)) {
             /* Start each loop with every slot full, as the first start does,
              * so its opening chunks are not read while they play. */
@@ -438,8 +444,9 @@ int preview_stream_open(PreviewStream *s,const Ode *ode,OdeReadBuffer reader,con
         s->slot[i][s->header.max_chunk]=s->slot[i][s->header.max_chunk+1]=0;
         ++s->slots;
     }
-    /* Fewer slots than the preroll cannot start; the rest just risks stalls. */
-    if (s->slots<=s->header.preroll && s->slots<s->header.chunks) { result=-4; goto failed; }
+    /* One slot playing while another is read is the least that streams;
+     * fewer slots than the encoder assumed only means longer waits. */
+    if (s->slots<2 && s->slots<s->header.chunks) { result=-4; goto failed; }
     if (s->ring) memset(s->ring,0,PREVIEW_STREAM_RING);
     preview7_reset(&s->dec);
 #ifdef OH3DO_SDK

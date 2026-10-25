@@ -55,6 +55,7 @@ void *memset(void *d,int c,size_t n) { uint8_t *a=(uint8_t *)d; while (n--) *a++
 #define LLOYD_ROUNDS 4
 #endif
 #define SCRATCH_FRAME (BLOCKS*8+64)
+#define SCRATCH_BYTES ((uint64_t)PREVIEW7_MAX_CHUNK_FRAMES*SCRATCH_FRAME*2+4096)
 /* ARM60 clocks of preview_v7_arm.s decoding a frame into the full-screen
  * bitmap, fitted to tests/test_preview_v7.py --clocks counts (within 300
  * clocks a frame): per frame, per op and per block of a run. The browser's
@@ -98,6 +99,7 @@ typedef struct Work {
     uint8_t *src;               /* frames*BLOCKS*48, x8 scale */
     uint16_t *l4; uint32_t *d4; /* nearest 4x4 entry and its error */
     uint16_t *l2; uint32_t *dq; /* nearest 2x2 entries (4 per block) and their summed error */
+    uint8_t *seen;              /* how much each block's error counts, see visibility */
     Book b4, b2;
     uint8_t *sample;            /* SAMPLES*48 */
     uint32_t *label;            /* SAMPLES */
@@ -116,8 +118,16 @@ typedef struct Work {
     unsigned char *dec_screen, *dec_thumb;
     unsigned char *dec_state;
     uint32_t *chunk_bytes;      /* padded size of each chunk */
+    double *read_done, *play_at; /* preroll's model: two loops of chunks */
     double mu;
     uint32_t max_cycles;
+    /* Pre-sending (see presend): the state after a chunk's frames, kept while
+     * the next chunk is tried, and the entries that try sent. */
+    Snapshot kept_cur, kept_start;
+    uint16_t *kept_slot4, *kept_slot2, *kept_new4, *kept_new2, *wanted4, *wanted2;
+    uint8_t *kept_scratch;
+    int trying;
+    uint32_t tries;             /* lambda raises the last chunk() needed to fit */
 } Work;
 
 static void *carve(uint8_t **p,uint64_t bytes)
@@ -134,6 +144,7 @@ static uint64_t layout(Work *w,uint8_t *base,uint32_t frames)
     w->src=carve(&p,f*BLOCKS*DIM4);
     w->l4=carve(&p,f*BLOCKS*2); w->d4=carve(&p,f*BLOCKS*4);
     w->l2=carve(&p,f*BLOCKS*8); w->dq=carve(&p,f*BLOCKS*4);
+    w->seen=carve(&p,f*BLOCKS);
     w->b4.v=carve(&p,8192*DIM4); w->b4.sum=carve(&p,8192*4); w->b4.id=carve(&p,8192*2); w->b4.byid=carve(&p,8192*DIM4);
     w->b2.v=carve(&p,4096*DIM2); w->b2.sum=carve(&p,4096*4); w->b2.id=carve(&p,4096*2); w->b2.byid=carve(&p,4096*DIM2);
     w->sample=carve(&p,(uint64_t)SAMPLES*DIM4);
@@ -143,12 +154,17 @@ static uint64_t layout(Work *w,uint8_t *base,uint32_t frames)
     w->slot4=carve(&p,8192*2); w->slot2=carve(&p,4096*2);
     w->send_cost4=carve(&p,8192*4); w->send_cost2=carve(&p,4096*4);
     w->new4=carve(&p,8192*2); w->new2=carve(&p,4096*2);
-    w->scratch=carve(&p,(uint64_t)PREVIEW7_MAX_CHUNK_FRAMES*SCRATCH_FRAME*2+4096);
+    w->scratch=carve(&p,SCRATCH_BYTES);
+    w->kept_scratch=carve(&p,SCRATCH_BYTES);
+    w->kept_slot4=carve(&p,8192*2); w->kept_slot2=carve(&p,4096*2);
+    w->kept_new4=carve(&p,8192*2); w->kept_new2=carve(&p,4096*2);
+    w->wanted4=carve(&p,8192*2); w->wanted2=carve(&p,4096*2);
     w->mode=carve(&p,BLOCKS);
     w->expected=carve(&p,(PREVIEW7_MAX_CHUNK_FRAMES+1)*PREVIEW7_FRAME_BYTES);
     w->dec_screen=carve(&p,PREVIEW7_FRAME_BYTES); w->dec_thumb=carve(&p,PREVIEW7_THUMB_BYTES);
     w->dec_state=carve(&p,preview7_state_bytes()+64);
     w->chunk_bytes=carve(&p,PREVIEW7_MAX_CHUNKS*4);
+    w->read_done=carve(&p,2*PREVIEW7_MAX_CHUNKS*sizeof(double)); w->play_at=carve(&p,2*PREVIEW7_MAX_CHUNKS*sizeof(double));
     return (uint64_t)(p-base)+sizeof(Work)+64;
 }
 
@@ -175,6 +191,21 @@ EXPORT int32_t oh3do_preview7_begin(void *workspace,uint64_t bytes,uint32_t fram
     return 0;
 }
 
+static double sqrt_(double x) { double r=x>1 ? x : 1; int i; for (i=0;i<60;++i) r=(r+x/r)/2; return r; }
+/* How much a block's error counts, 1..255 for 0..1: fully in flat areas,
+ * where blockiness shows, less in busy ones that hide it. From its source
+ * brightness variance (x8 scale). */
+#define FLAT_VARIANCE 400.0
+static uint8_t visibility(const uint8_t *q)
+{
+    double y[16],m=0,var=0;
+    int i;
+    for (i=0;i<16;++i) { y[i]=(77*q[i*3]+150*q[i*3+1]+29*q[i*3+2])/256.0; m+=y[i]; }
+    m/=16;
+    for (i=0;i<16;++i) var+=(y[i]-m)*(y[i]-m);
+    return (uint8_t)(1+254*sqrt_(FLAT_VARIANCE/(FLAT_VARIANCE+var/16))+0.5);
+}
+
 /* Add the next frame: 320x240 RGB24. */
 EXPORT int32_t oh3do_preview7_frame(void *workspace,const uint8_t *rgb)
 {
@@ -191,6 +222,7 @@ EXPORT int32_t oh3do_preview7_frame(void *workspace,const uint8_t *rgb)
             /* 5-bit units with three fraction bits: 255 -> 248. */
             for (c=0;c<3;++c) *out++=(uint8_t)((p[c]*248+127)/255);
         }
+        w->seen[(uint64_t)w->added*BLOCKS+b]=visibility(out-DIM4);
     }
     ++w->added;
     return 0;
@@ -209,13 +241,25 @@ static void sub_vector(const uint8_t *block,int s,uint8_t *out)
 
 static uint32_t vsum(const uint8_t *v,int dim) { uint32_t s=0; int i; for (i=0;i<dim;++i) s+=v[i]; return s; }
 
+/* A pixel's error as the eye weighs it: brightness in full, colour at half
+ * (Cb/Cr scaled as in YCbCr), so a grey error e counts 3*e*e as in RGB. */
+static uint32_t pixel_error(int er,int eg,int eb)
+{
+    int64_t y=77*er+150*eg+29*eb,cb=eb*256-y,cr=er*256-y;
+    double d=(double)y*y+0.5*(0.32*(double)cb*cb+0.51*(double)cr*cr);
+    return (uint32_t)(d*3.0/65536.0+0.5);
+}
+/* pixel_error is never below this share of the plain RGB squared error
+ * (0.39, with room for rounding); the nearest-entry search relies on it. */
+#define METRIC_FLOOR 0.35
+
 static uint32_t dist(const uint8_t *a,const uint8_t *b,int dim,uint32_t limit)
 {
     uint32_t d=0;
     int i;
     for (i=0;i<dim;i+=12) {
         int k;
-        for (k=i;k<i+12;++k) { int e=(int)a[k]-(int)b[k]; d+=(uint32_t)(e*e); }
+        for (k=i;k<i+12;k+=3) d+=pixel_error((int)a[k]-(int)b[k],(int)a[k+1]-(int)b[k+1],(int)a[k+2]-(int)b[k+2]);
         if (d>=limit) return d;
     }
     return d;
@@ -249,7 +293,7 @@ static uint32_t nearest(const Book *b,const uint8_t *q,uint32_t *best_d)
     while (up<b->k || down>=0) {
         if (up<b->k) {
             uint32_t e=b->sum[up]-s;
-            if ((uint64_t)e*e>=(uint64_t)best*b->dim) up=b->k;
+            if ((double)e*e*METRIC_FLOOR>=(double)best*b->dim) up=b->k;
             else {
                 uint32_t d=dist(q,b->v+(size_t)up*b->dim,b->dim,best);
                 if (d<best) { best=d; who=up; }
@@ -258,7 +302,7 @@ static uint32_t nearest(const Book *b,const uint8_t *q,uint32_t *best_d)
         }
         if (down>=0) {
             uint32_t e=s-b->sum[down];
-            if ((uint64_t)e*e>=(uint64_t)best*b->dim) down=-1;
+            if ((double)e*e*METRIC_FLOOR>=(double)best*b->dim) down=-1;
             else {
                 uint32_t d=dist(q,b->v+(size_t)down*b->dim,b->dim,best);
                 if (d<best) { best=d; who=down; }
@@ -472,13 +516,13 @@ static uint32_t decide(Work *w,uint32_t f,double lambda,double mu)
         uint8_t v[DIM4];
         uint32_t ek,e4=w->l4[at+b];
         const uint16_t *q=w->l2+(at+b)*4;
-        double best,cost;
+        double best,cost,seen=w->seen[at+b]/255.0;
         int choice=0,s;
         recon(w,&w->cur,b,v);
         ek=dist(src+(size_t)b*DIM4,v,DIM4,0xffffffffu);
-        best=ek;
+        best=seen*ek;
         if (!(w->cur.type[b]==1 && w->cur.four[b]==e4)) {
-            cost=w->d4[at+b]+lambda*(2+(w->slot4[e4]==0xffff ? w->send_cost4[e4] : 0))+mu*CYC_FOUR;
+            cost=seen*w->d4[at+b]+lambda*(2+(w->slot4[e4]==0xffff ? w->send_cost4[e4] : 0))+mu*CYC_FOUR;
             if (cost<best) { best=cost; choice=1; }
         }
         if (!(w->cur.type[b]==2 && w->cur.quad[b][0]==q[0] && w->cur.quad[b][1]==q[1] && w->cur.quad[b][2]==q[2] && w->cur.quad[b][3]==q[3])) {
@@ -488,7 +532,7 @@ static uint32_t decide(Work *w,uint32_t f,double lambda,double mu)
                 for (k=0;k<s;++k) if (q[k]==q[s]) dup=1;
                 if (!dup && w->slot2[q[s]]==0xffff) fresh+=w->send_cost2[q[s]];
             }
-            cost=w->dq[at+b]+lambda*(6+fresh)+mu*CYC_QUAD;
+            cost=seen*w->dq[at+b]+lambda*(6+fresh)+mu*CYC_QUAD;
             if (cost<best) { best=cost; choice=2; }
         }
         w->mode[b]=(uint8_t)choice;
@@ -569,7 +613,6 @@ static void send_costs(Work *w)
 }
 
 static uint64_t samples_at(uint64_t f) { return f*PREVIEW7_AUDIO_RATE/PREVIEW7_FPS; }
-static double sqrt_(double x) { double r=x>1 ? x : 1; int i; for (i=0;i<60;++i) r=(r+x/r)/2; return r; }
 
 typedef struct Pass {
     const Preview7Params *p;
@@ -581,6 +624,43 @@ typedef struct Pass {
     Preview7Header header;
     uint8_t table[2*PREVIEW7_MAX_CHUNKS];
 } Pass;
+
+static uint32_t chunk(Work *w,Pass *ps,uint32_t c,double lambda);
+/* Before a chunk with `raw` bytes is written, try the next one. If it had to
+ * give up quality to fit, send the entries it needs first here instead, in
+ * the order it first used them, while this chunk has room. Scene changes,
+ * the opening after a fade-in above all, need far more new entries than one
+ * chunk can carry; the decoder only needs an entry before its first use. */
+static void presend(Work *w,Pass *ps,uint32_t c,double lambda,uint32_t raw)
+{
+    uint32_t chunks=(w->frames+ps->p->chunk_frames-1)/ps->p->chunk_frames,n4=w->new4n,n2=w->new2n,k4,k2,i,j,room;
+    double mu=w->mu;
+    uint32_t max_cycles=w->max_cycles;
+    Pass trial;
+    if (c+1>=chunks || raw+PREVIEW7_ENTRY2>ps->p->max_chunk) return;
+    room=ps->p->max_chunk-raw;
+    copy_bytes(w->kept_scratch,w->scratch,SCRATCH_BYTES);
+    copy_bytes(&w->kept_cur,&w->cur,sizeof(Snapshot)); copy_bytes(&w->kept_start,&w->chunk_start,sizeof(Snapshot));
+    copy_bytes(w->kept_slot4,w->slot4,8192*2); copy_bytes(w->kept_slot2,w->slot2,4096*2);
+    copy_bytes(w->kept_new4,w->new4,n4*2); copy_bytes(w->kept_new2,w->new2,n2*2);
+    copy_bytes(&trial,ps,sizeof(Pass)); trial.out=NULL; trial.verify=0;
+    w->trying=1; chunk(w,&trial,c+1,lambda); w->trying=0;
+    k4=w->new4n; k2=w->new2n;
+    copy_bytes(w->wanted4,w->new4,k4*2); copy_bytes(w->wanted2,w->new2,k2*2);
+    copy_bytes(w->scratch,w->kept_scratch,SCRATCH_BYTES);
+    copy_bytes(&w->cur,&w->kept_cur,sizeof(Snapshot)); copy_bytes(&w->chunk_start,&w->kept_start,sizeof(Snapshot));
+    copy_bytes(w->slot4,w->kept_slot4,8192*2); copy_bytes(w->slot2,w->kept_slot2,4096*2);
+    copy_bytes(w->new4,w->kept_new4,n4*2); copy_bytes(w->new2,w->kept_new2,n2*2); w->new4n=n4; w->new2n=n2;
+    w->mu=mu; w->max_cycles=max_cycles;
+    if (!w->tries) return;
+    /* The two kinds interleaved by how far through their lists they are. */
+    for (i=0,j=0;i<k4 || j<k2;) {
+        int four=j>=k2 || (i<k4 && (uint64_t)i*k2<=(uint64_t)j*k4);
+        uint32_t bytes=four ? PREVIEW7_ENTRY4 : PREVIEW7_ENTRY2;
+        if (bytes>room) break;
+        if (four ? send4(w,w->wanted4[i++]) : send2(w,w->wanted2[j++])) room-=bytes;
+    }
+}
 
 /* Encode chunk c at lambda; returns its padded size, or 0 if it cannot fit. */
 static uint32_t chunk(Work *w,Pass *ps,uint32_t c,double lambda)
@@ -631,6 +711,13 @@ static uint32_t chunk(Work *w,Pass *ps,uint32_t c,double lambda)
             while (w->new2n) w->slot2[w->new2[--w->new2n]]=0xffff;
             copy_bytes(&w->cur,&w->chunk_start,sizeof(Snapshot));
             continue;
+        }
+        w->tries=tries;
+        if (!w->trying) {
+            presend(w,ps,c,lambda,PREVIEW7_CHUNK_HEADER+((audio+3)&~3u)+n4*PREVIEW7_ENTRY4+n2*PREVIEW7_ENTRY2+(frames+1)*4+packets);
+            n4=w->new4n; n2=w->new2n;
+            size=PREVIEW7_CHUNK_HEADER+((audio+3)&~3u)+n4*PREVIEW7_ENTRY4+n2*PREVIEW7_ENTRY2+(frames+1)*4+packets;
+            size=(size+PREVIEW7_BLOCK_BYTES-1)/PREVIEW7_BLOCK_BYTES*PREVIEW7_BLOCK_BYTES;
         }
         if (ps->out) {
             uint8_t *o;
@@ -683,6 +770,7 @@ static uint32_t chunk(Work *w,Pass *ps,uint32_t c,double lambda)
         }
         return size;
     }
+    w->tries=tries;
     return 0;
 }
 
@@ -704,29 +792,42 @@ static uint64_t pass(Work *w,Pass *ps,double lambda)
     return total;
 }
 
-/* The fewest chunks to buffer before playing so that a reader of read_rate
- * bytes/s with `slots` chunk buffers stays ahead of playback for two loops;
- * 0 if none works. A slot frees when its chunk has finished playing. */
+/* The player starts, and starts each loop again, only once every slot holds
+ * a chunk; it reads the next loop only after this one has played, while the
+ * picture holds and the reader has the console to itself (HOLD_READ_RATE).
+ * Between those points each chunk must arrive before it plays, from a reader
+ * of read_rate bytes/s sharing the console with playback. A slot frees when
+ * its chunk has finished playing. Checks two loops. Returns the chunks read
+ * before playing (the slots, or every chunk of a short clip), or 0 if the
+ * reader falls behind mid-loop or a loop would hold more than LOOP_WAIT
+ * seconds. */
+#define LOOP_WAIT 2.0
+#define HOLD_READ_RATE (400.0*1024)
 static uint32_t preroll(const Work *w,const Preview7Params *p,uint32_t chunks,uint32_t slots)
 {
     const double t=(double)p->chunk_frames/PREVIEW7_FPS,margin=0.1;
-    uint32_t pre;
-    for (pre=1;pre<=slots && pre<=chunks;++pre) {
-        double reader=(double)PREVIEW7_BLOCK_BYTES/p->read_rate,start=0;
-        uint32_t k;
-        int ok=1;
-        for (k=0;k<2*chunks && ok;++k) {
-            if (k>=slots) {
-                double free_at=start+(double)(k-slots+1)*t;
-                if (free_at>reader) reader=free_at;
+    double *done=w->read_done,*play=w->play_at,reader=0;
+    uint32_t k,j,fill=slots<chunks ? slots : chunks;
+    for (k=0;k<2*chunks;++k) {
+        if (k%chunks==0) {
+            double natural=k ? play[k-1]+t : 0;
+            if (natural>reader) reader=natural;
+            for (j=k;j<k+fill;++j) {
+                if (j>=slots && play[j-slots]+t>reader) reader=play[j-slots]+t;
+                reader+=(double)w->chunk_bytes[j%chunks]/HOLD_READ_RATE; done[j]=reader;
             }
-            reader+=(double)w->chunk_bytes[k%chunks]/p->read_rate;
-            if (k+1==pre) start=reader;
-            if (k>=pre && reader>start+(double)k*t-margin) ok=0;
+            play[k]=done[k+fill-1]>natural ? done[k+fill-1] : natural;
+            if (k && play[k]-natural>LOOP_WAIT) return 0;
+        } else {
+            play[k]=play[k-1]+t;
+            if (k%chunks>=fill) {
+                if (k>=slots && play[k-slots]+t>reader) reader=play[k-slots]+t;
+                reader+=(double)w->chunk_bytes[k%chunks]/p->read_rate; done[k]=reader;
+            }
+            if (done[k]>play[k]-margin) return 0;
         }
-        if (ok) return pre;
     }
-    return 0;
+    return fill;
 }
 
 static void header_block(uint8_t *o,const Preview7Params *p,const Work *w,uint32_t chunks,uint32_t pre,uint32_t slots,uint32_t audio_rate,uint32_t max_chunk,const uint8_t *table)
