@@ -4,10 +4,15 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
-root=Path(__file__).resolve().parent.parent
-source=(root/'src/main.c').read_text()
-controller=source[source.index('static void connect_ode(Menu *menu)\n{'):source.index('static void go_back(Menu *menu)\n{')]
-stubs=r'''
+
+root = Path(__file__).resolve().parent.parent
+source = (root / "src/main.c").read_text()
+controller = source[
+    source.index("static void connect_ode(Menu *menu)\n{") : source.index(
+        "static void go_back(Menu *menu)\n{"
+    )
+]
+stubs = r"""
 #include "library_navigation.h"
 #include "library_features.h"
 #include "menu_config.h"
@@ -72,8 +77,8 @@ static void learn_saves(Menu *m) { assert(configured && m->booting && !shown); +
 static void load_directory(Menu *m,size_t selected) { assert(!selected && m->booting); m->ready=m->view_valid=fail_stage!=4; }
 static void load_position(Menu *m) { assert(configured && m->booting && !shown); ++positioned;m->depth=3;m->selected=5; }
 static void UnloadCel(void *p) { assert(p==NULL_SPLASH); }
-'''
-checks=r'''
+"""
+checks = r"""
 int main(void) {
     Menu menu; int failure;
     for(failure=0;failure<=4;++failure) {
@@ -93,9 +98,23 @@ int main(void) {
     puts("Startup: splash hides default layout; saved settings and folder precede menu; failures and X recovery passed");
     return 0;
 }
-'''
-with tempfile.TemporaryDirectory(prefix='oh3do-startup-') as directory:
-    code,binary=Path(directory)/'test.c',Path(directory)/'test'
-    code.write_text(stubs+controller+checks)
-    subprocess.run([os.environ.get('CC','cc'),'-std=c89','-Wall','-Wextra','-Werror','-Isrc',str(code),'-o',str(binary)],cwd=root,check=True)
-    subprocess.run([str(binary)],check=True)
+"""
+with tempfile.TemporaryDirectory(prefix="oh3do-startup-") as directory:
+    code, binary = Path(directory) / "test.c", Path(directory) / "test"
+    code.write_text(stubs + controller + checks)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Isrc",
+            str(code),
+            "-o",
+            str(binary),
+        ],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run([str(binary)], check=True)

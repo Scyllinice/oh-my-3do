@@ -20,16 +20,25 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--baseline', action='store_true', help='Record findings without failing')
+parser.add_argument("--baseline", action="store_true", help="Record findings without failing")
 args = parser.parse_args()
-work = ROOT / 'build' / 'desktop-accessibility'
+work = ROOT / "build" / "desktop-accessibility"
 work.mkdir(parents=True, exist_ok=True)
-version = json.loads((ROOT / 'desktop/shell/tauri.conf.json').read_text())['version']
-cheats = json.loads((ROOT / 'data/save-cheats.json').read_text())
-records = [dict(path=f'Games/USA/{title}/{title}.iso', title=title, category='Games',
-                region='USA', metadata={'genre': 'Action'}, bytes=2048)
-           for title in ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta']]
-mock = r"""
+version = json.loads((ROOT / "desktop/shell/tauri.conf.json").read_text())["version"]
+cheats = json.loads((ROOT / "data/save-cheats.json").read_text())
+records = [
+    dict(
+        path=f"Games/USA/{title}/{title}.iso",
+        title=title,
+        category="Games",
+        region="USA",
+        metadata={"genre": "Action"},
+        bytes=2048,
+    )
+    for title in ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]
+]
+mock = (
+    r"""
 const records=RECORDS,cheats=CHEATS;
 let prefs={library:'/fixture/library',destination:'/fixture/usb',offline:true,disable_update_checks:true,theme:'light'};
 const listeners={};
@@ -64,7 +73,12 @@ window.__TAURI__={event:{listen:async(name,fn)=>{listeners[name]=fn;return ()=>{
  default:throw 'Unhandled fixture operation: '+action;
  }
 }}};
-""".replace('RECORDS', json.dumps(records)).replace('CHEATS', json.dumps(cheats)).replace('VERSION', json.dumps(version))
+""".replace(
+        "RECORDS", json.dumps(records)
+    )
+    .replace("CHEATS", json.dumps(cheats))
+    .replace("VERSION", json.dumps(version))
+)
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -72,19 +86,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path in ('/', '/index.html', '/mock.js'):
-            content = mock if self.path == '/mock.js' else (ROOT / 'desktop/ui/index.html').read_text().replace('<head>', '<head><script src="mock.js"></script>')
+        if self.path in ("/", "/index.html", "/mock.js"):
+            content = (
+                mock
+                if self.path == "/mock.js"
+                else (ROOT / "desktop/ui/index.html")
+                .read_text()
+                .replace("<head>", '<head><script src="mock.js"></script>')
+            )
             content = content.encode()
             self.send_response(200)
-            self.send_header('Content-Type', 'text/javascript' if self.path.endswith('.js') else 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(content)))
+            self.send_header(
+                "Content-Type",
+                "text/javascript" if self.path.endswith(".js") else "text/html; charset=utf-8",
+            )
+            self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
         else:
             super().do_GET()
 
 
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Handler, directory=str(ROOT / 'desktop/ui')))
+server = http.server.ThreadingHTTPServer(
+    ("127.0.0.1", 0), functools.partial(Handler, directory=str(ROOT / "desktop/ui"))
+)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 driver = webdriver.WebKitGTK()
 wait = WebDriverWait(driver, 8)
@@ -94,7 +119,7 @@ checks = []
 
 def check(condition, message):
     (checks if condition else findings).append(message)
-    print(('PASS ' if condition else 'FAIL ') + message, flush=True)
+    print(("PASS " if condition else "FAIL ") + message, flush=True)
 
 
 def js(script, *values):
@@ -102,13 +127,17 @@ def js(script, *values):
 
 
 def element(selector):
-    return wait.until(lambda _: next((n for n in driver.find_elements(By.CSS_SELECTOR, selector) if n.is_displayed()),None))
+    return wait.until(
+        lambda _: next(
+            (n for n in driver.find_elements(By.CSS_SELECTOR, selector) if n.is_displayed()), None
+        )
+    )
 
 
 def activate(selector):
     node = element(selector)
     node.send_keys(Keys.ENTER)
-    time.sleep(.16)
+    time.sleep(0.16)
 
 
 def page(name):
@@ -117,12 +146,15 @@ def page(name):
 
 
 def audit_labels(name):
-    missing = js("""const root=[...document.querySelectorAll('dialog[open]')].at(-1)||document;return [...root.querySelectorAll('input,select,textarea')].filter(n=>n.getClientRects().length&&!n.disabled&&n.type!=='hidden'&&!(n.labels?.length||n.getAttribute('aria-label')||n.getAttribute('aria-labelledby')||n.title)).map(n=>n.id||n.outerHTML.slice(0,180));""")
+    missing = js(
+        """const root=[...document.querySelectorAll('dialog[open]')].at(-1)||document;return [...root.querySelectorAll('input,select,textarea')].filter(n=>n.getClientRects().length&&!n.disabled&&n.type!=='hidden'&&!(n.labels?.length||n.getAttribute('aria-label')||n.getAttribute('aria-labelledby')||n.title)).map(n=>n.id||n.outerHTML.slice(0,180));"""
+    )
     check(not missing, f'{name}: form controls have explicit accessible labels {missing or ""}')
 
 
 def audit_layout(name):
-    failures = js("""
+    failures = js(
+        """
      const result=[];
      if(document.documentElement.scrollWidth>innerWidth+2)result.push('document scrolls horizontally');
      const front=[...document.querySelectorAll('dialog[open]')].at(-1);
@@ -139,12 +171,14 @@ def audit_layout(name):
       if(foot.bottom>r.bottom+2||foot.top<r.top)result.push('dialog actions outside dialog');
      }
      return [...new Set(result)];
-    """)
+    """
+    )
     check(not failures, f'{name}: controls reflow inside the viewport {failures or ""}')
 
 
 def audit_contrast(name):
-    failures = js("""
+    failures = js(
+        """
      const rgb=color=>(color.match(/[0-9.]+/g)||[]).map(Number);
      const light=color=>{const c=rgb(color).slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return c[0]*.2126+c[1]*.7152+c[2]*.0722;};
      const root=[...document.querySelectorAll('dialog[open]')].at(-1)||document.querySelector('#content');
@@ -159,149 +193,257 @@ def audit_contrast(name):
       if(ratio+.01<threshold)failed.push({text:text.textContent.trim().slice(0,70),ratio:Math.round(ratio*100)/100,color:style.color});
      }
      return failed.slice(0,15);
-    """)
+    """
+    )
     check(not failures, f'{name}: text contrast meets measured size thresholds {failures or ""}')
 
 
 try:
     driver.set_window_size(1280, 900)
-    driver.get(f'http://127.0.0.1:{server.server_port}/')
-    wait.until(lambda _: len(driver.find_elements(By.CSS_SELECTOR, '[data-game]')) == 6)
-    tile = element('[data-game]')
-    key = tile.get_attribute('data-game')
+    driver.get(f"http://127.0.0.1:{server.server_port}/")
+    wait.until(lambda _: len(driver.find_elements(By.CSS_SELECTOR, "[data-game]")) == 6)
+    tile = element("[data-game]")
+    key = tile.get_attribute("data-game")
     try:
-        check(tile.accessible_name=='Alpha', 'WebKit exposes the full game name to accessibility clients')
+        check(
+            tile.accessible_name == "Alpha",
+            "WebKit exposes the full game name to accessibility clients",
+        )
     except Exception as error:
-        print('NOTE WebKit computed-name endpoint unavailable: '+str(error).splitlines()[0],flush=True)
+        print(
+            "NOTE WebKit computed-name endpoint unavailable: " + str(error).splitlines()[0],
+            flush=True,
+        )
     tile.send_keys(Keys.SPACE)
-    time.sleep(.2)
-    check(js('return document.activeElement.dataset.game') == key, 'Selecting a game with Space retains focus on that game')
-    check(element('[data-game]').get_attribute('aria-pressed') == 'true', 'Space selects the game')
+    time.sleep(0.2)
+    check(
+        js("return document.activeElement.dataset.game") == key,
+        "Selecting a game with Space retains focus on that game",
+    )
+    check(element("[data-game]").get_attribute("aria-pressed") == "true", "Space selects the game")
     if not args.baseline:
-        element('[data-game]').send_keys(Keys.ARROW_RIGHT)
-        check(js('return document.activeElement.dataset.game') != key, 'Right arrow moves focus between games')
-        check(len(driver.find_elements(By.CSS_SELECTOR, '[data-game][aria-pressed="true"]')) == 1, 'Arrow navigation does not change selection')
-        check(len(driver.find_elements(By.CSS_SELECTOR, '[data-game][tabindex="0"]')) == 1, 'The game collection uses one Tab stop')
+        element("[data-game]").send_keys(Keys.ARROW_RIGHT)
+        check(
+            js("return document.activeElement.dataset.game") != key,
+            "Right arrow moves focus between games",
+        )
+        check(
+            len(driver.find_elements(By.CSS_SELECTOR, '[data-game][aria-pressed="true"]')) == 1,
+            "Arrow navigation does not change selection",
+        )
+        check(
+            len(driver.find_elements(By.CSS_SELECTOR, '[data-game][tabindex="0"]')) == 1,
+            "The game collection uses one Tab stop",
+        )
         driver.switch_to.active_element.send_keys(Keys.END)
-        check(js('return document.activeElement===document.querySelector("[data-game]:last-child")'), 'End reaches the last game')
+        check(
+            js('return document.activeElement===document.querySelector("[data-game]:last-child")'),
+            "End reaches the last game",
+        )
         driver.switch_to.active_element.send_keys(Keys.HOME)
-        check(js('return document.activeElement===document.querySelector("[data-game]")'), 'Home reaches the first game')
+        check(
+            js('return document.activeElement===document.querySelector("[data-game]")'),
+            "Home reaches the first game",
+        )
         driver.switch_to.active_element.send_keys(Keys.TAB)
-        check(js('return document.activeElement.dataset.action') == 'game-details', 'Tab leaves the game collection for selection actions')
-        driver.switch_to.active_element.send_keys(Keys.SHIFT,Keys.TAB)
-        check(js('return document.activeElement.dataset.game') == key, 'Shift+Tab returns to the focused game')
-    audit_labels('Library')
-    audit_contrast('Light Library')
+        check(
+            js("return document.activeElement.dataset.action") == "game-details",
+            "Tab leaves the game collection for selection actions",
+        )
+        driver.switch_to.active_element.send_keys(Keys.SHIFT, Keys.TAB)
+        check(
+            js("return document.activeElement.dataset.game") == key,
+            "Shift+Tab returns to the focused game",
+        )
+    audit_labels("Library")
+    audit_contrast("Light Library")
     activate('[data-action="copy-open"]')
-    element('dialog[open]')
-    audit_labels('Copy dialog')
+    element("dialog[open]")
+    audit_labels("Copy dialog")
     if not args.baseline:
-        element('dialog h2').send_keys(Keys.SHIFT,Keys.TAB)
-        backward=js('return {action:document.activeElement.dataset.action,tag:document.activeElement.tagName,id:document.activeElement.id}')
-        check(backward.get('action') == 'copy-preview', f'Shift+Tab from a dialog heading reaches its last action {backward}')
+        element("dialog h2").send_keys(Keys.SHIFT, Keys.TAB)
+        backward = js(
+            "return {action:document.activeElement.dataset.action,tag:document.activeElement.tagName,id:document.activeElement.id}"
+        )
+        check(
+            backward.get("action") == "copy-preview",
+            f"Shift+Tab from a dialog heading reaches its last action {backward}",
+        )
         driver.switch_to.active_element.send_keys(Keys.TAB)
-        check(js('return document.activeElement.dataset.action') == 'close-dialog', 'Tab wraps from the last dialog action to Close')
+        check(
+            js("return document.activeElement.dataset.action") == "close-dialog",
+            "Tab wraps from the last dialog action to Close",
+        )
     activate('[data-action="copy-preview"]')
     wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, '[data-action="copy-apply"]'))
-    check(js('return !!document.activeElement.closest("dialog[open]")'), 'Copy review keeps focus inside its replacement dialog')
+    check(
+        js('return !!document.activeElement.closest("dialog[open]")'),
+        "Copy review keeps focus inside its replacement dialog",
+    )
     driver.switch_to.active_element.send_keys(Keys.ESCAPE)
-    wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, 'dialog[open]'))
-    check(js('return document.activeElement.dataset.action') == 'copy-open', 'Closing copy returns focus to its opener')
+    wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, "dialog[open]"))
+    check(
+        js("return document.activeElement.dataset.action") == "copy-open",
+        "Closing copy returns focus to its opener",
+    )
     if not args.baseline:
         activate('[data-action="copy-open"]')
         js("window.__a11yMock.fail='copy_preview'")
         activate('[data-action="copy-preview"]')
-        wait.until(lambda _: js('return document.querySelector("dialog [data-announcer=alert]")?.textContent'))
-        check('Fixture operation failed' in js('return document.querySelector("dialog [data-announcer=alert]").textContent'), 'Operation errors are announced inside the modal')
-        js('window.__a11yMock.fail=null')
+        wait.until(
+            lambda _: js(
+                'return document.querySelector("dialog [data-announcer=alert]")?.textContent'
+            )
+        )
+        check(
+            "Fixture operation failed"
+            in js('return document.querySelector("dialog [data-announcer=alert]").textContent'),
+            "Operation errors are announced inside the modal",
+        )
+        js("window.__a11yMock.fail=null")
         driver.switch_to.active_element.send_keys(Keys.ESCAPE)
-        wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, 'dialog[open]'))
-    for name in ['saves', 'media', 'drive', 'settings', 'updates']:
+        wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, "dialog[open]"))
+    for name in ["saves", "media", "drive", "settings", "updates"]:
         page(name)
         audit_labels(name)
-    page('library')
+    page("library")
     activate('[data-action="add-discs"]')
     activate('[data-action="import-files"]')
     activate('[data-action="scan"]')
-    wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, '[data-import-check]'))
-    audit_labels('Import review')
-    check(not element('[data-import-check]').is_enabled(), 'Unresolved imports cannot be selected')
-    check(element('[data-import-category]').get_attribute('value') == '', 'Missing category has an explicit placeholder')
-    js('const select=document.querySelector("[data-import-category]");select.value="Bonus Discs";select.dispatchEvent(new Event("change",{bubbles:true}));')
-    wait.until(lambda _: element('[data-import-check]').is_enabled())
-    check(element('[data-import-category]').get_attribute('value') == 'Bonus Discs', 'Unmatched import retains Bonus Discs after refresh')
-    js('const select=document.querySelector("[data-import-category]");select.value="Music";select.dispatchEvent(new Event("change",{bubbles:true}));')
-    wait.until(lambda _: 'Music/USA' in element('td.path').text)
-    check(element('[data-import-category]').get_attribute('value') == 'Music', 'Custom import category remains selectable')
-    element('[data-import-check]').send_keys(Keys.SPACE)
-    wait.until(lambda _: 'Import 1 selected' in element('[data-action="import-apply"]').text)
-    check(element('[data-import-check]').is_selected(), 'Resolved import can be selected')
-    page('saves')
+    wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, "[data-import-check]"))
+    audit_labels("Import review")
+    check(not element("[data-import-check]").is_enabled(), "Unresolved imports cannot be selected")
+    check(
+        element("[data-import-category]").get_attribute("value") == "",
+        "Missing category has an explicit placeholder",
+    )
+    js(
+        'const select=document.querySelector("[data-import-category]");select.value="Bonus Discs";select.dispatchEvent(new Event("change",{bubbles:true}));'
+    )
+    wait.until(lambda _: element("[data-import-check]").is_enabled())
+    check(
+        element("[data-import-category]").get_attribute("value") == "Bonus Discs",
+        "Unmatched import retains Bonus Discs after refresh",
+    )
+    js(
+        'const select=document.querySelector("[data-import-category]");select.value="Music";select.dispatchEvent(new Event("change",{bubbles:true}));'
+    )
+    wait.until(lambda _: "Music/USA" in element("td.path").text)
+    check(
+        element("[data-import-category]").get_attribute("value") == "Music",
+        "Custom import category remains selectable",
+    )
+    element("[data-import-check]").send_keys(Keys.SPACE)
+    wait.until(lambda _: "Import 1 selected" in element('[data-action="import-apply"]').text)
+    check(element("[data-import-check]").is_selected(), "Resolved import can be selected")
+    page("saves")
     activate('[data-action="backup-open"]')
-    wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, '#hex-editor'))
-    audit_labels('Save editor')
-    page('settings')
+    wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, "#hex-editor"))
+    audit_labels("Save editor")
+    page("settings")
     activate('[data-action="cheats-open"]')
-    element('dialog[open]')
-    audit_labels('Cheat database editor')
+    element("dialog[open]")
+    audit_labels("Cheat database editor")
     if not args.baseline:
         # Escape must use the same dirty-edit protection as the Close button.
         field = element('[data-profile-key="game"]')
-        field.send_keys(Keys.END, ' edited', Keys.TAB)
+        field.send_keys(Keys.END, " edited", Keys.TAB)
         driver.switch_to.active_element.send_keys(Keys.ESCAPE)
-        wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, '#confirm-dialog[open]'))
-        check(element('#cheats-dialog').is_displayed(), 'Escape keeps unsaved database edits behind a confirmation')
-        check(js('return document.activeElement.dataset.answer') == 'cancel', 'Discard confirmation initially focuses Cancel')
+        wait.until(lambda _: driver.find_element(By.CSS_SELECTOR, "#confirm-dialog[open]"))
+        check(
+            element("#cheats-dialog").is_displayed(),
+            "Escape keeps unsaved database edits behind a confirmation",
+        )
+        check(
+            js("return document.activeElement.dataset.answer") == "cancel",
+            "Discard confirmation initially focuses Cancel",
+        )
         driver.switch_to.active_element.send_keys(Keys.ESCAPE)
-        wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, '#confirm-dialog[open]'))
-        check(element('[data-profile-key="game"]').get_attribute('value').endswith(' edited'), 'Canceling discard preserves the database draft')
+        wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, "#confirm-dialog[open]"))
+        check(
+            element('[data-profile-key="game"]').get_attribute("value").endswith(" edited"),
+            "Canceling discard preserves the database draft",
+        )
         driver.switch_to.active_element.send_keys(Keys.ESCAPE)
         activate('#confirm-dialog [data-answer="yes"]')
-        wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, 'dialog[open]'))
+        wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, "dialog[open]"))
 
-        for theme in ['light','dark']:
-            select = element('#pref-theme')
-            js('arguments[0].value=arguments[1];arguments[0].dispatchEvent(new Event("change",{bubbles:true}))', select, theme)
-            page('library')
-            audit_contrast(theme+' Library')
-            page('settings')
-            audit_contrast(theme+' Settings')
+        for theme in ["light", "dark"]:
+            select = element("#pref-theme")
+            js(
+                'arguments[0].value=arguments[1];arguments[0].dispatchEvent(new Event("change",{bubbles:true}))',
+                select,
+                theme,
+            )
+            page("library")
+            audit_contrast(theme + " Library")
+            page("settings")
+            audit_contrast(theme + " Settings")
 
-        for width,height,scale in [(1280,900,100),(960,720,150),(640,480,200)]:
-            driver.set_window_size(width,height)
-            page('settings')
-            scale_node=element('#pref-text-scale')
-            js('arguments[0].value=arguments[1];arguments[0].dispatchEvent(new Event("change",{bubbles:true}))', scale_node, str(scale))
-            time.sleep(.2)
-            check(js('return document.documentElement.dataset.textScale') == str(scale), f'{scale}% text size applies')
-            check(js('return window.__a11yMock.requests.filter(r=>r.action==="preferences").at(-1).args.text_scale') == scale, f'{scale}% text size is persisted')
-            for name in ['library','saves','media','drive','settings','updates']:
+        for width, height, scale in [(1280, 900, 100), (960, 720, 150), (640, 480, 200)]:
+            driver.set_window_size(width, height)
+            page("settings")
+            scale_node = element("#pref-text-scale")
+            js(
+                'arguments[0].value=arguments[1];arguments[0].dispatchEvent(new Event("change",{bubbles:true}))',
+                scale_node,
+                str(scale),
+            )
+            time.sleep(0.2)
+            check(
+                js("return document.documentElement.dataset.textScale") == str(scale),
+                f"{scale}% text size applies",
+            )
+            check(
+                js(
+                    'return window.__a11yMock.requests.filter(r=>r.action==="preferences").at(-1).args.text_scale'
+                )
+                == scale,
+                f"{scale}% text size is persisted",
+            )
+            for name in ["library", "saves", "media", "drive", "settings", "updates"]:
                 page(name)
-                audit_layout(f'{name} {width}×{height} at {scale}%')
-            page('library')
+                audit_layout(f"{name} {width}×{height} at {scale}%")
+            page("library")
             if not driver.find_elements(By.CSS_SELECTOR, '[data-action="copy-open"]'):
-                element('[data-game]').send_keys(Keys.SPACE)
-            if width<=760:
+                element("[data-game]").send_keys(Keys.SPACE)
+            if width <= 760:
                 activate('[data-action="selection-actions"]')
-                check(element('dialog[open] h2').text=='Selected games', 'Compact selection actions are keyboard accessible')
+                check(
+                    element("dialog[open] h2").text == "Selected games",
+                    "Compact selection actions are keyboard accessible",
+                )
             activate('[data-action="copy-open"]')
-            audit_layout(f'Copy dialog {width}×{height} at {scale}%')
-            audit_contrast(f'Copy dialog at {scale}%')
-            driver.save_screenshot(str(work / f'copy-{width}-{scale}.png'))
-            element('dialog[open] h2').send_keys(Keys.ESCAPE)
-            wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, 'dialog[open]'))
+            audit_layout(f"Copy dialog {width}×{height} at {scale}%")
+            audit_contrast(f"Copy dialog at {scale}%")
+            driver.save_screenshot(str(work / f"copy-{width}-{scale}.png"))
+            element("dialog[open] h2").send_keys(Keys.ESCAPE)
+            wait.until(lambda _: not driver.find_elements(By.CSS_SELECTOR, "dialog[open]"))
     if not args.baseline:
-        page('library');element('[data-game]').send_keys(Keys.HOME)
-        check(js('const title=document.activeElement.querySelector(".game-title").getBoundingClientRect(),bar=document.querySelector(".selection-bar").getBoundingClientRect();return title.top>=0&&title.bottom<=bar.top+1'), 'Focused game title stays visible above compact selection actions')
-    driver.save_screenshot(str(work / ('baseline.png' if args.baseline else 'tested.png')))
+        page("library")
+        element("[data-game]").send_keys(Keys.HOME)
+        check(
+            js(
+                'const title=document.activeElement.querySelector(".game-title").getBoundingClientRect(),bar=document.querySelector(".selection-bar").getBoundingClientRect();return title.top>=0&&title.bottom<=bar.top+1'
+            ),
+            "Focused game title stays visible above compact selection actions",
+        )
+    driver.save_screenshot(str(work / ("baseline.png" if args.baseline else "tested.png")))
 except Exception:
-    driver.save_screenshot(str(work / 'failure.png'))
+    driver.save_screenshot(str(work / "failure.png"))
     raise
 finally:
     driver.quit()
     server.shutdown()
 
-report = {'version': version, 'passed': checks, 'failed': findings, 'environment': 'WebKitGTK frontend; mocked native bridge'}
-(work / ('baseline.json' if args.baseline else 'results.json')).write_text(json.dumps(report, indent=2) + '\n')
+report = {
+    "version": version,
+    "passed": checks,
+    "failed": findings,
+    "environment": "WebKitGTK frontend; mocked native bridge",
+}
+(work / ("baseline.json" if args.baseline else "results.json")).write_text(
+    json.dumps(report, indent=2) + "\n"
+)
 if findings and not args.baseline:
-    raise SystemExit(f'{len(findings)} accessibility checks failed')
+    raise SystemExit(f"{len(findings)} accessibility checks failed")

@@ -6,9 +6,13 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
-source = (root / 'src/main.c').read_text()
-controller = source[source.index('static int can_recover_library('):source.index('static void refresh_usb_art(Menu *menu)\n{')]
-stubs = r'''
+source = (root / "src/main.c").read_text()
+controller = source[
+    source.index("static int can_recover_library(") : source.index(
+        "static void refresh_usb_art(Menu *menu)\n{"
+    )
+]
+stubs = r"""
 #include "ode.h"
 #include <assert.h>
 #include <stdio.h>
@@ -46,8 +50,8 @@ static void setup(Menu *m) {
     m->covers_enabled=1;m->ode.navigation_failed=1;m->ode.media_beside=1;
     m->ode.media_folder="Games/Child";strcpy(m->filter,"old");
 }
-'''
-checks = r'''
+"""
+checks = r"""
 int main(void) {
     Menu m; int i,prior;
     for(i=0;i<6;++i) {
@@ -82,9 +86,23 @@ int main(void) {
     puts("Recovery controller: no-I/O gates, single/multi-volume adoption, media suppression and failed retry passed");
     return 0;
 }
-'''
-with tempfile.TemporaryDirectory(prefix='oh3do-recovery-') as directory:
-    code, binary = Path(directory) / 'test.c', Path(directory) / 'test'
+"""
+with tempfile.TemporaryDirectory(prefix="oh3do-recovery-") as directory:
+    code, binary = Path(directory) / "test.c", Path(directory) / "test"
     code.write_text(stubs + controller + checks)
-    subprocess.run([os.environ.get('CC', 'cc'), '-std=c89', '-Wall', '-Wextra', '-Werror', '-Isrc', str(code), '-o', str(binary)], cwd=root, check=True)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Isrc",
+            str(code),
+            "-o",
+            str(binary),
+        ],
+        cwd=root,
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)

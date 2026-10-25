@@ -7,20 +7,24 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
-source = (root / 'src/main.c').read_text()
+source = (root / "src/main.c").read_text()
+
 
 def find(marker, after=0):
     """Where `marker` appears in main.c, ignoring differences in whitespace."""
-    pattern = r'\s*'.join(re.escape(c) for c in marker if not c.isspace())
+    pattern = r"\s*".join(re.escape(c) for c in marker if not c.isspace())
     match = re.compile(pattern).search(source, after)
     if not match:
-        raise ValueError(f'Not found in main.c: {marker!r}')
+        raise ValueError(f"Not found in main.c: {marker!r}")
     return match.start()
+
+
 def section(start, end):
     begin = find(start)
-    return source[begin:find(end, begin)]
+    return source[begin : find(end, begin)]
 
-stubs = r'''
+
+stubs = r"""
 #include "library_index.h"
 #include "library_features.h"
 #include "menu_position.h"
@@ -87,20 +91,38 @@ static int transfer(void *ctx,const unsigned char *p,unsigned char *r,size_t cap
     (void)ctx;memset(r,0,cap);r[0]=p[0];
     assert(p[0]==0xc5);++mounted;*n=2;return fail_mount ? -1 : 0;
 }
-'''
+"""
 
-stubs=stubs.replace('/*GAME_LOOKUP_TYPES*/',section('#define GAME_LOOKUP_SLOTS', '#define SCROLL_MEASURE_SLOTS'))
-stubs=stubs.replace('/*GAME_LOOKUP_FIELDS*/',section('    GameLookup game_lookups[GAME_LOOKUP_SLOTS];','    ScrollMeasure scroll_measures'))
+stubs = stubs.replace(
+    "/*GAME_LOOKUP_TYPES*/", section("#define GAME_LOOKUP_SLOTS", "#define SCROLL_MEASURE_SLOTS")
+)
+stubs = stubs.replace(
+    "/*GAME_LOOKUP_FIELDS*/",
+    section("    GameLookup game_lookups[GAME_LOOKUP_SLOTS];", "    ScrollMeasure scroll_measures"),
+)
 
-controller = ''.join([
-    section('static int directory_path(Menu *menu, char *buffer, size_t capacity)\n{', 'typedef struct UsbCoverRead'),
-    section('static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{', "/* Resolve the selected game's metadata once"),
-    section('static void activate(Menu *menu)\n{', 'static void review_queue(Menu *menu)\n{'),
-    section('static void start_queue(Menu *menu)\n{', '/* Tools stay available after a transport failure'),
-    section('static void remember_position(Menu *menu, int force)\n{', 'typedef struct RecentLaunch'),
-])
+controller = "".join(
+    [
+        section(
+            "static int directory_path(Menu *menu, char *buffer, size_t capacity)\n{",
+            "typedef struct UsbCoverRead",
+        ),
+        section(
+            "static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{",
+            "/* Resolve the selected game's metadata once",
+        ),
+        section("static void activate(Menu *menu)\n{", "static void review_queue(Menu *menu)\n{"),
+        section(
+            "static void start_queue(Menu *menu)\n{",
+            "/* Tools stay available after a transport failure",
+        ),
+        section(
+            "static void remember_position(Menu *menu, int force)\n{", "typedef struct RecentLaunch"
+        ),
+    ]
+)
 
-checks = r'''
+checks = r"""
 int main(void) {
     static LibraryGameInfo games[]={
         {"Games/USA/One/One.iso","","",""},
@@ -154,14 +176,33 @@ int main(void) {
     puts("Game-folder launch: single/multi-disc games keep browser and reboot position; failures, existing queue and explicit open passed");
     return 0;
 }
-'''
+"""
 
-with tempfile.TemporaryDirectory(prefix='oh3do-game-folder-') as directory:
-    code, binary = Path(directory) / 'test.c', Path(directory) / 'test'
+with tempfile.TemporaryDirectory(prefix="oh3do-game-folder-") as directory:
+    code, binary = Path(directory) / "test.c", Path(directory) / "test"
     # The launch controller frees its listing after a successful mount. Borrowed
     # entries remain owned by this test, so only stub this allocation operation.
-    code.write_text(stubs + '\n#define ode_listing_free(p) ((void)(p))\n' + controller + checks)
-    subprocess.run([os.environ.get('CC', 'cc'), '-std=c89', '-Wall', '-Wextra', '-Werror', '-Isrc', str(code),
-                    'src/ode.c', 'src/library_features.c', 'src/menu_ui.c', 'src/menu_categories.c', 'src/menu_position.c', 'src/menu_sort.c', 'src/cover_catalog.c',
-                    '-o', str(binary)], cwd=root, check=True)
+    code.write_text(stubs + "\n#define ode_listing_free(p) ((void)(p))\n" + controller + checks)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Isrc",
+            str(code),
+            "src/ode.c",
+            "src/library_features.c",
+            "src/menu_ui.c",
+            "src/menu_categories.c",
+            "src/menu_position.c",
+            "src/menu_sort.c",
+            "src/cover_catalog.c",
+            "-o",
+            str(binary),
+        ],
+        cwd=root,
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)

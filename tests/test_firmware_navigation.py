@@ -22,20 +22,40 @@ def run_fixture(directory, source, name):
     code = directory / f"{name}.c"
     binary = directory / name
     code.write_text(harness.replace("/* INSERT_FIRMWARE_SET_TOC_LEVEL */", extract(source)))
-    subprocess.run([
-        os.environ.get("CC", "cc"), "-std=c99", "-O1", "-Wall", "-Wextra",
-        "-Werror", "-Wno-unused-variable", "-Wno-unused-but-set-variable",
-        "-I", str(ROOT / "src"), str(code), str(ROOT / "src/ode.c"),
-        str(ROOT / "src/art_navigation.c"), str(ROOT / "src/library_navigation.c"),
-        str(ROOT / "src/menu_ui.c"), str(ROOT / "src/menu_categories.c"), str(ROOT / "src/cover_catalog.c"),
-        str(ROOT / "src/menu_sort.c"), str(ROOT / "src/library_features.c"), "-o", str(binary),
-    ], check=True)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c99",
+            "-O1",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-variable",
+            "-Wno-unused-but-set-variable",
+            "-I",
+            str(ROOT / "src"),
+            str(code),
+            str(ROOT / "src/ode.c"),
+            str(ROOT / "src/art_navigation.c"),
+            str(ROOT / "src/library_navigation.c"),
+            str(ROOT / "src/menu_ui.c"),
+            str(ROOT / "src/menu_categories.c"),
+            str(ROOT / "src/cover_catalog.c"),
+            str(ROOT / "src/menu_sort.c"),
+            str(ROOT / "src/library_features.c"),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     return subprocess.run([str(binary)], capture_output=True, text=True)
 
 
 def main():
     if not SOURCE.is_file():
-        raise SystemExit("Check out FCare/SataTo3DO in third_party/SataTo3DO before running this test.")
+        raise SystemExit(
+            "Check out FCare/SataTo3DO in third_party/SataTo3DO before running this test."
+        )
     with tempfile.TemporaryDirectory(prefix="oh3do-firmware-nav-") as temporary:
         directory = Path(temporary)
         original = SOURCE.read_text()
@@ -54,8 +74,13 @@ def main():
         staged = directory / "src/interfaces/MSC.c"
         staged.parent.mkdir(parents=True)
         staged.write_text(original)
-        subprocess.run(["patch", "--batch", "--forward", "-p1", "-i", str(PATCH)],
-                       cwd=directory, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["patch", "--batch", "--forward", "-p1", "-i", str(PATCH)],
+            cwd=directory,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         after = run_fixture(directory, staged.read_text(), "patched")
         print("Patched firmware:")
         print(after.stdout, end="")

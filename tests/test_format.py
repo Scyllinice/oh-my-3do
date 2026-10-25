@@ -4,10 +4,13 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+
 root = Path(__file__).resolve().parent.parent
-source = (root / 'src/main.c').read_text()
-formatter = source[source.index('static void format('):source.index('static unsigned long now_ms(')]
-checks = r'''
+source = (root / "src/main.c").read_text()
+formatter = source[
+    source.index("static void format(") : source.index("static unsigned long now_ms(")
+]
+checks = r"""
 #include <assert.h>
 #include <string.h>
 int main(void) {
@@ -35,9 +38,21 @@ int main(void) {
     puts("Formatter values: queue counts, save sizes, identity, errors and slot paths passed");
     return 0;
 }
-'''
-with tempfile.TemporaryDirectory(prefix='oh3do-format-') as directory:
-    path, binary = Path(directory)/'test.c', Path(directory)/'test'
-    path.write_text('#include <stdio.h>\n#include <stdarg.h>\n' + formatter + checks)
-    subprocess.run([os.environ.get('CC','cc'),'-std=c89','-Wall','-Wextra','-Werror',str(path),'-o',str(binary)],check=True)
-    subprocess.run([str(binary)],check=True)
+"""
+with tempfile.TemporaryDirectory(prefix="oh3do-format-") as directory:
+    path, binary = Path(directory) / "test.c", Path(directory) / "test"
+    path.write_text("#include <stdio.h>\n#include <stdarg.h>\n" + formatter + checks)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            str(path),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    subprocess.run([str(binary)], check=True)

@@ -7,21 +7,32 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
-source = (root / 'src/main.c').read_text()
+source = (root / "src/main.c").read_text()
+
+
 def find(marker, after=0):
     """Where `marker` appears in main.c, ignoring differences in whitespace."""
-    pattern = r'\s*'.join(re.escape(c) for c in marker if not c.isspace())
+    pattern = r"\s*".join(re.escape(c) for c in marker if not c.isspace())
     match = re.compile(pattern).search(source, after)
     if not match:
-        raise ValueError(f'Not found in main.c: {marker!r}')
+        raise ValueError(f"Not found in main.c: {marker!r}")
     return match.start()
+
+
 def section(start, end):
     begin = find(start)
-    return source[begin:find(end, begin)]
-types = section('#define GAME_LOOKUP_SLOTS', '#define SCROLL_MEASURE_SLOTS')
-fields = section('    GameLookup game_lookups[GAME_LOOKUP_SLOTS];', '    ScrollMeasure scroll_measures')
-controller = section('static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{', 'static int compare_title_hash')
-stubs = r'''
+    return source[begin : find(end, begin)]
+
+
+types = section("#define GAME_LOOKUP_SLOTS", "#define SCROLL_MEASURE_SLOTS")
+fields = section(
+    "    GameLookup game_lookups[GAME_LOOKUP_SLOTS];", "    ScrollMeasure scroll_measures"
+)
+controller = section(
+    "static long relative_folder(Menu *menu,char *path,size_t size,size_t room)\n{",
+    "static int compare_title_hash",
+)
+stubs = r"""
 #include "library_index.h"
 #include "library_features.h"
 #include "menu_ui.h"
@@ -46,8 +57,12 @@ const LibraryGameInfo *__real_library_metadata_find(const LibraryMetadata *,cons
 const LibraryGameInfo *__wrap_library_metadata_find(const LibraryMetadata *m,const char *path) {
     ++finds;return __real_library_metadata_find(m,path);
 }
-'''.replace('/*TYPES*/', types).replace('/*FIELDS*/', fields)
-checks = r'''
+""".replace(
+    "/*TYPES*/", types
+).replace(
+    "/*FIELDS*/", fields
+)
+checks = r"""
 int main(void) {
     static Menu m;
     LibraryGameInfo games[]={
@@ -104,12 +119,36 @@ int main(void) {
     puts("Game lookup cache: repeated hits, disc order, missing metadata, eviction and listing/index/depth invalidation passed");
     return 0;
 }
-'''
-with tempfile.TemporaryDirectory(prefix='oh3do-lookups-') as directory:
-    code, binary = Path(directory) / 'test.c', Path(directory) / 'test'
+"""
+with tempfile.TemporaryDirectory(prefix="oh3do-lookups-") as directory:
+    code, binary = Path(directory) / "test.c", Path(directory) / "test"
     code.write_text(stubs + controller + checks)
-    subprocess.run([os.environ.get('CC', 'cc'), '-O2', '-std=c89', '-pedantic', '-Wall', '-Wextra', '-Werror',
-                    '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-Wl,--wrap=menu_disc_group', '-Wl,--wrap=library_metadata_find',
-                    '-Isrc', str(code), 'src/library_index.c', 'src/library_features.c', 'src/menu_sort.c',
-                    'src/menu_ui.c', 'src/menu_categories.c', 'src/cover_catalog.c', '-o', str(binary)], cwd=root, check=True)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-O2",
+            "-std=c89",
+            "-pedantic",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-ffunction-sections",
+            "-fdata-sections",
+            "-Wl,--gc-sections",
+            "-Wl,--wrap=menu_disc_group",
+            "-Wl,--wrap=library_metadata_find",
+            "-Isrc",
+            str(code),
+            "src/library_index.c",
+            "src/library_features.c",
+            "src/menu_sort.c",
+            "src/menu_ui.c",
+            "src/menu_categories.c",
+            "src/cover_catalog.c",
+            "-o",
+            str(binary),
+        ],
+        cwd=root,
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)

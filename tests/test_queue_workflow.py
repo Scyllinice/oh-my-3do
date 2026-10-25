@@ -4,10 +4,15 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
-root=Path(__file__).resolve().parent.parent
-source=(root/'src/main.c').read_text()
-controller=source[source.index('static void current_route(Menu *menu, ArtRouteStep *route)\n{'):source.index('static int queue_set(Menu *menu, const MenuEntry *entry)\n{')]
-stubs=r'''
+
+root = Path(__file__).resolve().parent.parent
+source = (root / "src/main.c").read_text()
+controller = source[
+    source.index("static void current_route(Menu *menu, ArtRouteStep *route)\n{") : source.index(
+        "static int queue_set(Menu *menu, const MenuEntry *entry)\n{"
+    )
+]
+stubs = r"""
 #include "library_navigation.h"
 #include <assert.h>
 #include <stdio.h>
@@ -59,8 +64,8 @@ int library_visit(Ode *ode,const ArtRouteStep *route,unsigned int depth,const Od
     result=action(context,&e,"/Storage/Games");
     return result;
 }
-'''
-checks=r'''
+"""
+checks = r"""
 int main(void) {
     Menu m; int fail;
     for(fail=0;fail<=4;++fail) {
@@ -99,11 +104,27 @@ int main(void) {
     puts("Queue workflow: all paths checked before clear; edited order applied; failed rebuilds cannot launch");
     return 0;
 }
-'''
-with tempfile.TemporaryDirectory(prefix='oh3do-queue-') as directory:
-    path,binary=Path(directory)/'test.c',Path(directory)/'test'
-    navigation=(root/'src/library_navigation.c').read_text()
-    resolver=navigation[navigation.index('int library_current_files('):]
-    path.write_text(stubs+resolver+controller+checks)
-    subprocess.run([os.environ.get('CC','cc'),'-std=c89','-Wall','-Wextra','-Werror','-Isrc',str(path),'src/ode.c','src/menu_sort.c','-o',str(binary)],cwd=root,check=True)
-    subprocess.run([str(binary)],check=True)
+"""
+with tempfile.TemporaryDirectory(prefix="oh3do-queue-") as directory:
+    path, binary = Path(directory) / "test.c", Path(directory) / "test"
+    navigation = (root / "src/library_navigation.c").read_text()
+    resolver = navigation[navigation.index("int library_current_files(") :]
+    path.write_text(stubs + resolver + controller + checks)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Isrc",
+            str(path),
+            "src/ode.c",
+            "src/menu_sort.c",
+            "-o",
+            str(binary),
+        ],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run([str(binary)], check=True)

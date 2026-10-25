@@ -8,8 +8,10 @@ import sys
 
 
 def template_files(sdk):
-    return sorted([sdk / "AppStartup", sdk / "BannerScreen"] +
-                  [path for path in (sdk / "System").rglob("*") if path.is_file()])
+    return sorted(
+        [sdk / "AppStartup", sdk / "BannerScreen"]
+        + [path for path in (sdk / "System").rglob("*") if path.is_file()]
+    )
 
 
 def prepare(stage, audit):
@@ -19,7 +21,9 @@ def prepare(stage, audit):
     expected = {path.relative_to(sdk).as_posix() for path in sources}
     actual = {path.relative_to(stage).as_posix() for path in stage.rglob("*") if path.is_file()}
     if actual != expected:
-        raise ValueError(f"SDK runtime differs: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
+        raise ValueError(
+            f"SDK runtime differs: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}"
+        )
     inventory = []
     for source in sources:
         name = source.relative_to(sdk).as_posix()
@@ -29,14 +33,30 @@ def prepare(stage, audit):
         data = target.read_bytes()
         if data != source.read_bytes():
             raise ValueError(f"Modified SDK runtime component: {name}")
-        inventory.append({"path": name, "bytes": len(data),
-                          "sha256": hashlib.sha256(data).hexdigest(),
-                          "origin": "3do-devkit/takeme/" + name,
-                          "redistribution_permission": "unresolved"})
-    audit.write_text(json.dumps({"runtime_policy": "complete SDK bootstrap template",
-                                "sdk_components": inventory, "removed_files": [],
-                                "project_startup_scripts": []}, indent=2) + "\n")
-    print(f"Runtime: verified all {len(inventory)} SDK bootstrap files; no pruning or startup replacements")
+        inventory.append(
+            {
+                "path": name,
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "origin": "3do-devkit/takeme/" + name,
+                "redistribution_permission": "unresolved",
+            }
+        )
+    audit.write_text(
+        json.dumps(
+            {
+                "runtime_policy": "complete SDK bootstrap template",
+                "sdk_components": inventory,
+                "removed_files": [],
+                "project_startup_scripts": [],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    print(
+        f"Runtime: verified all {len(inventory)} SDK bootstrap files; no pruning or startup replacements"
+    )
 
 
 if __name__ == "__main__":

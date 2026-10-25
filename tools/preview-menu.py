@@ -15,7 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
-STUBS = r'''
+STUBS = r"""
 #include "ode.h"
 #include "menu_config.h"
 #include "menu_ui.h"
@@ -313,9 +313,9 @@ const MenuCover menu_covers[] = {
     {"Road Rash.iso", "$boot/covers/road.cel"}
 };
 const size_t menu_cover_count=2;
-'''
+"""
 
-NVRAM_STUBS = r'''
+NVRAM_STUBS = r"""
 static int preview_mounts;
 static int preview_mount(void *context,const unsigned char *packet,unsigned char *reply,size_t capacity,size_t *length) {
     Menu *menu=(Menu *)context;
@@ -342,9 +342,9 @@ int nvram_preflight(const SaveEntry *entry, NvramInfo *info) { (void)entry; (voi
 int nvram_restore(const SaveEntry *entry, NvramInfo *info) {
     (void)entry; (void)info; ++preview_nvram_writes; return 0;
 }
-'''
+"""
 
-MAIN = r'''
+MAIN = r"""
 static Menu *reading_menu;
 static int reading_fail,reading_transition;
 static int preview_read_directory(Ode *ode, OdeListing *listing) {
@@ -1679,85 +1679,240 @@ int main(int argc, char **argv) {
     ode_listing_free(&menu.listing);
     return 0;
 }
-'''
+"""
 
 
 def color(value):
     value = int(value)
-    return "#" + "".join(f"{((value >> shift) & 31) * 255 // 31:02x}"
-                          for shift in (10, 5, 0))
+    return "#" + "".join(f"{((value >> shift) & 31) * 255 // 31:02x}" for shift in (10, 5, 0))
 
 
 def main():
     source = (ROOT / "src/main.c").read_text()
-    drawing = source[source.index("#define MENU_VERSION"):source.index("static void progress(")]
-    loading = source[source.index("static void progress("):source.index("static int directory_path(")]
-    covers = source[source.index("static int directory_path("):source.index("static void show_demo(")]
-    demo = source[source.index("static void show_demo("):source.index("static void connect_ode(")]
-    back = source[source.index("static void go_back(Menu *menu)\n{"):source.index("static void activate(Menu *menu)")]
-    queue = source[source.index("static void queue_selected_disc(Menu *menu)\n{"):source.index("/* Tools stay available")]
-    tools = source[source.index("/* Tools stay available"):source.index("int main(int argc") ]
+    drawing = source[source.index("#define MENU_VERSION") : source.index("static void progress(")]
+    loading = source[
+        source.index("static void progress(") : source.index("static int directory_path(")
+    ]
+    covers = source[
+        source.index("static int directory_path(") : source.index("static void show_demo(")
+    ]
+    demo = source[source.index("static void show_demo(") : source.index("static void connect_ode(")]
+    back = source[
+        source.index("static void go_back(Menu *menu)\n{") : source.index(
+            "static void activate(Menu *menu)"
+        )
+    ]
+    queue = source[
+        source.index("static void queue_selected_disc(Menu *menu)\n{") : source.index(
+            "/* Tools stay available"
+        )
+    ]
+    tools = source[source.index("/* Tools stay available") : source.index("int main(int argc")]
     font = (ROOT / "third_party/portfolio_os/src/graphics/text_deffont.c").read_text()
     images = {}
     for name, body in re.findall(r"CelData (Image_\w+)\[\]\s*=\s*\{(.*?)\};", font, re.S):
         words = re.findall(r"0x([0-9a-fA-F]{8})", body)
         assert len(words) == 24, name
         images[name] = [int(word, 16) >> 24 for word in words[::3]]
-    glyphs = {char: images[name] for char, name in
-              re.findall(r"\(int32\)'(.)', 8, (Image_\w+)", font)}
+    glyphs = {
+        char: images[name] for char, name in re.findall(r"\(int32\)'(.)', 8, (Image_\w+)", font)
+    }
     logo = base64.b64encode((ROOT / "assets/logo-menu.png").read_bytes()).decode()
-    logo_size = struct.unpack_from('>II', (ROOT / "assets/logo-menu.png").read_bytes(), 16)
+    logo_size = struct.unpack_from(">II", (ROOT / "assets/logo-menu.png").read_bytes(), 16)
     output = ROOT / "build"
     output.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as directory:
         code, binary = Path(directory) / "preview.c", Path(directory) / "preview"
-        code.write_text(STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + drawing + '\n#define ode_read_directory preview_read_directory\n' +
-                        '\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n' + loading + '\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_reclaim preview_video_load_profiled\n#define usb_png_cover preview_png_load\n' + covers + '\n#undef usb_preview_load_reclaim\n#undef usb_png_cover\n' + demo + back + NVRAM_STUBS + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n" + queue + tools + MAIN)
+        code.write_text(
+            STUBS
+            + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n"
+            + drawing
+            + "\n#define ode_read_directory preview_read_directory\n"
+            + "\n#define usb_art_index_load preview_art_index\n#define usb_media_index_load preview_video_index\n#define library_metadata_load preview_metadata_index\n"
+            + loading
+            + "\n#undef usb_art_index_load\n#undef usb_media_index_load\n#undef library_metadata_load\n#undef ode_read_directory\n#define usb_preview_load_reclaim preview_video_load_profiled\n#define usb_png_cover preview_png_load\n"
+            + covers
+            + "\n#undef usb_preview_load_reclaim\n#undef usb_png_cover\n"
+            + demo
+            + back
+            + NVRAM_STUBS
+            + "\n#define usb_file_text preview_text_read\n#define usb_file_text_write preview_text_write\n"
+            + queue
+            + tools
+            + MAIN
+        )
         (output / "menu-preview.c").write_text(code.read_text())
-        subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"),
-                        str(code), str(ROOT / "src/ode.c"), str(ROOT / "src/menu_sort.c"),
-                        str(ROOT / "src/menu_help.c"), str(ROOT / "src/game_info.c"), str(ROOT / "src/menu_ui.c"), str(ROOT / "src/menu_categories.c"), str(ROOT / "src/ui_font.c"),
-                        str(ROOT / "src/usb_art.c"), str(ROOT / "src/cover_cache.c"), str(ROOT / "src/usb_media.c"), str(ROOT / "src/preview_v5.c"), str(ROOT / "src/preview_v7.c"), str(ROOT / "src/preview_stream.c"), str(ROOT / "src/png_decode.c"), str(ROOT / "src/png_inflate.c"), str(ROOT / "src/art_navigation.c"),
-                        str(ROOT / "src/save_archive.c"), str(ROOT / "src/save_cheats.c"), str(ROOT / "src/save_cheats_usb.c"), str(ROOT / "src/save_usb.c"), str(ROOT / "src/save_names.c"), str(ROOT / "src/save_catalog.c"),
-                        str(ROOT / "src/library_index.c"), str(ROOT / "src/library_features.c"), str(ROOT / "src/library_navigation.c"),
-                        str(ROOT / "src/menu_settings.c"), str(ROOT / "src/menu_config.c"), str(ROOT / "src/menu_position.c"),
-                        "-o", str(binary)], check=True)
+        subprocess.run(
+            [
+                os.environ.get("CC", "cc"),
+                "-std=c99",
+                "-O1",
+                "-I",
+                str(ROOT / "src"),
+                str(code),
+                str(ROOT / "src/ode.c"),
+                str(ROOT / "src/menu_sort.c"),
+                str(ROOT / "src/menu_help.c"),
+                str(ROOT / "src/game_info.c"),
+                str(ROOT / "src/menu_ui.c"),
+                str(ROOT / "src/menu_categories.c"),
+                str(ROOT / "src/ui_font.c"),
+                str(ROOT / "src/usb_art.c"),
+                str(ROOT / "src/cover_cache.c"),
+                str(ROOT / "src/usb_media.c"),
+                str(ROOT / "src/preview_v5.c"),
+                str(ROOT / "src/preview_v7.c"),
+                str(ROOT / "src/preview_stream.c"),
+                str(ROOT / "src/png_decode.c"),
+                str(ROOT / "src/png_inflate.c"),
+                str(ROOT / "src/art_navigation.c"),
+                str(ROOT / "src/save_archive.c"),
+                str(ROOT / "src/save_cheats.c"),
+                str(ROOT / "src/save_cheats_usb.c"),
+                str(ROOT / "src/save_usb.c"),
+                str(ROOT / "src/save_names.c"),
+                str(ROOT / "src/save_catalog.c"),
+                str(ROOT / "src/library_index.c"),
+                str(ROOT / "src/library_features.c"),
+                str(ROOT / "src/library_navigation.c"),
+                str(ROOT / "src/menu_settings.c"),
+                str(ROOT / "src/menu_config.c"),
+                str(ROOT / "src/menu_position.c"),
+                "-o",
+                str(binary),
+            ],
+            check=True,
+        )
         subprocess.run([str(binary), "self-test"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([str(binary), "browser-render"], check=True, stdout=subprocess.DEVNULL)
-        print("Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed")
-        subprocess.run([str(binary),"font-memory"],stdout=subprocess.DEVNULL,check=True)
-        subprocess.run([str(binary),"font-measure-bench"],stdout=subprocess.DEVNULL,check=True)
-        subprocess.run([str(binary),"tools-return"],stdout=subprocess.DEVNULL,check=True)
-        subprocess.run([str(binary),"idle-draw-bench"],stdout=subprocess.DEVNULL,check=True)
-        subprocess.run([str(binary),"fullscreen-render"],stdout=subprocess.DEVNULL,check=True)
-        playback=subprocess.check_output([str(binary),"gecko-playback"],text=True).split("FRAME ")[1:]
-        logos=[sum(line.startswith("I 1 ") for line in frame.splitlines()) for frame in playback]
-        assert logos==[1,1,0,0,1], logos  # light frames leave the list panel alone; a new selection redraws it
+        print(
+            "Menu view/input: preview scheduling/playback/cancellation, alphabet focus/jump/cancel, browser, configuration discard, find keyboard, history persistence, favorite ordering and diagnostics export passed"
+        )
+        subprocess.run([str(binary), "font-memory"], stdout=subprocess.DEVNULL, check=True)
+        subprocess.run([str(binary), "font-measure-bench"], stdout=subprocess.DEVNULL, check=True)
+        subprocess.run([str(binary), "tools-return"], stdout=subprocess.DEVNULL, check=True)
+        subprocess.run([str(binary), "idle-draw-bench"], stdout=subprocess.DEVNULL, check=True)
+        subprocess.run([str(binary), "fullscreen-render"], stdout=subprocess.DEVNULL, check=True)
+        playback = subprocess.check_output([str(binary), "gecko-playback"], text=True).split(
+            "FRAME "
+        )[1:]
+        logos = [sum(line.startswith("I 1 ") for line in frame.splitlines()) for frame in playback]
+        assert logos == [
+            1,
+            1,
+            0,
+            0,
+            1,
+        ], logos  # light frames leave the list panel alone; a new selection redraws it
         print("Gecko playback: picture-only frames once both buffers hold the list panel")
-        timing_lines=subprocess.check_output([str(binary),"diagnostics-preview"],text=True).splitlines()
+        timing_lines = subprocess.check_output(
+            [str(binary), "diagnostics-preview"], text=True
+        ).splitlines()
         assert "L Last preview load" in timing_lines and "L Read + CRC: 24100ms" in timing_lines
-        assert "L Folder navigation: 7100ms" in timing_lines and "L Frames: 225 at 15 fps" in timing_lines
-        file_lines=subprocess.check_output([str(binary),"diagnostics-file"],text=True).splitlines()
-        assert "L Last requested USB file:" in file_lines and "L Indexes: 536 covers / 282 clips" in file_lines
-        assert "L Game metadata: 483 entries" in file_lines and "L Retained after a USB timeout." in file_lines
-        for mode in ("context-help", "context-hex", "context-confirm", "library", "queue", "cover", "loading", "nested", "tools", "help", "diagnostics", "diagnostics-state", "diagnostics-checked", "saves", "save-usb", "save-hex", "restore", "display", "display-save", "large", "margin", "favorites", "slot-details", "find", "filtered", "unsaved", "recent", "alphabet", "alphabet-large", "tools-margin", "settings-margin", "results", "formats", "formats-large", "metadata", "metadata-large", "metadata-margin", "metadata-missing", "metadata-long", "gecko", "gecko-metadata", "gecko-cover", "gecko-preview", "gecko-folder", "gecko-tools", "gecko-settings", "gecko-large", "gecko-margin", "gecko-alphabet", "gecko-tuning", "gecko-queued", "gecko-folder-game", "gecko-full", "gecko-preview-full"):
+        assert (
+            "L Folder navigation: 7100ms" in timing_lines
+            and "L Frames: 225 at 15 fps" in timing_lines
+        )
+        file_lines = subprocess.check_output(
+            [str(binary), "diagnostics-file"], text=True
+        ).splitlines()
+        assert (
+            "L Last requested USB file:" in file_lines
+            and "L Indexes: 536 covers / 282 clips" in file_lines
+        )
+        assert (
+            "L Game metadata: 483 entries" in file_lines
+            and "L Retained after a USB timeout." in file_lines
+        )
+        for mode in (
+            "context-help",
+            "context-hex",
+            "context-confirm",
+            "library",
+            "queue",
+            "cover",
+            "loading",
+            "nested",
+            "tools",
+            "help",
+            "diagnostics",
+            "diagnostics-state",
+            "diagnostics-checked",
+            "saves",
+            "save-usb",
+            "save-hex",
+            "restore",
+            "display",
+            "display-save",
+            "large",
+            "margin",
+            "favorites",
+            "slot-details",
+            "find",
+            "filtered",
+            "unsaved",
+            "recent",
+            "alphabet",
+            "alphabet-large",
+            "tools-margin",
+            "settings-margin",
+            "results",
+            "formats",
+            "formats-large",
+            "metadata",
+            "metadata-large",
+            "metadata-margin",
+            "metadata-missing",
+            "metadata-long",
+            "gecko",
+            "gecko-metadata",
+            "gecko-cover",
+            "gecko-preview",
+            "gecko-folder",
+            "gecko-tools",
+            "gecko-settings",
+            "gecko-large",
+            "gecko-margin",
+            "gecko-alphabet",
+            "gecko-tuning",
+            "gecko-queued",
+            "gecko-folder-game",
+            "gecko-full",
+            "gecko-preview-full",
+        ):
             commands = subprocess.check_output([str(binary), mode], text=True).splitlines()
             if mode == "gecko-cover":
-                assert sum(command.startswith("I 2 ") for command in commands)==1, "Draw one centered cover without a stretched duplicate"
+                assert (
+                    sum(command.startswith("I 2 ") for command in commands) == 1
+                ), "Draw one centered cover without a stretched duplicate"
             if mode.startswith("gecko") and mode not in ("gecko-full", "gecko-preview-full"):
-                assert sum(command.startswith("I 1 ") for command in commands) == 1, "Gecko TV must retain the graphical logo"
+                assert (
+                    sum(command.startswith("I 1 ") for command in commands) == 1
+                ), "Gecko TV must retain the graphical logo"
             if mode == "gecko-folder-game":
-                assert "L Adventure  -  1994" in commands and "L Play" in commands and "L Browse folder" not in commands
+                assert (
+                    "L Adventure  -  1994" in commands
+                    and "L Play" in commands
+                    and "L Browse folder" not in commands
+                )
             if mode == "gecko-queued":
-                assert "L QUEUE 2" in commands and "L Queue" in commands  # OSD readout and the P prompt
+                assert (
+                    "L QUEUE 2" in commands and "L Queue" in commands
+                )  # OSD readout and the P prompt
             if mode == "gecko-preview-full":
                 assert "I 4 0.000000 0.000000 2.000000 2.000000" in commands
             if mode == "gecko-preview":
                 assert "L Cover" in commands  # X swaps the playing preview for the cover
-                assert "I 4 152.000000 45.000000 1.000000 1.000000" in commands  # the whole frame at native size, beside the solid list
+                assert (
+                    "I 4 152.000000 45.000000 1.000000 1.000000" in commands
+                )  # the whole frame at native size, beside the solid list
             if mode == "gecko-settings":
-                assert "L Folder workaround" in commands and "L AUTO" in commands and not any("Theme" in c for c in commands)
-            if mode in ("metadata","metadata-large","metadata-margin"):
+                assert (
+                    "L Folder workaround" in commands
+                    and "L AUTO" in commands
+                    and not any("Theme" in c for c in commands)
+                )
+            if mode in ("metadata", "metadata-large", "metadata-margin"):
                 assert "L Adventure  -  1994" in commands and "L Infogrames" in commands
             if mode == "metadata-missing":
                 assert "L No game information" in commands
@@ -1767,66 +1922,88 @@ def main():
                 assert not any("USB write" in command for command in commands)
             if mode == "diagnostics-checked":
                 assert any("USB write check: PASS" in command for command in commands)
-            svg = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="240" '
-                   'viewBox="0 0 320 240" shape-rendering="crispEdges">']
+            svg = [
+                '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="320" height="240" '
+                'viewBox="0 0 320 240" shape-rendering="crispEdges">'
+            ]
             for command in commands:
                 if command.startswith("L "):
                     continue
                 if command.startswith("B "):
                     _, x, y, sx, sy, c, width, height, data = command.split()
-                    x,y,sx,sy=map(float,(x,y,sx,sy))
-                    data=bytes.fromhex(data)
-                    palette=c.split(",")
+                    x, y, sx, sy = map(float, (x, y, sx, sy))
+                    data = bytes.fromhex(data)
+                    palette = c.split(",")
                     # Text is drawn in screen pixels; the mascot uses the
                     # menu's margin transform like the other artwork cels.
                     assert 0 < sx <= 1 and 0 < sy <= 1
                     for row in range(int(height)):
                         for col in range(int(width)):
-                            coverage=(data[row*144+col//2] >> (0 if col%2 else 4)) & 15
+                            coverage = (data[row * 144 + col // 2] >> (0 if col % 2 else 4)) & 15
                             if coverage:
-                                assert 0 <= x+col*sx < 320 and 0 <= y+row*sy < 240
-                                svg.append(f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" height="{sy}" fill="{color(palette[coverage])}"/>')
+                                assert 0 <= x + col * sx < 320 and 0 <= y + row * sy < 240
+                                svg.append(
+                                    f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" height="{sy}" fill="{color(palette[coverage])}"/>'
+                                )
                 elif command.startswith("P "):
                     _, x, y, sx, sy, width, height, data = command.split()
-                    x,y,sx,sy=map(float,(x,y,sx,sy))
-                    width,height=int(width),int(height)
+                    x, y, sx, sy = map(float, (x, y, sx, sy))
+                    width, height = int(width), int(height)
                     for row in range(height):
-                        top=y+row*sy if sy>0 else y+row*sy+sy+1
+                        top = y + row * sy if sy > 0 else y + row * sy + sy + 1
                         for col in range(width):
-                            value=int(data[(row*width+col)*4:(row*width+col)*4+4],16)
-                            left=x+col*sx
+                            value = int(
+                                data[(row * width + col) * 4 : (row * width + col) * 4 + 4], 16
+                            )
+                            left = x + col * sx
                             if value and -abs(sx) < left < 320 and -abs(sy) < top < 240:
-                                svg.append(f'<rect x="{left}" y="{top}" width="{sx}" height="{abs(sy)}" fill="{color(str(value))}"/>')
+                                svg.append(
+                                    f'<rect x="{left}" y="{top}" width="{sx}" height="{abs(sy)}" fill="{color(str(value))}"/>'
+                                )
                 elif command.startswith("I "):
                     _, tag, x, y, sx, sy = command.split()
-                    x,y,sx,sy=map(float,(x,y,sx,sy))
-                    source_art = ROOT / ("assets/demo-preview.svg" if tag == "4" else "assets/demo-cover.png" if tag == "2" else "assets/logo-menu.png")
+                    x, y, sx, sy = map(float, (x, y, sx, sy))
+                    source_art = ROOT / (
+                        "assets/demo-preview.svg"
+                        if tag == "4"
+                        else "assets/demo-cover.png" if tag == "2" else "assets/logo-menu.png"
+                    )
                     art = base64.b64encode(source_art.read_bytes()).decode()
-                    width,height=(160,120) if tag == "4" else (64,80) if tag == "2" else logo_size
-                    svg.append(f'<image x="{x}" y="{y}" width="{width*sx}" height="{height*sy}" '
-                               f'xlink:href="data:{"image/svg+xml" if tag == "4" else "image/png"};base64,{art}"/>')
+                    width, height = (
+                        (160, 120) if tag == "4" else (64, 80) if tag == "2" else logo_size
+                    )
+                    svg.append(
+                        f'<image x="{x}" y="{y}" width="{width*sx}" height="{height*sy}" '
+                        f'xlink:href="data:{"image/svg+xml" if tag == "4" else "image/png"};base64,{art}"/>'
+                    )
                 elif command.startswith("G "):
                     _, x, y, w, h, c, keep = command.split()
                     assert 0 <= int(x) < int(x) + int(w) <= 320
                     assert 0 <= int(y) < int(y) + int(h) <= 240
-                    svg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{color(c)}" fill-opacity="{(8-int(keep))/8}"/>')
+                    svg.append(
+                        f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{color(c)}" fill-opacity="{(8-int(keep))/8}"/>'
+                    )
                 elif command.startswith("R "):
                     _, x, y, w, h, c = command.split()
                     assert 0 <= int(x) < int(x) + int(w) <= 320
                     assert 0 <= int(y) < int(y) + int(h) <= 240
-                    svg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{color(c)}"/>')
+                    svg.append(
+                        f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{color(c)}"/>'
+                    )
                 else:
                     _, x, y, c, sx, sy, label = command.split(" ", 6)
                     x, y = float(x), float(y)
-                    sx,sy=float(sx),float(sy)
-                    assert x >= 0 and x + (len(label)-1)*8 + 8*sx <= 320.01, label
-                    assert y >= 0 and y + 8*sy <= 240.01, label
+                    sx, sy = float(sx), float(sy)
+                    assert x >= 0 and x + (len(label) - 1) * 8 + 8 * sx <= 320.01, label
+                    assert y >= 0 and y + 8 * sy <= 240.01, label
                     for char in label.upper():
                         for row, bits in enumerate(glyphs.get(char, images["Image_WhatTheHell"])):
                             for col in range(8):
                                 if bits & (128 >> col):
-                                    svg.append(f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" '
-                                               f'height="{sy}" fill="{color(c)}"/>')
+                                    svg.append(
+                                        f'<rect x="{x+col*sx}" y="{y+row*sy}" width="{sx}" '
+                                        f'height="{sy}" fill="{color(c)}"/>'
+                                    )
                         x += 8
             svg.append("</svg>")
             target = output / f"menu-preview-{mode}.svg"
@@ -1836,15 +2013,27 @@ def main():
                 # ImageMagick's internal SVG reader cannot resolve data URLs.
                 # Use an absolute asset path in its temporary input only.
                 local = Path(directory) / "render.svg"
-                local.write_text(target.read_text().replace(
-                    f"data:image/png;base64,{logo}", str(ROOT / "assets/logo-menu.png")).replace(
-                    "data:image/png;base64," + base64.b64encode((ROOT / "assets/demo-cover.png").read_bytes()).decode(),
-                    str(ROOT / "assets/demo-cover.png")).replace(
-                    "data:image/svg+xml;base64," + base64.b64encode((ROOT / "assets/demo-preview.svg").read_bytes()).decode(),
-                    str(ROOT / "assets/demo-preview.svg")))
+                local.write_text(
+                    target.read_text()
+                    .replace(f"data:image/png;base64,{logo}", str(ROOT / "assets/logo-menu.png"))
+                    .replace(
+                        "data:image/png;base64,"
+                        + base64.b64encode((ROOT / "assets/demo-cover.png").read_bytes()).decode(),
+                        str(ROOT / "assets/demo-cover.png"),
+                    )
+                    .replace(
+                        "data:image/svg+xml;base64,"
+                        + base64.b64encode(
+                            (ROOT / "assets/demo-preview.svg").read_bytes()
+                        ).decode(),
+                        str(ROOT / "assets/demo-preview.svg"),
+                    )
+                )
                 png = target.with_suffix(".png")
-                subprocess.run(["magick", str(local), "-filter", "point",
-                                "-resize", "960x720", str(png)], check=True)
+                subprocess.run(
+                    ["magick", str(local), "-filter", "point", "-resize", "960x720", str(png)],
+                    check=True,
+                )
                 print(png)
 
 

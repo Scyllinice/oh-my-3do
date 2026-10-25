@@ -36,11 +36,17 @@ def validate_cel(path):
             flags = struct.unpack_from(">I", data, offset + 12)[0]
             pre0, pre1 = struct.unpack_from(">II", data, offset + 64)
             width, height = struct.unpack_from(">II", data, offset + 72)
-            if ((width, height) != (64, 80) or not flags & 0x40000000 or
-                    not flags & 0x00400000 or flags & 0x00000200 or
-                    pre0 & 0x17 != 0x16 or ((pre0 >> 6) & 0x3ff) + 1 != 80 or
-                    pre1 & 0x800 or (pre1 & 0x7ff) + 1 != 64 or
-                    (((pre1 >> 16) & 0x3ff) + 2) * 4 != 128):
+            if (
+                (width, height) != (64, 80)
+                or not flags & 0x40000000
+                or not flags & 0x00400000
+                or flags & 0x00000200
+                or pre0 & 0x17 != 0x16
+                or ((pre0 >> 6) & 0x3FF) + 1 != 80
+                or pre1 & 0x800
+                or (pre1 & 0x7FF) + 1 != 64
+                or (((pre1 >> 16) & 0x3FF) + 2) * 4 != 128
+            ):
                 raise ValueError(f"Cover must be a single unpacked 16-bit 64x80 cel: {path}")
             found = True
         elif kind == b"PDAT":
@@ -73,8 +79,11 @@ def main():
     rows.sort()
     if sum(len(game.encode()) + len(file.encode()) + 10 for _, game, file in rows) > 128 * 1024:
         raise ValueError("Cover catalogue exceeds the 128 KiB memory budget")
-    code = ['/* Offline demo catalogue. Normal artwork is loaded from USB. */',
-            '#include "menu_ui.h"', 'const MenuCover menu_covers[] = {']
+    code = [
+        "/* Offline demo catalogue. Normal artwork is loaded from USB. */",
+        '#include "menu_ui.h"',
+        "const MenuCover menu_covers[] = {",
+    ]
     code.extend(f"    {{{c_string(game)}, {c_string(file)}}}," for _, game, file in rows)
     if not rows:
         code.append("    {NULL, NULL},")

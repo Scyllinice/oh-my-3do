@@ -8,102 +8,192 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
 def normalized(db):
-    db=json.loads(json.dumps(db))
-    assert db['version']==1 and 1<=len(db['profiles'])<=128
-    ids=set(); layouts=set()
-    for p in db['profiles']:
-        assert p['id'] not in ids; ids.add(p['id'])
-        assert p['encoding'] in ('u32be','be') and 8<=p['size']<=32768 and p['size']%4==0
-        sig=p['signature']; sig.setdefault('width',4)
-        check=p['checksum']
-        assert check['algorithm'] in ('sum32be','none')
-        assert check['offset']==p['size']-(4 if check['algorithm']=='sum32be' else 0)
-        assert 0<=check['seed']<=0xffffffff and (check['algorithm']!='none' or check['seed']==0)
-        assert sig['width'] in (1,2,4) and 0<=sig['offset']<=check['offset']-sig['width'] and 0<=sig['value']<1<<(8*sig['width'])
-        layout=(p['filename'],p['size'],sig['offset'],sig['value']);assert layout not in layouts;layouts.add(layout)
-        assert p['source'].startswith('https://') and p['notes']
-        for text,limit in [(p['id'],63),(p['game'],31),(p['filename'],31),*[(f['label'],25) for f in p['fields']],*[(x['label'],34) for x in p['presets']]]:
-            assert text and len(text)<=limit and all(32<=ord(c)<127 for c in text)
-        assert p['filename'] not in ('.','..') and not any(c in p['filename'] for c in '/\\:')
-        assert 1<=len(p['fields'])<=160 and 1<=len(p['presets'])<=32
-        occupied=bytearray(p['size']);occupied[sig['offset']:sig['offset']+sig['width']]=bytes([255])*sig['width']
-        for f in p['fields']:
-            f.setdefault('width',4);f.setdefault('mask',0xffffffff)
-            assert f['width'] in (1,2,4) and 0<=f['offset']<=check['offset']-f['width'] and 0<f['mask']<1<<(f['width']*8)
-            shifted=f['mask']//(f['mask']&-f['mask'])
-            assert shifted&(shifted+1)==0 and 0<=f['min']<=f['max']<=shifted
-            for i,bits in enumerate(f['mask'].to_bytes(f['width'],'big')):
-                assert not occupied[f['offset']+i]&bits
-                occupied[f['offset']+i]|=bits
-        for x in p['presets']:
-            x.setdefault('additional',[]);assert len(x['additional'])<160
-            used=set()
-            for c in [x,*x['additional']]:
-                assert 0<=c['field']<len(p['fields']) and c['field'] not in used;used.add(c['field'])
-                f=p['fields'][c['field']];assert f['min']<=c['value']<=f['max']
+    db = json.loads(json.dumps(db))
+    assert db["version"] == 1 and 1 <= len(db["profiles"]) <= 128
+    ids = set()
+    layouts = set()
+    for p in db["profiles"]:
+        assert p["id"] not in ids
+        ids.add(p["id"])
+        assert p["encoding"] in ("u32be", "be") and 8 <= p["size"] <= 32768 and p["size"] % 4 == 0
+        sig = p["signature"]
+        sig.setdefault("width", 4)
+        check = p["checksum"]
+        assert check["algorithm"] in ("sum32be", "none")
+        assert check["offset"] == p["size"] - (4 if check["algorithm"] == "sum32be" else 0)
+        assert 0 <= check["seed"] <= 0xFFFFFFFF and (
+            check["algorithm"] != "none" or check["seed"] == 0
+        )
+        assert (
+            sig["width"] in (1, 2, 4)
+            and 0 <= sig["offset"] <= check["offset"] - sig["width"]
+            and 0 <= sig["value"] < 1 << (8 * sig["width"])
+        )
+        layout = (p["filename"], p["size"], sig["offset"], sig["value"])
+        assert layout not in layouts
+        layouts.add(layout)
+        assert p["source"].startswith("https://") and p["notes"]
+        for text, limit in [
+            (p["id"], 63),
+            (p["game"], 31),
+            (p["filename"], 31),
+            *[(f["label"], 25) for f in p["fields"]],
+            *[(x["label"], 34) for x in p["presets"]],
+        ]:
+            assert text and len(text) <= limit and all(32 <= ord(c) < 127 for c in text)
+        assert p["filename"] not in (".", "..") and not any(c in p["filename"] for c in "/\\:")
+        assert 1 <= len(p["fields"]) <= 160 and 1 <= len(p["presets"]) <= 32
+        occupied = bytearray(p["size"])
+        occupied[sig["offset"] : sig["offset"] + sig["width"]] = bytes([255]) * sig["width"]
+        for f in p["fields"]:
+            f.setdefault("width", 4)
+            f.setdefault("mask", 0xFFFFFFFF)
+            assert (
+                f["width"] in (1, 2, 4)
+                and 0 <= f["offset"] <= check["offset"] - f["width"]
+                and 0 < f["mask"] < 1 << (f["width"] * 8)
+            )
+            shifted = f["mask"] // (f["mask"] & -f["mask"])
+            assert shifted & (shifted + 1) == 0 and 0 <= f["min"] <= f["max"] <= shifted
+            for i, bits in enumerate(f["mask"].to_bytes(f["width"], "big")):
+                assert not occupied[f["offset"] + i] & bits
+                occupied[f["offset"] + i] |= bits
+        for x in p["presets"]:
+            x.setdefault("additional", [])
+            assert len(x["additional"]) < 160
+            used = set()
+            for c in [x, *x["additional"]]:
+                assert 0 <= c["field"] < len(p["fields"]) and c["field"] not in used
+                used.add(c["field"])
+                f = p["fields"][c["field"]]
+                assert f["min"] <= c["value"] <= f["max"]
     return db
 
+
 def generate(db):
-    db=normalized(db)
-    out=['/* Generated by tools/build-save-cheats.py; edit data/save-cheats.json. */']
-    for i,p in enumerate(db['profiles']):
-        out.append(f'static const SaveCheatField cheat_fields_{i}[] = {{')
-        for f in p['fields']:
-            out.append('    {%s,%d,%dUL,%dUL,%d,%dUL},'%(json.dumps(f['label']),f['offset'],f['min'],f['max'],f['width'],f['mask']))
-        out.append('};')
-        for j,x in enumerate(p['presets']):
-            if x['additional']:
-                out.append(f'static const SaveCheatChange cheat_changes_{i}_{j}[] = {{')
-                out.extend('    {%d,%dUL},'%(c['field'],c['value']) for c in x['additional']);out.append('};')
-        out.append(f'static const SaveCheatPreset cheat_presets_{i}[] = {{')
-        for j,x in enumerate(p['presets']):
-            changes=f'cheat_changes_{i}_{j}' if x['additional'] else 'NULL'
-            out.append('    {%s,%d,%dUL,%s,%d},'%(json.dumps(x['label']),x['field'],x['value'],changes,len(x['additional'])))
-        out.append('};')
-    out.append('static const SaveCheatProfile cheat_profiles[] = {')
-    for i,p in enumerate(db['profiles']):
-        out.append('    {%s,%s,%s,%d,%d,%dUL,%d,%dUL,cheat_fields_%d,%d,cheat_presets_%d,%d,%d,%d},'%(
-            json.dumps(p['id']),json.dumps(p['game']),json.dumps(p['filename']),p['size'],p['signature']['offset'],p['signature']['value'],p['checksum']['offset'],p['checksum']['seed'],i,len(p['fields']),i,len(p['presets']),p['signature']['width'],int(p['checksum']['algorithm']!='none')))
-    out.append('};');return '\n'.join(out)+'\n'
+    db = normalized(db)
+    out = ["/* Generated by tools/build-save-cheats.py; edit data/save-cheats.json. */"]
+    for i, p in enumerate(db["profiles"]):
+        out.append(f"static const SaveCheatField cheat_fields_{i}[] = {{")
+        for f in p["fields"]:
+            out.append(
+                "    {%s,%d,%dUL,%dUL,%d,%dUL},"
+                % (json.dumps(f["label"]), f["offset"], f["min"], f["max"], f["width"], f["mask"])
+            )
+        out.append("};")
+        for j, x in enumerate(p["presets"]):
+            if x["additional"]:
+                out.append(f"static const SaveCheatChange cheat_changes_{i}_{j}[] = {{")
+                out.extend("    {%d,%dUL}," % (c["field"], c["value"]) for c in x["additional"])
+                out.append("};")
+        out.append(f"static const SaveCheatPreset cheat_presets_{i}[] = {{")
+        for j, x in enumerate(p["presets"]):
+            changes = f"cheat_changes_{i}_{j}" if x["additional"] else "NULL"
+            out.append(
+                "    {%s,%d,%dUL,%s,%d},"
+                % (json.dumps(x["label"]), x["field"], x["value"], changes, len(x["additional"]))
+            )
+        out.append("};")
+    out.append("static const SaveCheatProfile cheat_profiles[] = {")
+    for i, p in enumerate(db["profiles"]):
+        out.append(
+            "    {%s,%s,%s,%d,%d,%dUL,%d,%dUL,cheat_fields_%d,%d,cheat_presets_%d,%d,%d,%d},"
+            % (
+                json.dumps(p["id"]),
+                json.dumps(p["game"]),
+                json.dumps(p["filename"]),
+                p["size"],
+                p["signature"]["offset"],
+                p["signature"]["value"],
+                p["checksum"]["offset"],
+                p["checksum"]["seed"],
+                i,
+                len(p["fields"]),
+                i,
+                len(p["presets"]),
+                p["signature"]["width"],
+                int(p["checksum"]["algorithm"] != "none"),
+            )
+        )
+    out.append("};")
+    return "\n".join(out) + "\n"
+
 
 def binary(db):
-    db=normalized(db)
-    def text(value,size):return value.encode('ascii').ljust(size,b'\0')
-    payload=bytearray()
-    for p in db['profiles']:
-        length=176+48*len(p['fields'])+sum(48+8*len(x['additional']) for x in p['presets'])
-        payload+=struct.pack('>12I',length,p['size'],p['signature']['offset'],p['signature']['value'],p['checksum']['offset'],p['checksum']['seed'],len(p['fields']),len(p['presets']),p['signature']['width'],int(p['checksum']['algorithm']!='none'),0,0)
-        payload+=text(p['id'],64)+text(p['game'],32)+text(p['filename'],32)
-        for f in p['fields']:payload+=text(f['label'],28)+struct.pack('>5I',f['offset'],f['min'],f['max'],f['width'],f['mask'])
-        for x in p['presets']:
-            payload+=text(x['label'],36)+struct.pack('>3I',x['field'],x['value'],len(x['additional']))
-            for c in x['additional']:payload+=struct.pack('>2I',c['field'],c['value'])
-    assert len(payload)+24<=65536
-    return b'OM3DCHT2'+struct.pack('>4I',24+len(payload),len(db['profiles']),zlib.crc32(payload),0)+payload
+    db = normalized(db)
+
+    def text(value, size):
+        return value.encode("ascii").ljust(size, b"\0")
+
+    payload = bytearray()
+    for p in db["profiles"]:
+        length = (
+            176 + 48 * len(p["fields"]) + sum(48 + 8 * len(x["additional"]) for x in p["presets"])
+        )
+        payload += struct.pack(
+            ">12I",
+            length,
+            p["size"],
+            p["signature"]["offset"],
+            p["signature"]["value"],
+            p["checksum"]["offset"],
+            p["checksum"]["seed"],
+            len(p["fields"]),
+            len(p["presets"]),
+            p["signature"]["width"],
+            int(p["checksum"]["algorithm"] != "none"),
+            0,
+            0,
+        )
+        payload += text(p["id"], 64) + text(p["game"], 32) + text(p["filename"], 32)
+        for f in p["fields"]:
+            payload += text(f["label"], 28) + struct.pack(
+                ">5I", f["offset"], f["min"], f["max"], f["width"], f["mask"]
+            )
+        for x in p["presets"]:
+            payload += text(x["label"], 36) + struct.pack(
+                ">3I", x["field"], x["value"], len(x["additional"])
+            )
+            for c in x["additional"]:
+                payload += struct.pack(">2I", c["field"], c["value"])
+    assert len(payload) + 24 <= 65536
+    return (
+        b"OM3DCHT2"
+        + struct.pack(">4I", 24 + len(payload), len(db["profiles"]), zlib.crc32(payload), 0)
+        + payload
+    )
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--check', action='store_true')
-    parser.add_argument('--binary', type=Path, help='Export the compact console database')
-    parser.add_argument('--source', type=Path, default=ROOT/'data/save-cheats.json')
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--binary", type=Path, help="Export the compact console database")
+    parser.add_argument("--source", type=Path, default=ROOT / "data/save-cheats.json")
     args = parser.parse_args()
-    if args.source != ROOT/'data/save-cheats.json' and not args.binary:
-        parser.error('--source requires --binary; custom exports do not replace the bundled fallback')
+    if args.source != ROOT / "data/save-cheats.json" and not args.binary:
+        parser.error(
+            "--source requires --binary; custom exports do not replace the bundled fallback"
+        )
     db = json.loads(args.source.read_text())
     output = generate(db)
     if args.binary:
         args.binary.parent.mkdir(parents=True, exist_ok=True)
         args.binary.write_bytes(binary(db))
-    if args.source != ROOT/'data/save-cheats.json':
-        print('Custom console database exported; bundled fallback unchanged')
+    if args.source != ROOT / "data/save-cheats.json":
+        print("Custom console database exported; bundled fallback unchanged")
         return
-    target = ROOT / 'src/save_cheat_db.h'
+    target = ROOT / "src/save_cheat_db.h"
     if args.check:
-        assert target.read_text() == output, 'Run python3 tools/build-save-cheats.py'
+        assert target.read_text() == output, "Run python3 tools/build-save-cheats.py"
     else:
         target.write_text(output)
-    print('Save cheats: shared database validated; C tables ' + ('current' if args.check else 'generated'))
+    print(
+        "Save cheats: shared database validated; C tables "
+        + ("current" if args.check else "generated")
+    )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

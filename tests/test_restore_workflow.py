@@ -10,9 +10,13 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
-source = (root / 'src/main.c').read_text()
-controller = source[source.index('static void restore_selected('):source.index('static void tools_input(Menu *menu, u32 pressed)\n{')]
-stubs = r'''
+source = (root / "src/main.c").read_text()
+controller = source[
+    source.index("static void restore_selected(") : source.index(
+        "static void tools_input(Menu *menu, u32 pressed)\n{"
+    )
+]
+stubs = r"""
 #include "nvram_io.h"
 #include <assert.h>
 #include <stdio.h>
@@ -58,8 +62,8 @@ int nvram_restore(const SaveEntry *entry, NvramInfo *info) {
     assert(!memcmp(entry->data,"new",3)); info->error="restore failure";
     return step() ? -1 : 0;
 }
-'''
-main = r'''
+"""
+main = r"""
 int main(void) {
     Menu m; int fail, limit;
     memset(&m,0,sizeof(m)); fixture(&m.backup,1);
@@ -78,10 +82,28 @@ int main(void) {
     puts("Restore workflow: no NVRAM writes before verified recovery; all stage failures and recovery-source preservation passed");
     return 0;
 }
-'''
-with tempfile.TemporaryDirectory(prefix='oh3do-restore-') as directory:
-    code, binary = Path(directory)/'test.c', Path(directory)/'test'
+"""
+with tempfile.TemporaryDirectory(prefix="oh3do-restore-") as directory:
+    code, binary = Path(directory) / "test.c", Path(directory) / "test"
     code.write_text(stubs + controller + main)
-    subprocess.run([os.environ.get('CC', 'cc'), '-std=c89', '-Wall', '-Wextra', '-Werror', '-Isrc', str(code),
-                    'src/save_archive.c', 'src/usb_art.c', 'src/menu_ui.c', 'src/menu_categories.c', 'src/cover_catalog.c', '-o', str(binary)], cwd=root, check=True)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Isrc",
+            str(code),
+            "src/save_archive.c",
+            "src/usb_art.c",
+            "src/menu_ui.c",
+            "src/menu_categories.c",
+            "src/cover_catalog.c",
+            "-o",
+            str(binary),
+        ],
+        cwd=root,
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)

@@ -33,7 +33,13 @@ def main():
     prepare = module("prepare_cover_test", "prepare-cover.py")
     build = module("build_covers_test", "build-covers.py")
     export = module("export_covers_test", "export-covers.py")
-    for path in ("../Game.iso", "Games/../Game.iso", "Games//Game.iso", "Game.txt", "Bad\nGame.iso"):
+    for path in (
+        "../Game.iso",
+        "Games/../Game.iso",
+        "Games//Game.iso",
+        "Game.txt",
+        "Bad\nGame.iso",
+    ):
         rejects(prepare.normalize, path)
     assert prepare.normalize("Games\\Disc 1.ISO") == "Games/Disc 1.ISO"
     assert build.c_string('A"é') == '"\\101\\042\\303\\251"'
@@ -54,14 +60,22 @@ def main():
         assert (stage / "takeme/covers/demo.cel").is_file()
         if not shutil.which("3it") or not (shutil.which("convert") or shutil.which("magick")):
             raise SystemExit("Run this test through ./tools/dev-container run make test-covers")
-        sys.argv = ["prepare-cover", 'Games/Quoted "Disc".ISO', str(ROOT / "assets/loading-menu.png")]
+        sys.argv = [
+            "prepare-cover",
+            'Games/Quoted "Disc".ISO',
+            str(ROOT / "assets/loading-menu.png"),
+        ]
         prepare.main()
         index = temporary / "assets/covers/index.json"
         entries = json.loads(index.read_text())
         filename = next(iter(entries.values()))
         cel = temporary / "assets/covers" / filename
         build.validate_cel(cel)
-        sys.argv = ["prepare-cover", 'GAMES/Quoted "Disc".iso', str(ROOT / "assets/loading-menu.png")]
+        sys.argv = [
+            "prepare-cover",
+            'GAMES/Quoted "Disc".iso',
+            str(ROOT / "assets/loading-menu.png"),
+        ]
         prepare.main()
         assert len(json.loads(index.read_text())) == 1  # case-only update
         sys.argv = ["build-covers", str(stage), "menu"]
@@ -79,7 +93,10 @@ def main():
         assert cover[:8] == b"OM3DCOV2" and cover[-8:] == b"END3DC02"
         expected = temporary / "expected.rgb555"
         expected.write_bytes(zlib.decompress(cover[24:-8]))
-        subprocess.run([str(ROOT / "build/test_usb_media"), "fastcover", str(converted[0]), str(expected)], check=True)
+        subprocess.run(
+            [str(ROOT / "build/test_usb_media"), "fastcover", str(converted[0]), str(expected)],
+            check=True,
+        )
         # Validate rejection before malformed art can reach the cel engine.
         damaged = bytearray(cel.read_bytes())
         struct.pack_into(">I", damaged, 72, 320)

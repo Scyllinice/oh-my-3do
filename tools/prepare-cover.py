@@ -43,17 +43,53 @@ def main():
     index = directory / "index.json"
     entries = json.loads(index.read_text()) if index.exists() else {}
     if not isinstance(entries, dict):
-        parser.error("assets/covers/index.json must be an object mapping USB paths to CEL filenames")
+        parser.error(
+            "assets/covers/index.json must be an object mapping USB paths to CEL filenames"
+        )
     name = hashlib.sha256(fold(game).encode()).hexdigest()[:24] + ".cel"
     # Letterbox rather than crop, so portrait and landscape art retain titles.
     with tempfile.TemporaryDirectory(prefix="oh3do-cover-") as temporary:
         png = Path(temporary) / "cover.png"
         cel = Path(temporary) / name
-        subprocess.run([converter, str(args.image.resolve()) + "[0]", "-auto-orient",
-                        "-thumbnail", "64x80", "-background", "#081021", "-gravity", "center",
-                        "-extent", "64x80", "-alpha", "remove", "-alpha", "off", str(png)], check=True)
-        subprocess.run(["3it", "to-cel", "--bpp", "16", "--packed", "false",
-                        "--ccb-last", "set", "--ccb-bgnd", "set", "-o", str(cel), str(png)], check=True)
+        subprocess.run(
+            [
+                converter,
+                str(args.image.resolve()) + "[0]",
+                "-auto-orient",
+                "-thumbnail",
+                "64x80",
+                "-background",
+                "#081021",
+                "-gravity",
+                "center",
+                "-extent",
+                "64x80",
+                "-alpha",
+                "remove",
+                "-alpha",
+                "off",
+                str(png),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "3it",
+                "to-cel",
+                "--bpp",
+                "16",
+                "--packed",
+                "false",
+                "--ccb-last",
+                "set",
+                "--ccb-bgnd",
+                "set",
+                "-o",
+                str(cel),
+                str(png),
+            ],
+            check=True,
+        )
         shutil.copyfile(cel, directory / name)
     entries = {key: value for key, value in entries.items() if fold(key) != fold(game)}
     entries[game] = name
@@ -61,6 +97,7 @@ def main():
     # Conversion and USB export do not rebuild or alter boot.iso.
     spec_path = Path(__file__).with_name("export-covers.py")
     from importlib.util import module_from_spec, spec_from_file_location
+
     spec = spec_from_file_location("export_covers", spec_path)
     export = module_from_spec(spec)
     spec.loader.exec_module(export)

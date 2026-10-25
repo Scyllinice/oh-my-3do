@@ -7,9 +7,15 @@ import tempfile
 
 root = Path(__file__).resolve().parent.parent
 source = (root / "src/main.c").read_text()
-read = source[source.index("static int favorites_read("):source.index("static void open_favorites(Menu *menu)\n{")]
-edit = source[source.index("typedef struct FavoritesEdit"):source.index("static void edit_favorites(")]
-harness = r'''
+read = source[
+    source.index("static int favorites_read(") : source.index(
+        "static void open_favorites(Menu *menu)\n{"
+    )
+]
+edit = source[
+    source.index("typedef struct FavoritesEdit") : source.index("static void edit_favorites(")
+]
+harness = r"""
 #include "library_features.h"
 #include "usb_file.h"
 #include <assert.h>
@@ -33,8 +39,8 @@ int usb_file_text_write(Ode *ode, OdeReadBuffer reader, const char *name, const 
     if (write_fail) return -1;
     strcpy(file,text); return 0;
 }
-'''
-checks = r'''
+"""
+checks = r"""
 int main(void)
 {
     Menu menu; FavoritesEdit op; int before;
@@ -67,11 +73,27 @@ int main(void)
     puts("Favorites workflow: create, fresh-read edits, duplicates, removal, invalid files and USB failures passed");
     return 0;
 }
-'''
+"""
 with tempfile.TemporaryDirectory(prefix="oh3do-favorites-") as directory:
     code, binary = Path(directory) / "test.c", Path(directory) / "test"
     code.write_text(harness + read + edit + checks)
-    subprocess.run([os.environ.get("CC", "cc"), "-std=c89", "-Wall", "-Wextra", "-Werror",
-                    "-I", str(root / "src"), str(code), str(root / "src/library_features.c"),
-                    str(root / "src/menu_ui.c"), str(root / "src/menu_categories.c"), str(root / "src/cover_catalog.c"), "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c89",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(root / "src"),
+            str(code),
+            str(root / "src/library_features.c"),
+            str(root / "src/menu_ui.c"),
+            str(root / "src/menu_categories.c"),
+            str(root / "src/cover_catalog.c"),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)
