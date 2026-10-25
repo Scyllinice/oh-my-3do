@@ -1,3 +1,24 @@
+//! Copying a PC library to a console drive. `plan` compares the library
+//! with the drive and decides what happens to every file; the person reviews
+//! that; `apply` then carries it out through an undo journal, checking
+//! nothing changed since the review and reading every copy back.
+//!
+//! Each file in a plan has a status:
+//!
+//! - "copy": not on the drive yet.
+//! - "update": on the drive but different (never a disc: a different disc
+//!   at the same path stops the copy).
+//! - "unchanged": already the same.
+//! - "preserve": the person's own file on the drive (settings, saves,
+//!   favorites and so on), which the library's copy never replaces.
+//! - "remap": one of those files, rewritten to follow game folders moved to
+//!   another category.
+//! - "remove": a description in the old root folder, no longer used.
+//!
+//! After copying, "verified" and "removed" record what was done. A record
+//! of each copy is kept on the PC, so the next review of the same drive can
+//! trust files verified then without reading them again.
+
 use crate::{
     categories, disc as d, fsutil as f,
     library::{self, Journal},
@@ -11,6 +32,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+/// One file of a copy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CopyItem {
     /// Destination path; also the source path unless `source_path` is set.
@@ -19,13 +41,19 @@ pub struct CopyItem {
     /// folders to the .ohmy3do folder beside their disc on the drive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
+    /// What happens to it (see the module's description).
     pub status: String,
     pub size: u64,
+    /// The library file's modification time when reviewed.
     pub source_stamp: u128,
+    /// The drive file's modification time when reviewed, if it existed.
     pub destination_stamp: Option<u128>,
+    /// Known to match the library: compared or copied and read back.
     #[serde(default)]
     pub verified: bool,
 }
+
+/// A reviewed copy from a library (`source`) to a drive (`destination`).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CopyPlan {
     pub source: PathBuf,
@@ -34,13 +62,20 @@ pub struct CopyPlan {
     #[serde(default)]
     pub moves: Vec<(String, String)>,
     pub files: Vec<CopyItem>,
+    /// How many discs are copied.
     pub games: usize,
+    /// How many bytes will be written.
     pub bytes: u64,
+    /// When copying only some games: their disc paths.
     #[serde(default)]
     pub selection: Option<Vec<String>>,
+    /// When copying only some games: the drive's new index files, made for
+    /// the drive's games plus the selected ones (see `usb_selection`).
     #[serde(default)]
     pub generated: BTreeMap<String, Vec<u8>>,
 }
+
+/// The big-endian 32-bit number at `pos`, failing if the data is too short.
 fn word(data: &[u8], pos: usize) -> Result<usize> {
     Ok(u32::from_be_bytes(
         data.get(pos..pos + 4)
@@ -48,6 +83,7 @@ fn word(data: &[u8], pos: usize) -> Result<usize> {
             .try_into()?,
     ) as usize)
 }
+/// Checks a settings file is one the menu can read.
 pub fn config(path: &Path) -> Result<()> {
     if fs::metadata(path)?.len() > 512 {
         bail!("Config exceeds 512 bytes")
@@ -56,6 +92,8 @@ pub fn config(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reads library.3di (the menu's list of every disc, for Find; format in
+/// src/library_index.h), checking it fits the menu's limits.
 pub fn find(path: &Path) -> Result<Vec<String>> {
     if fs::metadata(path)?.len() > 128 * 1024 + 32 {
         bail!("Oversized Find index")
@@ -99,15 +137,22 @@ pub fn find(path: &Path) -> Result<Vec<String>> {
     };
     Ok(names)
 }
-/// Runtime files as (USB path, staging path) pairs. Media moves beside its disc.
+/// Every file the drive needs from the library at `root`, as (path on the
+/// drive, path in the library). Covers, previews and descriptions, kept in
+/// the library's .ohmy3do folder, go to the .ohmy3do folder beside their
+/// disc on the drive. Also returns the number of discs.
 pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize)> {
     inventory_selected(root, None, job)
 }
+/// `inventory`, for only the `selected` discs (all if None). Checks the
+/// library is ready first: a valid menu image and settings, indexes that
+/// match the discs, valid media, and no file too big for FAT32.
 fn inventory_selected(
     root: &Path,
     selected: Option<&BTreeSet<String>>,
     job: &Job,
 ) -> Result<(Vec<(String, String)>, usize)> {
+    // The menu, settings and Find index must be there and valid.
     let boot = f::safe(root, "boot.iso")?;
     d::issue(&boot)?;
     if fs::metadata(&boot)?.len() > 16 * 1024 * 1024 {
@@ -136,6 +181,8 @@ fn inventory_selected(
             bail!("Selected games changed; reload the game list");
         }
     }
+
+    // The discs, the metadata index and the descriptions.
     let chosen = |path: &str| selected.is_none_or(|s| s.contains(path));
     let mut files = BTreeSet::from([
         "boot.iso".into(),
@@ -177,6 +224,7 @@ fn inventory_selected(
             }
         }
     }
+    // The cheat database and save names.
     let cheats = f::safe(root, crate::save_cheats::JSON_PATH)?;
     if cheats.is_file() {
         let db = crate::save_cheats::Database::read(&cheats)?;
@@ -189,7 +237,6 @@ fn inventory_selected(
             if !db.matches_binary(&fs::read(&binary)?)? {
                 bail!("Cheat database source and console file differ; reinstall them with the database editor");
             }
-            files.insert(crate::save_cheats::JSON_PATH.into());
             files.insert(crate::save_cheats::BINARY_PATH.into());
         }
     }
@@ -200,6 +247,7 @@ fn inventory_selected(
         }
         files.insert(".ohmy3do/save-names.txt".into());
     }
+    // Covers (with their full-screen versions) and previews.
     for folder in ["covers", "previews"] {
         let map = library::read_media_index(root, folder)?;
         let index = format!(".ohmy3do/{folder}/index.3di");
@@ -251,6 +299,7 @@ fn inventory_selected(
             beside.insert(beside_path(&name), path);
         }
     }
+    // The person's lists and saves, if the library has them.
     for name in ["favorites.txt", "recent.txt", "last-position.txt"] {
         let path = format!(".ohmy3do/{name}");
         if f::safe(root, &path)?.is_file() {
@@ -288,9 +337,13 @@ fn inventory_selected(
     pairs.sort();
     Ok((pairs, selected.map_or(games.len(), BTreeSet::len)))
 }
+/// Whether a file is a cover or preview index (rewritten for the drive's
+/// beside-the-disc layout when copied).
 fn media_index(name: &str) -> bool {
     [".ohmy3do/covers/index.3di", ".ohmy3do/previews/index.3di"].contains(&name)
 }
+/// Whether a file is the person's own (settings, saves, lists), which a
+/// copy never replaces on the drive.
 fn personal(name: &str) -> bool {
     name.starts_with(".ohmy3do/saves/")
         || [
@@ -304,8 +357,10 @@ fn personal(name: &str) -> bool {
         ]
         .contains(&name)
 }
-/// Category/Region/Game folders that changed category in staging but are
-/// still at their old place on the drive. Staging's own folders are never moved.
+/// Folders on the drive to move, as (old, new): category folders renamed in
+/// the library, and Category/Region/Game folders whose game moved to
+/// another category in the library (when exactly one such folder matches).
+/// Only the drive's folders move, never the library's.
 fn folder_moves(
     target: &Path,
     files: &[(String, String)],
@@ -385,7 +440,8 @@ fn folder_moves(
     }
     Ok(moves)
 }
-/// Disc paths on the drive under moved folders, old → new (folded keys).
+/// The new path of every file on the drive under a folder that moves, by
+/// its old path (in case-insensitive form).
 fn moved_paths(target: &Path, moves: &[(String, String)]) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for (old, new) in moves {
@@ -404,6 +460,7 @@ fn moved_paths(target: &Path, moves: &[(String, String)]) -> HashMap<String, Str
     }
     map
 }
+/// Where the record of copies from `source` to `target` is kept on the PC.
 fn report_path(source: &Path, target: &Path, cache: &Path) -> PathBuf {
     let key = format!(
         "{:x}",
@@ -411,6 +468,7 @@ fn report_path(source: &Path, target: &Path, cache: &Path) -> PathBuf {
     );
     cache.join("usb-copy").join(format!("{key}.json"))
 }
+/// The record of the last copy, if there is a readable one.
 fn read_report(path: &Path) -> Option<CopyPlan> {
     fs::read(path)
         .ok()
@@ -428,9 +486,13 @@ fn save_report(path: &Path, plan: &CopyPlan) -> Result<()> {
     }
     f::atomic(path, &serde_json::to_vec_pretty(&report)?)
 }
+/// Whether the drive at `root` has the cheat database file `name`.
 fn plan_cheat_exists(root: &Path, name: &str) -> bool {
     root.join(name).exists()
 }
+/// Reviews copying the whole library at `source` to the drive at `target`.
+/// With `verify`, files that seem unchanged are compared byte for byte
+/// instead of trusting their size and date (or the last copy's record).
 pub fn plan(
     source: &Path,
     target: &Path,
@@ -440,7 +502,8 @@ pub fn plan(
 ) -> Result<CopyPlan> {
     plan_impl(source, target, cache, verify, None, job)
 }
-/// Selection contains complete game groups from `choices`, never individual tracks.
+/// Reviews copying only the `selected` discs (with the rest of each one's
+/// game, see `choices`) to a drive that may already have other games.
 pub fn plan_selected(
     source: &Path,
     target: &Path,
@@ -464,6 +527,7 @@ pub fn plan_selected(
         .collect();
     plan_impl(source, target, cache, verify, Some(expanded), job)
 }
+/// `plan` and `plan_selected`.
 fn plan_impl(
     source: &Path,
     target: &Path,
@@ -479,6 +543,9 @@ fn plan_impl(
     }
     let _source_lock = library::lock_library(&source, cache)?;
     let _destination_lock = library::lock_library(&target, cache)?;
+
+    // What the drive needs, the folders to move on it, and (for a partial
+    // copy) its new indexes.
     job.say("Validating staging and media");
     let (mut files, games) = inventory_selected(&source, selected.as_ref(), job)?;
     let report = report_path(&source, &target, cache);
@@ -501,6 +568,9 @@ fn plan_impl(
         BTreeMap::new()
     };
     files.retain(|(name, _)| !generated.contains_key(name));
+
+    // Decide each file's status. Progress counts files, each split into
+    // REVIEW_UNITS for the checksums of large ones.
     let remaps = moved_paths(&target, &moves);
     let mut items = vec![];
     let mut bytes = 0;
@@ -544,6 +614,9 @@ fn plan_impl(
         if name == ".ohmy3do/ohmy3do.ini" && dest.is_file() {
             config(&dest)?
         }
+        // The person's files and cheat database already on the drive are
+        // kept (or remapped to moved folders). Otherwise compare with the
+        // drive's file.
         let mut trusted = false;
         let cheat_file = [
             crate::save_cheats::JSON_PATH,
@@ -641,6 +714,8 @@ fn plan_impl(
             "Reviewing files",
         );
     }
+
+    // The generated index files of a partial copy.
     for (generated_index, (name, content)) in generated.iter().enumerate() {
         let dest = f::safe(&target, name)?;
         if dest.exists() && !dest.is_file() {
@@ -753,6 +828,12 @@ fn plan_impl(
     ));
     Ok(plan)
 }
+/// Carries out a reviewed copy: moves folders, remaps the person's lists,
+/// copies and checks files (discs first, then indexes, then boot.iso last,
+/// so the drive is only bootable with the new menu once everything else is
+/// there), removes old files, and adds missing support files and the slot
+/// catalog. Stops if anything changed since the review. If any step fails,
+/// everything is undone. Returns the undo journal's path.
 pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
     if f::root(&plan.source)? != plan.source || f::root(&plan.destination)? != plan.destination {
         bail!("Copy roots changed since preview")
@@ -809,6 +890,8 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 tx.write(&file.path, &text)?;
             }
         }
+
+        // Copy, in order: other files, then indexes, then boot.iso.
         let mut order = (0..plan.files.len()).collect::<Vec<_>>();
         order.sort_by_key(|i| {
             let name = &plan.files[*i].path;
@@ -918,6 +1001,8 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
             completed_bytes += file.size;
             job.report(completed_bytes, total_bytes, "Copying and verifying files");
         }
+
+        // Remove old files, and the old descriptions folder once empty.
         for (i, file) in plan
             .files
             .iter()
@@ -976,6 +1061,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
     job.say("USB copy complete; existing settings and saves preserved");
     Ok(tx.path)
 }
+/// A one-paragraph summary of a plan, for the log.
 pub fn summary(plan: &CopyPlan) -> String {
     let mut counts = std::collections::BTreeMap::new();
     for f in &plan.files {
@@ -995,13 +1081,17 @@ pub fn summary(plan: &CopyPlan) -> String {
     )
 }
 
-/// Whole game folders, keeping all discs and CUE data together. Sizes exclude media/support files.
+/// A game the person can pick for a partial copy: all its discs together
+/// (a whole Category/Region/Game folder in an organized library). Its size
+/// counts only the disc files, not media or support files.
 #[derive(Clone)]
 pub struct GameChoice {
     pub label: String,
     pub discs: Vec<String>,
     pub bytes: u64,
 }
+/// The game a disc belongs to: its Category/Region/Game folder, or the
+/// disc itself outside the organized folders.
 fn game_label(path: &str, config: &categories::Categories) -> String {
     let parts = path.split('/').collect::<Vec<_>>();
     if parts.len() >= 4 && config.contains(parts[0]) {
@@ -1010,6 +1100,7 @@ fn game_label(path: &str, config: &categories::Categories) -> String {
         path.into()
     }
 }
+/// The games of the library at `root` that can be picked for a partial copy.
 pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
     let root = f::root(root)?;
     let indexed = find(&f::safe(&root, ".ohmy3do/library.3di")?)?
@@ -1042,8 +1133,9 @@ pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
     Ok((root, groups.into_values().collect()))
 }
 
-/// File-content totals, plus a conservative reserve for allocation, temporary
-/// replacements and runtime support. Space is queried again before copying.
+/// How much space a copy needs: the files' sizes by kind, plus a reserve
+/// for file system overhead and temporary files during replacements.
+/// Checked again just before copying.
 #[derive(Clone, Debug, Serialize)]
 pub struct StorageEstimate {
     pub games: u64,
@@ -1059,13 +1151,16 @@ pub struct StorageEstimate {
     pub shortfall: u64,
     pub fits: bool,
 }
+/// `estimate_with_space` with the drive's current free space.
 pub fn storage_estimate(plan: &CopyPlan) -> Result<StorageEstimate> {
     Ok(estimate_with_space(
         plan,
         fs2::available_space(&plan.destination)?,
     ))
 }
-/// Separate space arithmetic from filesystem queries for deterministic checks.
+/// The space a plan needs, given `available` bytes free (separate from
+/// asking the drive, so tests can check the arithmetic). The reserve is the
+/// largest of 8 MiB, 1% of what is copied, and 16 KiB per file.
 pub fn estimate_with_space(plan: &CopyPlan, available: u64) -> StorageEstimate {
     let mut estimate = StorageEstimate {
         games: 0,
