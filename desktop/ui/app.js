@@ -1,603 +1,3409 @@
-import {categories,groupGames,visibleGames,selectedDiscs,escapeHtml as e,formatBytes as bytes,slotMatches,displayPath,restoreLibraryView} from './model.mjs';
-import {DialogProgress} from './dialog-progress.mjs';
-import {captureFocus,restoreFocus,focusElement,focusHeading,announce,moveGameFocus,trapDialogTab,textScale} from './accessibility.mjs';
-const dialogProgress=new DialogProgress(document);
-const {invoke}=window.__TAURI__.core;
-const {listen}=window.__TAURI__.event;
-const $=q=>document.querySelector(q);
-const state={page:'library',prefs:{},version:'1.0.0',records:[],groups:[],selected:new Set(),libraryRoot:null,browseRoot:'',driveStatus:{},browser:null,browserError:'',cleanup:null,cleanupSelected:new Set(),filter:{search:'',category:'',region:'',media:'',information:'',searchScope:'title'},paths:[],plan:null,copy:null,readiness:null,backup:null,entry:null,entryIndex:null,hexDirty:false,slots:[],slotQuery:'',config:null,updates:null,pendingUpdate:null,updateReport:null,installedMenu:null,versionTarget:'',noticeDismissed:'',reportDismissed:false,cheats:'',cheatsDirty:false,logs:[],busy:false,anchor:null,coverCache:new Map(),mediaDisc:''};
-const icons={library:'▦',import:'＋',saves:'▤',media:'▧',drive:'▱',settings:'⚙',updates:'↻'};
-const titles={library:'Library',import:'Add discs',saves:'Save Manager',media:'Artwork & previews',drive:'Drive setup',settings:'Settings & tools',updates:'Updates'};
-const action=(id,label,cls='',extra='')=>`<button data-action="${id}" class="${cls}" ${extra}>${label}</button>`;
-const pathLabel=value=>e(displayPath(value));
-const option=(v,label,selected)=>`<option value="${e(v)}" ${selected?'selected':''}>${e(label)}</option>`;
-const field=(label,id,value,type='text')=>`<label class="field">${e(label)}<input id="${id}" type="${type}" value="${e(value)}"></label>`;
-const checkbox=(id,label,checked)=>`<label><input id="${id}" type="checkbox" ${checked?'checked':''}>${e(label)}</label>`;
-const heading=(title,note,actions='')=>`<div class="page-heading row spread"><div><h1 id="page-title">${e(title)}</h1><p>${e(note)}</p></div><div class="row">${actions}</div></div>`;
-const quantity=(n,unit)=>`${Number(n).toLocaleString('en-US')} ${unit}${n===1?'':'s'}`;
-const basename=path=>String(path||'').split(/[\\/]/).at(-1);
-const defaults={folder_workaround:0,usb_covers:true,screen_margin:0,large_titles:false,remember_position:true,recent_games:true,video_previews:true,preview_sound:true,hide_adult:false};
-function setStatus(message){dialogProgress.update(message);const status=$('#status-message');if(status){status.textContent=message;status.title=message;}}
-function toast(message,error=false){announce(message,error);document.querySelectorAll('.toast,.dialog-toast').forEach(node=>node.remove());const front=[...document.querySelectorAll('dialog[open]')].at(-1);const n=document.createElement('div');n.className=`${front?'dialog-toast':'toast'}${error?' error':''}`;n.textContent=String(message);const panel=front?.querySelector('.dialog-progress');if(panel?.dataset.state==='complete'){panel.querySelector('[role="status"]').textContent=String(message);if(error)panel.dataset.state='error';setStatus(String(message));return;}if(panel?.dataset.state==='error'&&panel.querySelector('[role="status"]').textContent===String(message)){setStatus(String(message));return;}if(front)front.querySelector('.dialog-head').after(n);else document.body.append(n);setTimeout(()=>n.remove(),error?15000:5500);setStatus(String(message));}
-const operationMessages={
- titles_remove_review:['Reviewing selected title files…','Title removal ready to review.'],
- titles_remove:['Removing selected titles…','Selected titles removed.'],
- library:['Refreshing the library…','Library refreshed.'],
- drive_browser:['Reading games on the drive…','Drive contents refreshed.'],
- scan:['Identifying discs…','Disc scan complete. Review the import.'],
- import:['Importing selected discs…','Disc import complete.'],
- copy_preview:['Checking destination files and space…','Copy review ready.'],
- copy:['Copying selected games and support files…','Copy complete.'],
- drive_setup:['Preparing the console drive…','Drive setup complete.'],
- drive_check:['Checking the console drive…','Drive check complete.'],
- drive_cleanup_review:['Finding menu files on the drive…','Drive cleanup ready to review.'],
- drive_cleanup:['Removing menu files from the drive…','Menu files removed.'],
- drive_eject:['Safely ejecting the drive…','Drive ejected.'],
- media_update:['Preparing missing media and game information…','Media preparation complete.'],
- media_selected:['Preparing media for selected games…','Selected media preparation complete.'],
- media_rebuild:['Rebuilding media from source files…','Media rebuild complete.'],
- game_info_matches:['Reading LaunchBox matches…','Information matches ready to review.'],
- game_info_choose_match:['Saving the chosen information match…','Information match saved.'],
- game_info_backups:['Reading automatic metadata backups…','Metadata backup list ready.'],
- game_info_backup_preview:['Comparing the snapshot with your library…','Snapshot restore ready to review.'],
- game_info_export:['Exporting custom metadata…','Custom metadata exported.'],
- game_info_import_preview:['Comparing imported metadata with your library…','Metadata import ready to review.'],
- game_info_import:['Importing checked metadata entries…','Custom metadata imported.'],
- game_info_restore_preview:['Reading downloaded information…','Downloaded information ready to review.'],
- game_info_save:['Saving game information…','Game information saved.'],
- game_information:['Updating game information from LaunchBox…','Game information updated.'],
- categories_save:['Saving categories and folder changes…','Categories saved.'],
- move:['Moving selected games…','Selected games moved.'],
- indexes:['Rebuilding console indexes…','Console indexes rebuilt.'],
- undo:['Restoring the previous library state…','Last change undone.'],
- backup_open:['Opening the save archive…','Save archive opened.'],
- backup_save:['Saving and verifying the save archive…','Save archive saved and verified.'],
- backup_compare:['Comparing save archives…','Save comparison ready.'],
- updates_check:['Checking GitHub for updates…','Update check complete.'],
- boot_update:['Downloading and installing the menu image…','Menu image updated.'],
- self_update:['Downloading the desktop update…','Desktop update prepared.'],
- video_tools:['Downloading and verifying video tools…','Video tools installed.'],
- support_export:['Writing the support report…','Support report exported.']
+import {
+  categories,
+  groupGames,
+  visibleGames,
+  selectedDiscs,
+  escapeHtml as e,
+  formatBytes as bytes,
+  slotMatches,
+  displayPath,
+  restoreLibraryView,
+} from './model.mjs';
+import { DialogProgress } from './dialog-progress.mjs';
+import {
+  captureFocus,
+  restoreFocus,
+  focusElement,
+  focusHeading,
+  announce,
+  moveGameFocus,
+  trapDialogTab,
+  textScale,
+} from './accessibility.mjs';
+const dialogProgress = new DialogProgress(document);
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const $ = (q) => document.querySelector(q);
+const state = {
+  page: 'library',
+  prefs: {},
+  version: '1.0.0',
+  records: [],
+  groups: [],
+  selected: new Set(),
+  libraryRoot: null,
+  browseRoot: '',
+  driveStatus: {},
+  browser: null,
+  browserError: '',
+  cleanup: null,
+  cleanupSelected: new Set(),
+  filter: {
+    search: '',
+    category: '',
+    region: '',
+    media: '',
+    information: '',
+    searchScope: 'title',
+  },
+  paths: [],
+  plan: null,
+  copy: null,
+  readiness: null,
+  backup: null,
+  entry: null,
+  entryIndex: null,
+  hexDirty: false,
+  slots: [],
+  slotQuery: '',
+  config: null,
+  updates: null,
+  pendingUpdate: null,
+  updateReport: null,
+  installedMenu: null,
+  versionTarget: '',
+  noticeDismissed: '',
+  reportDismissed: false,
+  cheats: '',
+  cheatsDirty: false,
+  logs: [],
+  busy: false,
+  anchor: null,
+  coverCache: new Map(),
+  mediaDisc: '',
 };
-function recordActivity(message){state.logs.push(String(message));if(state.logs.length>500)state.logs.shift();}
-function wasCanceled(error){return /\boperation cancel(?:led|ed)\b/i.test(String(error));}
-async function call(action,args={}){
- const messages=operationMessages[action];
- const job=['pick','preferences','init','ready','quit','drive_status'].includes(action)?null:dialogProgress.start(messages?.[0]||'Working…');
- if(messages&&!state.busy){recordActivity(messages[0]);setStatus(messages[0]);}else if(job&&!messages)setStatus('Working…');
- try{const result=await invoke('request',{action,args,requestId:job?.id||null});dialogProgress.finish(job,messages?.[1]||'Operation complete.');if(messages){recordActivity(messages[1]);setStatus(messages[1]);}else if(job)setStatus('Ready');return result;}
- catch(error){dialogProgress.finish(job,String(error),wasCanceled(error)?'canceled':'error');recordActivity(String(error));if(!state.busy)setStatus(wasCanceled(error)?'Operation canceled.':'Could not complete the operation. Open Activity for details.');throw error;}
+const icons = {
+  library: '▦',
+  import: '＋',
+  saves: '▤',
+  media: '▧',
+  drive: '▱',
+  settings: '⚙',
+  updates: '↻',
+};
+const titles = {
+  library: 'Library',
+  import: 'Add discs',
+  saves: 'Save Manager',
+  media: 'Artwork & previews',
+  drive: 'Drive setup',
+  settings: 'Settings & tools',
+  updates: 'Updates',
+};
+const action = (id, label, cls = '', extra = '') =>
+  `<button data-action="${id}" class="${cls}" ${extra}>${label}</button>`;
+const pathLabel = (value) => e(displayPath(value));
+const option = (v, label, selected) =>
+  `<option value="${e(v)}" ${selected ? 'selected' : ''}>${e(label)}</option>`;
+const field = (label, id, value, type = 'text') =>
+  `<label class="field">${e(label)}<input id="${id}" type="${type}" value="${e(value)}"></label>`;
+const checkbox = (id, label, checked) =>
+  `<label><input id="${id}" type="checkbox" ${checked ? 'checked' : ''}>${e(label)}</label>`;
+const heading = (title, note, actions = '') =>
+  `<div class="page-heading row spread"><div><h1 id="page-title">${e(title)}</h1><p>${e(note)}</p></div><div class="row">${actions}</div></div>`;
+const quantity = (n, unit) => `${Number(n).toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
+const basename = (path) =>
+  String(path || '')
+    .split(/[\\/]/)
+    .at(-1);
+const defaults = {
+  folder_workaround: 0,
+  usb_covers: true,
+  screen_margin: 0,
+  large_titles: false,
+  remember_position: true,
+  recent_games: true,
+  video_previews: true,
+  preview_sound: true,
+  hide_adult: false,
+};
+function setStatus(message) {
+  dialogProgress.update(message);
+  const status = $('#status-message');
+  if (status) {
+    status.textContent = message;
+    status.title = message;
+  }
 }
-async function perform(fn){try{return await fn();}catch(err){toast(wasCanceled(err)?'Operation canceled.':err,!wasCanceled(err));return null;}}
-async function pick(kind,start=''){return call('pick',{kind,start});}
-const systemTheme=window.matchMedia('(prefers-color-scheme: dark)');
-function applyTheme(){
- const mode=state.prefs.theme||'system';
- document.documentElement.dataset.textScale=String(textScale(state.prefs.text_scale));
- document.documentElement.style.fontSize=textScale(state.prefs.text_scale)+'%';
- document.documentElement.dataset.theme=mode==='system'?(systemTheme.matches?'dark':'light'):mode;
- if($('#content'))resizeSelectionBar();
+function toast(message, error = false) {
+  announce(message, error);
+  document.querySelectorAll('.toast,.dialog-toast').forEach((node) => node.remove());
+  const front = [...document.querySelectorAll('dialog[open]')].at(-1);
+  const n = document.createElement('div');
+  n.className = `${front ? 'dialog-toast' : 'toast'}${error ? ' error' : ''}`;
+  n.textContent = String(message);
+  const panel = front?.querySelector('.dialog-progress');
+  if (panel?.dataset.state === 'complete') {
+    panel.querySelector('[role="status"]').textContent = String(message);
+    if (error) panel.dataset.state = 'error';
+    setStatus(String(message));
+    return;
+  }
+  if (
+    panel?.dataset.state === 'error' &&
+    panel.querySelector('[role="status"]').textContent === String(message)
+  ) {
+    setStatus(String(message));
+    return;
+  }
+  if (front) front.querySelector('.dialog-head').after(n);
+  else document.body.append(n);
+  setTimeout(() => n.remove(), error ? 15000 : 5500);
+  setStatus(String(message));
 }
-systemTheme.addEventListener('change',()=>{if(!state.prefs.theme||state.prefs.theme==='system')applyTheme();});
-const narrowLayout=window.matchMedia('(max-width:760px)');
-narrowLayout.addEventListener('change',()=>{if($('#content')){resizeSelectionBar();loadCovers();}});
-async function preferences(){rememberRoots();await call('preferences',state.prefs);updateLocation();}
-async function developerPreferences(){await preferences();state.updates=null;state.noticeDismissed='';render();}
-function developerSettingsView(){return `<div class="card"><h3>Developer updates</h3>${checkbox('pref-developer','Use local builds instead of GitHub releases',state.prefs.developer_mode)}<label class="field">Build output directory<div class="row"><input class="grow" id="developer-directory" value="${e(state.prefs.developer_updates_directory||'')}" placeholder="Choose the repository’s iso folder">${action('developer-folder','Browse…','', 'aria-label="Choose developer build folder"')}</div></label><p class="note">Builds write update manifests into the iso folder automatically. Local updates work offline and detect rebuilt desktop apps even at the same version. Check for updates after building. Missing local builds never fall back to GitHub.</p></div>`;}
-let viewTimer=null,viewDirty=false,viewRevision=0;
-function rememberLibraryView(){if(!state.libraryRoot)return;state.prefs.library_views??={};const next={...state.filter,selected:[...state.selected]};if(JSON.stringify(state.prefs.library_views[state.libraryRoot])===JSON.stringify(next))return;state.prefs.library_views[state.libraryRoot]=next;viewDirty=true;++viewRevision;clearTimeout(viewTimer);viewTimer=setTimeout(()=>perform(flushLibraryView),400);}
-async function flushLibraryView(){clearTimeout(viewTimer);if(!viewDirty)return;if(state.busy){viewTimer=setTimeout(()=>perform(flushLibraryView),400);return;}const revision=viewRevision;try{await invoke('save_library_views',{views:state.prefs.library_views});viewDirty=revision!==viewRevision;if(viewDirty)viewTimer=setTimeout(()=>perform(flushLibraryView),400);}catch(error){if(String(error).includes('Another operation')){viewTimer=setTimeout(()=>perform(flushLibraryView),400);return;}throw error;}}
-function updateLocation(){const library=$('#pc-library');if(library)library.innerHTML=pcLibraryOptions();const drive=$('#usb-drive');if(drive)drive.innerHTML=driveOptions();const eject=$('#top-eject');if(eject){const root=state.prefs.destination;const removable=!!root&&!!state.driveStatus[root]?.removable;eject.hidden=!removable;eject.dataset.root=root||'';eject.title=removable?'Safely eject '+displayPath(root):'';}}
-function rootName(path){const parts=String(path).replace(/[\\/]+$/,'').split(/[\\/]/);return parts[parts.length-1]||String(path);}
-function driveName(path){return state.prefs.drives?.[path]?.name||'USB / SD';}
-function pcLibraryOptions(){return (state.prefs.library?'':option('','Choose a PC library',true))+(state.prefs.libraries||[]).map(path=>option(path,`${rootName(path)} — ${displayPath(path)}`,path===state.prefs.library)).join('')+option('add','Add a PC library…',false)+option('manage','Manage libraries…',false);}
-function driveOptions(){return (state.prefs.destination?'':option('','Choose a USB / SD drive',true))+(state.prefs.browser_drives||[]).map(path=>option(path,`${driveName(path)} — ${displayPath(path)}${state.driveStatus[path]?.connected===false?' (not connected)':''}`,path===state.prefs.destination)).join('')+option('add','Add a drive…',false)+option('manage','Manage drives…',false);}
-function rememberRoots(){const p=state.prefs;p.libraries=[...(p.libraries||[])];p.browser_drives=[...(p.browser_drives||[])];if(p.library&&!p.libraries.includes(p.library))p.libraries.push(p.library);if(p.destination&&!p.browser_drives.includes(p.destination))p.browser_drives.push(p.destination);}
-async function refreshDriveStatus(){const roots=state.prefs.browser_drives||[];const list=roots.length?await call('drive_status',{roots}):[];state.driveStatus=Object.fromEntries(list.map(s=>[s.root,s]));updateLocation();}
-function viewSwitch(){return `<div class="view-switch" role="group" aria-label="Show">${action('view-pc','PC library','',`aria-pressed="${!state.browseRoot}"`)}${action('view-drive','USB / SD drive','',`aria-pressed="${!!state.browseRoot}"${state.prefs.destination?'':' disabled'}`)}</div>`;}
-async function manageRoots(kind){const drives=kind==='drives';if(drives)await refreshDriveStatus();const roots=drives?(state.prefs.browser_drives||[]):(state.prefs.libraries||[]);const current=drives?state.prefs.destination:state.prefs.library;dialog(drives?'Manage drives':'Manage PC libraries',`${roots.length?roots.map(root=>{const s=state.driveStatus[root];const detail=[displayPath(root),root===current?'selected':'',drives?(s?.connected===false?'not connected':s?.removable?'removable':s?'can’t be ejected here':''):''].filter(Boolean).join(' · ');return `<div class="root-row"><div class="grow"><strong>${e(drives?driveName(root):rootName(root))}</strong><div class="note">${e(detail)}</div></div>${drives&&s?.removable?action('drive-eject','Safely eject','small',`data-root="${e(root)}"`):''}${action('forget-root','Remove from list','small danger',`data-kind="${kind}" data-root="${e(root)}"`)}</div>`;}).join(''):`<p>No ${drives?'drives':'PC libraries'} yet.</p>`}<div class="notice">Removing ${drives?'a drive':'a library'} only takes it off this list. Nothing on it is changed, and you can add it again any time.</div>`,action('manage-add',drives?'Add a drive…':'Add a PC library…','',`data-kind="${kind}"`)+action('close-dialog','Done','primary','data-dialog="main-dialog"'));}
-async function switchLibrary(root){rememberLibraryView();await flushLibraryView();state.browseRoot=root;state.page='library';state.coverCache.clear();updateLocation();await loadLibrary();}
-function shell(){document.querySelector('#app').innerHTML=`<a class="skip-link" href="#content">Skip to content</a><div class="shell"><nav class="sidebar" aria-label="Main navigation"><img class="brand" src="assets/logo.png" alt="Oh My 3DO">${['library','saves','media','drive'].map(page=>`<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`).join('')}<div class="nav-bottom"><div class="nav-divider"></div>${['updates','settings'].map(page=>`<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`).join('')}<div class="version">Oh My 3DO · ${e(state.version)}</div></div></nav><section class="workspace"><header class="topbar"><div class="library-location"><label for="pc-library">PC LIBRARY</label><select id="pc-library"></select></div><div class="library-location"><label for="usb-drive">USB / SD DRIVE</label><select id="usb-drive"></select>${action('drive-eject','Safely eject','small','id="top-eject" hidden')}</div><div class="row">${action('library-refresh','Refresh','small')}</div></header><div data-announcer="polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div><div data-announcer="alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div><div id="update-notice" hidden></div><main id="content" class="content" tabindex="-1" aria-labelledby="page-title"></main></section><footer class="statusbar"><span id="busy-dot" class="busy-dot hidden"></span><progress id="operation-meter" aria-label="Operation progress" max="1" hidden></progress><span id="operation-percent" hidden></span><span id="status-message" class="message" role="status" aria-live="polite" aria-atomic="true">Ready</span>${action('cancel','Cancel','small hidden','id="cancel-job"')}${action('logs','Activity','quiet small')}</footer></div>`;updateLocation();render();}
-function render(){const content=$('#content'),focus=captureFocus(content),changed=state.renderedPage!==state.page;updateLocation();renderUpdateNotice();document.querySelectorAll('[data-page]').forEach(n=>{const current=n.dataset.page===(state.page==='import'?'library':state.page);n.classList.toggle('active',current);if(current)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});content.innerHTML=({library:libraryView,import:importView,saves:savesView,media:mediaView,drive:driveView,settings:settingsView,updates:updatesView}[state.page]||libraryView)();loadCovers();resizeSelectionBar();if(changed||focus&&!restoreFocus(focus,content))focusHeading(content);state.renderedPage=state.page;}
-function empty(title,note,buttons=''){return `<div class="empty"><div class="empty-mark">◉</div><h2>${e(title)}</h2><p>${e(note)}</p><div class="row empty-actions">${buttons}</div></div>`;}
-function selectionButtonsView(){const count=state.selected.size;return `${action('game-details','Game details','quiet',count!==1?'disabled':'')}${action('remove-titles','Remove…','danger')}${state.browseRoot?'':action('game-info-bulk','Edit information…','quiet')}${state.browseRoot?'':action('media-selected','Prepare missing media','quiet')}${state.browseRoot?'':action('move-games','Move category…','quiet',state.groups.some(g=>state.selected.has(g.key)&&!g.movable)?'disabled':'')}${state.browseRoot?'':action('copy-open','Copy selected to USB…','primary')}`;}
-function libraryView(){const visible=visibleGames(state.groups,state.filter);const regions=[...new Set(state.groups.map(g=>g.region).filter(Boolean))].sort();const count=state.selected.size;const visibleKeys=new Set(visible.map(g=>g.key));const hiddenSelected=state.groups.filter(g=>state.selected.has(g.key)&&!visibleKeys.has(g.key)).length;const focusedGame=visible.find(g=>g.key===state.focusedGame)?.key||visible[0]?.key;
- return viewSwitch()+heading(state.browseRoot?'On your USB / SD drive':'Your PC library',`${visible.length===state.groups.length?quantity(state.groups.length,'game'):visible.length+' of '+state.groups.length+' games shown'} · ${quantity(state.records.length,'disc')} in library`,(state.browseRoot?action('drive-media-update','Update media & information…','primary',!state.groups.length||!state.prefs.library?'disabled':'')+action('browse-drive-setup','Drive setup…','small'):action('information-tools','Metadata…','quiet small',!state.groups.length?'disabled':'')+action('information-refresh','Get game information…','quiet small',!state.groups.length?'disabled':'')+action('add-discs','+ Add discs','orange',!state.prefs.library?'disabled':'')))+browserSummary()+
- `<div class="row spread toolbar library-toolbar"><div class="library-search-controls"><input type="search" id="library-search" aria-label="Find a game" placeholder="Find a game…" value="${e(state.filter.search)}"><select id="library-search-scope" aria-label="Search in">${option('title','Titles only',state.filter.searchScope!=='information')}${option('information','Titles & information',state.filter.searchScope==='information')}</select><select id="library-region" aria-label="Region">${option('','All regions',!state.filter.region)}${regions.map(r=>option(r,r,state.filter.region===r)).join('')}</select><select id="library-media" aria-label="Missing artwork">${[['','All media'],['cover','Missing covers'],['preview','Missing previews'],['either','Missing covers or previews']].map(([v,label])=>option(v,label,(state.filter.media||'')===v)).join('')}</select><select id="library-information" aria-label="Game information filter">${[['','All information'],['any','Missing any information'],['description','Missing descriptions'],['released','Missing release dates / years'],['genre','Missing genres'],['developer','Missing developers'],['publisher','Missing publishers'],['players','Missing player counts'],['edited','Manually edited']].map(([v,label])=>option(v,label,(state.filter.information||'')===v)).join('')}</select></div><div class="row">${Object.entries(state.filter).some(([k,v])=>k!=='searchScope'&&v)?action('filters-clear','Clear filters','quiet small'):''}${action('select-shown','Select all shown','small',!visible.length?'disabled':'')}${count?action('clear-selection','Clear selection','quiet small'):''}</div></div>
- <div class="row filters">${['',...categories.filter(c=>state.groups.some(g=>g.category===c))].map(c=>action('filter-category',e(c||'All'),`chip${state.filter.category===c?' active':''}`,`data-category="${e(c)}" aria-pressed="${state.filter.category===c}"`)).join('')}</div>`+
- (state.browserError?empty('Could not read this library',state.browserError,action('library-refresh','Try again','primary')):!state.browseRoot&&!state.prefs.library?empty('A home for your 3DO library','Choose the folder containing your games, or create a staging library to import discs into.',action('choose-library','Choose library folder','primary')):!state.groups.length?(state.browseRoot?empty('No games on this drive','Choose your PC library and copy selected games to this drive.'):empty('Your library is ready for games','Add ISO or CUE files to identify and organize your collection. Your original files stay in place.',action('add-discs','Add discs','primary'))):!visible.length?empty('No matching games','Try another search, category, region or information filter.',action('filters-clear','Clear filters','primary')):
- `<p class="note" id="game-keyboard">Arrow keys move between games; Space selects.</p><div class="grid" role="group" aria-label="Games" aria-describedby="game-keyboard">${visible.map((g,i)=>`<button class="game${state.selected.has(g.key)?' selected':''}" data-game="${e(g.key)}" tabindex="${g.key===focusedGame?0:-1}" aria-label="${e(g.title)}" aria-describedby="game-detail-${i} game-status-${i}" aria-pressed="${state.selected.has(g.key)}" title="${e(g.title+'\n'+g.key)}"><div class="cover">${g.cover?`<img data-cover="${e(g.cover)}" alt="" loading="lazy">`:'<span class="placeholder" aria-hidden="true">◉</span>'}<span class="selection-check" aria-hidden="true">${state.selected.has(g.key)?'✓':''}</span></div><div class="game-title">${e(g.title)}</div><div class="game-detail" id="game-detail-${i}">${e([g.region,g.genre.split(';')[0]].filter(Boolean).join(' · '))}${g.discs.length>1?` · ${quantity(g.discs.length,'disc')}`:''}${g.edited?' · Edited':''}</div><div class="game-detail game-status" id="game-status-${i}">${state.browseRoot?`${bytes(g.bytes)} · ${g.missingCover?'Cover missing':'Cover available'} · ${g.missingPreview?'Preview missing':'Preview available'}`:g.presenceKnown?(g.presentDiscs===g.discs.length?'Already on drive':g.presentDiscs?`${g.presentDiscs} of ${g.discs.length} discs on drive`:'Not on drive'):''}</div></button>`).join('')}</div>`)+
- (count?`<div class="selection-bar row spread" id="selection-actions"><div><strong>${count} game${count===1?'':'s'} selected</strong><small> · ${quantity(selectedDiscs(state.groups,state.selected).length,'disc')}${hiddenSelected?' · '+hiddenSelected+' selected outside this view':''}</small></div>${action('selection-actions','Actions…','selection-more')}<div class="row selection-buttons">${selectionButtonsView()}</div></div>`:'');
+const operationMessages = {
+  titles_remove_review: ['Reviewing selected title files…', 'Title removal ready to review.'],
+  titles_remove: ['Removing selected titles…', 'Selected titles removed.'],
+  library: ['Refreshing the library…', 'Library refreshed.'],
+  drive_browser: ['Reading games on the drive…', 'Drive contents refreshed.'],
+  scan: ['Identifying discs…', 'Disc scan complete. Review the import.'],
+  import: ['Importing selected discs…', 'Disc import complete.'],
+  copy_preview: ['Checking destination files and space…', 'Copy review ready.'],
+  copy: ['Copying selected games and support files…', 'Copy complete.'],
+  drive_setup: ['Preparing the console drive…', 'Drive setup complete.'],
+  drive_check: ['Checking the console drive…', 'Drive check complete.'],
+  drive_cleanup_review: ['Finding menu files on the drive…', 'Drive cleanup ready to review.'],
+  drive_cleanup: ['Removing menu files from the drive…', 'Menu files removed.'],
+  drive_eject: ['Safely ejecting the drive…', 'Drive ejected.'],
+  media_update: ['Preparing missing media and game information…', 'Media preparation complete.'],
+  media_selected: ['Preparing media for selected games…', 'Selected media preparation complete.'],
+  media_rebuild: ['Rebuilding media from source files…', 'Media rebuild complete.'],
+  game_info_matches: ['Reading LaunchBox matches…', 'Information matches ready to review.'],
+  game_info_choose_match: ['Saving the chosen information match…', 'Information match saved.'],
+  game_info_backups: ['Reading automatic metadata backups…', 'Metadata backup list ready.'],
+  game_info_backup_preview: [
+    'Comparing the snapshot with your library…',
+    'Snapshot restore ready to review.',
+  ],
+  game_info_export: ['Exporting custom metadata…', 'Custom metadata exported.'],
+  game_info_import_preview: [
+    'Comparing imported metadata with your library…',
+    'Metadata import ready to review.',
+  ],
+  game_info_import: ['Importing checked metadata entries…', 'Custom metadata imported.'],
+  game_info_restore_preview: [
+    'Reading downloaded information…',
+    'Downloaded information ready to review.',
+  ],
+  game_info_save: ['Saving game information…', 'Game information saved.'],
+  game_information: ['Updating game information from LaunchBox…', 'Game information updated.'],
+  categories_save: ['Saving categories and folder changes…', 'Categories saved.'],
+  move: ['Moving selected games…', 'Selected games moved.'],
+  indexes: ['Rebuilding console indexes…', 'Console indexes rebuilt.'],
+  undo: ['Restoring the previous library state…', 'Last change undone.'],
+  backup_open: ['Opening the save archive…', 'Save archive opened.'],
+  backup_save: ['Saving and verifying the save archive…', 'Save archive saved and verified.'],
+  backup_compare: ['Comparing save archives…', 'Save comparison ready.'],
+  updates_check: ['Checking GitHub for updates…', 'Update check complete.'],
+  boot_update: ['Downloading and installing the menu image…', 'Menu image updated.'],
+  self_update: ['Downloading the desktop update…', 'Desktop update prepared.'],
+  video_tools: ['Downloading and verifying video tools…', 'Video tools installed.'],
+  support_export: ['Writing the support report…', 'Support report exported.'],
+};
+function recordActivity(message) {
+  state.logs.push(String(message));
+  if (state.logs.length > 500) state.logs.shift();
+}
+function wasCanceled(error) {
+  return /\boperation cancel(?:led|ed)\b/i.test(String(error));
+}
+async function call(action, args = {}) {
+  const messages = operationMessages[action];
+  const job = ['pick', 'preferences', 'init', 'ready', 'quit', 'drive_status'].includes(action)
+    ? null
+    : dialogProgress.start(messages?.[0] || 'Working…');
+  if (messages && !state.busy) {
+    recordActivity(messages[0]);
+    setStatus(messages[0]);
+  } else if (job && !messages) setStatus('Working…');
+  try {
+    const result = await invoke('request', { action, args, requestId: job?.id || null });
+    dialogProgress.finish(job, messages?.[1] || 'Operation complete.');
+    if (messages) {
+      recordActivity(messages[1]);
+      setStatus(messages[1]);
+    } else if (job) setStatus('Ready');
+    return result;
+  } catch (error) {
+    dialogProgress.finish(job, String(error), wasCanceled(error) ? 'canceled' : 'error');
+    recordActivity(String(error));
+    if (!state.busy)
+      setStatus(
+        wasCanceled(error)
+          ? 'Operation canceled.'
+          : 'Could not complete the operation. Open Activity for details.',
+      );
+    throw error;
+  }
+}
+async function perform(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    toast(wasCanceled(err) ? 'Operation canceled.' : err, !wasCanceled(err));
+    return null;
+  }
+}
+async function pick(kind, start = '') {
+  return call('pick', { kind, start });
+}
+const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const mode = state.prefs.theme || 'system';
+  document.documentElement.dataset.textScale = String(textScale(state.prefs.text_scale));
+  document.documentElement.style.fontSize = textScale(state.prefs.text_scale) + '%';
+  document.documentElement.dataset.theme =
+    mode === 'system' ? (systemTheme.matches ? 'dark' : 'light') : mode;
+  if ($('#content')) resizeSelectionBar();
+}
+systemTheme.addEventListener('change', () => {
+  if (!state.prefs.theme || state.prefs.theme === 'system') applyTheme();
+});
+const narrowLayout = window.matchMedia('(max-width:760px)');
+narrowLayout.addEventListener('change', () => {
+  if ($('#content')) {
+    resizeSelectionBar();
+    loadCovers();
+  }
+});
+async function preferences() {
+  rememberRoots();
+  await call('preferences', state.prefs);
+  updateLocation();
+}
+async function developerPreferences() {
+  await preferences();
+  state.updates = null;
+  state.noticeDismissed = '';
+  render();
+}
+function developerSettingsView() {
+  return `<div class="card"><h3>Developer updates</h3>${checkbox('pref-developer', 'Use local builds instead of GitHub releases', state.prefs.developer_mode)}<label class="field">Build output directory<div class="row"><input class="grow" id="developer-directory" value="${e(state.prefs.developer_updates_directory || '')}" placeholder="Choose the repository’s iso folder">${action('developer-folder', 'Browse…', '', 'aria-label="Choose developer build folder"')}</div></label><p class="note">Builds write update manifests into the iso folder automatically. Local updates work offline and detect rebuilt desktop apps even at the same version. Check for updates after building. Missing local builds never fall back to GitHub.</p></div>`;
+}
+let viewTimer = null,
+  viewDirty = false,
+  viewRevision = 0;
+function rememberLibraryView() {
+  if (!state.libraryRoot) return;
+  state.prefs.library_views ??= {};
+  const next = { ...state.filter, selected: [...state.selected] };
+  if (JSON.stringify(state.prefs.library_views[state.libraryRoot]) === JSON.stringify(next)) return;
+  state.prefs.library_views[state.libraryRoot] = next;
+  viewDirty = true;
+  ++viewRevision;
+  clearTimeout(viewTimer);
+  viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+}
+async function flushLibraryView() {
+  clearTimeout(viewTimer);
+  if (!viewDirty) return;
+  if (state.busy) {
+    viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+    return;
+  }
+  const revision = viewRevision;
+  try {
+    await invoke('save_library_views', { views: state.prefs.library_views });
+    viewDirty = revision !== viewRevision;
+    if (viewDirty) viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+  } catch (error) {
+    if (String(error).includes('Another operation')) {
+      viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+      return;
+    }
+    throw error;
+  }
+}
+function updateLocation() {
+  const library = $('#pc-library');
+  if (library) library.innerHTML = pcLibraryOptions();
+  const drive = $('#usb-drive');
+  if (drive) drive.innerHTML = driveOptions();
+  const eject = $('#top-eject');
+  if (eject) {
+    const root = state.prefs.destination;
+    const removable = !!root && !!state.driveStatus[root]?.removable;
+    eject.hidden = !removable;
+    eject.dataset.root = root || '';
+    eject.title = removable ? 'Safely eject ' + displayPath(root) : '';
+  }
+}
+function rootName(path) {
+  const parts = String(path)
+    .replace(/[\\/]+$/, '')
+    .split(/[\\/]/);
+  return parts[parts.length - 1] || String(path);
+}
+function driveName(path) {
+  return state.prefs.drives?.[path]?.name || 'USB / SD';
+}
+function pcLibraryOptions() {
+  return (
+    (state.prefs.library ? '' : option('', 'Choose a PC library', true)) +
+    (state.prefs.libraries || [])
+      .map((path) =>
+        option(path, `${rootName(path)} — ${displayPath(path)}`, path === state.prefs.library),
+      )
+      .join('') +
+    option('add', 'Add a PC library…', false) +
+    option('manage', 'Manage libraries…', false)
+  );
+}
+function driveOptions() {
+  return (
+    (state.prefs.destination ? '' : option('', 'Choose a USB / SD drive', true)) +
+    (state.prefs.browser_drives || [])
+      .map((path) =>
+        option(
+          path,
+          `${driveName(path)} — ${displayPath(path)}${state.driveStatus[path]?.connected === false ? ' (not connected)' : ''}`,
+          path === state.prefs.destination,
+        ),
+      )
+      .join('') +
+    option('add', 'Add a drive…', false) +
+    option('manage', 'Manage drives…', false)
+  );
+}
+function rememberRoots() {
+  const p = state.prefs;
+  p.libraries = [...(p.libraries || [])];
+  p.browser_drives = [...(p.browser_drives || [])];
+  if (p.library && !p.libraries.includes(p.library)) p.libraries.push(p.library);
+  if (p.destination && !p.browser_drives.includes(p.destination))
+    p.browser_drives.push(p.destination);
+}
+async function refreshDriveStatus() {
+  const roots = state.prefs.browser_drives || [];
+  const list = roots.length ? await call('drive_status', { roots }) : [];
+  state.driveStatus = Object.fromEntries(list.map((s) => [s.root, s]));
+  updateLocation();
+}
+function viewSwitch() {
+  return `<div class="view-switch" role="group" aria-label="Show">${action('view-pc', 'PC library', '', `aria-pressed="${!state.browseRoot}"`)}${action('view-drive', 'USB / SD drive', '', `aria-pressed="${!!state.browseRoot}"${state.prefs.destination ? '' : ' disabled'}`)}</div>`;
+}
+async function manageRoots(kind) {
+  const drives = kind === 'drives';
+  if (drives) await refreshDriveStatus();
+  const roots = drives ? state.prefs.browser_drives || [] : state.prefs.libraries || [];
+  const current = drives ? state.prefs.destination : state.prefs.library;
+  dialog(
+    drives ? 'Manage drives' : 'Manage PC libraries',
+    `${
+      roots.length
+        ? roots
+            .map((root) => {
+              const s = state.driveStatus[root];
+              const detail = [
+                displayPath(root),
+                root === current ? 'selected' : '',
+                drives
+                  ? s?.connected === false
+                    ? 'not connected'
+                    : s?.removable
+                      ? 'removable'
+                      : s
+                        ? 'can’t be ejected here'
+                        : ''
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' · ');
+              return `<div class="root-row"><div class="grow"><strong>${e(drives ? driveName(root) : rootName(root))}</strong><div class="note">${e(detail)}</div></div>${drives && s?.removable ? action('drive-eject', 'Safely eject', 'small', `data-root="${e(root)}"`) : ''}${action('forget-root', 'Remove from list', 'small danger', `data-kind="${kind}" data-root="${e(root)}"`)}</div>`;
+            })
+            .join('')
+        : `<p>No ${drives ? 'drives' : 'PC libraries'} yet.</p>`
+    }<div class="notice">Removing ${drives ? 'a drive' : 'a library'} only takes it off this list. Nothing on it is changed, and you can add it again any time.</div>`,
+    action('manage-add', drives ? 'Add a drive…' : 'Add a PC library…', '', `data-kind="${kind}"`) +
+      action('close-dialog', 'Done', 'primary', 'data-dialog="main-dialog"'),
+  );
+}
+async function switchLibrary(root) {
+  rememberLibraryView();
+  await flushLibraryView();
+  state.browseRoot = root;
+  state.page = 'library';
+  state.coverCache.clear();
+  updateLocation();
+  await loadLibrary();
+}
+function shell() {
+  document.querySelector('#app').innerHTML =
+    `<a class="skip-link" href="#content">Skip to content</a><div class="shell"><nav class="sidebar" aria-label="Main navigation"><img class="brand" src="assets/logo.png" alt="Oh My 3DO">${['library', 'saves', 'media', 'drive'].map((page) => `<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`).join('')}<div class="nav-bottom"><div class="nav-divider"></div>${['updates', 'settings'].map((page) => `<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`).join('')}<div class="version">Oh My 3DO · ${e(state.version)}</div></div></nav><section class="workspace"><header class="topbar"><div class="library-location"><label for="pc-library">PC LIBRARY</label><select id="pc-library"></select></div><div class="library-location"><label for="usb-drive">USB / SD DRIVE</label><select id="usb-drive"></select>${action('drive-eject', 'Safely eject', 'small', 'id="top-eject" hidden')}</div><div class="row">${action('library-refresh', 'Refresh', 'small')}</div></header><div data-announcer="polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div><div data-announcer="alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div><div id="update-notice" hidden></div><main id="content" class="content" tabindex="-1" aria-labelledby="page-title"></main></section><footer class="statusbar"><span id="busy-dot" class="busy-dot hidden"></span><progress id="operation-meter" aria-label="Operation progress" max="1" hidden></progress><span id="operation-percent" hidden></span><span id="status-message" class="message" role="status" aria-live="polite" aria-atomic="true">Ready</span>${action('cancel', 'Cancel', 'small hidden', 'id="cancel-job"')}${action('logs', 'Activity', 'quiet small')}</footer></div>`;
+  updateLocation();
+  render();
+}
+function render() {
+  const content = $('#content'),
+    focus = captureFocus(content),
+    changed = state.renderedPage !== state.page;
+  updateLocation();
+  renderUpdateNotice();
+  document.querySelectorAll('[data-page]').forEach((n) => {
+    const current = n.dataset.page === (state.page === 'import' ? 'library' : state.page);
+    n.classList.toggle('active', current);
+    if (current) n.setAttribute('aria-current', 'page');
+    else n.removeAttribute('aria-current');
+  });
+  content.innerHTML = (
+    {
+      library: libraryView,
+      import: importView,
+      saves: savesView,
+      media: mediaView,
+      drive: driveView,
+      settings: settingsView,
+      updates: updatesView,
+    }[state.page] || libraryView
+  )();
+  loadCovers();
+  resizeSelectionBar();
+  if (changed || (focus && !restoreFocus(focus, content))) focusHeading(content);
+  state.renderedPage = state.page;
+}
+function empty(title, note, buttons = '') {
+  return `<div class="empty"><div class="empty-mark">◉</div><h2>${e(title)}</h2><p>${e(note)}</p><div class="row empty-actions">${buttons}</div></div>`;
+}
+function selectionButtonsView() {
+  const count = state.selected.size;
+  return `${action('game-details', 'Game details', 'quiet', count !== 1 ? 'disabled' : '')}${action('remove-titles', 'Remove…', 'danger')}${state.browseRoot ? '' : action('game-info-bulk', 'Edit information…', 'quiet')}${state.browseRoot ? '' : action('media-selected', 'Prepare missing media', 'quiet')}${state.browseRoot ? '' : action('move-games', 'Move category…', 'quiet', state.groups.some((g) => state.selected.has(g.key) && !g.movable) ? 'disabled' : '')}${state.browseRoot ? '' : action('copy-open', 'Copy selected to USB…', 'primary')}`;
+}
+function libraryView() {
+  const visible = visibleGames(state.groups, state.filter);
+  const regions = [...new Set(state.groups.map((g) => g.region).filter(Boolean))].sort();
+  const count = state.selected.size;
+  const visibleKeys = new Set(visible.map((g) => g.key));
+  const hiddenSelected = state.groups.filter(
+    (g) => state.selected.has(g.key) && !visibleKeys.has(g.key),
+  ).length;
+  const focusedGame = visible.find((g) => g.key === state.focusedGame)?.key || visible[0]?.key;
+  return (
+    viewSwitch() +
+    heading(
+      state.browseRoot ? 'On your USB / SD drive' : 'Your PC library',
+      `${visible.length === state.groups.length ? quantity(state.groups.length, 'game') : visible.length + ' of ' + state.groups.length + ' games shown'} · ${quantity(state.records.length, 'disc')} in library`,
+      state.browseRoot
+        ? action(
+            'drive-media-update',
+            'Update media & information…',
+            'primary',
+            !state.groups.length || !state.prefs.library ? 'disabled' : '',
+          ) + action('browse-drive-setup', 'Drive setup…', 'small')
+        : action(
+            'information-tools',
+            'Metadata…',
+            'quiet small',
+            !state.groups.length ? 'disabled' : '',
+          ) +
+            action(
+              'information-refresh',
+              'Get game information…',
+              'quiet small',
+              !state.groups.length ? 'disabled' : '',
+            ) +
+            action('add-discs', '+ Add discs', 'orange', !state.prefs.library ? 'disabled' : ''),
+    ) +
+    browserSummary() +
+    `<div class="row spread toolbar library-toolbar"><div class="library-search-controls"><input type="search" id="library-search" aria-label="Find a game" placeholder="Find a game…" value="${e(state.filter.search)}"><select id="library-search-scope" aria-label="Search in">${option('title', 'Titles only', state.filter.searchScope !== 'information')}${option('information', 'Titles & information', state.filter.searchScope === 'information')}</select><select id="library-region" aria-label="Region">${option('', 'All regions', !state.filter.region)}${regions.map((r) => option(r, r, state.filter.region === r)).join('')}</select><select id="library-media" aria-label="Missing artwork">${[
+      ['', 'All media'],
+      ['cover', 'Missing covers'],
+      ['preview', 'Missing previews'],
+      ['either', 'Missing covers or previews'],
+    ]
+      .map(([v, label]) => option(v, label, (state.filter.media || '') === v))
+      .join('')}</select><select id="library-information" aria-label="Game information filter">${[
+      ['', 'All information'],
+      ['any', 'Missing any information'],
+      ['description', 'Missing descriptions'],
+      ['released', 'Missing release dates / years'],
+      ['genre', 'Missing genres'],
+      ['developer', 'Missing developers'],
+      ['publisher', 'Missing publishers'],
+      ['players', 'Missing player counts'],
+      ['edited', 'Manually edited'],
+    ]
+      .map(([v, label]) => option(v, label, (state.filter.information || '') === v))
+      .join(
+        '',
+      )}</select></div><div class="row">${Object.entries(state.filter).some(([k, v]) => k !== 'searchScope' && v) ? action('filters-clear', 'Clear filters', 'quiet small') : ''}${action('select-shown', 'Select all shown', 'small', !visible.length ? 'disabled' : '')}${count ? action('clear-selection', 'Clear selection', 'quiet small') : ''}</div></div>
+ <div class="row filters">${['', ...categories.filter((c) => state.groups.some((g) => g.category === c))].map((c) => action('filter-category', e(c || 'All'), `chip${state.filter.category === c ? ' active' : ''}`, `data-category="${e(c)}" aria-pressed="${state.filter.category === c}"`)).join('')}</div>` +
+    (state.browserError
+      ? empty(
+          'Could not read this library',
+          state.browserError,
+          action('library-refresh', 'Try again', 'primary'),
+        )
+      : !state.browseRoot && !state.prefs.library
+        ? empty(
+            'A home for your 3DO library',
+            'Choose the folder containing your games, or create a staging library to import discs into.',
+            action('choose-library', 'Choose library folder', 'primary'),
+          )
+        : !state.groups.length
+          ? state.browseRoot
+            ? empty(
+                'No games on this drive',
+                'Choose your PC library and copy selected games to this drive.',
+              )
+            : empty(
+                'Your library is ready for games',
+                'Add ISO or CUE files to identify and organize your collection. Your original files stay in place.',
+                action('add-discs', 'Add discs', 'primary'),
+              )
+          : !visible.length
+            ? empty(
+                'No matching games',
+                'Try another search, category, region or information filter.',
+                action('filters-clear', 'Clear filters', 'primary'),
+              )
+            : `<p class="note" id="game-keyboard">Arrow keys move between games; Space selects.</p><div class="grid" role="group" aria-label="Games" aria-describedby="game-keyboard">${visible.map((g, i) => `<button class="game${state.selected.has(g.key) ? ' selected' : ''}" data-game="${e(g.key)}" tabindex="${g.key === focusedGame ? 0 : -1}" aria-label="${e(g.title)}" aria-describedby="game-detail-${i} game-status-${i}" aria-pressed="${state.selected.has(g.key)}" title="${e(g.title + '\n' + g.key)}"><div class="cover">${g.cover ? `<img data-cover="${e(g.cover)}" alt="" loading="lazy">` : '<span class="placeholder" aria-hidden="true">◉</span>'}<span class="selection-check" aria-hidden="true">${state.selected.has(g.key) ? '✓' : ''}</span></div><div class="game-title">${e(g.title)}</div><div class="game-detail" id="game-detail-${i}">${e([g.region, g.genre.split(';')[0]].filter(Boolean).join(' · '))}${g.discs.length > 1 ? ` · ${quantity(g.discs.length, 'disc')}` : ''}${g.edited ? ' · Edited' : ''}</div><div class="game-detail game-status" id="game-status-${i}">${state.browseRoot ? `${bytes(g.bytes)} · ${g.missingCover ? 'Cover missing' : 'Cover available'} · ${g.missingPreview ? 'Preview missing' : 'Preview available'}` : g.presenceKnown ? (g.presentDiscs === g.discs.length ? 'Already on drive' : g.presentDiscs ? `${g.presentDiscs} of ${g.discs.length} discs on drive` : 'Not on drive') : ''}</div></button>`).join('')}</div>`) +
+    (count
+      ? `<div class="selection-bar row spread" id="selection-actions"><div><strong>${count} game${count === 1 ? '' : 's'} selected</strong><small> · ${quantity(selectedDiscs(state.groups, state.selected).length, 'disc')}${hiddenSelected ? ' · ' + hiddenSelected + ' selected outside this view' : ''}</small></div>${action('selection-actions', 'Actions…', 'selection-more')}<div class="row selection-buttons">${selectionButtonsView()}</div></div>`
+      : '')
+  );
 }
 let coverObserver;
 let selectionObserver;
-function resizeSelectionBar(){
- selectionObserver?.disconnect();const content=$('#content'),bar=$('.selection-bar');if(!content)return;
- const size=()=>{const height=bar?Math.ceil(bar.getBoundingClientRect().height):0;content.style.setProperty('--selection-space',height?`${height+24}px`:'0px');const footer=$('.statusbar'),fixedFooter=footer&&getComputedStyle(footer).position==='fixed'?footer.getBoundingClientRect().height:0;document.documentElement.style.setProperty('--fixed-ui-space',`${height+fixedFooter+16}px`);};
- size();if(bar){selectionObserver=new ResizeObserver(size);selectionObserver.observe(bar);}
+function resizeSelectionBar() {
+  selectionObserver?.disconnect();
+  const content = $('#content'),
+    bar = $('.selection-bar');
+  if (!content) return;
+  const size = () => {
+    const height = bar ? Math.ceil(bar.getBoundingClientRect().height) : 0;
+    content.style.setProperty('--selection-space', height ? `${height + 24}px` : '0px');
+    const footer = $('.statusbar'),
+      fixedFooter =
+        footer && getComputedStyle(footer).position === 'fixed'
+          ? footer.getBoundingClientRect().height
+          : 0;
+    document.documentElement.style.setProperty(
+      '--fixed-ui-space',
+      `${height + fixedFooter + 16}px`,
+    );
+  };
+  size();
+  if (bar) {
+    selectionObserver = new ResizeObserver(size);
+    selectionObserver.observe(bar);
+  }
 }
-function loadCovers(){coverObserver?.disconnect();coverObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;coverObserver.unobserve(entry.target);const img=entry.target;const root=state.browser?.root||state.libraryRoot;const token=state.browseRoot?state.browser?.identity?.token:null;const name=state.browseRoot?img.dataset.cover:`.ohmy3do/covers/${img.dataset.cover}`;const key=`${root}/${token||''}/${name}`;if(state.coverCache.has(key)){img.src=state.coverCache.get(key);continue;}coverQueue.push({img,key,name,root,token,generation:state.coverGeneration});pumpCovers();}},{root:getComputedStyle($('#content')).overflowY==='visible'?null:$('#content'),rootMargin:'200px'});document.querySelectorAll('img[data-cover]').forEach(img=>coverObserver.observe(img));}
-let coverRunning=0;const coverQueue=[];
-function pumpCovers(){while(coverRunning<3&&coverQueue.length){const item=coverQueue.shift();if(!item.img.isConnected)continue;coverRunning++;invoke('cover',{name:item.name,browserRoot:item.root,token:item.token}).then(src=>{if(item.generation===state.coverGeneration){state.coverCache.set(item.key,src);if(item.img.isConnected)item.img.src=src;}}).catch(()=>{item.img.remove();}).finally(()=>{coverRunning--;pumpCovers();});}}
-async function driveMediaUpdate(){
- if(!state.browseRoot||!state.browser)throw new Error('Refresh the drive browser first.');
- const source=await call('library');const wanted=new Set((state.selected.size?selectedDiscs(state.groups,state.selected):state.records.map(r=>r.path)).map(p=>p.toLowerCase()));
- const discs=source.records.map(r=>r.path).filter(p=>wanted.has(p.toLowerCase()));
- state.driveUpdate={root:state.browser.root,token:state.browser.identity.token,source:state.prefs.library,discs};
- const skipped=[...wanted].filter(p=>!discs.some(d=>d.toLowerCase()===p));
- dialog('Update drive media & information',`<p>Drive: ${pathLabel(state.driveUpdate.root)}<br>Source: ${pathLabel(state.prefs.library)}</p><p>${quantity(discs.length,'disc')} matched by file path${state.selected.size?' from the selected games':' across this drive'}. Existing PC artwork, previews, descriptions and metadata will be transferred with console support files. Game disc files will stay in place.</p>${skipped.length?`<details class="notice warning"><summary>${quantity(skipped.length,'disc')} have no matching PC library entry and will be skipped</summary>${skipped.map(p=>`<p class="path">${pathLabel(p)}</p>`).join('')}</details>`:''}<p class="note">Edit game information or assign replacement artwork in the PC library first. The option below finds missing media and descriptions using your configured sources; it keeps existing information.</p>${checkbox('drive-update-prepare','Find missing media and descriptions in the PC library first',false)}`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('drive-media-review','Review update','primary',discs.length?'':'disabled'));
+function loadCovers() {
+  coverObserver?.disconnect();
+  coverObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        coverObserver.unobserve(entry.target);
+        const img = entry.target;
+        const root = state.browser?.root || state.libraryRoot;
+        const token = state.browseRoot ? state.browser?.identity?.token : null;
+        const name = state.browseRoot ? img.dataset.cover : `.ohmy3do/covers/${img.dataset.cover}`;
+        const key = `${root}/${token || ''}/${name}`;
+        if (state.coverCache.has(key)) {
+          img.src = state.coverCache.get(key);
+          continue;
+        }
+        coverQueue.push({ img, key, name, root, token, generation: state.coverGeneration });
+        pumpCovers();
+      }
+    },
+    {
+      root: getComputedStyle($('#content')).overflowY === 'visible' ? null : $('#content'),
+      rootMargin: '200px',
+    },
+  );
+  document.querySelectorAll('img[data-cover]').forEach((img) => coverObserver.observe(img));
 }
-async function reviewDriveMedia(){
- const u=state.driveUpdate;if(!u||u.source!==state.prefs.library)throw new Error('PC library changed. Start the update again.');
- const drive=await call('drive_inspect',{root:u.root});if(drive.token!==u.token)throw new Error('Drive changed. Refresh and start again.');
- if($('#drive-update-prepare').checked)await call('media_selected',{discs:u.discs});
- const plan=await call('copy_preview',{destination:u.root,discs:u.discs,verify:false,existing_only:true,drive_token:u.token});u.plan=plan;
- dialog('Review drive media update',`<p>Destination: ${pathLabel(u.root)}</p><p>Game disc files will not be copied or replaced. Media, information and console support will be updated; existing settings and saves are preserved.</p>${storageView(plan.storage)}<details><summary>File changes</summary><div class="progress-log">${plan.files.filter(f=>f.status!=='unchanged').map(f=>`${e(f.status)} ${pathLabel(f.path)}`).join('\n')||'No changed files.'}</div></details>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('drive-media-apply','Update drive','primary',plan.storage.fits?'':'disabled'));
+let coverRunning = 0;
+const coverQueue = [];
+function pumpCovers() {
+  while (coverRunning < 3 && coverQueue.length) {
+    const item = coverQueue.shift();
+    if (!item.img.isConnected) continue;
+    coverRunning++;
+    invoke('cover', { name: item.name, browserRoot: item.root, token: item.token })
+      .then((src) => {
+        if (item.generation === state.coverGeneration) {
+          state.coverCache.set(item.key, src);
+          if (item.img.isConnected) item.img.src = src;
+        }
+      })
+      .catch(() => {
+        item.img.remove();
+      })
+      .finally(() => {
+        coverRunning--;
+        pumpCovers();
+      });
+  }
 }
-function browserSummary(){if(state.browseRoot&&state.browser)return `<div class="notice"><strong>Drive browser</strong> · ${bytes(state.browser.game_bytes)} of games${state.browser.available!==null?' · '+bytes(state.browser.available)+' free of '+bytes(state.browser.capacity):''}<br>${state.browser.identity?.identity?e(state.browser.identity.identity.name)+' · ':''}Copy destination: ${pathLabel(state.prefs.destination||'Not selected')}${state.browser.warnings.map(w=>`<p>${e(w)}</p>`).join('')}</div>`;return state.prefs.destination?`<p class="note">Copy destination: ${pathLabel(state.prefs.destination)} ${state.browser?.destination_available===false?' · Drive unavailable — connect it and refresh.':' · “Already on drive” compares disc paths and sizes, including CUE tracks.'} Refresh after changing drives.</p>`:'';}
-async function loadLibrary(){
- state.coverGeneration=(state.coverGeneration||0)+1;state.coverCache.clear();coverQueue.length=0;
- if(!state.browseRoot&&!state.prefs.library){state.browserError='';state.records=[];state.groups=[];state.libraryRoot=null;state.browser=null;render();return;}
- let result;try{result=await call(state.browseRoot?'drive_browser':'library',state.browseRoot?{root:state.browseRoot}:{});}catch(error){state.records=[];state.groups=[];state.selected.clear();state.browser=null;state.browserError=String(error);state.libraryRoot=null;render();throw error;}
- state.browserError='';state.browser=result;state.records=result.records||[];categories.splice(0,categories.length,...result.categories);state.groups=groupGames(state.records);
- const key=state.browseRoot?`drive:${result.identity?.token||'unnamed'}:${result.root}`:result.root;
- const saved=state.prefs.library_views?.[key];const view=restoreLibraryView(state.libraryRoot===key?{...state.filter,selected:[...state.selected]}:saved,state.groups,categories);state.libraryRoot=key;
- state.selected=new Set(view.selected);state.filter={search:view.search,category:view.category,region:view.region,media:view.media,information:view.information,searchScope:view.searchScope};state.anchor=null;rememberLibraryView();render();setStatus(`${state.groups.length} games ${state.browseRoot?'on drive':'in the PC library'}`);
+async function driveMediaUpdate() {
+  if (!state.browseRoot || !state.browser) throw new Error('Refresh the drive browser first.');
+  const source = await call('library');
+  const wanted = new Set(
+    (state.selected.size
+      ? selectedDiscs(state.groups, state.selected)
+      : state.records.map((r) => r.path)
+    ).map((p) => p.toLowerCase()),
+  );
+  const discs = source.records.map((r) => r.path).filter((p) => wanted.has(p.toLowerCase()));
+  state.driveUpdate = {
+    root: state.browser.root,
+    token: state.browser.identity.token,
+    source: state.prefs.library,
+    discs,
+  };
+  const skipped = [...wanted].filter((p) => !discs.some((d) => d.toLowerCase() === p));
+  dialog(
+    'Update drive media & information',
+    `<p>Drive: ${pathLabel(state.driveUpdate.root)}<br>Source: ${pathLabel(state.prefs.library)}</p><p>${quantity(discs.length, 'disc')} matched by file path${state.selected.size ? ' from the selected games' : ' across this drive'}. Existing PC artwork, previews, descriptions and metadata will be transferred with console support files. Game disc files will stay in place.</p>${skipped.length ? `<details class="notice warning"><summary>${quantity(skipped.length, 'disc')} have no matching PC library entry and will be skipped</summary>${skipped.map((p) => `<p class="path">${pathLabel(p)}</p>`).join('')}</details>` : ''}<p class="note">Edit game information or assign replacement artwork in the PC library first. The option below finds missing media and descriptions using your configured sources; it keeps existing information.</p>${checkbox('drive-update-prepare', 'Find missing media and descriptions in the PC library first', false)}`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+      action('drive-media-review', 'Review update', 'primary', discs.length ? '' : 'disabled'),
+  );
 }
-function dialog(title,body,footer='',id='main-dialog'){
- const previous=document.getElementById(id),focus=previous?captureFocus(previous):null;
- const opener=previous?.returnFocus||captureFocus(document);previous?.remove();
- const element=document.createElement('dialog');element.id=id;element.returnFocus=opener;element.setAttribute('aria-labelledby',id+'-title');
- element.innerHTML=`<div class="dialog-head"><h2 id="${id}-title" tabindex="-1">${e(title)}</h2>${action('close-dialog','×','icon quiet',`data-dialog="${id}" aria-label="Close ${e(title)}"`)}</div><div class="sr-only" data-announcer="polite" role="status" aria-live="polite" aria-atomic="true"></div><div class="sr-only" data-announcer="alert" role="alert" aria-live="assertive" aria-atomic="true"></div><div class="dialog-body">${body}</div><div class="dialog-foot">${footer}</div>`;
- document.body.append(element);
- element.addEventListener('close',()=>{element.remove();const front=[...document.querySelectorAll('dialog[open]')].at(-1);if(!restoreFocus(element.returnFocus,front||document))focusHeading(front||$('#content'));});
- element.addEventListener('cancel',event=>{event.preventDefault();if(element.dataset.operationBusy!=='true')perform(()=>handlers['close-dialog']({dataset:{dialog:id}}));});
- element.showModal();if(!restoreFocus(focus,element)){
-  const initial=element.querySelector('[autofocus],[data-answer="cancel"],[data-dirty="cancel"]');if(!focusElement(initial))focusHeading(element);
- }
- dialogProgress.attach(element);return element;
+async function reviewDriveMedia() {
+  const u = state.driveUpdate;
+  if (!u || u.source !== state.prefs.library)
+    throw new Error('PC library changed. Start the update again.');
+  const drive = await call('drive_inspect', { root: u.root });
+  if (drive.token !== u.token) throw new Error('Drive changed. Refresh and start again.');
+  if ($('#drive-update-prepare').checked) await call('media_selected', { discs: u.discs });
+  const plan = await call('copy_preview', {
+    destination: u.root,
+    discs: u.discs,
+    verify: false,
+    existing_only: true,
+    drive_token: u.token,
+  });
+  u.plan = plan;
+  dialog(
+    'Review drive media update',
+    `<p>Destination: ${pathLabel(u.root)}</p><p>Game disc files will not be copied or replaced. Media, information and console support will be updated; existing settings and saves are preserved.</p>${storageView(plan.storage)}<details><summary>File changes</summary><div class="progress-log">${
+      plan.files
+        .filter((f) => f.status !== 'unchanged')
+        .map((f) => `${e(f.status)} ${pathLabel(f.path)}`)
+        .join('\n') || 'No changed files.'
+    }</div></details>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+      action('drive-media-apply', 'Update drive', 'primary', plan.storage.fits ? '' : 'disabled'),
+  );
 }
-function closeDialog(id='main-dialog'){const element=document.getElementById(id);if(element?.dataset.operationBusy!=='true')element?.close();}
-function confirmAction(title,message,yes='Continue',danger=false){return new Promise(resolve=>{const d=dialog(title,`<p>${e(message)}</p>`,`<button data-answer="cancel">Cancel</button><button class="${danger?'danger':'primary'}" data-answer="yes">${e(yes)}</button>`,'confirm-dialog');d.addEventListener('click',event=>{const answer=event.target.closest('[data-answer]');if(answer){resolve(answer.dataset.answer==='yes');d.close();}});d.addEventListener('cancel',()=>resolve(false));d.addEventListener('close',()=>resolve(false));});}
-async function resolveDirty(){if(!state.backup?.dirty&&!state.hexDirty)return true;return new Promise(resolve=>{const d=dialog('Unsaved save edits','<p>Save your edited backup before continuing?</p>','<button data-dirty="cancel">Cancel</button><button data-dirty="discard">Discard changes</button><button data-dirty="save" class="primary">Save changes</button>','dirty-dialog');d.addEventListener('click',event=>{const answer=event.target.closest('[data-dirty]');if(!answer)return;perform(async()=>{if(answer.dataset.dirty==='save'){if(!await saveBackup())return;resolve(true);}else if(answer.dataset.dirty==='discard'){await call('backup_discard');state.backup=null;state.entry=null;state.hexDirty=false;resolve(true);}else resolve(false);d.close();});});d.addEventListener('cancel',()=>resolve(false));d.addEventListener('close',()=>resolve(false));});}
-function copyDialog(){const chosen=state.groups.filter(g=>state.selected.has(g.key));state.copyDiscs=chosen.flatMap(g=>g.discs);state.copyRoot=state.prefs.library;state.copy=null;renderCopyDialog(chosen);}
-function renderCopyDialog(chosen=state.groups.filter(g=>state.selected.has(g.key))){dialog('Copy games to USB',`<p><strong>${quantity(chosen.length,'game')}</strong> · ${quantity(state.copyDiscs.length,'disc')}. Covers, previews and menu support are included.</p><details><summary>Selected games</summary>${chosen.map(g=>`<div>${e(g.title)}</div>`).join('')}</details><label class="field">USB destination<div class="row"><input class="grow" id="copy-destination" value="${e(state.prefs.destination)}" placeholder="Choose the drive root">${action('copy-destination','Browse…','', 'aria-label="Choose copy destination"')}</div></label><div class="notice">Games, settings, favorites and saves already on this drive are preserved.</div>${checkbox('copy-verify','Verify existing disc contents (slower)',state.copyVerify)}${state.copy?`<div class="card section"><p><strong>Destination: ${e(state.copy.drive?.identity?.name||'Unnamed drive')}</strong> · ${pathLabel(state.copy.destination)}</p>${storageView(state.copy.storage)}${copySummary(state.copy)}<details><summary>Show file details</summary><div class="progress-log">${state.copy.files.map(f=>`${e(f.status.padEnd(10))} ${pathLabel(f.path)}`).join('\n')}</div></details></div>`:''}`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action(state.copy?'copy-apply':'copy-preview',state.copy?'Copy to USB':'Review copy','primary',state.copy&&!state.copy.storage.fits?'disabled':''));}
+function browserSummary() {
+  if (state.browseRoot && state.browser)
+    return `<div class="notice"><strong>Drive browser</strong> · ${bytes(state.browser.game_bytes)} of games${state.browser.available !== null ? ' · ' + bytes(state.browser.available) + ' free of ' + bytes(state.browser.capacity) : ''}<br>${state.browser.identity?.identity ? e(state.browser.identity.identity.name) + ' · ' : ''}Copy destination: ${pathLabel(state.prefs.destination || 'Not selected')}${state.browser.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>`;
+  return state.prefs.destination
+    ? `<p class="note">Copy destination: ${pathLabel(state.prefs.destination)} ${state.browser?.destination_available === false ? ' · Drive unavailable — connect it and refresh.' : ' · “Already on drive” compares disc paths and sizes, including CUE tracks.'} Refresh after changing drives.</p>`
+    : '';
+}
+async function loadLibrary() {
+  state.coverGeneration = (state.coverGeneration || 0) + 1;
+  state.coverCache.clear();
+  coverQueue.length = 0;
+  if (!state.browseRoot && !state.prefs.library) {
+    state.browserError = '';
+    state.records = [];
+    state.groups = [];
+    state.libraryRoot = null;
+    state.browser = null;
+    render();
+    return;
+  }
+  let result;
+  try {
+    result = await call(
+      state.browseRoot ? 'drive_browser' : 'library',
+      state.browseRoot ? { root: state.browseRoot } : {},
+    );
+  } catch (error) {
+    state.records = [];
+    state.groups = [];
+    state.selected.clear();
+    state.browser = null;
+    state.browserError = String(error);
+    state.libraryRoot = null;
+    render();
+    throw error;
+  }
+  state.browserError = '';
+  state.browser = result;
+  state.records = result.records || [];
+  categories.splice(0, categories.length, ...result.categories);
+  state.groups = groupGames(state.records);
+  const key = state.browseRoot
+    ? `drive:${result.identity?.token || 'unnamed'}:${result.root}`
+    : result.root;
+  const saved = state.prefs.library_views?.[key];
+  const view = restoreLibraryView(
+    state.libraryRoot === key ? { ...state.filter, selected: [...state.selected] } : saved,
+    state.groups,
+    categories,
+  );
+  state.libraryRoot = key;
+  state.selected = new Set(view.selected);
+  state.filter = {
+    search: view.search,
+    category: view.category,
+    region: view.region,
+    media: view.media,
+    information: view.information,
+    searchScope: view.searchScope,
+  };
+  state.anchor = null;
+  rememberLibraryView();
+  render();
+  setStatus(`${state.groups.length} games ${state.browseRoot ? 'on drive' : 'in the PC library'}`);
+}
+function dialog(title, body, footer = '', id = 'main-dialog') {
+  const previous = document.getElementById(id),
+    focus = previous ? captureFocus(previous) : null;
+  const opener = previous?.returnFocus || captureFocus(document);
+  previous?.remove();
+  const element = document.createElement('dialog');
+  element.id = id;
+  element.returnFocus = opener;
+  element.setAttribute('aria-labelledby', id + '-title');
+  element.innerHTML = `<div class="dialog-head"><h2 id="${id}-title" tabindex="-1">${e(title)}</h2>${action('close-dialog', '×', 'icon quiet', `data-dialog="${id}" aria-label="Close ${e(title)}"`)}</div><div class="sr-only" data-announcer="polite" role="status" aria-live="polite" aria-atomic="true"></div><div class="sr-only" data-announcer="alert" role="alert" aria-live="assertive" aria-atomic="true"></div><div class="dialog-body">${body}</div><div class="dialog-foot">${footer}</div>`;
+  document.body.append(element);
+  element.addEventListener('close', () => {
+    element.remove();
+    const front = [...document.querySelectorAll('dialog[open]')].at(-1);
+    if (!restoreFocus(element.returnFocus, front || document)) focusHeading(front || $('#content'));
+  });
+  element.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    if (element.dataset.operationBusy !== 'true')
+      perform(() => handlers['close-dialog']({ dataset: { dialog: id } }));
+  });
+  element.showModal();
+  if (!restoreFocus(focus, element)) {
+    const initial = element.querySelector(
+      '[autofocus],[data-answer="cancel"],[data-dirty="cancel"]',
+    );
+    if (!focusElement(initial)) focusHeading(element);
+  }
+  dialogProgress.attach(element);
+  return element;
+}
+function closeDialog(id = 'main-dialog') {
+  const element = document.getElementById(id);
+  if (element?.dataset.operationBusy !== 'true') element?.close();
+}
+function confirmAction(title, message, yes = 'Continue', danger = false) {
+  return new Promise((resolve) => {
+    const d = dialog(
+      title,
+      `<p>${e(message)}</p>`,
+      `<button data-answer="cancel">Cancel</button><button class="${danger ? 'danger' : 'primary'}" data-answer="yes">${e(yes)}</button>`,
+      'confirm-dialog',
+    );
+    d.addEventListener('click', (event) => {
+      const answer = event.target.closest('[data-answer]');
+      if (answer) {
+        resolve(answer.dataset.answer === 'yes');
+        d.close();
+      }
+    });
+    d.addEventListener('cancel', () => resolve(false));
+    d.addEventListener('close', () => resolve(false));
+  });
+}
+async function resolveDirty() {
+  if (!state.backup?.dirty && !state.hexDirty) return true;
+  return new Promise((resolve) => {
+    const d = dialog(
+      'Unsaved save edits',
+      '<p>Save your edited backup before continuing?</p>',
+      '<button data-dirty="cancel">Cancel</button><button data-dirty="discard">Discard changes</button><button data-dirty="save" class="primary">Save changes</button>',
+      'dirty-dialog',
+    );
+    d.addEventListener('click', (event) => {
+      const answer = event.target.closest('[data-dirty]');
+      if (!answer) return;
+      perform(async () => {
+        if (answer.dataset.dirty === 'save') {
+          if (!(await saveBackup())) return;
+          resolve(true);
+        } else if (answer.dataset.dirty === 'discard') {
+          await call('backup_discard');
+          state.backup = null;
+          state.entry = null;
+          state.hexDirty = false;
+          resolve(true);
+        } else resolve(false);
+        d.close();
+      });
+    });
+    d.addEventListener('cancel', () => resolve(false));
+    d.addEventListener('close', () => resolve(false));
+  });
+}
+function copyDialog() {
+  const chosen = state.groups.filter((g) => state.selected.has(g.key));
+  state.copyDiscs = chosen.flatMap((g) => g.discs);
+  state.copyRoot = state.prefs.library;
+  state.copy = null;
+  renderCopyDialog(chosen);
+}
+function renderCopyDialog(chosen = state.groups.filter((g) => state.selected.has(g.key))) {
+  dialog(
+    'Copy games to USB',
+    `<p><strong>${quantity(chosen.length, 'game')}</strong> · ${quantity(state.copyDiscs.length, 'disc')}. Covers, previews and menu support are included.</p><details><summary>Selected games</summary>${chosen.map((g) => `<div>${e(g.title)}</div>`).join('')}</details><label class="field">USB destination<div class="row"><input class="grow" id="copy-destination" value="${e(state.prefs.destination)}" placeholder="Choose the drive root">${action('copy-destination', 'Browse…', '', 'aria-label="Choose copy destination"')}</div></label><div class="notice">Games, settings, favorites and saves already on this drive are preserved.</div>${checkbox('copy-verify', 'Verify existing disc contents (slower)', state.copyVerify)}${state.copy ? `<div class="card section"><p><strong>Destination: ${e(state.copy.drive?.identity?.name || 'Unnamed drive')}</strong> · ${pathLabel(state.copy.destination)}</p>${storageView(state.copy.storage)}${copySummary(state.copy)}<details><summary>Show file details</summary><div class="progress-log">${state.copy.files.map((f) => `${e(f.status.padEnd(10))} ${pathLabel(f.path)}`).join('\n')}</div></details></div>` : ''}`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+      action(
+        state.copy ? 'copy-apply' : 'copy-preview',
+        state.copy ? 'Copy to USB' : 'Review copy',
+        'primary',
+        state.copy && !state.copy.storage.fits ? 'disabled' : '',
+      ),
+  );
+}
 
+function recoveryDialog() {
+  const r = state.cleanup;
+  if (!r) return;
+  const selected = r.copies.filter((c) => state.cleanupSelected.has(c.name));
+  dialog(
+    'Recovery copies',
+    `<p>${pathLabel(r.directory)}</p><p>${r.copies.length} app-created save recovery ${r.copies.length === 1 ? 'copy' : 'copies'} · <strong>${bytes(r.bytes)}</strong> total. Current .3ds slots, recovery.3ds/recovery2.3ds and unrelated .bak files are excluded.</p><div class="row">${action('recovery-older', 'Select older copies (keep newest)', 'small')}${action('recovery-clear', 'Clear selection', 'quiet small')}</div><p class="note">${selected.length} selected · ${bytes(selected.reduce((n, c) => n + c.bytes, 0))} to reclaim. Nothing is selected automatically.</p>${r.copies.length ? `<div class="stack">${r.copies.map((c) => `<label class="card"><input type="checkbox" data-recovery-copy="${e(c.name)}" ${state.cleanupSelected.has(c.name) ? 'checked' : ''}><span><strong>${e(c.original)}</strong>${c.newest ? ' <span class="badge">Newest copy</span>' : c.keep ? ' <span class="badge">Newest valid copy</span>' : ''}<br><small>${e(c.name)}<br>${bytes(c.bytes)} · ${e(new Date(c.modified * 1000).toLocaleString())} · ${c.valid ? 'Valid archive' : 'Invalid archive — inspect before discarding'}</small></span></label>`).join('')}</div>` : '<p>No app-created save recovery copies were found in this folder.</p>'}`,
+    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"') +
+      action(
+        'recovery-delete',
+        'Delete selected copies',
+        'danger',
+        selected.length ? '' : 'disabled',
+      ),
+  );
+}
 
-function recoveryDialog(){const r=state.cleanup;if(!r)return;const selected=r.copies.filter(c=>state.cleanupSelected.has(c.name));dialog('Recovery copies',`<p>${pathLabel(r.directory)}</p><p>${r.copies.length} app-created save recovery ${r.copies.length===1?'copy':'copies'} · <strong>${bytes(r.bytes)}</strong> total. Current .3ds slots, recovery.3ds/recovery2.3ds and unrelated .bak files are excluded.</p><div class="row">${action('recovery-older','Select older copies (keep newest)','small')}${action('recovery-clear','Clear selection','quiet small')}</div><p class="note">${selected.length} selected · ${bytes(selected.reduce((n,c)=>n+c.bytes,0))} to reclaim. Nothing is selected automatically.</p>${r.copies.length?`<div class="stack">${r.copies.map(c=>`<label class="card"><input type="checkbox" data-recovery-copy="${e(c.name)}" ${state.cleanupSelected.has(c.name)?'checked':''}><span><strong>${e(c.original)}</strong>${c.newest?' <span class="badge">Newest copy</span>':c.keep?' <span class="badge">Newest valid copy</span>':''}<br><small>${e(c.name)}<br>${bytes(c.bytes)} · ${e(new Date(c.modified*1000).toLocaleString())} · ${c.valid?'Valid archive':'Invalid archive — inspect before discarding'}</small></span></label>`).join('')}</div>`:'<p>No app-created save recovery copies were found in this folder.</p>'}`,action('close-dialog','Close','','data-dialog="main-dialog"')+action('recovery-delete','Delete selected copies','danger',selected.length?'':'disabled'));}
+function copySummary(plan) {
+  const count = (status) => plan.files.filter((file) => file.status === status).length;
+  const items = [
+    ['copy', 'new file', 'new files'],
+    ['update', 'file to update', 'files to update'],
+    ['preserve', 'existing file kept', 'existing files kept'],
+    ['unchanged', 'file already up to date', 'files already up to date'],
+    ['remap', 'reference file to adjust', 'reference files to adjust'],
+    ['remove', 'old file to remove', 'old files to remove'],
+  ]
+    .filter(([status]) => count(status))
+    .map(
+      ([status, one, many]) =>
+        `${count(status).toLocaleString('en-US')} ${count(status) === 1 ? one : many}`,
+    );
+  return `<div class="copy-summary"><p>${quantity(plan.games, 'disc')} · ${quantity(plan.files.length, 'file')}${plan.folders_to_move ? ' · ' + quantity(plan.folders_to_move, 'folder') + ' to move' : ''}</p><ul>${items.map((text) => `<li>${e(text)}</li>`).join('')}</ul></div>`;
+}
+function storageView(s) {
+  return `<div class="storage-estimate"><h3>Transfer size</h3><p class="transfer-size"><strong>${bytes(s.to_copy)}</strong> to transfer</p><details><summary>Size breakdown</summary><div class="row"><span>Games <strong>${bytes(s.games)}</strong></span><span>Covers <strong>${bytes(s.covers)}</strong></span><span>Previews <strong>${bytes(s.previews)}</strong></span><span>Menu & support <strong>${bytes(s.support)}</strong></span></div><p class="note">Selected files total ${bytes(s.total)}, including files already on the drive.</p></details><p><strong>${bytes(s.available)}</strong> free now · <strong>${bytes(s.remaining)}</strong> estimated free after copying.</p>${s.fits ? '' : `<div class="notice error">Not enough room: ${bytes(s.shortfall)} more free space is needed. Select fewer games or choose another drive.</div>`}<p class="note">Estimate includes ${bytes(s.reserve)} reserved for filesystem allocation and temporary/support files. Free space is checked again before copying.</p></div>`;
+}
+function readinessView() {
+  const r = state.readiness;
+  if (!r || r.requested_root !== state.prefs.destination) return '';
+  return `<div id="readiness-results" class="section"><div class="notice ${r.errors ? 'error' : ''}"><strong>${r.ready ? (r.warnings ? 'Ready with warnings' : 'Drive checks passed') : 'Drive needs attention'}</strong> · ${r.errors} errors · ${r.warnings} warnings</div><p class="note">${pathLabel(r.root)} · Snapshot from the last check. This does not test console booting or perform a full game checksum scan.</p><div class="stack">${r.checks.map((c) => `<div class="card"><strong><span class="badge ${c.status === 'error' ? 'error' : c.status === 'warning' ? 'warning' : ''}">${e(c.status === 'ok' ? 'Passed' : c.status)}</span> ${e(c.name)}</strong><p class="note">${e(c.detail)}</p>${c.fix ? `<p>${e(c.fix)}</p>` : ''}</div>`).join('')}</div></div>`;
+}
+function comparisonDialog(result, path) {
+  const rows = result.rows;
+  dialog(
+    'Compare backup archives',
+    `<p>Reference: ${pathLabel(path)}<br>Current: ${pathLabel(state.backup.path || 'Unsaved draft')}</p><p>Changes below describe the current draft relative to the reference. Comparing does not change either archive.</p><div class="row"><span class="badge">${result.added} added</span><span class="badge">${result.removed} removed</span><span class="badge warning">${result.changed} changed</span><span class="badge">${result.unchanged} unchanged</span></div>${!result.added && !result.removed && !result.changed ? '<p class="section">The archives contain identical saves, filenames and file types.</p>' : ''}${rows
+      .filter((r) => r.state !== 'Unchanged')
+      .map(comparisonRow)
+      .join('')}${
+      result.unchanged
+        ? `<details class="section"><summary>Show ${result.unchanged} unchanged saves</summary>${rows
+            .filter((r) => r.state === 'Unchanged')
+            .map(comparisonRow)
+            .join('')}</details>`
+        : ''
+    }`,
+    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+  );
+}
+function comparisonRow(r) {
+  const size = (n) => (n === null ? 'Absent' : bytes(n));
+  return `<details class="section"><summary><span class="badge ${r.state === 'Changed' ? 'warning' : ''}">${e(r.state)}</span> ${e(r.game)}${r.game !== r.name ? ` · ${e(r.name)}` : ''} · ${r.changed_bytes} changed bytes</summary><p class="note">Reference: ${size(r.before_size)} → Current: ${size(r.after_size)}${r.type_changed ? ' · File type changed' : ''}${r.name_changed ? ' · Filename changed' : ''}</p>${r.after_index !== null ? action('compare-edit', 'Open current save in hex editor', 'small', `data-index="${r.after_index}"`) : '<p class="note">This save is absent from the current draft.</p>'}<pre class="progress-log">${r.changes.length ? 'Offset   Reference → Current\n' + r.changes.map(([offset, before, after]) => `${offset.toString(16).padStart(4, '0')}     ${before === null ? '--' : before.toString(16).padStart(2, '0')} → ${after === null ? '--' : after.toString(16).padStart(2, '0')}`).join('\n') : 'No byte differences.'}${r.changed_bytes > 512 ? '\nFirst 512 differences shown.' : ''}</pre></details>`;
+}
 
-function copySummary(plan){const count=status=>plan.files.filter(file=>file.status===status).length;const items=[['copy','new file','new files'],['update','file to update','files to update'],['preserve','existing file kept','existing files kept'],['unchanged','file already up to date','files already up to date'],['remap','reference file to adjust','reference files to adjust'],['remove','old file to remove','old files to remove']].filter(([status])=>count(status)).map(([status,one,many])=>`${count(status).toLocaleString('en-US')} ${count(status)===1?one:many}`);return `<div class="copy-summary"><p>${quantity(plan.games,'disc')} · ${quantity(plan.files.length,'file')}${plan.folders_to_move?' · '+quantity(plan.folders_to_move,'folder')+' to move':''}</p><ul>${items.map(text=>`<li>${e(text)}</li>`).join('')}</ul></div>`;}
-function storageView(s){return `<div class="storage-estimate"><h3>Transfer size</h3><p class="transfer-size"><strong>${bytes(s.to_copy)}</strong> to transfer</p><details><summary>Size breakdown</summary><div class="row"><span>Games <strong>${bytes(s.games)}</strong></span><span>Covers <strong>${bytes(s.covers)}</strong></span><span>Previews <strong>${bytes(s.previews)}</strong></span><span>Menu & support <strong>${bytes(s.support)}</strong></span></div><p class="note">Selected files total ${bytes(s.total)}, including files already on the drive.</p></details><p><strong>${bytes(s.available)}</strong> free now · <strong>${bytes(s.remaining)}</strong> estimated free after copying.</p>${s.fits?'':`<div class="notice error">Not enough room: ${bytes(s.shortfall)} more free space is needed. Select fewer games or choose another drive.</div>`}<p class="note">Estimate includes ${bytes(s.reserve)} reserved for filesystem allocation and temporary/support files. Free space is checked again before copying.</p></div>`;}
-function readinessView(){const r=state.readiness;if(!r||r.requested_root!==state.prefs.destination)return '';return `<div id="readiness-results" class="section"><div class="notice ${r.errors?'error':''}"><strong>${r.ready?(r.warnings?'Ready with warnings':'Drive checks passed'):'Drive needs attention'}</strong> · ${r.errors} errors · ${r.warnings} warnings</div><p class="note">${pathLabel(r.root)} · Snapshot from the last check. This does not test console booting or perform a full game checksum scan.</p><div class="stack">${r.checks.map(c=>`<div class="card"><strong><span class="badge ${c.status==='error'?'error':c.status==='warning'?'warning':''}">${e(c.status==='ok'?'Passed':c.status)}</span> ${e(c.name)}</strong><p class="note">${e(c.detail)}</p>${c.fix?`<p>${e(c.fix)}</p>`:''}</div>`).join('')}</div></div>`;}
-function comparisonDialog(result,path){const rows=result.rows;dialog('Compare backup archives',`<p>Reference: ${pathLabel(path)}<br>Current: ${pathLabel(state.backup.path||'Unsaved draft')}</p><p>Changes below describe the current draft relative to the reference. Comparing does not change either archive.</p><div class="row"><span class="badge">${result.added} added</span><span class="badge">${result.removed} removed</span><span class="badge warning">${result.changed} changed</span><span class="badge">${result.unchanged} unchanged</span></div>${!result.added&&!result.removed&&!result.changed?'<p class="section">The archives contain identical saves, filenames and file types.</p>':''}${rows.filter(r=>r.state!=='Unchanged').map(comparisonRow).join('')}${result.unchanged?`<details class="section"><summary>Show ${result.unchanged} unchanged saves</summary>${rows.filter(r=>r.state==='Unchanged').map(comparisonRow).join('')}</details>`:''}`,action('close-dialog','Close','','data-dialog="main-dialog"'));}
-function comparisonRow(r){const size=n=>n===null?'Absent':bytes(n);return `<details class="section"><summary><span class="badge ${r.state==='Changed'?'warning':''}">${e(r.state)}</span> ${e(r.game)}${r.game!==r.name?` · ${e(r.name)}`:''} · ${r.changed_bytes} changed bytes</summary><p class="note">Reference: ${size(r.before_size)} → Current: ${size(r.after_size)}${r.type_changed?' · File type changed':''}${r.name_changed?' · Filename changed':''}</p>${r.after_index!==null?action('compare-edit','Open current save in hex editor','small',`data-index="${r.after_index}"`):'<p class="note">This save is absent from the current draft.</p>'}<pre class="progress-log">${r.changes.length?'Offset   Reference → Current\n'+r.changes.map(([offset,before,after])=>`${offset.toString(16).padStart(4,'0')}     ${before===null?'--':before.toString(16).padStart(2,'0')} → ${after===null?'--':after.toString(16).padStart(2,'0')}`).join('\n'):'No byte differences.'}${r.changed_bytes>512?'\nFirst 512 differences shown.':''}</pre></details>`;}
-
-function importReady(entry){return !entry.blocked&&!!entry.category&&!!entry.target;}
-function importView(){const entries=state.plan?.entries||[];return heading('Add discs','Identify and copy discs into your game library. Original files stay in place.',action('import-files','Add ISO / CUE…')+action('import-folder','Add folder…'))+
- `<div class="card"><div class="row spread"><strong>${state.paths.length} source${state.paths.length===1?'':'s'} selected</strong><div class="row">${checkbox('quick-scan','Fast name-only scan',state.prefs.quick)}${action('scan','Scan discs','primary',!state.paths.length?'disabled':'')}${action('clear-sources','Clear','quiet')}</div></div>${state.paths.length?`<details><summary>Source files and folders</summary><div class="progress-log">${state.paths.map(pathLabel).join('\n')}</div></details>`:'<p class="note">Choose ISO/CUE files or a folder. You can also drop files onto this window.</p>'}</div>`+
- (state.plan?`<div class="row spread section"><h2>Review import</h2>${action('import-apply',`Import ${entries.filter(e=>e.selected).length} selected`,'primary',!entries.some(e=>e.selected)?'disabled':'')}</div><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th></th><th>Game / identification</th><th>Category</th><th>Destination</th><th></th></tr></thead><tbody>${entries.map((r,i)=>`<tr><td><input type="checkbox" data-import-check="${i}" aria-label="Import ${e(r.title)}" ${r.selected?'checked':''} ${!importReady(r)?'disabled':''}></td><td><strong>${e(r.title)}</strong><p class="note">${e(r.reason)}</p><span class="badge ${r.blocked?'error':r.confidence==='sha1'?'':'warning'}">${e(r.confidence)}</span></td><td><select data-import-category="${i}" aria-label="Category for ${e(r.title)}"><option value="" ${r.category?'':'selected'} disabled>Choose a category…</option>${categories.map(c=>option(c,c,r.category===c)).join('')}</select></td><td class="path">${pathLabel(r.target)}</td><td>${action('import-resolve','Identify…','small',`data-index="${i}" aria-label="Identify ${e(r.title)}"`)}</td></tr>`).join('')}</tbody></table></div>`:'');}
-function savesView(){const b=state.backup;const entry=state.entry;return heading('Save Manager','Search slots, edit individual saves and assemble backup archives.',action('backup-open','Open backup…')+action('backup-new','New backup','primary'))+
- `<div class="card"><div class="row spread"><h3>Find saves across slots</h3><div class="row">${action('slots-usb','Use USB')}${action('slots-library','Use library')}${action('slots-folder','Choose folder…')}${action('slots-refresh','Refresh','small')}</div></div><div class="row"><input class="grow" id="slots-directory" aria-label="Save backups folder" placeholder="Drive/.ohmy3do/saves" value="${e(state.slotDirectory||'')}"><input id="slot-search" aria-label="Search backup slots" type="search" placeholder="Game, filename, label or notes…" value="${e(state.slotQuery)}"></div><div id="slot-results">${slotResults()}</div></div>`+
- (b?`<div class="row spread section"><div><h2>${e(basename(b.path)||'New backup')}${b.dirty||state.hexDirty?' <span class="badge warning">Unsaved changes</span>':''}</h2><p class="note">${b.entries.length} saves · ${bytes(b.bytes)} of 64 KB · ${pathLabel(b.path||'Not saved yet')}</p></div><div class="row">${action('backup-save','Save','primary')}${action('backup-save-as','Save as…')}${action('backup-merge','Add saves from…')}${action('backup-compare','Compare…')}${b.path?action('slot-label','Name slot…','quiet')+(/^slot[0-9]+\.3ds$/i.test(basename(b.path))?action('slot-notes','Notes…','quiet'):''):''}</div></div><div class="notice">Saving writes the entire destination backup slot. Use “Add saves from…” to merge individual saves before saving. Existing archives get a recovery copy.</div><div class="split"><div class="card entry-list">${b.entries.length?b.entries.map((r,i)=>`<button class="entry-button${state.entryIndex===i?' active':''}" data-entry="${i}" aria-pressed="${state.entryIndex===i}"><strong>${e(r.known||r.name)}</strong><small>${e(r.name)} · ${bytes(r.size)}</small></button>`).join(''):'<p class="note">This draft is empty. Add saves from another backup to build a slot.</p>'}</div><div class="card">${entry?`<div class="row spread"><h3>${e(entry.name)}</h3>${action('backup-remove','Remove from draft','danger small')}</div>${entry.profile?`<div class="notice"><strong>${e(entry.profile.game)}</strong><p class="note">${e(entry.profile.notes)}</p><div class="form-grid">${entry.profile.fields.map((f,i)=>`<label class="field">${e(f.label)}<input type="number" data-cheat-field="${i}" min="${f.min}" max="${f.max}" value="${entry.values[i]??''}"></label>`).join('')}</div><div class="row section">${entry.profile.presets.map((p,i)=>action('cheat-preset',e(p.label),'small',`data-index="${i}"`)).join('')}</div></div>`:'<p class="note">No verified game-specific editor is available for this save. Raw hex editing remains available.</p>'}<div class="row section">${action('backup-export-raw','Export raw…','small')}${action('backup-export-one','Export this save…','small')}${action('backup-import-raw','Import raw bytes…','small')}</div><details ${!entry.profile?'open':''}><summary>Raw hex editor · offsets in bytes</summary><div class="row spread"><small>Offset 0000 · ${entry.data.length} bytes</small>${action('hex-apply','Apply hex edits','small')}</div><textarea id="hex-editor" class="hex" spellcheck="false" aria-label="Save data in hexadecimal">${e(entry.hex)}</textarea><div class="ascii">${e(entry.data.map(c=>c>=32&&c<=126?String.fromCharCode(c):'·').join(''))}</div><p class="note">Two hex digits per byte. Apply edits to the draft, then Save to write the archive. Game-specific controls also maintain the game’s checksum.</p></details>`:'<p>Select a save to inspect or edit it.</p>'}</div></div>`:empty('Your console saves, in one place','Open a .3ds backup, search the slots on your drive, or create a draft and combine individual saves from other backups.'))+`<div class="card section"><h3>Recovery copies</h3><p>Review app-created recovery copies and remove selected older copies to reclaim space.</p>${action('recovery-open','Manage recovery copies…')}</div>`;}
-function slotResults(){const slots=state.slots.filter(s=>slotMatches(s,state.slotQuery));return slots.length?`<details open><summary>${slots.length} occupied slots</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th>Slot</th><th>Games / saves</th><th></th></tr></thead><tbody>${slots.map(s=>`<tr><td>${e(s.name)}${!s.valid?' <span class="badge error">Invalid</span>':''}</td><td>${e(s.games)}${s.notes?`<small class="note">${e(s.notes.slice(0,160))}${s.notes.length>160?'…':''}</small>`:''}</td><td>${action('slot-open','Open','small',`data-path="${e(s.path)}" aria-label="Open ${e(s.name)}" ${!s.valid?'disabled':''}`)}</td></tr>`).join('')}</tbody></table></div></details>`:state.slots.length?'<p class="note">No matching occupied slots.</p>':'';}
-async function commitHex(){if(!state.hexDirty)return;state.backup=await call('backup_edit',{index:state.entryIndex,hex:$('#hex-editor')?.value??state.entry.hex});state.hexDirty=false;state.entry=await call('backup_entry',{index:state.entryIndex});}
-async function openBackup(path){if(!await resolveDirty())return;state.backup=await call('backup_open',{path});state.hexDirty=false;state.entryIndex=state.backup.entries.length?0:null;state.entry=state.entryIndex===null?null:await call('backup_entry',{index:0});state.page='saves';render();}
-async function saveBackup(as=false){await commitHex();let path=!as&&state.backup?.path;if(!path)path=await pick('archive_save',state.slotDirectory||state.prefs.destination);if(!path)return false;
- const overwrite=await confirmAction('Save backup archive',`Write the complete archive (${state.backup.entries.length} saves) to ${displayPath(path)}? Any existing destination slot is replaced as a whole, with a recovery backup kept.`, 'Save archive');if(!overwrite)return false;
- const result=await call('backup_save',{path,overwrite:true});state.backup=result.backup;toast(result.catalog_warning||`Backup saved and verified${result.recovery?`. Recovery copy: ${displayPath(result.recovery)}`:''}`);render();return true;}
-function mediaView(){const game=state.groups.find(g=>g.discs.includes(state.mediaDisc));return heading('Artwork & previews','Prepare covers, video previews and game descriptions for the console menu.')+`<div class="card"><h3>Media sources</h3><div class="row"><label class="field grow">EmuMovies / media folder<input id="media-source" value="${e(state.prefs.emumovies)}" placeholder="Optional local artwork and video folder"></label>${action('media-folder','Browse…','', 'aria-label="Choose media source folder"')}</div><p class="note">Media is matched to game titles and converted for the console. Prepare missing media also finds missing descriptions and creates their console files.</p><div class="row">${action('media-prepare','Prepare missing media','primary',!state.groups.length?'disabled':'')}${action('media-rebuild','Rebuild existing media…')}</div></div><div class="card"><h3>Assign media to a game</h3><select id="media-game" aria-label="Game to assign media" class="grow">${option('','Choose a game',!state.mediaDisc)}${state.groups.map(g=>option(g.discs[0],g.title,g.discs.includes(state.mediaDisc))).join('')}</select>${game?`<div class="row section"><div class="grow"><strong>${e(game.title)}</strong><p class="note">${e(game.discs.join('\n'))}</p></div><div class="row">${action('media-cover','Choose cover…')}${action('media-preview','Choose preview video…')}</div></div>`:''}</div><div class="card"><h3>Video tools</h3><div class="row"><input id="media-video-tools" aria-label="Video tools folder" class="grow" value="${e(state.prefs.video_tools)}" placeholder="Folder containing FFmpeg and ffprobe">${action('video-folder','Browse…','', 'aria-label="Choose video tools folder"')}${action('video-tools','Download tools','',state.prefs.offline?'disabled':'')}</div><p class="note">FFmpeg is downloaded separately and verified against its published checksum.</p></div>`;}
-function settingsForm(settings,prefix='config'){return `<div class="form-grid">${[['usb_covers','Show covers'],['video_previews','Play video previews'],['preview_sound','Preview sound'],['remember_position','Remember menu position'],['recent_games','Show recent games'],['large_titles','Large titles']].map(([key,label])=>checkbox(`${prefix}-${key}`,label,settings[key])).join('')}<label class="field">Screen margin<input type="number" min="0" max="12" id="${prefix}-screen_margin" value="${settings.screen_margin}"></label><label class="field">Folder workaround<select id="${prefix}-folder_workaround">${[['0','Automatic'],['1','Always'],['2','Off']].map(([v,l])=>option(v,l,String(settings.folder_workaround)===v)).join('')}</select></label></div>`;}
-function readSettings(prefix='config'){const out={...defaults,...(prefix==='config'?state.config?.settings:{})};for(const key of Object.keys(out)){const n=document.getElementById(`${prefix}-${key}`);if(n)out[key]=n.type==='checkbox'?n.checked:Number(n.value);}return out;}
+function importReady(entry) {
+  return !entry.blocked && !!entry.category && !!entry.target;
+}
+function importView() {
+  const entries = state.plan?.entries || [];
+  return (
+    heading(
+      'Add discs',
+      'Identify and copy discs into your game library. Original files stay in place.',
+      action('import-files', 'Add ISO / CUE…') + action('import-folder', 'Add folder…'),
+    ) +
+    `<div class="card"><div class="row spread"><strong>${state.paths.length} source${state.paths.length === 1 ? '' : 's'} selected</strong><div class="row">${checkbox('quick-scan', 'Fast name-only scan', state.prefs.quick)}${action('scan', 'Scan discs', 'primary', !state.paths.length ? 'disabled' : '')}${action('clear-sources', 'Clear', 'quiet')}</div></div>${state.paths.length ? `<details><summary>Source files and folders</summary><div class="progress-log">${state.paths.map(pathLabel).join('\n')}</div></details>` : '<p class="note">Choose ISO/CUE files or a folder. You can also drop files onto this window.</p>'}</div>` +
+    (state.plan
+      ? `<div class="row spread section"><h2>Review import</h2>${action('import-apply', `Import ${entries.filter((e) => e.selected).length} selected`, 'primary', !entries.some((e) => e.selected) ? 'disabled' : '')}</div><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th></th><th>Game / identification</th><th>Category</th><th>Destination</th><th></th></tr></thead><tbody>${entries.map((r, i) => `<tr><td><input type="checkbox" data-import-check="${i}" aria-label="Import ${e(r.title)}" ${r.selected ? 'checked' : ''} ${!importReady(r) ? 'disabled' : ''}></td><td><strong>${e(r.title)}</strong><p class="note">${e(r.reason)}</p><span class="badge ${r.blocked ? 'error' : r.confidence === 'sha1' ? '' : 'warning'}">${e(r.confidence)}</span></td><td><select data-import-category="${i}" aria-label="Category for ${e(r.title)}"><option value="" ${r.category ? '' : 'selected'} disabled>Choose a category…</option>${categories.map((c) => option(c, c, r.category === c)).join('')}</select></td><td class="path">${pathLabel(r.target)}</td><td>${action('import-resolve', 'Identify…', 'small', `data-index="${i}" aria-label="Identify ${e(r.title)}"`)}</td></tr>`).join('')}</tbody></table></div>`
+      : '')
+  );
+}
+function savesView() {
+  const b = state.backup;
+  const entry = state.entry;
+  return (
+    heading(
+      'Save Manager',
+      'Search slots, edit individual saves and assemble backup archives.',
+      action('backup-open', 'Open backup…') + action('backup-new', 'New backup', 'primary'),
+    ) +
+    `<div class="card"><div class="row spread"><h3>Find saves across slots</h3><div class="row">${action('slots-usb', 'Use USB')}${action('slots-library', 'Use library')}${action('slots-folder', 'Choose folder…')}${action('slots-refresh', 'Refresh', 'small')}</div></div><div class="row"><input class="grow" id="slots-directory" aria-label="Save backups folder" placeholder="Drive/.ohmy3do/saves" value="${e(state.slotDirectory || '')}"><input id="slot-search" aria-label="Search backup slots" type="search" placeholder="Game, filename, label or notes…" value="${e(state.slotQuery)}"></div><div id="slot-results">${slotResults()}</div></div>` +
+    (b
+      ? `<div class="row spread section"><div><h2>${e(basename(b.path) || 'New backup')}${b.dirty || state.hexDirty ? ' <span class="badge warning">Unsaved changes</span>' : ''}</h2><p class="note">${b.entries.length} saves · ${bytes(b.bytes)} of 64 KB · ${pathLabel(b.path || 'Not saved yet')}</p></div><div class="row">${action('backup-save', 'Save', 'primary')}${action('backup-save-as', 'Save as…')}${action('backup-merge', 'Add saves from…')}${action('backup-compare', 'Compare…')}${b.path ? action('slot-label', 'Name slot…', 'quiet') + (/^slot[0-9]+\.3ds$/i.test(basename(b.path)) ? action('slot-notes', 'Notes…', 'quiet') : '') : ''}</div></div><div class="notice">Saving writes the entire destination backup slot. Use “Add saves from…” to merge individual saves before saving. Existing archives get a recovery copy.</div><div class="split"><div class="card entry-list">${b.entries.length ? b.entries.map((r, i) => `<button class="entry-button${state.entryIndex === i ? ' active' : ''}" data-entry="${i}" aria-pressed="${state.entryIndex === i}"><strong>${e(r.known || r.name)}</strong><small>${e(r.name)} · ${bytes(r.size)}</small></button>`).join('') : '<p class="note">This draft is empty. Add saves from another backup to build a slot.</p>'}</div><div class="card">${entry ? `<div class="row spread"><h3>${e(entry.name)}</h3>${action('backup-remove', 'Remove from draft', 'danger small')}</div>${entry.profile ? `<div class="notice"><strong>${e(entry.profile.game)}</strong><p class="note">${e(entry.profile.notes)}</p><div class="form-grid">${entry.profile.fields.map((f, i) => `<label class="field">${e(f.label)}<input type="number" data-cheat-field="${i}" min="${f.min}" max="${f.max}" value="${entry.values[i] ?? ''}"></label>`).join('')}</div><div class="row section">${entry.profile.presets.map((p, i) => action('cheat-preset', e(p.label), 'small', `data-index="${i}"`)).join('')}</div></div>` : '<p class="note">No verified game-specific editor is available for this save. Raw hex editing remains available.</p>'}<div class="row section">${action('backup-export-raw', 'Export raw…', 'small')}${action('backup-export-one', 'Export this save…', 'small')}${action('backup-import-raw', 'Import raw bytes…', 'small')}</div><details ${!entry.profile ? 'open' : ''}><summary>Raw hex editor · offsets in bytes</summary><div class="row spread"><small>Offset 0000 · ${entry.data.length} bytes</small>${action('hex-apply', 'Apply hex edits', 'small')}</div><textarea id="hex-editor" class="hex" spellcheck="false" aria-label="Save data in hexadecimal">${e(entry.hex)}</textarea><div class="ascii">${e(entry.data.map((c) => (c >= 32 && c <= 126 ? String.fromCharCode(c) : '·')).join(''))}</div><p class="note">Two hex digits per byte. Apply edits to the draft, then Save to write the archive. Game-specific controls also maintain the game’s checksum.</p></details>` : '<p>Select a save to inspect or edit it.</p>'}</div></div>`
+      : empty(
+          'Your console saves, in one place',
+          'Open a .3ds backup, search the slots on your drive, or create a draft and combine individual saves from other backups.',
+        )) +
+    `<div class="card section"><h3>Recovery copies</h3><p>Review app-created recovery copies and remove selected older copies to reclaim space.</p>${action('recovery-open', 'Manage recovery copies…')}</div>`
+  );
+}
+function slotResults() {
+  const slots = state.slots.filter((s) => slotMatches(s, state.slotQuery));
+  return slots.length
+    ? `<details open><summary>${slots.length} occupied slots</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th>Slot</th><th>Games / saves</th><th></th></tr></thead><tbody>${slots.map((s) => `<tr><td>${e(s.name)}${!s.valid ? ' <span class="badge error">Invalid</span>' : ''}</td><td>${e(s.games)}${s.notes ? `<small class="note">${e(s.notes.slice(0, 160))}${s.notes.length > 160 ? '…' : ''}</small>` : ''}</td><td>${action('slot-open', 'Open', 'small', `data-path="${e(s.path)}" aria-label="Open ${e(s.name)}" ${!s.valid ? 'disabled' : ''}`)}</td></tr>`).join('')}</tbody></table></div></details>`
+    : state.slots.length
+      ? '<p class="note">No matching occupied slots.</p>'
+      : '';
+}
+async function commitHex() {
+  if (!state.hexDirty) return;
+  state.backup = await call('backup_edit', {
+    index: state.entryIndex,
+    hex: $('#hex-editor')?.value ?? state.entry.hex,
+  });
+  state.hexDirty = false;
+  state.entry = await call('backup_entry', { index: state.entryIndex });
+}
+async function openBackup(path) {
+  if (!(await resolveDirty())) return;
+  state.backup = await call('backup_open', { path });
+  state.hexDirty = false;
+  state.entryIndex = state.backup.entries.length ? 0 : null;
+  state.entry = state.entryIndex === null ? null : await call('backup_entry', { index: 0 });
+  state.page = 'saves';
+  render();
+}
+async function saveBackup(as = false) {
+  await commitHex();
+  let path = !as && state.backup?.path;
+  if (!path) path = await pick('archive_save', state.slotDirectory || state.prefs.destination);
+  if (!path) return false;
+  const overwrite = await confirmAction(
+    'Save backup archive',
+    `Write the complete archive (${state.backup.entries.length} saves) to ${displayPath(path)}? Any existing destination slot is replaced as a whole, with a recovery backup kept.`,
+    'Save archive',
+  );
+  if (!overwrite) return false;
+  const result = await call('backup_save', { path, overwrite: true });
+  state.backup = result.backup;
+  toast(
+    result.catalog_warning ||
+      `Backup saved and verified${result.recovery ? `. Recovery copy: ${displayPath(result.recovery)}` : ''}`,
+  );
+  render();
+  return true;
+}
+function mediaView() {
+  const game = state.groups.find((g) => g.discs.includes(state.mediaDisc));
+  return (
+    heading(
+      'Artwork & previews',
+      'Prepare covers, video previews and game descriptions for the console menu.',
+    ) +
+    `<div class="card"><h3>Media sources</h3><div class="row"><label class="field grow">EmuMovies / media folder<input id="media-source" value="${e(state.prefs.emumovies)}" placeholder="Optional local artwork and video folder"></label>${action('media-folder', 'Browse…', '', 'aria-label="Choose media source folder"')}</div><p class="note">Media is matched to game titles and converted for the console. Prepare missing media also finds missing descriptions and creates their console files.</p><div class="row">${action('media-prepare', 'Prepare missing media', 'primary', !state.groups.length ? 'disabled' : '')}${action('media-rebuild', 'Rebuild existing media…')}</div></div><div class="card"><h3>Assign media to a game</h3><select id="media-game" aria-label="Game to assign media" class="grow">${option('', 'Choose a game', !state.mediaDisc)}${state.groups.map((g) => option(g.discs[0], g.title, g.discs.includes(state.mediaDisc))).join('')}</select>${game ? `<div class="row section"><div class="grow"><strong>${e(game.title)}</strong><p class="note">${e(game.discs.join('\n'))}</p></div><div class="row">${action('media-cover', 'Choose cover…')}${action('media-preview', 'Choose preview video…')}</div></div>` : ''}</div><div class="card"><h3>Video tools</h3><div class="row"><input id="media-video-tools" aria-label="Video tools folder" class="grow" value="${e(state.prefs.video_tools)}" placeholder="Folder containing FFmpeg and ffprobe">${action('video-folder', 'Browse…', '', 'aria-label="Choose video tools folder"')}${action('video-tools', 'Download tools', '', state.prefs.offline ? 'disabled' : '')}</div><p class="note">FFmpeg is downloaded separately and verified against its published checksum.</p></div>`
+  );
+}
+function settingsForm(settings, prefix = 'config') {
+  return `<div class="form-grid">${[
+    ['usb_covers', 'Show covers'],
+    ['video_previews', 'Play video previews'],
+    ['preview_sound', 'Preview sound'],
+    ['remember_position', 'Remember menu position'],
+    ['recent_games', 'Show recent games'],
+    ['large_titles', 'Large titles'],
+  ]
+    .map(([key, label]) => checkbox(`${prefix}-${key}`, label, settings[key]))
+    .join(
+      '',
+    )}<label class="field">Screen margin<input type="number" min="0" max="12" id="${prefix}-screen_margin" value="${settings.screen_margin}"></label><label class="field">Folder workaround<select id="${prefix}-folder_workaround">${[
+    ['0', 'Automatic'],
+    ['1', 'Always'],
+    ['2', 'Off'],
+  ]
+    .map(([v, l]) => option(v, l, String(settings.folder_workaround) === v))
+    .join('')}</select></label></div>`;
+}
+function readSettings(prefix = 'config') {
+  const out = { ...defaults, ...(prefix === 'config' ? state.config?.settings : {}) };
+  for (const key of Object.keys(out)) {
+    const n = document.getElementById(`${prefix}-${key}`);
+    if (n) out[key] = n.type === 'checkbox' ? n.checked : Number(n.value);
+  }
+  return out;
+}
 // Removing Oh My 3DO from a drive: review what would go, then confirm. When
 // the drive holds save backups, the person picks a PC folder for them or
 // explicitly chooses to delete them.
-async function reviewDriveCleanup(){
-  const root=$('#drive-destination').value||state.prefs.destination;
-  if(!root)throw new Error('Choose the USB / SD drive root first.');
-  const plan=await call('drive_cleanup_review',{root});
-  const fileList=plan.files.map(file=>`<li>${pathLabel(file.path)} · ${bytes(file.bytes)}</li>`).join('');
-  const kept=plan.kept.length
-    ?`<p>Kept because they belong to something else: ${plan.kept.map(e).join(', ')}.</p>`
-    :'';
-  const savesNote=plan.saves.length
-    ?`<div class="notice">This drive holds ${quantity(plan.saves.length,'save backup file')}. Copy them to a folder on the PC first, or remove them with everything else.</div>`
-    :'';
-  const buttons=plan.saves.length
-    ?action('drive-cleanup-skip-saves','Remove without keeping saves','danger')+action('drive-cleanup-keep-saves','Copy saves to PC, then remove…','primary')
-    :action('drive-cleanup-apply','Remove menu files','danger');
-  dialog('Stop using Oh My 3DO on this drive',
-    `<p>Permanently remove ${quantity(plan.files.length,'file')} (${bytes(plan.bytes)}) from ${pathLabel(plan.root)}?</p>
+async function reviewDriveCleanup() {
+  const root = $('#drive-destination').value || state.prefs.destination;
+  if (!root) throw new Error('Choose the USB / SD drive root first.');
+  const plan = await call('drive_cleanup_review', { root });
+  const fileList = plan.files
+    .map((file) => `<li>${pathLabel(file.path)} · ${bytes(file.bytes)}</li>`)
+    .join('');
+  const kept = plan.kept.length
+    ? `<p>Kept because they belong to something else: ${plan.kept.map(e).join(', ')}.</p>`
+    : '';
+  const savesNote = plan.saves.length
+    ? `<div class="notice">This drive holds ${quantity(plan.saves.length, 'save backup file')}. Copy them to a folder on the PC first, or remove them with everything else.</div>`
+    : '';
+  const buttons = plan.saves.length
+    ? action('drive-cleanup-skip-saves', 'Remove without keeping saves', 'danger') +
+      action('drive-cleanup-keep-saves', 'Copy saves to PC, then remove…', 'primary')
+    : action('drive-cleanup-apply', 'Remove menu files', 'danger');
+  dialog(
+    'Stop using Oh My 3DO on this drive',
+    `<p>Permanently remove ${quantity(plan.files.length, 'file')} (${bytes(plan.bytes)}) from ${pathLabel(plan.root)}?</p>
      <p>Games and every other file stay where they are.</p>${kept}${savesNote}
      <div class="notice">This cannot be undone. To use the menu again later, set up the drive again.</div>
      <details class="section"><summary>Review files</summary><ul>${fileList}</ul></details>`,
-    action('close-dialog','Cancel','','data-dialog="main-dialog"')+buttons);
+    action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') + buttons,
+  );
 }
-async function applyDriveCleanup(choice){
-  const result=await call('drive_cleanup',choice);
-  if(result.backup_closed){state.backup=null;state.entry=null;state.entryIndex=null;state.hexDirty=false;}
-  state.readiness=null;state.copy=null;state.coverCache.clear();
+async function applyDriveCleanup(choice) {
+  const result = await call('drive_cleanup', choice);
+  if (result.backup_closed) {
+    state.backup = null;
+    state.entry = null;
+    state.entryIndex = null;
+    state.hexDirty = false;
+  }
+  state.readiness = null;
+  state.copy = null;
+  state.coverCache.clear();
   closeDialog();
   await perform(loadLibrary);
-  const cleaned=result.cleaned;
-  const saved=cleaned.saves_copied_to?` Save backups are in ${cleaned.saves_copied_to}.`:'';
-  toast(`${quantity(cleaned.files,'file')} removed.${saved}${cleaned.warnings.length?' '+cleaned.warnings.join(' '):''}`,cleaned.warnings.length>0);
+  const cleaned = result.cleaned;
+  const saved = cleaned.saves_copied_to ? ` Save backups are in ${cleaned.saves_copied_to}.` : '';
+  toast(
+    `${quantity(cleaned.files, 'file')} removed.${saved}${cleaned.warnings.length ? ' ' + cleaned.warnings.join(' ') : ''}`,
+    cleaned.warnings.length > 0,
+  );
 }
-function driveView(){return heading('Set up your drive','Install or repair the menu and Save Manager support without copying games.')+`<div class="card"><label class="field">USB / SD destination<div class="row"><input class="grow" id="drive-destination" value="${e(state.prefs.destination)}" placeholder="Choose the drive root">${action('drive-folder','Browse…','', 'aria-label="Choose USB or SD destination"')}</div></label><div class="row">${action('drive-name','Name / identify drive…')}</div><div class="notice">Existing games, media, settings and save backups are preserved. Missing support files are created automatically.</div><div class="row">${action('drive-library','Use library boot.iso','primary',!state.prefs.library?'disabled':'')}${action('drive-iso','Choose boot.iso…')}${action('drive-download',state.prefs.developer_mode?'Install local menu':'Download released menu','',state.prefs.offline&&!state.prefs.developer_mode?'disabled':'')}</div><details><summary>Initial menu settings</summary>${settingsForm(defaults,'drive')}<p class="note">Used only when creating new settings.</p></details></div><div class="card"><h3>Repair a drive</h3><p>Already have boot.iso? Create missing settings, save folders and search support using the installed image.</p>${action('drive-repair','Repair installed support')}</div><div class="card"><h3>Drive readiness</h3><p>Check the installed menu, settings, game indexes, navigation helpers, saves and media before ejecting. This check does not change any files.</p><div class="row">${action('drive-check','Check drive','primary')}${action('drive-eject','Safely eject drive')}${action('support-export','Export support report…')}</div><p class="note">Support reports include drive paths, readiness results, console diagnostics and recent desktop activity. They exclude game and save contents.</p>${readinessView()}</div><div class="card"><h3>Stop using Oh My 3DO on this drive</h3><p>Remove the menu, its settings, media, descriptions and save backups from the drive. Your games stay where they are. You can copy the save backups to the PC first.</p>${action('drive-cleanup','Review cleanup…','danger')}</div><p class="note">To add games, select them in Library and choose Copy selected to USB. Install this drive in the console with the power off.</p>`;}
-function settingsView(){return heading('Settings & tools','Desktop preferences, console settings and library maintenance.')+`<div class="card"><h3>Desktop preferences</h3><div class="stack"><label class="field">Appearance<select id="pref-theme">${["system","light","dark"].map(mode=>option(mode,mode==="system"?"System (follow device theme)":mode[0].toUpperCase()+mode.slice(1),(state.prefs.theme||"system")===mode)).join('')}</select></label><label class="field">Text size<select id="pref-text-scale">${[100,125,150,175,200].map(size=>option(size,`${size}%`,textScale(state.prefs.text_scale)===size)).join('')}</select></label>${checkbox('pref-offline','Offline mode — use cached catalog and local media',state.prefs.offline)}${checkbox('pref-software','Software graphics (restart required)',state.prefs.software_rendering)}${checkbox('pref-updates','Check for updates at startup',!state.prefs.disable_update_checks)}${checkbox('pref-update-notices','Notify when updates are available',!state.prefs.hide_update_notifications)}</div></div>${developerSettingsView()}<div class="card"><h3>Console menu settings</h3><div class="row"><input id="config-root" aria-label="Console settings library or drive root" class="grow" value="${e(state.config?.root||state.prefs.destination||state.prefs.library)}" placeholder="Library or drive root">${action('config-folder','Browse…','', 'aria-label="Choose console settings location"')}${action('config-load','Load settings')}</div>${state.config?`<div class="section">${settingsForm(state.config.settings)}</div>${action('config-save','Save console settings','primary')}`:'<p class="note">Load ohmy3do.ini to edit settings for the console menu.</p>'}</div><div class="card"><h3>Categories</h3><p>Add or rename category folders, choose import destinations, and control which categories appear on the console. The desktop always shows hidden categories.</p>${action('categories-open','Manage categories…')}</div><div class="card"><h3>Library tools</h3><div class="row">${action('indexes','Rebuild search indexes')}${action('library-review','Create library review')}${action('undo','Undo last change','danger')}</div></div><div class="card"><h3>Cheat database</h3><p>Edit the known save layouts, field addresses and presets shared by the desktop and console.</p>${action('cheats-open','Open database editor…')}</div><div class="card"><h3>Set up a PC staging library</h3><p>Choose the library folder at the top of the window, then install its menu support before importing discs.</p>${action('staging-setup',state.prefs.developer_mode?'Install local menu into library…':'Download menu into library…')}</div>`;}
-async function openCategories(root){const result=await call('categories_read',{root});state.categoryRoot=result.root;state.categoryOriginal=result.config;state.categoryDraft=structuredClone(result.config);categoriesDialog();}
-function categoriesDialog(){const config=state.categoryDraft;dialog('Library categories',`<div class="row spread"><p>${pathLabel(state.categoryRoot)}</p>${action('categories-folder','Choose library / drive…','small')}</div><p>Hidden categories stay available here. Saving renames their folders and updates library references; Undo restores the previous state. Remove a category only after moving its games elsewhere.</p><div class="stack">${config.categories.map((c,i)=>`<div class="row"><input class="grow" data-category-name="${i}" value="${e(c.name)}" maxlength="48" aria-label="Category name"><label><input type="checkbox" data-category-hidden="${i}" ${c.hidden?'checked':''}>Hide on console</label>${action('category-remove','Remove','danger small',`data-index="${i}"`)}</div>`).join('')}</div><div class="section">${action('category-add','Add category','small',config.categories.length>=32?'disabled':'')}</div><h3>Import destinations</h3><p>Choose where each detected disc type is imported.</p><div class="form-grid">${Object.entries(config.defaults).map(([role,id])=>`<label class="field">${e(role)}<select data-category-role="${e(role)}">${config.categories.map(c=>option(c.id,c.name,c.id===id)).join('')}</select></label>`).join('')}</div>`,action('close-dialog','Cancel','','data-dialog="categories-dialog"')+action('categories-save','Save categories','primary'),'categories-dialog');}
-function updateCards(){const u=state.updates;if(!u)return state.prefs?.developer_mode?'<p>Check the local build directory for desktop and menu updates.</p>':'<p>Check GitHub for desktop and menu updates.</p>';const cards=[];const notes=r=>`<details><summary>${r.local?'Local build':'Release notes'} — ${e(r.tag)}</summary><pre class="progress-log">${e(r.notes)}</pre></details>`;if(u.desktop&&!state.pendingUpdate)cards.push(`<div class="card update-card"><h3>Desktop app <span class="badge">${e(u.desktop_release.tag)}</span></h3><p>${u.local?'Read the verified local package':'Download the verified release'}, install it and restart automatically. Your settings and game library are preserved.</p>${state.pendingUpdate?'<p class="notice">Update downloaded and verified. It will install when you close the app.</p>'+action('self-update-apply','Restart now','primary')+action('self-update-cancel','Cancel scheduled update'):action('self-update','Update and restart','primary')+action('self-update-exit','Update on exit')}${notes(u.desktop_release)}</div>`);for(const target of u.targets)cards.push(`<div class="card update-card"><h3>${target.installed?'Boot ISO update':'Install boot ISO'} <span class="badge">${e(u.menu_release.tag)}</span></h3><p>${pathLabel(target.root)}</p><p class="note">${target.installed?(u.local?'The installed menu differs from this local build.':'The menu image differs from this release.'):'No menu image is installed here.'} Games and saves are preserved.</p>${action('boot-update','Update boot ISO','primary',`data-root="${e(target.root)}"`)}${notes(u.menu_release)}</div>`);return (cards.join('')||'<div class="notice">Everything checked is up to date.</div>')+(u.warnings.length?`<details><summary>Drive check details</summary><p>${u.warnings.map(e).join('<br>')}</p></details>`:'');}
-function updatesView(){return heading('Updates',state.prefs.developer_mode?`Developer mode — local builds from ${state.prefs.developer_updates_directory||'no directory selected'}`:'Verified downloads from the Oh My 3DO GitHub releases.',action('check-updates','Check for updates','primary',state.prefs.offline&&!state.prefs.developer_mode?'disabled':''))+installedVersionsView()+updateResultView()+pendingUpdateView()+updateCards();}
-async function installBootUpdate(button){const d=await inspectWriteDrive(button.dataset.root);if(!await confirmAction('Update boot ISO',`Replace boot.iso on ${d.identity?.name||'unnamed drive'} at ${displayPath(d.root)} with ${state.updates.local?'local build ':''}${state.updates.menu_release.tag}? Games, saves and settings are preserved.`,'Update boot ISO'))return;await call('boot_update',{root:button.dataset.root,drive_token:d.token});closeDialog();state.page='updates';render();await checkUpdates();toast('Boot ISO updated and verified.');}
-async function checkUpdates(automatic=false){try{state.updates=await call('updates_check',{root:versionRoot()});await refreshInstalledVersions();renderUpdateNotice();if(state.page==='updates')render();if(!automatic&&!state.updates.desktop&&!state.updates.targets.length)toast('Everything checked is up to date.');}catch(error){if(!automatic)throw error;recordActivity(`Automatic update check failed: ${error}`);}}
-function versionRoot(){return state.versionTarget||state.browseRoot||state.prefs.destination||state.prefs.library||'';}
-async function refreshInstalledVersions(){const root=versionRoot();state.installedMenu=null;if(!root)return;try{state.installedMenu=await call('installed_versions',{root});}catch(error){state.installedMenu={root,error:String(error)};}}
-function installedVersionsView(){const menu=state.installedMenu;const roots=[...new Set([versionRoot(),state.prefs.library,...(state.prefs.libraries||[]),state.prefs.destination,...(state.prefs.browser_drives||[])].filter(Boolean))];const label=!versionRoot()?'Choose a library or drive':menu?.error?'Drive unavailable':!menu?'Not checked':!menu.installed?'Not installed':menu.version?`v${menu.version}`:'Version unknown — check for updates to identify it';return `<div class="card installed-versions"><h3>Installed versions</h3><p><strong>Desktop app</strong> · v${e(state.version)}</p><label class="field">Menu on library / drive<select id="version-root">${roots.map(root=>option(root,displayPath(root),root===versionRoot())).join('')}</select></label><p><strong>Console menu</strong> · ${e(label)}</p>${menu?.error?`<p class="note">${e(menu.error)}</p>`:''}${action('versions-refresh','Refresh installed versions','small',!versionRoot()?'disabled':'')}</div>`;}
-function updateResultView(){const r=state.updateReport;if(!r)return '';return `<div class="card ${r.success?'':'update-failure'}"><h3>${r.success?'Last desktop update completed':'Last desktop update failed'}</h3><p>${r.success?'The updated app passed its startup check.':r.previous_intact?'The previous version is intact. You can continue using it and try again later.':'Recovery could not be confirmed. Keep the update recovery files.'}</p><details ${r.success?'':'open'}><summary>Update details</summary><pre class="progress-log">${e(r.detail)}</pre><p class="note">Log: ${pathLabel(r.log)}</p></details></div>`;}
-function pendingUpdateView(){return state.pendingUpdate?`<div class="card"><h3>Desktop v${e(state.pendingUpdate.version)} is ready</h3><p>It will install when you close the app. A hidden startup check runs afterward; the app stays closed.</p>${action('self-update-apply','Restart now','primary')}${action('self-update-cancel','Cancel scheduled update')}</div>`:'';}
-function updateNotice(){if(state.updateReport&&!state.updateReport.success&&!state.reportDismissed)return `<strong>The last desktop update failed.</strong> ${state.updateReport.previous_intact?'The previous version is intact.':'Recovery needs attention.'} ${action('updates-review','View details','small')}${action('update-notice-dismiss','Dismiss','quiet small')}`;if(state.pendingUpdate)return `<strong>Desktop v${e(state.pendingUpdate.version)} is ready to install on exit.</strong> ${action('updates-review','Review','small')}`;if(state.prefs.hide_update_notifications)return '';const u=state.updates;if(!u||(!u.desktop&&!u.targets.length))return '';const key=JSON.stringify([u.desktop&&u.desktop_release.tag,u.targets.map(t=>t.root),u.menu_release?.tag]);if(state.noticeDismissed===key)return '';const label=u.desktop&&u.targets.length?'Desktop and boot ISO updates are available.':u.desktop?'A desktop update is available.':'A boot ISO update is available.';return `<strong>${u.local?'Local build: ':''}${label}</strong> ${action('updates-review','Review updates','small')}${action('update-notice-dismiss','Dismiss','quiet small')}`;}
-function renderUpdateNotice(){const panel=$('#update-notice');if(!panel)return;const html=updateNotice();panel.innerHTML=html;panel.hidden=!html;const nav=document.querySelector('[data-page="updates"]');const count=state.prefs.hide_update_notifications?0:(Number(Boolean(state.updates?.desktop))+Number(Boolean(state.updates?.targets.length)));if(nav){if(count)nav.dataset.count=String(count);else delete nav.dataset.count;nav.setAttribute('aria-label',count?`Updates, ${count} available`:'Updates');}}
-async function prepareDesktopUpdate(onExit){if(!onExit&&!await prepareClose())return;if(!await confirmAction(onExit?'Update on exit':'Update and restart',state.updates.local?`Install local ${state.updates.desktop_release.tag} from ${displayPath(state.prefs.developer_updates_directory)}${onExit?' when you close the app':' and restart'}? Local builds can replace the same or a newer version.`:onExit?`Download ${state.updates.desktop_release.tag} now and install it when you close Oh My 3DO? You can keep working until then.`:`Install ${state.updates.desktop_release.tag} and restart Oh My 3DO? Your settings and library stay in place.`,onExit?'Download update':'Update and restart'))return;const result=await call('self_update',{on_exit:onExit});if(onExit){state.pendingUpdate=result;closeDialog();render();toast('Update downloaded and verified. It will install when you close the app.');}}
-const handlers={
- 'drive-media-update':()=>driveMediaUpdate(),
- 'drive-media-review':()=>reviewDriveMedia(),
- 'drive-media-apply':async()=>{const u=state.driveUpdate;if(!u?.plan||u.source!==state.prefs.library)throw new Error('Review the update again.');await call('copy',{destination:u.root,drive_token:u.token});state.driveUpdate=null;closeDialog();state.coverCache.clear();await loadLibrary();toast('Drive media, descriptions and information updated.');},
- 'library-refresh':async()=>{state.coverCache.clear();await refreshDriveStatus();await loadLibrary();},
- 'view-pc':()=>switchLibrary(''),
- 'view-drive':async()=>{if(!state.prefs.destination)throw new Error('Choose a USB / SD drive first.');await switchLibrary(state.prefs.destination);},
- 'add-drive':async()=>{const folder=await pick('folder',state.prefs.destination);if(!folder)return false;state.prefs.destination=folder;await preferences();await refreshDriveStatus();if(state.browseRoot)await switchLibrary(folder);else await loadLibrary();return true;},
- 'manage-add':async button=>{const kind=button.dataset.kind;closeDialog();await handlers[kind==='drives'?'add-drive':'choose-library']();await manageRoots(kind);},
- 'forget-root':async button=>{const {kind,root}=button.dataset;const p=state.prefs;if(kind==='drives'){p.browser_drives=(p.browser_drives||[]).filter(r=>r!==root);if(p.destination===root)p.destination=p.browser_drives[0]||'';await preferences();if(state.browseRoot===root)await switchLibrary(p.destination||'');}else{if(p.library===root&&!await resolveDirty())return;const active=p.library===root;if(active){rememberLibraryView();await flushLibraryView();}p.libraries=(p.libraries||[]).filter(r=>r!==root);if(active){p.library=p.libraries[0]||'';state.coverCache.clear();}await preferences();if(active&&!state.browseRoot)await loadLibrary();}await manageRoots(kind);},
- 'browse-drive-setup':async()=>{await switchLibrary('');state.page='drive';render();},
- 'choose-library':async()=>{if(!await resolveDirty())return;const folder=await pick('folder',state.prefs.library);if(folder){rememberLibraryView();await flushLibraryView();state.browseRoot='';state.prefs.library=folder;state.coverCache.clear();await preferences();await loadLibrary();}},
- 'add-discs':()=>{state.page='import';render();},
- 'select-shown':()=>{for(const g of visibleGames(state.groups,state.filter))state.selected.add(g.key);rememberLibraryView();render();},
- 'clear-selection':()=>{state.selected.clear();rememberLibraryView();render();},
- 'filters-clear':()=>{state.filter={...state.filter,search:'',category:'',region:'',media:'',information:''};state.anchor=null;rememberLibraryView();render();},
- 'filter-category':button=>{state.filter.category=button.dataset.category;state.anchor=null;rememberLibraryView();render();},
- 'remove-titles':async()=>{const discs=selectedDiscs(state.groups,state.selected);if(!discs.length)return;const titles=state.groups.filter(g=>state.selected.has(g.key)).map(g=>g.title);const plan=await call('titles_remove_review',{discs,...(state.browseRoot?{browser_root:state.browseRoot,drive_token:state.browser?.identity?.token}:{})});state.removal=plan;dialog('Remove selected titles',`<p>Permanently delete ${quantity(titles.length,'title')} (${quantity(plan.discs.length,'disc')}) from ${pathLabel(plan.root)}?</p><ul>${titles.map(t=>`<li>${e(t)}</li>`).join('')}</ul><p>${quantity(plan.files.length,'file')} · ${bytes(plan.bytes)} to remove, including associated media that no remaining title uses.</p><div class="notice">This cannot be undone. Saves, unrelated files and copies in other libraries are kept.</div><details class="section"><summary>Review files</summary><ul>${plan.files.map(f=>`<li>${pathLabel(f.path)} · ${bytes(f.bytes)}</li>`).join('')}</ul></details>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('remove-titles-apply','Permanently remove','danger'));},
- 'remove-titles-apply':async()=>{let result;try{result=await call('titles_remove');}catch(error){const button=document.querySelector('[data-action=remove-titles-apply]');if(button){button.dataset.action='remove-titles';button.textContent='Review again';}throw error;}state.removal=null;state.selected.clear();state.coverCache.clear();closeDialog();await perform(loadLibrary);toast(`${quantity(result.discs,'disc')} removed.${result.warnings.length?' '+result.warnings.join(' '):''}`,result.warnings.length>0);},
- 'move-games':async()=>{dialog('Move selected games',`<p>Move ${state.selected.size} complete game folders and update their metadata, media links and menu lists.</p><label class="field">Category<select id="move-category">${categories.map(c=>option(c,c,false)).join('')}</select></label>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('move-apply','Move folders','primary'));},
- 'move-apply':async()=>{const category=$('#move-category').value;await call('move',{discs:selectedDiscs(state.groups,state.selected),category});closeDialog();await loadLibrary();toast('Game folders moved. Undo is available in Settings & tools.');},
- 'copy-open':()=>copyDialog(),
- 'copy-destination':async()=>{const folder=await pick('folder',state.prefs.destination);if(folder){state.prefs.destination=folder;state.copy=null;await preferences();renderCopyDialog();}},
- 'copy-preview':async()=>{if(state.copyRoot!==state.prefs.library)throw new Error('Library changed. Select the games again.');state.prefs.destination=$('#copy-destination').value;state.copyVerify=$('#copy-verify').checked;await preferences();state.copy=await call('copy_preview',{discs:state.copyDiscs,destination:state.prefs.destination,verify:state.copyVerify});renderCopyDialog();},
- 'copy-apply':async()=>{if(state.copyRoot!==state.prefs.library||$('#copy-destination').value!==state.prefs.destination){state.copy=null;throw new Error('Folders changed. Review the copy again.');}await call('copy',{destination:state.prefs.destination,drive_token:state.copy.drive.token});state.copy=null;await perform(loadLibrary);dialog('USB copy complete',`<p>The reviewed files were copied and verified. Existing games, settings and saves were preserved.</p><p>${pathLabel(state.prefs.destination)}</p>`,action('close-dialog','Close','','data-dialog="main-dialog"')+action('drive-eject','Safely eject drive','primary',`data-root="${e(state.prefs.destination)}"`));},
- 'import-files':async()=>{const paths=await pick('discs');if(paths){state.paths=[...new Set([...state.paths,...paths])];state.plan=null;render();}},
- 'import-folder':async()=>{const path=await pick('folder');if(path){state.paths=[...new Set([...state.paths,path])];state.plan=null;render();}},
- 'clear-sources':()=>{state.paths=[];state.plan=null;render();},
- 'scan':async()=>{await preferences();state.plan=await call('scan',{paths:state.paths});render();toast('Scan complete. Review identification and selection before importing.');},
- 'import-apply':async()=>{if(!await confirmAction('Import selected discs',`Copy ${state.plan.entries.filter(r=>r.selected).length} discs into ${state.prefs.library}?`,'Import discs'))return;await call('import');state.paths=[];state.plan=null;state.page='library';await loadLibrary();toast('Discs imported and search indexes updated.');},
- 'import-resolve':button=>{const index=Number(button.dataset.index);const r=state.plan.entries[index];dialog('Identify disc',`<p>${pathLabel(r.source)}</p><label class="field">Catalog release<select id="resolve-game"><option value="">Choose a release…</option>${state.plan.catalog.games.map((g,i)=>option(i,g.release,r.game===i)).join('')}</select></label><div class="row section"><label class="field grow">Category<select id="resolve-category">${categories.map(c=>option(c,c,c===r.category)).join('')}</select></label></div><details><summary>Import an unverified title</summary>${field('Title','resolve-title',r.title)}${field('Region','resolve-region',r.region||'Unknown')}<p class="note">This accepts your title explicitly without asserting checksum identification.</p>${action('import-unverified','Accept unverified title','','data-index="'+index+'"')}</details>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('import-identify','Use selected release','primary',`data-index="${index}"`));},
- 'import-identify':async button=>{const value=$('#resolve-game').value;if(value==='')throw new Error('Choose a catalog release first.');state.plan=await call('edit_import',{index:Number(button.dataset.index),game:Number(value),category:$('#resolve-category').value,selected:true});closeDialog();render();},
- 'import-unverified':async button=>{state.plan=await call('edit_import',{index:Number(button.dataset.index),unverified:true,title:$('#resolve-title').value,region:$('#resolve-region').value,category:$('#resolve-category').value});closeDialog();render();},
- 'backup-open':async()=>{const path=await pick('archive',state.slotDirectory);if(path)await openBackup(path);},
- 'backup-new':async()=>{if(!await resolveDirty())return;state.backup=await call('backup_new');state.entry=null;state.entryIndex=null;state.hexDirty=false;render();},
- 'backup-save':()=>saveBackup(), 'backup-save-as':()=>saveBackup(true),
- 'hex-apply':async()=>{await commitHex();render();toast('Hex changes applied to the draft. Save to write the archive.');},
- 'cheat-preset':async button=>{await commitHex();state.backup=await call('backup_edit',{index:state.entryIndex,preset:Number(button.dataset.index)});state.entry=await call('backup_entry',{index:state.entryIndex});render();},
- 'backup-remove':async()=>{if(!await confirmAction('Remove save from draft',`Remove ${state.entry.name} from this backup draft?`,'Remove save',true))return;state.backup=await call('backup_remove',{indices:[state.entryIndex]});state.entry=null;state.entryIndex=null;state.hexDirty=false;render();},
- 'backup-export-raw':()=>exportSave(true),
- 'backup-export-one':()=>exportSave(false),
- 'backup-import-raw':async()=>{await commitHex();const path=await pick('raw');if(!path)return;if(!await confirmAction('Replace save bytes',`Replace the raw bytes of ${state.entry.name} in this draft? Its filename and file type stay the same.`,'Import bytes'))return;state.backup=await call('backup_import_raw',{index:state.entryIndex,path});state.entry=await call('backup_entry',{index:state.entryIndex});render();},
- 'backup-merge':async()=>{await commitHex();const path=await pick('archive',state.slotDirectory);if(!path)return;const entries=await call('backup_inspect',{path});state.mergePath=path;dialog('Add individual saves',`<p>Choose saves to add to this draft. Matching filenames replace that save only; unrelated saves stay in the draft.</p><div class="stack">${entries.map(r=>`<label><input type="checkbox" data-merge-index="${r.index}"><span><strong>${e(r.known||r.name)}</strong><small> · ${e(r.name)} · ${bytes(r.size)}</small></span></label>`).join('')}</div>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('backup-merge-apply','Add selected saves','primary'));},
- 'backup-merge-apply':async()=>{const indices=[...document.querySelectorAll('[data-merge-index]:checked')].map(n=>Number(n.dataset.mergeIndex));if(!indices.length)throw new Error('Choose at least one save.');state.backup=await call('backup_merge',{path:state.mergePath,indices});closeDialog();state.entry=null;state.entryIndex=null;render();},
- 'backup-compare':async()=>{await commitHex();const path=await pick('archive',state.slotDirectory);if(!path)return;const result=await call('backup_compare',{path});comparisonDialog(result,path);},
- 'compare-edit':async button=>{state.entryIndex=Number(button.dataset.index);state.entry=await call('backup_entry',{index:state.entryIndex});closeDialog();render();const hex=$('#hex-editor');if(hex){hex.closest('details').open=true;hex.focus();hex.scrollIntoView({block:'center'});}},
- 'slots-usb':async()=>{if(!state.prefs.destination)throw new Error('Choose a USB destination in Drive setup first.');state.slotDirectory=state.prefs.destination.replace(/[\\/]$/,'')+'/.ohmy3do/saves';await refreshSlots();},
- 'slots-library':async()=>{if(!state.prefs.library)throw new Error('Choose a library folder first.');state.slotDirectory=state.prefs.library.replace(/[\\/]$/,'')+'/.ohmy3do/saves';await refreshSlots();},
- 'slots-folder':async()=>{const folder=await pick('folder',state.slotDirectory);if(folder){state.slotDirectory=folder;await refreshSlots();}},
- 'slots-refresh':async()=>{state.slotDirectory=$('#slots-directory').value;await refreshSlots();},
- 'slot-open':button=>openBackup(button.dataset.path),
- 'slot-label':()=>{if(!state.backup.path)throw new Error('Save this draft into a numbered slot first.');const found=state.slots.find(s=>s.path===state.backup.path);dialog('Name backup slot',field('Slot label (24 ASCII characters)','slot-label-text',found?.label||''),action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('slot-label-save','Save label','primary'));},
- 'slot-label-save':async()=>{state.slots=await call('slot_label',{path:state.backup.path,label:$('#slot-label-text').value});closeDialog();render();toast('Slot name saved. Archive contents were preserved.');},
- 'slot-notes':async()=>{if(!state.backup?.path)throw new Error('Save the draft into a numbered slot first.');const result=await call('slot_notes_read',{path:state.backup.path});state.notesOriginal=result.notes;dialog('Slot notes',`<p>Notes stay beside the archive and do not change console save data.</p><label class="field">Notes (up to 4096 UTF-8 bytes)<textarea id="slot-notes-text" rows="7" aria-label="Slot notes">${e(result.notes||'')}</textarea></label>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('slot-notes-save','Save notes','primary'));},
- 'slot-notes-save':async()=>{await call('slot_notes_save',{path:state.backup.path,notes:$('#slot-notes-text').value,original:state.notesOriginal});closeDialog();if(state.slotDirectory)await refreshSlots();toast('Slot notes saved. Archive contents were preserved.');},
- 'game-details':()=>showGameDetails(),
- 'game-info-edit':button=>openInformationEditor(button.dataset.gameKey),
- 'game-info-bulk':()=>openBulkInformationEditor(),
- 'game-info-save':async()=>{const edit=state.informationEditor;const patch=informationPatch();if(!hasInformationChanges()){state.informationEditor=null;closeDialog('game-info-dialog');return;}if(edit.bulk&&!await confirmAction('Apply shared information',`Apply ${Object.keys(patch).map(k=>informationFields.find(([key])=>key===k)[1]).join(', ')} to ${edit.gameCount} selected games (${quantity(edit.records.length,'disc')})? Unchecked fields are kept. Blank applied values will clear those fields.`,'Save information'))return;await call('game_info_save',{original:edit.records,patch,restore_fields:[...(edit.restoreFields||[])],restore_token:edit.restorePreview?.token});state.informationEditor=null;closeDialog('game-info-dialog');closeDialog();await loadLibrary();if(!edit.bulk)showGameDetails(edit.key);toast('Game information saved. Copy the games to update your console drive.');},
- 'information-tools':()=>informationTools(),
- 'information-export':button=>exportInformation(button.dataset.scope==='selected'),
- 'information-import-preview':()=>previewInformationImport(),
- 'information-import-save':()=>saveInformationImport(),
- 'information-matches':()=>openInformationMatches(),
- 'information-match-game':button=>openInformationMatch(button.dataset.key),
- 'information-match-save':()=>saveInformationMatch(),
- 'information-backups':()=>showInformationBackups(),
- 'information-backup-preview':async button=>{const preview=await call('game_info_backup_preview',{name:button.dataset.name});showInformationImport(preview,button.dataset.name);},
- 'game-info-restore':button=>previewInformationRestore(button.dataset.field),
- 'game-info-stage-restore':()=>stageInformationRestore(),
- 'information-refresh':async()=>{if(!await confirmAction('Get game information','Match library titles to descriptions and metadata from LaunchBox. The downloaded information stays available offline. Unmatched games keep their existing information.','Get information'))return;await call('game_information');await loadLibrary();toast('Game information updated. Copy selected games to transfer it to the console.');},
- 'media-selected':async()=>{const discs=selectedDiscs(state.groups,state.selected);if(!discs.length)throw new Error('Select games first.');if(!await confirmAction('Prepare selected media',`Prepare missing covers, previews and descriptions for ${state.selected.size} selected games using your configured media folder and download preferences?`,'Prepare media'))return;await call('media_selected',{discs});await loadLibrary();toast('Missing media and available descriptions prepared for the selected games.');},
- 'drive-name':async()=>{const root=$('#drive-destination').value;if(!root)throw new Error('Choose a USB / SD drive first.');state.driveInspection=await call('drive_inspect',{root});const d=state.driveInspection;dialog('Name and identify drive',`<p>${pathLabel(d.root)}</p>${d.mismatch?`<p class="notice warning">A different drive was previously remembered at this location: ${e(d.expected.name)}. Check the drive before remembering this one.</p>`:''}<p>${d.identity?'Drive ID: '+e(d.identity.id):'This drive has no identity yet. A small identity file will be created on it.'}</p>${field('Friendly name','drive-friendly-name',d.identity?.name||'Console SD')}`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('drive-name-save','Remember this drive','primary'));},
- 'drive-name-save':async()=>{const d=state.driveInspection;const result=await call('drive_remember',{root:d.root,name:$('#drive-friendly-name').value,token:d.token});state.prefs=result.prefs;closeDialog();render();toast('Drive remembered as '+result.identity.name);},
- 'media-folder':async()=>{const path=await pick('folder',state.prefs.emumovies);if(path){state.prefs.emumovies=path;await preferences();render();}},
- 'media-prepare':async()=>{state.prefs.emumovies=$('#media-source').value;state.prefs.video_tools=$('#media-video-tools').value;await preferences();await call('media_update');await loadLibrary();toast('Missing media and available descriptions prepared.');},
- 'media-rebuild':async()=>{if(!await confirmAction('Rebuild media','Reconvert existing media from its available source files? This can take a while.','Rebuild media'))return;await call('media_rebuild');await loadLibrary();toast('Media rebuilt.');},
- 'media-cover':async()=>{const cover=await pick('image');if(cover){await call('media_update',{disc:state.mediaDisc,cover});await loadLibrary();toast('Cover prepared.');}},
- 'media-preview':async()=>{const preview=await pick('video');if(preview){await call('media_update',{disc:state.mediaDisc,preview});await loadLibrary();toast('Preview prepared.');}},
- 'video-folder':async()=>{const path=await pick('folder',state.prefs.video_tools);if(path){state.prefs.video_tools=path;await preferences();render();}},
- 'video-tools':async()=>{state.prefs=await call('video_tools');render();toast('FFmpeg and ffprobe installed and verified.');},
- 'support-export':async()=>{const root=$('#drive-destination').value;if(!root)throw new Error('Choose a USB / SD destination first.');const target=await pick('support_save');if(!target)return;await call('support_export',{root,target,activity:state.logs});toast('Support report exported and verified. It includes drive paths and diagnostic text.');},
- 'recovery-open':async()=>{const start=state.slotDirectory||(state.prefs.destination?`${state.prefs.destination.replace(/[\\/]$/,'')}/.ohmy3do/saves`:state.prefs.library);const directory=await pick('folder',start);if(!directory)return;state.cleanup=await call('recovery_scan',{directory});state.cleanupSelected.clear();recoveryDialog();},
- 'recovery-older':()=>{state.cleanupSelected=new Set(state.cleanup.copies.filter(c=>!c.keep).map(c=>c.name));recoveryDialog();},
- 'recovery-clear':()=>{state.cleanupSelected.clear();recoveryDialog();},
- 'recovery-delete':async()=>{const selected=[...state.cleanupSelected];if(!selected.length)return;const total=state.cleanup.copies.filter(c=>state.cleanupSelected.has(c.name)).reduce((n,c)=>n+c.bytes,0);if(!await confirmAction('Delete recovery copies',`Permanently delete ${selected.length} selected recovery ${selected.length===1?'copy':'copies'} (${bytes(total)})? This cannot be undone. Current slots and console recovery archives are kept.`,'Delete selected copies',true))return;const removed=await call('recovery_remove',{selected});const directory=state.cleanup.directory;const summary=`${removed.names.length} recovery ${removed.names.length===1?'copy':'copies'} removed; ${bytes(removed.bytes)} reclaimed.${removed.errors.length?' '+removed.errors.join(' '):''}`;state.cleanupSelected.clear();try{state.cleanup=await call('recovery_scan',{directory});recoveryDialog();toast(summary,removed.errors.length>0);}catch(error){state.cleanup=null;closeDialog();toast(`${summary} Refresh failed: ${error}`,true);}},
- 'drive-eject':async button=>{if(!await resolveDirty())return;const root=button.dataset.root||$('#drive-destination')?.value||state.prefs.destination;if(!root)throw new Error('Choose the USB / SD drive root first.');await flushLibraryView();coverObserver?.disconnect();coverQueue.length=0;let result;try{result=await call('drive_eject',{root});}catch(error){loadCovers();throw error;}if(result.backup_closed){state.backup=null;state.entry=null;state.entryIndex=null;state.hexDirty=false;}if(result.library_closed||state.browser?.root===result.root){state.browser=null;state.browseRoot='';state.records=[];state.groups=[];state.selected.clear();state.libraryRoot=null;}state.coverCache.clear();state.readiness=null;state.copy=null;closeDialog();if(result.library_closed){render();}else{await perform(loadLibrary);}await perform(refreshDriveStatus);toast(result.message);},
- 'drive-check':async()=>{const root=$('#drive-destination').value;if(!root)throw new Error('Choose a USB / SD destination first.');state.prefs.destination=root;await preferences();state.readiness={...await call('drive_check',{root}),requested_root:root};render();},
- 'drive-folder':async()=>{const folder=await pick('folder',state.prefs.destination);if(folder){state.prefs.destination=folder;await preferences();render();}},
- 'drive-library':()=>setupDrive(`${state.prefs.library.replace(/[\\/]$/,'')}/boot.iso`),
- 'drive-iso':async()=>{const path=await pick('iso',state.prefs.library);if(path)await setupDrive(path);},
- 'drive-download':()=>setupDrive(null,true),
- 'drive-cleanup':reviewDriveCleanup,
- 'drive-cleanup-keep-saves':async()=>{
-   const folder=await pick('folder');
-   if(folder)await applyDriveCleanup({saves_to:folder});
- },
- 'drive-cleanup-skip-saves':()=>applyDriveCleanup({skip_saves:true}),
- 'drive-cleanup-apply':()=>applyDriveCleanup({}),
- 'drive-repair':()=>setupDrive(`${($('#drive-destination').value||state.prefs.destination).replace(/[\\/]$/,'')}/boot.iso`),
- 'staging-setup':async()=>{if(!state.prefs.library)throw new Error('Choose a library folder first.');if(!await confirmAction('Set up staging library',`${state.prefs.developer_mode?'Install local':'Download and install the released'} menu support in ${state.prefs.library}?`,'Install menu support'))return;await call('drive_setup',{destination:state.prefs.library,release:true,settings:defaults});toast('Staging library prepared. Add discs from Library.');},
- 'categories-open':async()=>{const root=state.prefs.library||state.prefs.destination||await pick('folder');if(root)await openCategories(root);},
- 'categories-folder':async()=>{if(JSON.stringify(state.categoryDraft)!==JSON.stringify(state.categoryOriginal)&&!await confirmAction('Discard category edits?','Open another library or drive without saving these category changes?','Discard changes'))return;const root=await pick('folder',state.categoryRoot);if(root)await openCategories(root);},
- 'category-add':()=>{state.categoryDraft.categories.push({id:'custom-'+Date.now().toString(36),name:'New category',hidden:false});categoriesDialog();},
- 'category-remove':button=>{const list=state.categoryDraft.categories;if(list.length===1)throw new Error('Keep at least one category.');const index=Number(button.dataset.index);const [removed]=list.splice(index,1);for(const role of Object.keys(state.categoryDraft.defaults))if(state.categoryDraft.defaults[role]===removed.id)state.categoryDraft.defaults[role]=list[0].id;categoriesDialog();},
- 'categories-save':async()=>{if(!await resolveDirty())return;if(!await confirmAction('Save categories','Apply category names, visibility and import destinations? Renamed folders and references will be updated.','Save categories'))return;await call('categories_save',{root:state.categoryRoot,original:state.categoryOriginal,config:state.categoryDraft});$('#categories-dialog').close();state.plan=null;state.copy=null;state.coverCache.clear();await loadLibrary();toast('Categories saved. Undo is available in Settings & tools.');},
- 'config-folder':async()=>{const folder=await pick('folder',$('#config-root').value);if(folder)$('#config-root').value=folder;},
- 'config-load':async()=>{state.config=await call('config_load',{root:$('#config-root').value});render();},
- 'config-save':async()=>{await call('config_save',{settings:readSettings()});toast('Console settings saved and verified.');},
- 'indexes':async()=>{await call('indexes');toast('Search, metadata and save-name indexes rebuilt.');},
- 'library-review':async()=>{const report=await call('review');dialog('Library review',`<p>The review was written to:</p><code>${pathLabel(report.path)}</code>`,action('close-dialog','Close','','data-dialog="main-dialog"'));},
- 'undo':async()=>{if(!await confirmAction('Undo last change','Restore the files from the last operation’s undo journal?','Undo change',true))return;await call('undo');await loadLibrary();toast('Last change undone.');},
- 'cheats-open':async()=>{const db=await call('cheats_load');state.cheats=JSON.stringify(db,null,2);state.cheatsDirty=false;cheatDialog();},
- 'cheats-load':async()=>{if(state.cheatsDirty&&!await confirmAction('Discard database edits','Discard unsaved cheat database edits?','Discard edits',true))return;const path=await pick('json');if(path){state.cheats=JSON.stringify(await call('cheats_load',{path}),null,2);state.cheatsDirty=false;cheatDialog();}},
- 'cheats-download':async()=>{if(state.cheatsDirty)throw new Error('Save the current database edits before merging updates.');state.cheats=JSON.stringify(await call('cheats_download'),null,2);state.cheatsDirty=true;cheatDialog();},
- 'cheats-save':async()=>{const json=$('#cheats-json').value;const path=await pick('json_save',state.prefs.library);if(path){await call('cheats_save',{json,path});state.cheats=json;state.cheatsDirty=false;toast('Database validated and saved.');}},
- 'cheats-install':async()=>{const json=$('#cheats-json').value;const root=await pick('folder',state.prefs.destination||state.prefs.library);if(root){await call('cheats_install',{root,json});state.cheatsDirty=false;toast('Validated database installed for the console.');}},
- 'developer-folder':async()=>{const folder=await pick('folder',state.prefs.developer_updates_directory);if(folder){state.prefs.developer_updates_directory=folder;await developerPreferences();}},
- 'selection-actions':()=>{if(state.selected.size)dialog('Selected games',`<p>${quantity(state.selected.size,'game')} selected</p><div class="row">${selectionButtonsView()}</div>`,action('close-dialog','Close','','data-dialog="main-dialog"'));},
- 'check-updates':()=>checkUpdates(),
- 'self-update':()=>prepareDesktopUpdate(false),
- 'self-update-exit':()=>prepareDesktopUpdate(true),
- 'self-update-apply':async()=>{if(!await prepareClose())return;await call('self_update_apply');},
- 'self-update-cancel':async()=>{await call('self_update_cancel');state.pendingUpdate=null;render();toast('Scheduled update canceled. The installed app is unchanged.');},
- 'updates-review':async()=>{state.page='updates';await refreshInstalledVersions();render();},
- 'versions-refresh':async()=>{await refreshInstalledVersions();render();},
- 'update-notice-dismiss':()=>{state.reportDismissed=true;const u=state.updates;if(u)state.noticeDismissed=JSON.stringify([u.desktop&&u.desktop_release.tag,u.targets.map(t=>t.root),u.menu_release?.tag]);renderUpdateNotice();},
- 'boot-update':installBootUpdate,
- 'cancel':async()=>{for(const button of document.querySelectorAll('[data-action="cancel"]')){button.disabled=true;button.textContent='Canceling…';}await invoke('cancel');if(state.busy)setStatus('Cancel requested. Finishing the current step…');},
- 'logs':()=>dialog('Activity',`<div class="progress-log">${state.logs.map(e).join('\n')||'No operations yet.'}</div>`,action('close-dialog','Close','','data-dialog="main-dialog"')),
- 'close-dialog':async button=>{const id=button.dataset.dialog||'main-dialog';if(document.getElementById(id)?.dataset.operationBusy==='true')return;if(id==='game-info-dialog'){if(state.busy)return;if(hasInformationChanges()&&!await confirmAction('Unsaved game information','Discard your unsaved information edits?','Discard edits',true))return;state.informationEditor=null;}if(id==='cheats-dialog'&&state.cheatsDirty){if(!await confirmAction('Discard database edits','Discard unsaved cheat database edits?','Discard edits',true))return;state.cheatsDirty=false;}closeDialog(id);}
+function driveView() {
+  return (
+    heading(
+      'Set up your drive',
+      'Install or repair the menu and Save Manager support without copying games.',
+    ) +
+    `<div class="card"><label class="field">USB / SD destination<div class="row"><input class="grow" id="drive-destination" value="${e(state.prefs.destination)}" placeholder="Choose the drive root">${action('drive-folder', 'Browse…', '', 'aria-label="Choose USB or SD destination"')}</div></label><div class="row">${action('drive-name', 'Name / identify drive…')}</div><div class="notice">Existing games, media, settings and save backups are preserved. Missing support files are created automatically.</div><div class="row">${action('drive-library', 'Use library boot.iso', 'primary', !state.prefs.library ? 'disabled' : '')}${action('drive-iso', 'Choose boot.iso…')}${action('drive-download', state.prefs.developer_mode ? 'Install local menu' : 'Download released menu', '', state.prefs.offline && !state.prefs.developer_mode ? 'disabled' : '')}</div><details><summary>Initial menu settings</summary>${settingsForm(defaults, 'drive')}<p class="note">Used only when creating new settings.</p></details></div><div class="card"><h3>Repair a drive</h3><p>Already have boot.iso? Create missing settings, save folders and search support using the installed image.</p>${action('drive-repair', 'Repair installed support')}</div><div class="card"><h3>Drive readiness</h3><p>Check the installed menu, settings, game indexes, navigation helpers, saves and media before ejecting. This check does not change any files.</p><div class="row">${action('drive-check', 'Check drive', 'primary')}${action('drive-eject', 'Safely eject drive')}${action('support-export', 'Export support report…')}</div><p class="note">Support reports include drive paths, readiness results, console diagnostics and recent desktop activity. They exclude game and save contents.</p>${readinessView()}</div><div class="card"><h3>Stop using Oh My 3DO on this drive</h3><p>Remove the menu, its settings, media, descriptions and save backups from the drive. Your games stay where they are. You can copy the save backups to the PC first.</p>${action('drive-cleanup', 'Review cleanup…', 'danger')}</div><p class="note">To add games, select them in Library and choose Copy selected to USB. Install this drive in the console with the power off.</p>`
+  );
+}
+function settingsView() {
+  return (
+    heading('Settings & tools', 'Desktop preferences, console settings and library maintenance.') +
+    `<div class="card"><h3>Desktop preferences</h3><div class="stack"><label class="field">Appearance<select id="pref-theme">${['system', 'light', 'dark'].map((mode) => option(mode, mode === 'system' ? 'System (follow device theme)' : mode[0].toUpperCase() + mode.slice(1), (state.prefs.theme || 'system') === mode)).join('')}</select></label><label class="field">Text size<select id="pref-text-scale">${[100, 125, 150, 175, 200].map((size) => option(size, `${size}%`, textScale(state.prefs.text_scale) === size)).join('')}</select></label>${checkbox('pref-offline', 'Offline mode — use cached catalog and local media', state.prefs.offline)}${checkbox('pref-software', 'Software graphics (restart required)', state.prefs.software_rendering)}${checkbox('pref-updates', 'Check for updates at startup', !state.prefs.disable_update_checks)}${checkbox('pref-update-notices', 'Notify when updates are available', !state.prefs.hide_update_notifications)}</div></div>${developerSettingsView()}<div class="card"><h3>Console menu settings</h3><div class="row"><input id="config-root" aria-label="Console settings library or drive root" class="grow" value="${e(state.config?.root || state.prefs.destination || state.prefs.library)}" placeholder="Library or drive root">${action('config-folder', 'Browse…', '', 'aria-label="Choose console settings location"')}${action('config-load', 'Load settings')}</div>${state.config ? `<div class="section">${settingsForm(state.config.settings)}</div>${action('config-save', 'Save console settings', 'primary')}` : '<p class="note">Load ohmy3do.ini to edit settings for the console menu.</p>'}</div><div class="card"><h3>Categories</h3><p>Add or rename category folders, choose import destinations, and control which categories appear on the console. The desktop always shows hidden categories.</p>${action('categories-open', 'Manage categories…')}</div><div class="card"><h3>Library tools</h3><div class="row">${action('indexes', 'Rebuild search indexes')}${action('library-review', 'Create library review')}${action('undo', 'Undo last change', 'danger')}</div></div><div class="card"><h3>Cheat database</h3><p>Edit the known save layouts, field addresses and presets shared by the desktop and console.</p>${action('cheats-open', 'Open database editor…')}</div><div class="card"><h3>Set up a PC staging library</h3><p>Choose the library folder at the top of the window, then install its menu support before importing discs.</p>${action('staging-setup', state.prefs.developer_mode ? 'Install local menu into library…' : 'Download menu into library…')}</div>`
+  );
+}
+async function openCategories(root) {
+  const result = await call('categories_read', { root });
+  state.categoryRoot = result.root;
+  state.categoryOriginal = result.config;
+  state.categoryDraft = structuredClone(result.config);
+  categoriesDialog();
+}
+function categoriesDialog() {
+  const config = state.categoryDraft;
+  dialog(
+    'Library categories',
+    `<div class="row spread"><p>${pathLabel(state.categoryRoot)}</p>${action('categories-folder', 'Choose library / drive…', 'small')}</div><p>Hidden categories stay available here. Saving renames their folders and updates library references; Undo restores the previous state. Remove a category only after moving its games elsewhere.</p><div class="stack">${config.categories.map((c, i) => `<div class="row"><input class="grow" data-category-name="${i}" value="${e(c.name)}" maxlength="48" aria-label="Category name"><label><input type="checkbox" data-category-hidden="${i}" ${c.hidden ? 'checked' : ''}>Hide on console</label>${action('category-remove', 'Remove', 'danger small', `data-index="${i}"`)}</div>`).join('')}</div><div class="section">${action('category-add', 'Add category', 'small', config.categories.length >= 32 ? 'disabled' : '')}</div><h3>Import destinations</h3><p>Choose where each detected disc type is imported.</p><div class="form-grid">${Object.entries(
+      config.defaults,
+    )
+      .map(
+        ([role, id]) =>
+          `<label class="field">${e(role)}<select data-category-role="${e(role)}">${config.categories.map((c) => option(c.id, c.name, c.id === id)).join('')}</select></label>`,
+      )
+      .join('')}</div>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="categories-dialog"') +
+      action('categories-save', 'Save categories', 'primary'),
+    'categories-dialog',
+  );
+}
+function updateCards() {
+  const u = state.updates;
+  if (!u)
+    return state.prefs?.developer_mode
+      ? '<p>Check the local build directory for desktop and menu updates.</p>'
+      : '<p>Check GitHub for desktop and menu updates.</p>';
+  const cards = [];
+  const notes = (r) =>
+    `<details><summary>${r.local ? 'Local build' : 'Release notes'} — ${e(r.tag)}</summary><pre class="progress-log">${e(r.notes)}</pre></details>`;
+  if (u.desktop && !state.pendingUpdate)
+    cards.push(
+      `<div class="card update-card"><h3>Desktop app <span class="badge">${e(u.desktop_release.tag)}</span></h3><p>${u.local ? 'Read the verified local package' : 'Download the verified release'}, install it and restart automatically. Your settings and game library are preserved.</p>${state.pendingUpdate ? '<p class="notice">Update downloaded and verified. It will install when you close the app.</p>' + action('self-update-apply', 'Restart now', 'primary') + action('self-update-cancel', 'Cancel scheduled update') : action('self-update', 'Update and restart', 'primary') + action('self-update-exit', 'Update on exit')}${notes(u.desktop_release)}</div>`,
+    );
+  for (const target of u.targets)
+    cards.push(
+      `<div class="card update-card"><h3>${target.installed ? 'Boot ISO update' : 'Install boot ISO'} <span class="badge">${e(u.menu_release.tag)}</span></h3><p>${pathLabel(target.root)}</p><p class="note">${target.installed ? (u.local ? 'The installed menu differs from this local build.' : 'The menu image differs from this release.') : 'No menu image is installed here.'} Games and saves are preserved.</p>${action('boot-update', 'Update boot ISO', 'primary', `data-root="${e(target.root)}"`)}${notes(u.menu_release)}</div>`,
+    );
+  return (
+    (cards.join('') || '<div class="notice">Everything checked is up to date.</div>') +
+    (u.warnings.length
+      ? `<details><summary>Drive check details</summary><p>${u.warnings.map(e).join('<br>')}</p></details>`
+      : '')
+  );
+}
+function updatesView() {
+  return (
+    heading(
+      'Updates',
+      state.prefs.developer_mode
+        ? `Developer mode — local builds from ${state.prefs.developer_updates_directory || 'no directory selected'}`
+        : 'Verified downloads from the Oh My 3DO GitHub releases.',
+      action(
+        'check-updates',
+        'Check for updates',
+        'primary',
+        state.prefs.offline && !state.prefs.developer_mode ? 'disabled' : '',
+      ),
+    ) +
+    installedVersionsView() +
+    updateResultView() +
+    pendingUpdateView() +
+    updateCards()
+  );
+}
+async function installBootUpdate(button) {
+  const d = await inspectWriteDrive(button.dataset.root);
+  if (
+    !(await confirmAction(
+      'Update boot ISO',
+      `Replace boot.iso on ${d.identity?.name || 'unnamed drive'} at ${displayPath(d.root)} with ${state.updates.local ? 'local build ' : ''}${state.updates.menu_release.tag}? Games, saves and settings are preserved.`,
+      'Update boot ISO',
+    ))
+  )
+    return;
+  await call('boot_update', { root: button.dataset.root, drive_token: d.token });
+  closeDialog();
+  state.page = 'updates';
+  render();
+  await checkUpdates();
+  toast('Boot ISO updated and verified.');
+}
+async function checkUpdates(automatic = false) {
+  try {
+    state.updates = await call('updates_check', { root: versionRoot() });
+    await refreshInstalledVersions();
+    renderUpdateNotice();
+    if (state.page === 'updates') render();
+    if (!automatic && !state.updates.desktop && !state.updates.targets.length)
+      toast('Everything checked is up to date.');
+  } catch (error) {
+    if (!automatic) throw error;
+    recordActivity(`Automatic update check failed: ${error}`);
+  }
+}
+function versionRoot() {
+  return (
+    state.versionTarget || state.browseRoot || state.prefs.destination || state.prefs.library || ''
+  );
+}
+async function refreshInstalledVersions() {
+  const root = versionRoot();
+  state.installedMenu = null;
+  if (!root) return;
+  try {
+    state.installedMenu = await call('installed_versions', { root });
+  } catch (error) {
+    state.installedMenu = { root, error: String(error) };
+  }
+}
+function installedVersionsView() {
+  const menu = state.installedMenu;
+  const roots = [
+    ...new Set(
+      [
+        versionRoot(),
+        state.prefs.library,
+        ...(state.prefs.libraries || []),
+        state.prefs.destination,
+        ...(state.prefs.browser_drives || []),
+      ].filter(Boolean),
+    ),
+  ];
+  const label = !versionRoot()
+    ? 'Choose a library or drive'
+    : menu?.error
+      ? 'Drive unavailable'
+      : !menu
+        ? 'Not checked'
+        : !menu.installed
+          ? 'Not installed'
+          : menu.version
+            ? `v${menu.version}`
+            : 'Version unknown — check for updates to identify it';
+  return `<div class="card installed-versions"><h3>Installed versions</h3><p><strong>Desktop app</strong> · v${e(state.version)}</p><label class="field">Menu on library / drive<select id="version-root">${roots.map((root) => option(root, displayPath(root), root === versionRoot())).join('')}</select></label><p><strong>Console menu</strong> · ${e(label)}</p>${menu?.error ? `<p class="note">${e(menu.error)}</p>` : ''}${action('versions-refresh', 'Refresh installed versions', 'small', !versionRoot() ? 'disabled' : '')}</div>`;
+}
+function updateResultView() {
+  const r = state.updateReport;
+  if (!r) return '';
+  return `<div class="card ${r.success ? '' : 'update-failure'}"><h3>${r.success ? 'Last desktop update completed' : 'Last desktop update failed'}</h3><p>${r.success ? 'The updated app passed its startup check.' : r.previous_intact ? 'The previous version is intact. You can continue using it and try again later.' : 'Recovery could not be confirmed. Keep the update recovery files.'}</p><details ${r.success ? '' : 'open'}><summary>Update details</summary><pre class="progress-log">${e(r.detail)}</pre><p class="note">Log: ${pathLabel(r.log)}</p></details></div>`;
+}
+function pendingUpdateView() {
+  return state.pendingUpdate
+    ? `<div class="card"><h3>Desktop v${e(state.pendingUpdate.version)} is ready</h3><p>It will install when you close the app. A hidden startup check runs afterward; the app stays closed.</p>${action('self-update-apply', 'Restart now', 'primary')}${action('self-update-cancel', 'Cancel scheduled update')}</div>`
+    : '';
+}
+function updateNotice() {
+  if (state.updateReport && !state.updateReport.success && !state.reportDismissed)
+    return `<strong>The last desktop update failed.</strong> ${state.updateReport.previous_intact ? 'The previous version is intact.' : 'Recovery needs attention.'} ${action('updates-review', 'View details', 'small')}${action('update-notice-dismiss', 'Dismiss', 'quiet small')}`;
+  if (state.pendingUpdate)
+    return `<strong>Desktop v${e(state.pendingUpdate.version)} is ready to install on exit.</strong> ${action('updates-review', 'Review', 'small')}`;
+  if (state.prefs.hide_update_notifications) return '';
+  const u = state.updates;
+  if (!u || (!u.desktop && !u.targets.length)) return '';
+  const key = JSON.stringify([
+    u.desktop && u.desktop_release.tag,
+    u.targets.map((t) => t.root),
+    u.menu_release?.tag,
+  ]);
+  if (state.noticeDismissed === key) return '';
+  const label =
+    u.desktop && u.targets.length
+      ? 'Desktop and boot ISO updates are available.'
+      : u.desktop
+        ? 'A desktop update is available.'
+        : 'A boot ISO update is available.';
+  return `<strong>${u.local ? 'Local build: ' : ''}${label}</strong> ${action('updates-review', 'Review updates', 'small')}${action('update-notice-dismiss', 'Dismiss', 'quiet small')}`;
+}
+function renderUpdateNotice() {
+  const panel = $('#update-notice');
+  if (!panel) return;
+  const html = updateNotice();
+  panel.innerHTML = html;
+  panel.hidden = !html;
+  const nav = document.querySelector('[data-page="updates"]');
+  const count = state.prefs.hide_update_notifications
+    ? 0
+    : Number(Boolean(state.updates?.desktop)) + Number(Boolean(state.updates?.targets.length));
+  if (nav) {
+    if (count) nav.dataset.count = String(count);
+    else delete nav.dataset.count;
+    nav.setAttribute('aria-label', count ? `Updates, ${count} available` : 'Updates');
+  }
+}
+async function prepareDesktopUpdate(onExit) {
+  if (!onExit && !(await prepareClose())) return;
+  if (
+    !(await confirmAction(
+      onExit ? 'Update on exit' : 'Update and restart',
+      state.updates.local
+        ? `Install local ${state.updates.desktop_release.tag} from ${displayPath(state.prefs.developer_updates_directory)}${onExit ? ' when you close the app' : ' and restart'}? Local builds can replace the same or a newer version.`
+        : onExit
+          ? `Download ${state.updates.desktop_release.tag} now and install it when you close Oh My 3DO? You can keep working until then.`
+          : `Install ${state.updates.desktop_release.tag} and restart Oh My 3DO? Your settings and library stay in place.`,
+      onExit ? 'Download update' : 'Update and restart',
+    ))
+  )
+    return;
+  const result = await call('self_update', { on_exit: onExit });
+  if (onExit) {
+    state.pendingUpdate = result;
+    closeDialog();
+    render();
+    toast('Update downloaded and verified. It will install when you close the app.');
+  }
+}
+const handlers = {
+  'drive-media-update': () => driveMediaUpdate(),
+  'drive-media-review': () => reviewDriveMedia(),
+  'drive-media-apply': async () => {
+    const u = state.driveUpdate;
+    if (!u?.plan || u.source !== state.prefs.library) throw new Error('Review the update again.');
+    await call('copy', { destination: u.root, drive_token: u.token });
+    state.driveUpdate = null;
+    closeDialog();
+    state.coverCache.clear();
+    await loadLibrary();
+    toast('Drive media, descriptions and information updated.');
+  },
+  'library-refresh': async () => {
+    state.coverCache.clear();
+    await refreshDriveStatus();
+    await loadLibrary();
+  },
+  'view-pc': () => switchLibrary(''),
+  'view-drive': async () => {
+    if (!state.prefs.destination) throw new Error('Choose a USB / SD drive first.');
+    await switchLibrary(state.prefs.destination);
+  },
+  'add-drive': async () => {
+    const folder = await pick('folder', state.prefs.destination);
+    if (!folder) return false;
+    state.prefs.destination = folder;
+    await preferences();
+    await refreshDriveStatus();
+    if (state.browseRoot) await switchLibrary(folder);
+    else await loadLibrary();
+    return true;
+  },
+  'manage-add': async (button) => {
+    const kind = button.dataset.kind;
+    closeDialog();
+    await handlers[kind === 'drives' ? 'add-drive' : 'choose-library']();
+    await manageRoots(kind);
+  },
+  'forget-root': async (button) => {
+    const { kind, root } = button.dataset;
+    const p = state.prefs;
+    if (kind === 'drives') {
+      p.browser_drives = (p.browser_drives || []).filter((r) => r !== root);
+      if (p.destination === root) p.destination = p.browser_drives[0] || '';
+      await preferences();
+      if (state.browseRoot === root) await switchLibrary(p.destination || '');
+    } else {
+      if (p.library === root && !(await resolveDirty())) return;
+      const active = p.library === root;
+      if (active) {
+        rememberLibraryView();
+        await flushLibraryView();
+      }
+      p.libraries = (p.libraries || []).filter((r) => r !== root);
+      if (active) {
+        p.library = p.libraries[0] || '';
+        state.coverCache.clear();
+      }
+      await preferences();
+      if (active && !state.browseRoot) await loadLibrary();
+    }
+    await manageRoots(kind);
+  },
+  'browse-drive-setup': async () => {
+    await switchLibrary('');
+    state.page = 'drive';
+    render();
+  },
+  'choose-library': async () => {
+    if (!(await resolveDirty())) return;
+    const folder = await pick('folder', state.prefs.library);
+    if (folder) {
+      rememberLibraryView();
+      await flushLibraryView();
+      state.browseRoot = '';
+      state.prefs.library = folder;
+      state.coverCache.clear();
+      await preferences();
+      await loadLibrary();
+    }
+  },
+  'add-discs': () => {
+    state.page = 'import';
+    render();
+  },
+  'select-shown': () => {
+    for (const g of visibleGames(state.groups, state.filter)) state.selected.add(g.key);
+    rememberLibraryView();
+    render();
+  },
+  'clear-selection': () => {
+    state.selected.clear();
+    rememberLibraryView();
+    render();
+  },
+  'filters-clear': () => {
+    state.filter = {
+      ...state.filter,
+      search: '',
+      category: '',
+      region: '',
+      media: '',
+      information: '',
+    };
+    state.anchor = null;
+    rememberLibraryView();
+    render();
+  },
+  'filter-category': (button) => {
+    state.filter.category = button.dataset.category;
+    state.anchor = null;
+    rememberLibraryView();
+    render();
+  },
+  'remove-titles': async () => {
+    const discs = selectedDiscs(state.groups, state.selected);
+    if (!discs.length) return;
+    const titles = state.groups.filter((g) => state.selected.has(g.key)).map((g) => g.title);
+    const plan = await call('titles_remove_review', {
+      discs,
+      ...(state.browseRoot
+        ? { browser_root: state.browseRoot, drive_token: state.browser?.identity?.token }
+        : {}),
+    });
+    state.removal = plan;
+    dialog(
+      'Remove selected titles',
+      `<p>Permanently delete ${quantity(titles.length, 'title')} (${quantity(plan.discs.length, 'disc')}) from ${pathLabel(plan.root)}?</p><ul>${titles.map((t) => `<li>${e(t)}</li>`).join('')}</ul><p>${quantity(plan.files.length, 'file')} · ${bytes(plan.bytes)} to remove, including associated media that no remaining title uses.</p><div class="notice">This cannot be undone. Saves, unrelated files and copies in other libraries are kept.</div><details class="section"><summary>Review files</summary><ul>${plan.files.map((f) => `<li>${pathLabel(f.path)} · ${bytes(f.bytes)}</li>`).join('')}</ul></details>`,
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('remove-titles-apply', 'Permanently remove', 'danger'),
+    );
+  },
+  'remove-titles-apply': async () => {
+    let result;
+    try {
+      result = await call('titles_remove');
+    } catch (error) {
+      const button = document.querySelector('[data-action=remove-titles-apply]');
+      if (button) {
+        button.dataset.action = 'remove-titles';
+        button.textContent = 'Review again';
+      }
+      throw error;
+    }
+    state.removal = null;
+    state.selected.clear();
+    state.coverCache.clear();
+    closeDialog();
+    await perform(loadLibrary);
+    toast(
+      `${quantity(result.discs, 'disc')} removed.${result.warnings.length ? ' ' + result.warnings.join(' ') : ''}`,
+      result.warnings.length > 0,
+    );
+  },
+  'move-games': async () => {
+    dialog(
+      'Move selected games',
+      `<p>Move ${state.selected.size} complete game folders and update their metadata, media links and menu lists.</p><label class="field">Category<select id="move-category">${categories.map((c) => option(c, c, false)).join('')}</select></label>`,
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('move-apply', 'Move folders', 'primary'),
+    );
+  },
+  'move-apply': async () => {
+    const category = $('#move-category').value;
+    await call('move', { discs: selectedDiscs(state.groups, state.selected), category });
+    closeDialog();
+    await loadLibrary();
+    toast('Game folders moved. Undo is available in Settings & tools.');
+  },
+  'copy-open': () => copyDialog(),
+  'copy-destination': async () => {
+    const folder = await pick('folder', state.prefs.destination);
+    if (folder) {
+      state.prefs.destination = folder;
+      state.copy = null;
+      await preferences();
+      renderCopyDialog();
+    }
+  },
+  'copy-preview': async () => {
+    if (state.copyRoot !== state.prefs.library)
+      throw new Error('Library changed. Select the games again.');
+    state.prefs.destination = $('#copy-destination').value;
+    state.copyVerify = $('#copy-verify').checked;
+    await preferences();
+    state.copy = await call('copy_preview', {
+      discs: state.copyDiscs,
+      destination: state.prefs.destination,
+      verify: state.copyVerify,
+    });
+    renderCopyDialog();
+  },
+  'copy-apply': async () => {
+    if (
+      state.copyRoot !== state.prefs.library ||
+      $('#copy-destination').value !== state.prefs.destination
+    ) {
+      state.copy = null;
+      throw new Error('Folders changed. Review the copy again.');
+    }
+    await call('copy', {
+      destination: state.prefs.destination,
+      drive_token: state.copy.drive.token,
+    });
+    state.copy = null;
+    await perform(loadLibrary);
+    dialog(
+      'USB copy complete',
+      `<p>The reviewed files were copied and verified. Existing games, settings and saves were preserved.</p><p>${pathLabel(state.prefs.destination)}</p>`,
+      action('close-dialog', 'Close', '', 'data-dialog="main-dialog"') +
+        action(
+          'drive-eject',
+          'Safely eject drive',
+          'primary',
+          `data-root="${e(state.prefs.destination)}"`,
+        ),
+    );
+  },
+  'import-files': async () => {
+    const paths = await pick('discs');
+    if (paths) {
+      state.paths = [...new Set([...state.paths, ...paths])];
+      state.plan = null;
+      render();
+    }
+  },
+  'import-folder': async () => {
+    const path = await pick('folder');
+    if (path) {
+      state.paths = [...new Set([...state.paths, path])];
+      state.plan = null;
+      render();
+    }
+  },
+  'clear-sources': () => {
+    state.paths = [];
+    state.plan = null;
+    render();
+  },
+  scan: async () => {
+    await preferences();
+    state.plan = await call('scan', { paths: state.paths });
+    render();
+    toast('Scan complete. Review identification and selection before importing.');
+  },
+  'import-apply': async () => {
+    if (
+      !(await confirmAction(
+        'Import selected discs',
+        `Copy ${state.plan.entries.filter((r) => r.selected).length} discs into ${state.prefs.library}?`,
+        'Import discs',
+      ))
+    )
+      return;
+    await call('import');
+    state.paths = [];
+    state.plan = null;
+    state.page = 'library';
+    await loadLibrary();
+    toast('Discs imported and search indexes updated.');
+  },
+  'import-resolve': (button) => {
+    const index = Number(button.dataset.index);
+    const r = state.plan.entries[index];
+    dialog(
+      'Identify disc',
+      `<p>${pathLabel(r.source)}</p><label class="field">Catalog release<select id="resolve-game"><option value="">Choose a release…</option>${state.plan.catalog.games.map((g, i) => option(i, g.release, r.game === i)).join('')}</select></label><div class="row section"><label class="field grow">Category<select id="resolve-category">${categories.map((c) => option(c, c, c === r.category)).join('')}</select></label></div><details><summary>Import an unverified title</summary>${field('Title', 'resolve-title', r.title)}${field('Region', 'resolve-region', r.region || 'Unknown')}<p class="note">This accepts your title explicitly without asserting checksum identification.</p>${action('import-unverified', 'Accept unverified title', '', 'data-index="' + index + '"')}</details>`,
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('import-identify', 'Use selected release', 'primary', `data-index="${index}"`),
+    );
+  },
+  'import-identify': async (button) => {
+    const value = $('#resolve-game').value;
+    if (value === '') throw new Error('Choose a catalog release first.');
+    state.plan = await call('edit_import', {
+      index: Number(button.dataset.index),
+      game: Number(value),
+      category: $('#resolve-category').value,
+      selected: true,
+    });
+    closeDialog();
+    render();
+  },
+  'import-unverified': async (button) => {
+    state.plan = await call('edit_import', {
+      index: Number(button.dataset.index),
+      unverified: true,
+      title: $('#resolve-title').value,
+      region: $('#resolve-region').value,
+      category: $('#resolve-category').value,
+    });
+    closeDialog();
+    render();
+  },
+  'backup-open': async () => {
+    const path = await pick('archive', state.slotDirectory);
+    if (path) await openBackup(path);
+  },
+  'backup-new': async () => {
+    if (!(await resolveDirty())) return;
+    state.backup = await call('backup_new');
+    state.entry = null;
+    state.entryIndex = null;
+    state.hexDirty = false;
+    render();
+  },
+  'backup-save': () => saveBackup(),
+  'backup-save-as': () => saveBackup(true),
+  'hex-apply': async () => {
+    await commitHex();
+    render();
+    toast('Hex changes applied to the draft. Save to write the archive.');
+  },
+  'cheat-preset': async (button) => {
+    await commitHex();
+    state.backup = await call('backup_edit', {
+      index: state.entryIndex,
+      preset: Number(button.dataset.index),
+    });
+    state.entry = await call('backup_entry', { index: state.entryIndex });
+    render();
+  },
+  'backup-remove': async () => {
+    if (
+      !(await confirmAction(
+        'Remove save from draft',
+        `Remove ${state.entry.name} from this backup draft?`,
+        'Remove save',
+        true,
+      ))
+    )
+      return;
+    state.backup = await call('backup_remove', { indices: [state.entryIndex] });
+    state.entry = null;
+    state.entryIndex = null;
+    state.hexDirty = false;
+    render();
+  },
+  'backup-export-raw': () => exportSave(true),
+  'backup-export-one': () => exportSave(false),
+  'backup-import-raw': async () => {
+    await commitHex();
+    const path = await pick('raw');
+    if (!path) return;
+    if (
+      !(await confirmAction(
+        'Replace save bytes',
+        `Replace the raw bytes of ${state.entry.name} in this draft? Its filename and file type stay the same.`,
+        'Import bytes',
+      ))
+    )
+      return;
+    state.backup = await call('backup_import_raw', { index: state.entryIndex, path });
+    state.entry = await call('backup_entry', { index: state.entryIndex });
+    render();
+  },
+  'backup-merge': async () => {
+    await commitHex();
+    const path = await pick('archive', state.slotDirectory);
+    if (!path) return;
+    const entries = await call('backup_inspect', { path });
+    state.mergePath = path;
+    dialog(
+      'Add individual saves',
+      `<p>Choose saves to add to this draft. Matching filenames replace that save only; unrelated saves stay in the draft.</p><div class="stack">${entries.map((r) => `<label><input type="checkbox" data-merge-index="${r.index}"><span><strong>${e(r.known || r.name)}</strong><small> · ${e(r.name)} · ${bytes(r.size)}</small></span></label>`).join('')}</div>`,
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('backup-merge-apply', 'Add selected saves', 'primary'),
+    );
+  },
+  'backup-merge-apply': async () => {
+    const indices = [...document.querySelectorAll('[data-merge-index]:checked')].map((n) =>
+      Number(n.dataset.mergeIndex),
+    );
+    if (!indices.length) throw new Error('Choose at least one save.');
+    state.backup = await call('backup_merge', { path: state.mergePath, indices });
+    closeDialog();
+    state.entry = null;
+    state.entryIndex = null;
+    render();
+  },
+  'backup-compare': async () => {
+    await commitHex();
+    const path = await pick('archive', state.slotDirectory);
+    if (!path) return;
+    const result = await call('backup_compare', { path });
+    comparisonDialog(result, path);
+  },
+  'compare-edit': async (button) => {
+    state.entryIndex = Number(button.dataset.index);
+    state.entry = await call('backup_entry', { index: state.entryIndex });
+    closeDialog();
+    render();
+    const hex = $('#hex-editor');
+    if (hex) {
+      hex.closest('details').open = true;
+      hex.focus();
+      hex.scrollIntoView({ block: 'center' });
+    }
+  },
+  'slots-usb': async () => {
+    if (!state.prefs.destination) throw new Error('Choose a USB destination in Drive setup first.');
+    state.slotDirectory = state.prefs.destination.replace(/[\\/]$/, '') + '/.ohmy3do/saves';
+    await refreshSlots();
+  },
+  'slots-library': async () => {
+    if (!state.prefs.library) throw new Error('Choose a library folder first.');
+    state.slotDirectory = state.prefs.library.replace(/[\\/]$/, '') + '/.ohmy3do/saves';
+    await refreshSlots();
+  },
+  'slots-folder': async () => {
+    const folder = await pick('folder', state.slotDirectory);
+    if (folder) {
+      state.slotDirectory = folder;
+      await refreshSlots();
+    }
+  },
+  'slots-refresh': async () => {
+    state.slotDirectory = $('#slots-directory').value;
+    await refreshSlots();
+  },
+  'slot-open': (button) => openBackup(button.dataset.path),
+  'slot-label': () => {
+    if (!state.backup.path) throw new Error('Save this draft into a numbered slot first.');
+    const found = state.slots.find((s) => s.path === state.backup.path);
+    dialog(
+      'Name backup slot',
+      field('Slot label (24 ASCII characters)', 'slot-label-text', found?.label || ''),
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('slot-label-save', 'Save label', 'primary'),
+    );
+  },
+  'slot-label-save': async () => {
+    state.slots = await call('slot_label', {
+      path: state.backup.path,
+      label: $('#slot-label-text').value,
+    });
+    closeDialog();
+    render();
+    toast('Slot name saved. Archive contents were preserved.');
+  },
+  'slot-notes': async () => {
+    if (!state.backup?.path) throw new Error('Save the draft into a numbered slot first.');
+    const result = await call('slot_notes_read', { path: state.backup.path });
+    state.notesOriginal = result.notes;
+    dialog(
+      'Slot notes',
+      `<p>Notes stay beside the archive and do not change console save data.</p><label class="field">Notes (up to 4096 UTF-8 bytes)<textarea id="slot-notes-text" rows="7" aria-label="Slot notes">${e(result.notes || '')}</textarea></label>`,
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('slot-notes-save', 'Save notes', 'primary'),
+    );
+  },
+  'slot-notes-save': async () => {
+    await call('slot_notes_save', {
+      path: state.backup.path,
+      notes: $('#slot-notes-text').value,
+      original: state.notesOriginal,
+    });
+    closeDialog();
+    if (state.slotDirectory) await refreshSlots();
+    toast('Slot notes saved. Archive contents were preserved.');
+  },
+  'game-details': () => showGameDetails(),
+  'game-info-edit': (button) => openInformationEditor(button.dataset.gameKey),
+  'game-info-bulk': () => openBulkInformationEditor(),
+  'game-info-save': async () => {
+    const edit = state.informationEditor;
+    const patch = informationPatch();
+    if (!hasInformationChanges()) {
+      state.informationEditor = null;
+      closeDialog('game-info-dialog');
+      return;
+    }
+    if (
+      edit.bulk &&
+      !(await confirmAction(
+        'Apply shared information',
+        `Apply ${Object.keys(patch)
+          .map((k) => informationFields.find(([key]) => key === k)[1])
+          .join(
+            ', ',
+          )} to ${edit.gameCount} selected games (${quantity(edit.records.length, 'disc')})? Unchecked fields are kept. Blank applied values will clear those fields.`,
+        'Save information',
+      ))
+    )
+      return;
+    await call('game_info_save', {
+      original: edit.records,
+      patch,
+      restore_fields: [...(edit.restoreFields || [])],
+      restore_token: edit.restorePreview?.token,
+    });
+    state.informationEditor = null;
+    closeDialog('game-info-dialog');
+    closeDialog();
+    await loadLibrary();
+    if (!edit.bulk) showGameDetails(edit.key);
+    toast('Game information saved. Copy the games to update your console drive.');
+  },
+  'information-tools': () => informationTools(),
+  'information-export': (button) => exportInformation(button.dataset.scope === 'selected'),
+  'information-import-preview': () => previewInformationImport(),
+  'information-import-save': () => saveInformationImport(),
+  'information-matches': () => openInformationMatches(),
+  'information-match-game': (button) => openInformationMatch(button.dataset.key),
+  'information-match-save': () => saveInformationMatch(),
+  'information-backups': () => showInformationBackups(),
+  'information-backup-preview': async (button) => {
+    const preview = await call('game_info_backup_preview', { name: button.dataset.name });
+    showInformationImport(preview, button.dataset.name);
+  },
+  'game-info-restore': (button) => previewInformationRestore(button.dataset.field),
+  'game-info-stage-restore': () => stageInformationRestore(),
+  'information-refresh': async () => {
+    if (
+      !(await confirmAction(
+        'Get game information',
+        'Match library titles to descriptions and metadata from LaunchBox. The downloaded information stays available offline. Unmatched games keep their existing information.',
+        'Get information',
+      ))
+    )
+      return;
+    await call('game_information');
+    await loadLibrary();
+    toast('Game information updated. Copy selected games to transfer it to the console.');
+  },
+  'media-selected': async () => {
+    const discs = selectedDiscs(state.groups, state.selected);
+    if (!discs.length) throw new Error('Select games first.');
+    if (
+      !(await confirmAction(
+        'Prepare selected media',
+        `Prepare missing covers, previews and descriptions for ${state.selected.size} selected games using your configured media folder and download preferences?`,
+        'Prepare media',
+      ))
+    )
+      return;
+    await call('media_selected', { discs });
+    await loadLibrary();
+    toast('Missing media and available descriptions prepared for the selected games.');
+  },
+  'drive-name': async () => {
+    const root = $('#drive-destination').value;
+    if (!root) throw new Error('Choose a USB / SD drive first.');
+    state.driveInspection = await call('drive_inspect', { root });
+    const d = state.driveInspection;
+    dialog(
+      'Name and identify drive',
+      `<p>${pathLabel(d.root)}</p>${d.mismatch ? `<p class="notice warning">A different drive was previously remembered at this location: ${e(d.expected.name)}. Check the drive before remembering this one.</p>` : ''}<p>${d.identity ? 'Drive ID: ' + e(d.identity.id) : 'This drive has no identity yet. A small identity file will be created on it.'}</p>${field('Friendly name', 'drive-friendly-name', d.identity?.name || 'Console SD')}`,
+      action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+        action('drive-name-save', 'Remember this drive', 'primary'),
+    );
+  },
+  'drive-name-save': async () => {
+    const d = state.driveInspection;
+    const result = await call('drive_remember', {
+      root: d.root,
+      name: $('#drive-friendly-name').value,
+      token: d.token,
+    });
+    state.prefs = result.prefs;
+    closeDialog();
+    render();
+    toast('Drive remembered as ' + result.identity.name);
+  },
+  'media-folder': async () => {
+    const path = await pick('folder', state.prefs.emumovies);
+    if (path) {
+      state.prefs.emumovies = path;
+      await preferences();
+      render();
+    }
+  },
+  'media-prepare': async () => {
+    state.prefs.emumovies = $('#media-source').value;
+    state.prefs.video_tools = $('#media-video-tools').value;
+    await preferences();
+    await call('media_update');
+    await loadLibrary();
+    toast('Missing media and available descriptions prepared.');
+  },
+  'media-rebuild': async () => {
+    if (
+      !(await confirmAction(
+        'Rebuild media',
+        'Reconvert existing media from its available source files? This can take a while.',
+        'Rebuild media',
+      ))
+    )
+      return;
+    await call('media_rebuild');
+    await loadLibrary();
+    toast('Media rebuilt.');
+  },
+  'media-cover': async () => {
+    const cover = await pick('image');
+    if (cover) {
+      await call('media_update', { disc: state.mediaDisc, cover });
+      await loadLibrary();
+      toast('Cover prepared.');
+    }
+  },
+  'media-preview': async () => {
+    const preview = await pick('video');
+    if (preview) {
+      await call('media_update', { disc: state.mediaDisc, preview });
+      await loadLibrary();
+      toast('Preview prepared.');
+    }
+  },
+  'video-folder': async () => {
+    const path = await pick('folder', state.prefs.video_tools);
+    if (path) {
+      state.prefs.video_tools = path;
+      await preferences();
+      render();
+    }
+  },
+  'video-tools': async () => {
+    state.prefs = await call('video_tools');
+    render();
+    toast('FFmpeg and ffprobe installed and verified.');
+  },
+  'support-export': async () => {
+    const root = $('#drive-destination').value;
+    if (!root) throw new Error('Choose a USB / SD destination first.');
+    const target = await pick('support_save');
+    if (!target) return;
+    await call('support_export', { root, target, activity: state.logs });
+    toast('Support report exported and verified. It includes drive paths and diagnostic text.');
+  },
+  'recovery-open': async () => {
+    const start =
+      state.slotDirectory ||
+      (state.prefs.destination
+        ? `${state.prefs.destination.replace(/[\\/]$/, '')}/.ohmy3do/saves`
+        : state.prefs.library);
+    const directory = await pick('folder', start);
+    if (!directory) return;
+    state.cleanup = await call('recovery_scan', { directory });
+    state.cleanupSelected.clear();
+    recoveryDialog();
+  },
+  'recovery-older': () => {
+    state.cleanupSelected = new Set(state.cleanup.copies.filter((c) => !c.keep).map((c) => c.name));
+    recoveryDialog();
+  },
+  'recovery-clear': () => {
+    state.cleanupSelected.clear();
+    recoveryDialog();
+  },
+  'recovery-delete': async () => {
+    const selected = [...state.cleanupSelected];
+    if (!selected.length) return;
+    const total = state.cleanup.copies
+      .filter((c) => state.cleanupSelected.has(c.name))
+      .reduce((n, c) => n + c.bytes, 0);
+    if (
+      !(await confirmAction(
+        'Delete recovery copies',
+        `Permanently delete ${selected.length} selected recovery ${selected.length === 1 ? 'copy' : 'copies'} (${bytes(total)})? This cannot be undone. Current slots and console recovery archives are kept.`,
+        'Delete selected copies',
+        true,
+      ))
+    )
+      return;
+    const removed = await call('recovery_remove', { selected });
+    const directory = state.cleanup.directory;
+    const summary = `${removed.names.length} recovery ${removed.names.length === 1 ? 'copy' : 'copies'} removed; ${bytes(removed.bytes)} reclaimed.${removed.errors.length ? ' ' + removed.errors.join(' ') : ''}`;
+    state.cleanupSelected.clear();
+    try {
+      state.cleanup = await call('recovery_scan', { directory });
+      recoveryDialog();
+      toast(summary, removed.errors.length > 0);
+    } catch (error) {
+      state.cleanup = null;
+      closeDialog();
+      toast(`${summary} Refresh failed: ${error}`, true);
+    }
+  },
+  'drive-eject': async (button) => {
+    if (!(await resolveDirty())) return;
+    const root = button.dataset.root || $('#drive-destination')?.value || state.prefs.destination;
+    if (!root) throw new Error('Choose the USB / SD drive root first.');
+    await flushLibraryView();
+    coverObserver?.disconnect();
+    coverQueue.length = 0;
+    let result;
+    try {
+      result = await call('drive_eject', { root });
+    } catch (error) {
+      loadCovers();
+      throw error;
+    }
+    if (result.backup_closed) {
+      state.backup = null;
+      state.entry = null;
+      state.entryIndex = null;
+      state.hexDirty = false;
+    }
+    if (result.library_closed || state.browser?.root === result.root) {
+      state.browser = null;
+      state.browseRoot = '';
+      state.records = [];
+      state.groups = [];
+      state.selected.clear();
+      state.libraryRoot = null;
+    }
+    state.coverCache.clear();
+    state.readiness = null;
+    state.copy = null;
+    closeDialog();
+    if (result.library_closed) {
+      render();
+    } else {
+      await perform(loadLibrary);
+    }
+    await perform(refreshDriveStatus);
+    toast(result.message);
+  },
+  'drive-check': async () => {
+    const root = $('#drive-destination').value;
+    if (!root) throw new Error('Choose a USB / SD destination first.');
+    state.prefs.destination = root;
+    await preferences();
+    state.readiness = { ...(await call('drive_check', { root })), requested_root: root };
+    render();
+  },
+  'drive-folder': async () => {
+    const folder = await pick('folder', state.prefs.destination);
+    if (folder) {
+      state.prefs.destination = folder;
+      await preferences();
+      render();
+    }
+  },
+  'drive-library': () => setupDrive(`${state.prefs.library.replace(/[\\/]$/, '')}/boot.iso`),
+  'drive-iso': async () => {
+    const path = await pick('iso', state.prefs.library);
+    if (path) await setupDrive(path);
+  },
+  'drive-download': () => setupDrive(null, true),
+  'drive-cleanup': reviewDriveCleanup,
+  'drive-cleanup-keep-saves': async () => {
+    const folder = await pick('folder');
+    if (folder) await applyDriveCleanup({ saves_to: folder });
+  },
+  'drive-cleanup-skip-saves': () => applyDriveCleanup({ skip_saves: true }),
+  'drive-cleanup-apply': () => applyDriveCleanup({}),
+  'drive-repair': () =>
+    setupDrive(
+      `${($('#drive-destination').value || state.prefs.destination).replace(/[\\/]$/, '')}/boot.iso`,
+    ),
+  'staging-setup': async () => {
+    if (!state.prefs.library) throw new Error('Choose a library folder first.');
+    if (
+      !(await confirmAction(
+        'Set up staging library',
+        `${state.prefs.developer_mode ? 'Install local' : 'Download and install the released'} menu support in ${state.prefs.library}?`,
+        'Install menu support',
+      ))
+    )
+      return;
+    await call('drive_setup', {
+      destination: state.prefs.library,
+      release: true,
+      settings: defaults,
+    });
+    toast('Staging library prepared. Add discs from Library.');
+  },
+  'categories-open': async () => {
+    const root = state.prefs.library || state.prefs.destination || (await pick('folder'));
+    if (root) await openCategories(root);
+  },
+  'categories-folder': async () => {
+    if (
+      JSON.stringify(state.categoryDraft) !== JSON.stringify(state.categoryOriginal) &&
+      !(await confirmAction(
+        'Discard category edits?',
+        'Open another library or drive without saving these category changes?',
+        'Discard changes',
+      ))
+    )
+      return;
+    const root = await pick('folder', state.categoryRoot);
+    if (root) await openCategories(root);
+  },
+  'category-add': () => {
+    state.categoryDraft.categories.push({
+      id: 'custom-' + Date.now().toString(36),
+      name: 'New category',
+      hidden: false,
+    });
+    categoriesDialog();
+  },
+  'category-remove': (button) => {
+    const list = state.categoryDraft.categories;
+    if (list.length === 1) throw new Error('Keep at least one category.');
+    const index = Number(button.dataset.index);
+    const [removed] = list.splice(index, 1);
+    for (const role of Object.keys(state.categoryDraft.defaults))
+      if (state.categoryDraft.defaults[role] === removed.id)
+        state.categoryDraft.defaults[role] = list[0].id;
+    categoriesDialog();
+  },
+  'categories-save': async () => {
+    if (!(await resolveDirty())) return;
+    if (
+      !(await confirmAction(
+        'Save categories',
+        'Apply category names, visibility and import destinations? Renamed folders and references will be updated.',
+        'Save categories',
+      ))
+    )
+      return;
+    await call('categories_save', {
+      root: state.categoryRoot,
+      original: state.categoryOriginal,
+      config: state.categoryDraft,
+    });
+    $('#categories-dialog').close();
+    state.plan = null;
+    state.copy = null;
+    state.coverCache.clear();
+    await loadLibrary();
+    toast('Categories saved. Undo is available in Settings & tools.');
+  },
+  'config-folder': async () => {
+    const folder = await pick('folder', $('#config-root').value);
+    if (folder) $('#config-root').value = folder;
+  },
+  'config-load': async () => {
+    state.config = await call('config_load', { root: $('#config-root').value });
+    render();
+  },
+  'config-save': async () => {
+    await call('config_save', { settings: readSettings() });
+    toast('Console settings saved and verified.');
+  },
+  indexes: async () => {
+    await call('indexes');
+    toast('Search, metadata and save-name indexes rebuilt.');
+  },
+  'library-review': async () => {
+    const report = await call('review');
+    dialog(
+      'Library review',
+      `<p>The review was written to:</p><code>${pathLabel(report.path)}</code>`,
+      action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+    );
+  },
+  undo: async () => {
+    if (
+      !(await confirmAction(
+        'Undo last change',
+        'Restore the files from the last operation’s undo journal?',
+        'Undo change',
+        true,
+      ))
+    )
+      return;
+    await call('undo');
+    await loadLibrary();
+    toast('Last change undone.');
+  },
+  'cheats-open': async () => {
+    const db = await call('cheats_load');
+    state.cheats = JSON.stringify(db, null, 2);
+    state.cheatsDirty = false;
+    cheatDialog();
+  },
+  'cheats-load': async () => {
+    if (
+      state.cheatsDirty &&
+      !(await confirmAction(
+        'Discard database edits',
+        'Discard unsaved cheat database edits?',
+        'Discard edits',
+        true,
+      ))
+    )
+      return;
+    const path = await pick('json');
+    if (path) {
+      state.cheats = JSON.stringify(await call('cheats_load', { path }), null, 2);
+      state.cheatsDirty = false;
+      cheatDialog();
+    }
+  },
+  'cheats-download': async () => {
+    if (state.cheatsDirty)
+      throw new Error('Save the current database edits before merging updates.');
+    state.cheats = JSON.stringify(await call('cheats_download'), null, 2);
+    state.cheatsDirty = true;
+    cheatDialog();
+  },
+  'cheats-save': async () => {
+    const json = $('#cheats-json').value;
+    const path = await pick('json_save', state.prefs.library);
+    if (path) {
+      await call('cheats_save', { json, path });
+      state.cheats = json;
+      state.cheatsDirty = false;
+      toast('Database validated and saved.');
+    }
+  },
+  'cheats-install': async () => {
+    const json = $('#cheats-json').value;
+    const root = await pick('folder', state.prefs.destination || state.prefs.library);
+    if (root) {
+      await call('cheats_install', { root, json });
+      state.cheatsDirty = false;
+      toast('Validated database installed for the console.');
+    }
+  },
+  'developer-folder': async () => {
+    const folder = await pick('folder', state.prefs.developer_updates_directory);
+    if (folder) {
+      state.prefs.developer_updates_directory = folder;
+      await developerPreferences();
+    }
+  },
+  'selection-actions': () => {
+    if (state.selected.size)
+      dialog(
+        'Selected games',
+        `<p>${quantity(state.selected.size, 'game')} selected</p><div class="row">${selectionButtonsView()}</div>`,
+        action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+      );
+  },
+  'check-updates': () => checkUpdates(),
+  'self-update': () => prepareDesktopUpdate(false),
+  'self-update-exit': () => prepareDesktopUpdate(true),
+  'self-update-apply': async () => {
+    if (!(await prepareClose())) return;
+    await call('self_update_apply');
+  },
+  'self-update-cancel': async () => {
+    await call('self_update_cancel');
+    state.pendingUpdate = null;
+    render();
+    toast('Scheduled update canceled. The installed app is unchanged.');
+  },
+  'updates-review': async () => {
+    state.page = 'updates';
+    await refreshInstalledVersions();
+    render();
+  },
+  'versions-refresh': async () => {
+    await refreshInstalledVersions();
+    render();
+  },
+  'update-notice-dismiss': () => {
+    state.reportDismissed = true;
+    const u = state.updates;
+    if (u)
+      state.noticeDismissed = JSON.stringify([
+        u.desktop && u.desktop_release.tag,
+        u.targets.map((t) => t.root),
+        u.menu_release?.tag,
+      ]);
+    renderUpdateNotice();
+  },
+  'boot-update': installBootUpdate,
+  cancel: async () => {
+    for (const button of document.querySelectorAll('[data-action="cancel"]')) {
+      button.disabled = true;
+      button.textContent = 'Canceling…';
+    }
+    await invoke('cancel');
+    if (state.busy) setStatus('Cancel requested. Finishing the current step…');
+  },
+  logs: () =>
+    dialog(
+      'Activity',
+      `<div class="progress-log">${state.logs.map(e).join('\n') || 'No operations yet.'}</div>`,
+      action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+    ),
+  'close-dialog': async (button) => {
+    const id = button.dataset.dialog || 'main-dialog';
+    if (document.getElementById(id)?.dataset.operationBusy === 'true') return;
+    if (id === 'game-info-dialog') {
+      if (state.busy) return;
+      if (
+        hasInformationChanges() &&
+        !(await confirmAction(
+          'Unsaved game information',
+          'Discard your unsaved information edits?',
+          'Discard edits',
+          true,
+        ))
+      )
+        return;
+      state.informationEditor = null;
+    }
+    if (id === 'cheats-dialog' && state.cheatsDirty) {
+      if (
+        !(await confirmAction(
+          'Discard database edits',
+          'Discard unsaved cheat database edits?',
+          'Discard edits',
+          true,
+        ))
+      )
+        return;
+      state.cheatsDirty = false;
+    }
+    closeDialog(id);
+  },
 };
-async function exportSave(raw){await commitHex();const path=await pick(raw?'raw_save':'archive_save');if(!path)return;if(!await confirmAction('Export selected save',`Write ${state.entry.name} to ${displayPath(path)}? An existing export will get a recovery copy.`,'Export save'))return;await call('backup_export',{index:state.entryIndex,path,raw,overwrite:true});toast('Selected save exported and verified.');}
-async function refreshSlots(){if(!state.slotDirectory)throw new Error('Choose the .ohmy3do/saves folder first.');state.slots=await call('slots',{directory:state.slotDirectory});render();}
-async function setupDrive(source,release=false){state.prefs.destination=$('#drive-destination').value;if(!state.prefs.destination)throw new Error('Choose a USB / SD destination first.');const settings=readSettings('drive');await preferences();const d=await inspectWriteDrive(state.prefs.destination);if(!await confirmAction('Prepare drive',`Prepare ${d.identity?.name||'unnamed drive'} at ${displayPath(d.root)}? Existing games and saves are preserved.`,'Prepare drive'))return;await call('drive_setup',{destination:state.prefs.destination,source,release,settings,drive_token:d.token});toast('Drive prepared and verified. You can use Save Manager without installing games.');}
-function databaseDraft(){return JSON.parse(state.cheats);}
-function writeDraft(db){state.cheats=JSON.stringify(db,null,2);state.cheatsDirty=true;const textarea=$('#cheats-json');if(textarea)textarea.value=state.cheats;}
-function cheatDialog(){
- const db=databaseDraft();state.cheatProfile=Math.min(state.cheatProfile||0,Math.max(0,db.profiles.length-1));const p=db.profiles[state.cheatProfile];
- const d=dialog('Save cheat database',`<p>Edit known save formats and presets. These definitions do not change your save archives until you apply a cheat in Save Manager.</p><div class="row">${action('cheats-load','Open JSON…')}${action('cheats-download','Merge published profiles','',state.prefs.offline?'disabled':'')}${action('cheats-validate','Validate')}</div><div class="row section"><select id="cheat-profile" class="grow" aria-label="Game profile">${db.profiles.map((p,i)=>option(i,p.game,i===state.cheatProfile)).join('')}</select>${action('cheats-new-profile','Add profile…','small')}${action('cheats-remove-profile','Remove profile','danger small',!p?'disabled':'')}</div>${p?`<div class="form-grid"><label class="field">Game<input data-profile-key="game" value="${e(p.game)}"></label><label class="field">Save filename<input data-profile-key="filename" value="${e(p.filename)}"></label></div><details><summary>Layout, source and checksum</summary><div class="form-grid">${['id','encoding','source','notes'].map(key=>`<label class="field">${e(key)}<input data-profile-key="${key}" value="${e(p[key]||'')}"></label>`).join('')}<label class="field">Save size (bytes)<input data-profile-key="size" type="number" value="${p.size}"></label></div><p class="note">Signature and checksum algorithms are preserved. Edit their exact structure in Advanced JSON when defining a new format.</p></details><div class="row spread section"><h3>Fields</h3>${action('cheats-add-field','Add field','small')}</div><div class="table-wrap cheat-fields"><table><thead><tr><th>Name</th><th>Offset</th><th>Bytes</th><th>Minimum</th><th>Maximum</th><th>Mask</th><th></th></tr></thead><tbody>${p.fields.map((f,i)=>`<tr>${[['label',f.label],['offset','0x'+f.offset.toString(16)],['width',f.width??4],['min',f.min],['max',f.max],['mask','0x'+(f.mask??4294967295).toString(16)]].map(([key,value])=>`<td><input data-db-field="${i}" data-key="${key}" value="${e(value)}" aria-label="${e(key)}"></td>`).join('')}<td>${action('cheats-remove-field','×','danger small',`data-index="${i}" aria-label="Remove field"`)}</td></tr>`).join('')}</tbody></table></div><div class="row spread section"><h3>Presets</h3>${action('cheats-add-preset','Add preset','small')}</div><div class="stack">${p.presets.map((preset,i)=>`<div class="row"><input class="grow" data-db-preset="${i}" data-key="label" value="${e(preset.label)}" aria-label="Preset name"><select data-db-preset="${i}" data-key="field" aria-label="Preset field">${p.fields.map((f,j)=>option(j,f.label,preset.field===j)).join('')}</select><input class="preset-value" type="number" data-db-preset="${i}" data-key="value" value="${preset.value}" aria-label="Preset value">${action('cheats-remove-preset','×','danger small',`data-index="${i}" aria-label="Remove preset"`)}</div>`).join('')||'<small>No presets yet.</small>'}</div>`:''}<details class="section"><summary>Advanced JSON — signatures, checksums and multi-field presets</summary><textarea id="cheats-json" class="json-editor" spellcheck="false" aria-label="Cheat database JSON">${e(state.cheats)}</textarea>${action('cheats-apply-json','Apply JSON to editor','small')}</details>`,action('close-dialog','Close','','data-dialog="cheats-dialog"')+action('cheats-use','Use in Save Manager')+action('cheats-save','Save JSON…')+action('cheats-install','Install to drive…','primary'),'cheats-dialog');
-
+async function exportSave(raw) {
+  await commitHex();
+  const path = await pick(raw ? 'raw_save' : 'archive_save');
+  if (!path) return;
+  if (
+    !(await confirmAction(
+      'Export selected save',
+      `Write ${state.entry.name} to ${displayPath(path)}? An existing export will get a recovery copy.`,
+      'Export save',
+    ))
+  )
+    return;
+  await call('backup_export', { index: state.entryIndex, path, raw, overwrite: true });
+  toast('Selected save exported and verified.');
 }
-Object.assign(handlers,{
- 'cheats-validate':async()=>{await call('cheats_validate',{json:$('#cheats-json').value});toast('Database structure, addresses, ranges and checksums validated.');},
- 'cheats-use':async()=>{await call('cheats_activate',{json:$('#cheats-json').value});if(state.entryIndex!==null&&state.backup){state.entry=await call('backup_entry',{index:state.entryIndex});render();}toast('Validated definitions are active in Save Manager for this session.');},
- 'cheats-apply-json':()=>{const db=JSON.parse($('#cheats-json').value);if(!Array.isArray(db.profiles))throw new Error('Database needs a profiles array.');state.cheats=JSON.stringify(db,null,2);state.cheatsDirty=true;cheatDialog();},
- 'cheats-new-profile':()=>{const db=databaseDraft();db.profiles.push({id:'custom-'+Date.now(),game:'New game',filename:'SaveName',size:4,encoding:'be',source:'https://example.com/save-format',notes:'Replace with a verified save layout before use.',signature:{offset:0,width:1,value:0},checksum:{algorithm:'none',offset:4,seed:0},fields:[{label:'Value',offset:1,width:1,min:0,max:255,mask:255}],presets:[]});state.cheatProfile=db.profiles.length-1;writeDraft(db);cheatDialog();},
- 'cheats-remove-profile':async()=>{if(!await confirmAction('Remove game profile','Remove this profile from the draft database?','Remove profile',true))return;const db=databaseDraft();db.profiles.splice(state.cheatProfile,1);state.cheatProfile=0;writeDraft(db);cheatDialog();},
- 'cheats-add-field':()=>{const db=databaseDraft();db.profiles[state.cheatProfile].fields.push({label:'New field',offset:0,width:1,min:0,max:255,mask:255});writeDraft(db);cheatDialog();},
- 'cheats-remove-field':button=>{const db=databaseDraft(),p=db.profiles[state.cheatProfile],index=Number(button.dataset.index);p.fields.splice(index,1);p.presets=p.presets.filter(v=>v.field!==index&&!(v.additional||[]).some(c=>c.field===index));for(const preset of p.presets){if(preset.field>index)preset.field--;for(const c of preset.additional||[])if(c.field>index)c.field--;}writeDraft(db);cheatDialog();},
- 'cheats-add-preset':()=>{const db=databaseDraft(),p=db.profiles[state.cheatProfile];if(!p.fields.length)throw new Error('Add a field first.');p.presets.push({label:'New preset',field:0,value:p.fields[0].min});writeDraft(db);cheatDialog();},
- 'cheats-remove-preset':button=>{const db=databaseDraft();db.profiles[state.cheatProfile].presets.splice(Number(button.dataset.index),1);writeDraft(db);cheatDialog();}
-});
-document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(button){event.preventDefault();const handler=handlers[button.dataset.action];if(handler)perform(()=>{if(state.browseRoot&&['add-discs','copy-open','move-games','move-apply','game-info-edit','game-info-bulk','game-info-save','information-refresh','information-tools','media-selected'].includes(button.dataset.action))throw new Error('Switch to your PC library to edit or copy games.');return handler(button);});return;}
- const nav=event.target.closest('[data-page]');if(nav){perform(async()=>{if(state.hexDirty)await commitHex();if(nav.dataset.page==='updates')state.versionTarget=state.browseRoot||state.prefs.destination||state.prefs.library;if(state.browseRoot&&nav.dataset.page!=='library'){await switchLibrary('');}state.page=nav.dataset.page;if(state.page==='updates')await refreshInstalledVersions();render();});return;}
- const tile=event.target.closest('[data-game]');if(tile){const visible=visibleGames(state.groups,state.filter);const i=visible.findIndex(g=>g.key===tile.dataset.game);if(event.shiftKey&&state.anchor!==null){for(const g of visible.slice(Math.min(i,state.anchor),Math.max(i,state.anchor)+1))state.selected.add(g.key);}else if(!state.selected.delete(tile.dataset.game))state.selected.add(tile.dataset.game);state.anchor=i;state.focusedGame=tile.dataset.game;rememberLibraryView();render();announce(`${state.selected.size} games selected`);return;}
- const entry=event.target.closest('[data-entry]');if(entry)perform(async()=>{await commitHex();state.entryIndex=Number(entry.dataset.entry);state.entry=await call('backup_entry',{index:state.entryIndex});render();});
-});
-document.addEventListener('input',event=>{const n=event.target;
- if(n.id==='information-match-query'||n.id==='information-match-all')renderInformationMatchList();
- if(n.id==='information-choice-query')renderInformationChoices();
- if(n.dataset.infoApply!==undefined){const input=$(`#game-info-${n.dataset.infoApply}`);if(input)input.disabled=!n.checked;markInformationRestores();}
- if(n.dataset.infoImport!==undefined)updateInformationImportButton();
- if(n.id.startsWith('game-info-')&&state.informationEditor){state.informationEditor.restoreFields?.delete(n.id.slice(10));markInformationRestores();}
- if(n.id==='library-search'){const cursor=n.selectionStart;state.filter.search=n.value;rememberLibraryView();render();$('#library-search').focus();$('#library-search').setSelectionRange(cursor,cursor);}
- if(n.id==='slot-search'){state.slotQuery=n.value;$('#slot-results').innerHTML=slotResults();}
- if(n.dataset.categoryName!==undefined)state.categoryDraft.categories[Number(n.dataset.categoryName)].name=n.value;
- if(n.id==='drive-destination'){state.readiness=null;$('#readiness-results')?.remove();}
- if(n.dataset.recoveryCopy!==undefined){if(n.checked)state.cleanupSelected.add(n.dataset.recoveryCopy);else state.cleanupSelected.delete(n.dataset.recoveryCopy);recoveryDialog();}
- if(n.id==='hex-editor')state.hexDirty=true;
- if(n.id==='cheats-json'){state.cheats=n.value;state.cheatsDirty=true;}
- if(n.id==='copy-destination'&&state.copy){state.copy=null;const apply=document.querySelector('[data-action="copy-apply"]');if(apply){apply.disabled=true;apply.textContent='Destination changed — review again';}const body=n.closest('.dialog-body');if(!document.querySelector('[data-action="copy-preview"]')){const b=document.createElement('button');b.dataset.action='copy-preview';b.textContent='Review copy';body.append(b);}}
-});
-document.addEventListener('change',event=>{const n=event.target;perform(async()=>{
- if(n.id==='pc-library'){const value=n.value;updateLocation();if(value==='add'){await handlers['choose-library']();return;}if(value==='manage'){await manageRoots('libraries');return;}if(!value||value===state.prefs.library||!await resolveDirty())return;rememberLibraryView();await flushLibraryView();state.prefs.library=value;state.coverCache.clear();await preferences();if(!state.browseRoot)await loadLibrary();return;}
- if(n.id==='usb-drive'){const value=n.value;updateLocation();if(value==='add'){await handlers['add-drive']();return;}if(value==='manage'){await manageRoots('drives');return;}if(!value||value===state.prefs.destination)return;state.prefs.destination=value;await preferences();if(state.browseRoot)await switchLibrary(value);else await loadLibrary();return;}
- if(n.id==='information-choice')renderInformationMatchPreview();
- if(n.dataset.categoryHidden!==undefined)state.categoryDraft.categories[Number(n.dataset.categoryHidden)].hidden=n.checked;
- if(n.dataset.categoryRole!==undefined)state.categoryDraft.defaults[n.dataset.categoryRole]=n.value;
- if(n.id==='cheat-profile'){state.cheatProfile=Number(n.value);cheatDialog();}
- if(n.dataset.profileKey){const db=databaseDraft();db.profiles[state.cheatProfile][n.dataset.profileKey]=n.dataset.profileKey==='size'?Number(n.value):n.value;writeDraft(db);}
- if(n.dataset.dbField!==undefined){const db=databaseDraft();db.profiles[state.cheatProfile].fields[Number(n.dataset.dbField)][n.dataset.key]=n.dataset.key==='label'?n.value:Number(n.value);writeDraft(db);}
- if(n.dataset.dbPreset!==undefined){const db=databaseDraft();db.profiles[state.cheatProfile].presets[Number(n.dataset.dbPreset)][n.dataset.key]=n.dataset.key==='label'?n.value:Number(n.value);writeDraft(db);}
- if(n.id==='library-search-scope'){state.filter.searchScope=n.value;state.anchor=null;rememberLibraryView();render();}
- if(n.id==='library-information'){state.filter.information=n.value;state.anchor=null;rememberLibraryView();render();}
- if(n.id==='library-media'){state.filter.media=n.value;state.anchor=null;rememberLibraryView();render();}
- if(n.id==='library-region'){state.filter.region=n.value;state.anchor=null;rememberLibraryView();render();}
- if(n.id==='quick-scan'){state.prefs.quick=n.checked;await preferences();}
- if(n.id==='pref-developer'){state.prefs.developer_mode=n.checked;await developerPreferences();}
- if(n.id==='developer-directory'){state.prefs.developer_updates_directory=n.value.trim();await developerPreferences();}
- if(n.id==='pref-text-scale'){state.prefs.text_scale=textScale(n.value);applyTheme();await preferences();}
- if(n.id==='pref-theme'){state.prefs.theme=n.value;applyTheme();await preferences();}
- if(n.id==='pref-software'){state.prefs.software_rendering=n.checked;await preferences();}
- if(n.id==='pref-offline'){state.prefs.offline=n.checked;await preferences();}
- if(n.id==='version-root'){state.versionTarget=n.value;await refreshInstalledVersions();render();}
- if(n.id==='pref-update-notices'){state.prefs.hide_update_notifications=!n.checked;await preferences();renderUpdateNotice();}
- if(n.id==='pref-updates'){state.prefs.disable_update_checks=!n.checked;await preferences();}
- if(n.id==='media-game'){state.mediaDisc=n.value;render();}
- if(n.dataset.importCheck!==undefined){state.plan=await call('edit_import',{index:Number(n.dataset.importCheck),selected:n.checked});render();}
- if(n.dataset.importCategory!==undefined&&n.value){state.plan=await call('edit_import',{index:Number(n.dataset.importCategory),category:n.value});render();}
- if(n.dataset.cheatField!==undefined){await commitHex();state.backup=await call('backup_edit',{index:state.entryIndex,field:Number(n.dataset.cheatField),value:Number(n.value)});state.entry=await call('backup_entry',{index:state.entryIndex});render();}
- if(n.id==='copy-verify'&&state.copy){state.copy=null;renderCopyDialog();}
- });
-});
-document.addEventListener('focusin',event=>{const game=event.target.closest('[data-game]');if(game){state.focusedGame=game.dataset.game;const previous=document.querySelector('[data-game][tabindex="0"]');if(previous&&previous!==game)previous.tabIndex=-1;game.tabIndex=0;}});
-document.addEventListener('keydown',event=>{if(trapDialogTab(event))return;if(event.target.matches('[data-game]')&&!event.altKey&&!event.ctrlKey&&!event.metaKey&&moveGameFocus(event.target,event.key)){event.preventDefault();return;}if(event.target.matches('input,textarea,select'))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='a'&&state.page==='library'&&!document.querySelector('dialog[open]')){event.preventDefault();handlers['select-shown']();}if(event.key==='Escape'&&!document.querySelector('dialog[open]')&&state.page==='library'){state.selected.clear();render();}});
-async function prepareClose(){if(state.busy){toast('Wait for the current operation or cancel it before closing.');return false;}if(hasInformationChanges()&&!await confirmAction('Unsaved game information','Discard your information edits and close the app?','Discard and close',true))return;if(!await resolveDirty())return;if(state.cheatsDirty&&!await confirmAction('Unsaved cheat database','Discard unsaved database edits and close the app?','Discard and close',true))return;await flushLibraryView();return true;}
-async function closeApp(){if(await prepareClose())await call('quit');}
-async function init(){const initial=await call('init');state.prefs=initial.prefs;rememberRoots();state.updateReport=initial.args.includes('--update-ready')?null:initial.update_report;applyTheme();state.version=initial.version;categories.splice(0,categories.length,...initial.categories);shell();
- await listen('operation-progress',({payload})=>dialogProgress.updateProgress(payload));
- await listen('progress',({payload})=>{recordActivity(payload);setStatus(String(payload));});
- let busyFocus=null;
- await listen('busy',({payload})=>{if(payload&&!state.busy)busyFocus=document.activeElement;state.busy=payload;document.body.classList.toggle('busy-ui',payload);$('#content')?.setAttribute('aria-busy',String(payload));if(!payload){const cancel=$('#cancel-job');cancel.disabled=false;cancel.textContent='Cancel';}
- for(const n of document.querySelectorAll('button,input,select,textarea')){if(['cancel','logs','close-dialog'].includes(n.dataset.action))continue;if(payload){n.dataset.busyLock=n.disabled?'1':'0';n.disabled=true;}else if(n.dataset.busyLock!==undefined){n.disabled=n.dataset.busyLock==='1';delete n.dataset.busyLock;}if(n.closest('dialog')?.dataset.operationBusy==='true')n.disabled=true;}
- if(!payload&&busyFocus?.isConnected&&!busyFocus.disabled){const dialogs=[...document.querySelectorAll('dialog[open]')];if(!dialogs.length||busyFocus.closest('dialog')===dialogs.at(-1))busyFocus.focus({preventScroll:true});busyFocus=null;}
- $('#busy-dot').classList.toggle('hidden',!payload);$('#cancel-job').classList.toggle('hidden',!payload);});
- await listen('close-requested',()=>perform(closeApp));
- await listen('tauri://drag-drop',({payload})=>{if(state.busy||state.browseRoot)return;state.paths=[...new Set([...state.paths,...payload.paths])];state.plan=null;state.page='import';render();});
- const args=initial.args;const arg=flag=>{const i=args.indexOf(flag);return i>=0?args[i+1]:null;};
- if(!args.includes('--update-exit'))await perform(loadLibrary);
- await perform(refreshDriveStatus);
- window.addEventListener('focus',()=>{if(!state.busy)perform(refreshDriveStatus);});
- if(args.includes('--guided-setup'))state.page='drive';
- if(arg('--tab'))state.page=['library','import','media','drive','settings'][Math.max(0,Math.min(4,Number(arg('--tab'))-1))];
- if(arg('--save-slots')){state.page='saves';state.slotDirectory=arg('--save-slots');await perform(refreshSlots);}
- if(arg('--save-backup'))await perform(()=>openBackup(arg('--save-backup')));
- render();await call('ready');
- if(arg('--update-failed')&&!state.updateReport)toast(`The desktop update failed. Keep the recovery files. Log: ${arg('--update-failed')}`,true);
- if(!args.includes('--update-exit')&&(!state.prefs.offline||state.prefs.developer_mode)&&!state.prefs.disable_update_checks)perform(()=>checkUpdates(true));
+async function refreshSlots() {
+  if (!state.slotDirectory) throw new Error('Choose the .ohmy3do/saves folder first.');
+  state.slots = await call('slots', { directory: state.slotDirectory });
+  render();
 }
-init().catch(error=>{document.getElementById('app').textContent=`Oh My 3DO could not initialize: ${error}`;});
-
-async function inspectWriteDrive(root){const d=await call('drive_inspect',{root});if(d.mismatch)throw new Error(`A different drive is mounted here. Expected ${d.expected.name}. Check and remember this drive in Drive setup first.`);return d;}
-function showGameDetails(key=[...state.selected][0]){const group=state.groups.find(g=>g.key===key);if(!group)return;const record=state.records.find(r=>group.discs.includes(r.path));const m=record?.metadata||{};const source=m.description_source||m.source;dialog(group.title,`<dl>${[['Region',group.region],['Genre',m.genre],['Developer',m.developer],['Publisher',m.publisher],['Released',m.release_date||m.year],['Players',m.players]].filter(([,v])=>v).map(([k,v])=>`<dt>${e(k)}</dt><dd>${e(v)}${informationDetailBadge(record,k)}</dd>`).join('')}</dl>${informationDetailBadge(record,'Description')}<p class="game-description">${e(m.description||m.overview||'No description available. Prepare missing media or edit this game’s information.')}</p><details><summary>Disc files</summary>${group.discs.map(p=>`<p class="path">${pathLabel(p)}</p>`).join('')}</details>${source?`<p class="note">Description source: ${e(source==='https://gamesdb.launchbox-app.com/Metadata.zip'?'LaunchBox':source)}</p>`:''}`,action('close-dialog','Close','','data-dialog="main-dialog"')+(state.browseRoot?'':action('game-info-edit','Edit information…','primary',`data-game-key="${e(group.key)}"`)));}
-const informationFields=[['description','Description'],['genre','Genre'],['developer','Developer'],['publisher','Publisher'],['release_date','Release date'],['year','Release year'],['players','Players']];
-function informationPatch(){if(!state.informationEditor)return {};const edit=state.informationEditor;return Object.fromEntries(informationFields.map(([key])=>[key,$(`#game-info-${key}`)?.value]).filter(([key,value])=>!edit.restoreFields?.has(key)&&value!==undefined&&(edit.bulk?$(`[data-info-apply="${key}"]`)?.checked:value!==edit.fields[key])));}
-function hasInformationChanges(){return Object.keys(informationPatch()).length>0||!!state.informationEditor?.restoreFields?.size;}
-function informationLabel(key,label){return `<span class="row spread"><label for="game-info-${key}">${label} <small class="badge hidden" data-info-marker="${key}"></small><small data-info-restored="${key}" class="hidden"> · Downloaded value staged</small></label>${action('game-info-restore','Restore downloaded','quiet small',`data-field="${key}" aria-label="Restore downloaded ${e(label.toLowerCase())}"`)}</span>`;}
-async function openInformationEditor(key){
- const group=state.groups.find(g=>g.key===key);if(!group)throw new Error('Game selection changed.');
- const view=await call('game_info_load',{discs:group.discs});state.informationEditor={...view,key,restoreFields:new Set()};
- const d=dialog('Edit '+group.title,`<p>Changed fields apply to all ${quantity(group.discs.length,'disc')} in this game. Your edits are kept when downloading information later.</p><div class="row section">${action('game-info-restore','Restore downloaded information…','small','data-field="all"')}</div><div class="field">${informationLabel('description','Description')}<textarea id="game-info-description" rows="7" aria-label="Game description">${e(view.fields.description)}</textarea></div><div class="form-grid">${informationFields.slice(1).map(([key,label])=>`<div class="field">${informationLabel(key,label)}<input id="game-info-${key}" aria-label="${label}" ${key==='year'||key==='players'?`type="number" min="1" max="${key==='year'?9999:64}"`:''} value="${e(view.fields[key])}"></div>`).join('')}</div><p class="note">Restore previews downloaded values before saving and lets future downloads update those fields again. Fields not supplied by LaunchBox are kept. Copy the games to update your console drive. Undo is available in Settings & tools.</p>`,action('close-dialog','Cancel','','data-dialog="game-info-dialog"')+action('game-info-save','Save information','primary'),'game-info-dialog');
- d.addEventListener('cancel',event=>{event.preventDefault();if(!state.busy)perform(()=>handlers['close-dialog']({dataset:{dialog:'game-info-dialog'}}));});
- markInformationRestores();
-}
-function markInformationRestores(){
- const edit=state.informationEditor;if(!edit)return;const patch=informationPatch();
- document.querySelectorAll('[data-info-restored]').forEach(n=>n.classList.toggle('hidden',!edit.restoreFields?.has(n.dataset.infoRestored)));
- document.querySelectorAll('[data-info-marker]').forEach(n=>{
-  const key=n.dataset.infoMarker,count=edit.records.filter(r=>Object.hasOwn(r.overrides||{},key)).length;
-  const text=edit.restoreFields?.has(key)?'':Object.hasOwn(patch,key)?'Edited on save':count===edit.records.length?'Edited':count?'Some discs edited':'';
-  n.textContent=text;n.classList.toggle('hidden',!text);n.title='Manual edits are protected from downloaded updates.';
- });
-}
-function informationValue(value){return value===null||value===undefined?'':String(value);}
-function informationDetailBadge(record,label){
- const keys={Description:['description'],Genre:['genre'],Developer:['developer'],Publisher:['publisher'],Released:['release_date','year'],Players:['players']}[label]||[];
- return keys.some(k=>Object.hasOwn(record?.metadata_overrides||{},k))?' <span class="badge" title="Protected from downloaded updates">Edited</span>':'';
-}
-async function openBulkInformationEditor(){
- const discs=selectedDiscs(state.groups,state.selected);if(!discs.length)throw new Error('Select games first.');
- const view=await call('game_info_load',{discs});const gameCount=state.selected.size;
- state.informationEditor={...view,bulk:true,gameCount,restoreFields:new Set()};
- const d=dialog('Edit selected games',`<p>Choose which shared fields to apply to ${gameCount} games (${quantity(discs.length,'disc')}). Unchecked fields and each game’s description are kept. Checking Apply with a blank value clears that field.</p><div class="form-grid">${informationFields.slice(1).map(([key,label])=>{
-  const values=view.records.map(r=>informationValue(r.metadata?.[key]));const same=new Set(values).size===1;
-  return `<div class="field"><label class="row"><input type="checkbox" data-info-apply="${key}">Apply ${e(label.toLowerCase())} <small class="badge hidden" data-info-marker="${key}"></small></label><input id="game-info-${key}" aria-label="${label}" disabled ${key==='year'||key==='players'?`type="number" min="1" max="${key==='year'?9999:64}"`:''} placeholder="${same?'': 'Mixed values — choose a shared value'}" value="${same?e(values[0]):''}"></div>`;
- }).join('')}</div><p class="note">Applied values become manual edits protected from future downloads. You can undo the entire change in Settings & tools.</p>`,action('close-dialog','Cancel','','data-dialog="game-info-dialog"')+action('game-info-save','Save information','primary'),'game-info-dialog');
- d.addEventListener('cancel',event=>{event.preventDefault();if(!state.busy)perform(()=>handlers['close-dialog']({dataset:{dialog:'game-info-dialog'}}));});
- markInformationRestores();
-}
-function informationTools(){
- dialog('Metadata tools',`<div class="metadata-tools stack"><section><h3>Match game information</h3><p>Review unmatched games or change an existing LaunchBox match.</p>${action('information-matches','Review information matches…')}</section><section><h3>Back up custom edits</h3><p>Export your edits, including cleared fields, or review an import before applying it.</p><div class="row">${action('information-export','Export all…','','data-scope="all"')}${action('information-export',`Export selected… (${state.selected.size})`,'',`data-scope="selected" ${state.selected.size?'':'disabled'}`)}${action('information-import-preview','Import metadata…')}</div></section><section><h3>Automatic backups</h3><p>Review the five most recent snapshots saved on this computer.</p>${action('information-backups','Automatic metadata backups…')}</section></div><p class="note">Manual edits are protected from downloads. Metadata imports and match changes support Undo.</p>`,action('close-dialog','Close','','data-dialog="main-dialog"'));
-}
-async function exportInformation(selected){
- const discs=selected?selectedDiscs(state.groups,state.selected):[];
- if(selected&&!discs.length)throw new Error('Select games first.');
- const target=await pick('metadata_save');if(!target)return;
- const result=await call('game_info_export',{target,discs});toast(`Exported custom metadata for ${quantity(result.count,'disc')}.`);
-}
-async function previewInformationImport(){
- const file=await pick('metadata');if(!file)return;
- const preview=await call('game_info_import_preview',{file});showInformationImport(preview,file);
-}
-function showInformationImport(preview,file){
- state.informationImport=preview;
- dialog('Review custom metadata import',`<p>${pathLabel(file)}</p><p>Changes found for ${quantity(preview.records.length,'disc')}. Select the entries to import, then review their fields below.</p><p class="note">Entries that replace different manual edits start unchecked. Check them only if you want the imported values. Other fields are kept.</p><div class="stack">${preview.records.map((r,index)=>`<section class="card"><label class="row"><input type="checkbox" data-info-import="${index}" ${r.conflicts.length?'':'checked'}><strong>${e(r.title)}</strong>${r.conflicts.length?'<span class="badge warning">Replaces manual edits</span>':''}</label><p class="note path">${pathLabel(r.path)}<br>${e(r.matching)}${r.path!==r.source_path?` · From ${pathLabel(r.source_path)}`:''}</p><details ${index===0?'open':''}><summary>Review ${quantity(Object.keys(r.fields).length,'field')}${r.conflicts.length?' · '+r.conflicts.length+' manual edits differ':''}</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Imported</th></tr></thead><tbody>${Object.entries(r.fields).map(([key,value])=>`<tr><td>${e(informationFields.find(([k])=>k===key)?.[1]||key)}${r.conflicts.includes(key)?' <span class="badge warning">Edited</span>':''}</td><td><div class="game-description">${e(informationValue(key==='description'?(r.original.metadata?.description||r.original.metadata?.overview):r.original.metadata?.[key])||'(Empty)')}</div></td><td><div class="game-description">${e(informationValue(value)||'(Empty — clears this field)')}</div></td></tr>`).join('')}</tbody></table></div></details></section>`).join('')}</div>${preview.skipped.length?`<details class="section"><summary>${preview.skipped.length} skipped entries</summary><ul>${preview.skipped.map(text=>`<li>${e(text)}</li>`).join('')}</ul></details>`:''}<p class="note">Importing saves the checked fields as manual edits. Copy the affected games afterward to update your console drive. Undo is available in Settings & tools.</p>`,action('close-dialog','Cancel','','data-dialog="main-dialog"')+action('information-import-save','Import checked entries','primary','id="information-import-save"'));
- updateInformationImportButton();
-}
-function updateInformationImportButton(){const button=$('#information-import-save'),count=document.querySelectorAll('[data-info-import]:checked').length;if(button){button.disabled=!count;button.textContent=count?`Import ${count} ${count===1?'disc':'discs'}`:'Select entries to import';}}
-async function openInformationMatches(){
- state.informationMatches=await call('game_info_matches');
- const d=state.informationMatches;const unmatched=d.records.filter(r=>!['Automatic match','Chosen match'].includes(d.status[r.path])).length;
- dialog('Review information matches',`<p>${quantity(unmatched,'disc')} ${unmatched===1?'needs':'need'} a match. Choose the correct LaunchBox title to preview and apply its information. Manual edits are kept. Chosen matches are remembered for future information downloads and missing-media preparation.</p><div class="row"><input id="information-match-query" type="search" placeholder="Find a library game…" aria-label="Find a game to match"><label><input type="checkbox" id="information-match-all"> Show matched games too</label></div><div id="information-match-list" class="stack section"></div><p class="note">This changes information only. Disc identification, folder names, game files and media associations are kept. Cached LaunchBox information works offline. Undo is available in Settings & tools.</p>`,action('close-dialog','Close','','data-dialog="main-dialog"'));
- renderInformationMatchList();
-}
-function renderInformationMatchList(){
- const target=$('#information-match-list'),review=state.informationMatches;if(!target||!review)return;
- const query=($('#information-match-query')?.value||'').trim().toLocaleLowerCase(),all=$('#information-match-all')?.checked;
- const games=groupGames(review.records).filter(g=>(!query||g.title.toLocaleLowerCase().includes(query))&&(all||g.discs.some(p=>!['Automatic match','Chosen match'].includes(review.status[p]))));
- target.innerHTML=games.length?games.map(g=>`<div class="card row spread"><div><strong>${e(g.title)}</strong><p class="note">${e(g.region)} · ${e([...new Set(g.discs.map(p=>review.status[p]))].join('; '))} · ${quantity(g.discs.length,'disc')}</p></div>${action('information-match-game','Choose match…','small',`data-key="${e(g.key)}"`)}</div>`).join(''):'<p>No games match this view. Clear the search or enable Show matched games too.</p>';
-}
-function openInformationMatch(key){
- const review=state.informationMatches,game=groupGames(review.records).find(g=>g.key===key);if(!game)throw new Error('Review information matches again.');
- state.informationMatchGame=game;state.informationMatchChoice='';
- dialog('Choose information for '+game.title,`<p>Applies to ${quantity(game.discs.length,'disc')}. Check the description, release year and publisher before choosing a match.</p><label class="field">Search LaunchBox titles<input id="information-choice-query" type="search" placeholder="Search the downloaded 3DO titles…"></label><label class="field">LaunchBox title<select id="information-choice" size="8" aria-label="LaunchBox title"></select></label><p class="note" id="information-choice-count"></p><div id="information-match-preview"></div>`,action('close-dialog','Cancel','','data-dialog="information-match-dialog"')+action('information-match-save','Use this match','primary','id="information-match-save" disabled'),'information-match-dialog');
- renderInformationChoices();
-}
-function renderInformationChoices(){
- const target=$('#information-choice');if(!target)return;
- const query=($('#information-choice-query')?.value||'').trim().toLocaleLowerCase();
- const choices=state.informationMatches.choices.filter(m=>!query||String(m.title).toLocaleLowerCase().includes(query));
- target.innerHTML=option('','Choose a LaunchBox title',true)+choices.map(m=>option(m.launchbox_id,[m.title,m.year,m.publisher,'ID '+m.launchbox_id].filter(Boolean).join(' · '),false)).join('');
- state.informationMatchChoice='';$('#information-choice-count').textContent=`${choices.length} matching LaunchBox titles.`;renderInformationMatchPreview();
-}
-function renderInformationMatchPreview(){
- const review=state.informationMatches,id=$('#information-choice')?.value||'',meta=review?.choices.find(m=>m.launchbox_id===id);state.informationMatchChoice=id;
- const target=$('#information-match-preview'),button=$('#information-match-save');if(button)button.disabled=!meta;if(!target)return;
- if(!meta){target.innerHTML='<p class="note">Choose a title to preview the changes. No files have been changed.</p>';return;}
- const game=state.informationMatchGame,records=review.records.filter(r=>game.discs.includes(r.path));
- target.innerHTML=`<h3>${e(meta.title)}</h3><p class="note">${e([meta.year,meta.publisher,meta.developer].filter(Boolean).join(' · '))} · LaunchBox ID ${e(id)}</p>${records.map((r,index)=>`<details ${index===0?'open':''}><summary>${pathLabel(r.path)}</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Downloaded</th></tr></thead><tbody>${informationFields.map(([key,label])=>{
-  const current=key==='description'?(r.metadata?.description||r.metadata?.overview):r.metadata?.[key],value=meta[key],manual=Object.hasOwn(r.metadata_overrides||{},key),supplied=value!==null&&value!==undefined&&String(value).trim()!=='';
-  return `<tr><td>${e(label)}</td><td><div class="game-description">${e(informationValue(current)||'(Empty)')}</div></td><td><div class="game-description">${manual?'<span class="badge">Manual edit kept</span>':supplied?e(informationValue(value)):'Not supplied — current value kept'}</div></td></tr>`;
- }).join('')}</tbody></table></div></details>`).join('')}<p class="note">Using this match saves downloaded fields immediately and remembers the LaunchBox entry. Manual edits remain protected; use Restore downloaded in the information editor to remove an override.</p>`;
-}
-async function saveInformationMatch(){
- const review=state.informationMatches,game=state.informationMatchGame,id=state.informationMatchChoice;
- if(!review||!game||!id)throw new Error('Choose and preview a LaunchBox title first.');
- await call('game_info_choose_match',{token:review.token,discs:game.discs,id});state.informationMatches=null;
- closeDialog('information-match-dialog');closeDialog();await loadLibrary();toast('Information match saved. Future downloads will use this entry. Copy the games to update your console drive.');
-}
-async function showInformationBackups(){
- const result=await call('game_info_backups');
- dialog('Automatic metadata backups',`<p>The five newest distinct snapshots of your custom edits are kept for this library. Snapshots are saved before library changes, including metadata edits and updates, imports, media preparation, category changes and Undo.</p><p class="note">Snapshots stay on this computer and are independent of Undo. Restoring opens the normal import review, where you choose entries and resolve conflicts. Only manual information fields are backed up.</p><p class="path">${pathLabel(result.directory)}</p><div class="stack">${result.backups.length?result.backups.map(b=>`<section class="card row spread"><div><strong>${e(new Date(b.modified*1000).toLocaleString())}</strong><p class="note">${quantity(b.entries,'disc')} · ${bytes(b.bytes)}</p></div>${action('information-backup-preview','Review restore…','small',`data-name="${e(b.name)}"`)}</section>`).join(''):'<p>No snapshots yet. After you edit game information, a snapshot is saved before your next library change.</p>'}</div>`,action('close-dialog','Close','','data-dialog="main-dialog"'));
-}
-async function saveInformationImport(){
- const plan=state.informationImport;if(!plan)throw new Error('Review a metadata import first.');
- const discs=[...document.querySelectorAll('[data-info-import]:checked')].map(n=>plan.records[Number(n.dataset.infoImport)].path);
- if(!discs.length)throw new Error('Check at least one entry to import.');
- await call('game_info_import',{token:plan.token,discs});state.informationImport=null;closeDialog();await loadLibrary();toast(`Imported custom metadata for ${quantity(discs.length,'disc')}. Copy the games to update your console drive.`);
-}
-async function previewInformationRestore(field){
- const edit=state.informationEditor;if(!edit)throw new Error('Open the information editor first.');
- if(!edit.restorePreview)edit.restorePreview=await call('game_info_restore_preview',{original:edit.records});
- const preview=edit.restorePreview,keys=field==='all'?informationFields.map(([key])=>key):[field];
- edit.restoreRequested=keys.filter(k=>preview.available.includes(k));
- const patch=informationPatch();
- const rows=keys.map(key=>{
-  const label=informationFields.find(([k])=>k===key)?.[1]||key;
-  const values=preview.records.map((r,i)=>{
-   const old=edit.records[i]?.metadata||{};
-   const current=edit.restoreFields.has(key)?informationValue(r.fields[key]):Object.hasOwn(patch,key)?patch[key]:informationValue(key==='description'?(old.description||old.overview):old[key]);
-   return {path:r.path,current,downloaded:informationValue(r.fields[key])};
+async function setupDrive(source, release = false) {
+  state.prefs.destination = $('#drive-destination').value;
+  if (!state.prefs.destination) throw new Error('Choose a USB / SD destination first.');
+  const settings = readSettings('drive');
+  await preferences();
+  const d = await inspectWriteDrive(state.prefs.destination);
+  if (
+    !(await confirmAction(
+      'Prepare drive',
+      `Prepare ${d.identity?.name || 'unnamed drive'} at ${displayPath(d.root)}? Existing games and saves are preserved.`,
+      'Prepare drive',
+    ))
+  )
+    return;
+  await call('drive_setup', {
+    destination: state.prefs.destination,
+    source,
+    release,
+    settings,
+    drive_token: d.token,
   });
-  const same=new Set(values.map(v=>JSON.stringify([v.current,v.downloaded]))).size===1;
-  return (same?values.slice(0,1):values).map(v=>`<tr><td>${e(label)}${!same?`<small class="path">${pathLabel(v.path)}</small>`:''}</td><td><div class="game-description">${e(v.current||'(Empty)')}</div></td><td><div class="game-description">${preview.available.includes(key)?e(v.downloaded):'Not supplied for every disc — kept'}</div></td></tr>`).join('');
- }).join('');
- dialog('Restore downloaded information',`<p>Review the LaunchBox values below. Choose Use downloaded values, then Save information in the editor to finish. Restored fields can receive future downloaded updates.</p><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current / draft</th><th>Downloaded</th></tr></thead><tbody>${rows}</tbody></table></div><p class="note">Applies to ${quantity(edit.records.length,'disc')}. Unavailable fields and your other edits are kept.</p>`,action('close-dialog','Cancel','','data-dialog="game-info-restore-dialog"')+action('game-info-stage-restore','Use downloaded values','primary',!edit.restoreRequested.length?'disabled':''),'game-info-restore-dialog');
+  toast('Drive prepared and verified. You can use Save Manager without installing games.');
 }
-function stageInformationRestore(){
- const edit=state.informationEditor;if(!edit?.restorePreview)return;
- for(const key of edit.restoreRequested){const input=$(`#game-info-${key}`);if(input){input.value=informationValue(edit.restorePreview.records[0].fields[key]);edit.restoreFields.add(key);}}
- markInformationRestores();closeDialog('game-info-restore-dialog');
+function databaseDraft() {
+  return JSON.parse(state.cheats);
+}
+function writeDraft(db) {
+  state.cheats = JSON.stringify(db, null, 2);
+  state.cheatsDirty = true;
+  const textarea = $('#cheats-json');
+  if (textarea) textarea.value = state.cheats;
+}
+function cheatDialog() {
+  const db = databaseDraft();
+  state.cheatProfile = Math.min(state.cheatProfile || 0, Math.max(0, db.profiles.length - 1));
+  const p = db.profiles[state.cheatProfile];
+  const d = dialog(
+    'Save cheat database',
+    `<p>Edit known save formats and presets. These definitions do not change your save archives until you apply a cheat in Save Manager.</p><div class="row">${action('cheats-load', 'Open JSON…')}${action('cheats-download', 'Merge published profiles', '', state.prefs.offline ? 'disabled' : '')}${action('cheats-validate', 'Validate')}</div><div class="row section"><select id="cheat-profile" class="grow" aria-label="Game profile">${db.profiles.map((p, i) => option(i, p.game, i === state.cheatProfile)).join('')}</select>${action('cheats-new-profile', 'Add profile…', 'small')}${action('cheats-remove-profile', 'Remove profile', 'danger small', !p ? 'disabled' : '')}</div>${
+      p
+        ? `<div class="form-grid"><label class="field">Game<input data-profile-key="game" value="${e(p.game)}"></label><label class="field">Save filename<input data-profile-key="filename" value="${e(p.filename)}"></label></div><details><summary>Layout, source and checksum</summary><div class="form-grid">${['id', 'encoding', 'source', 'notes'].map((key) => `<label class="field">${e(key)}<input data-profile-key="${key}" value="${e(p[key] || '')}"></label>`).join('')}<label class="field">Save size (bytes)<input data-profile-key="size" type="number" value="${p.size}"></label></div><p class="note">Signature and checksum algorithms are preserved. Edit their exact structure in Advanced JSON when defining a new format.</p></details><div class="row spread section"><h3>Fields</h3>${action('cheats-add-field', 'Add field', 'small')}</div><div class="table-wrap cheat-fields"><table><thead><tr><th>Name</th><th>Offset</th><th>Bytes</th><th>Minimum</th><th>Maximum</th><th>Mask</th><th></th></tr></thead><tbody>${p.fields
+            .map(
+              (f, i) =>
+                `<tr>${[
+                  ['label', f.label],
+                  ['offset', '0x' + f.offset.toString(16)],
+                  ['width', f.width ?? 4],
+                  ['min', f.min],
+                  ['max', f.max],
+                  ['mask', '0x' + (f.mask ?? 4294967295).toString(16)],
+                ]
+                  .map(
+                    ([key, value]) =>
+                      `<td><input data-db-field="${i}" data-key="${key}" value="${e(value)}" aria-label="${e(key)}"></td>`,
+                  )
+                  .join(
+                    '',
+                  )}<td>${action('cheats-remove-field', '×', 'danger small', `data-index="${i}" aria-label="Remove field"`)}</td></tr>`,
+            )
+            .join(
+              '',
+            )}</tbody></table></div><div class="row spread section"><h3>Presets</h3>${action('cheats-add-preset', 'Add preset', 'small')}</div><div class="stack">${p.presets.map((preset, i) => `<div class="row"><input class="grow" data-db-preset="${i}" data-key="label" value="${e(preset.label)}" aria-label="Preset name"><select data-db-preset="${i}" data-key="field" aria-label="Preset field">${p.fields.map((f, j) => option(j, f.label, preset.field === j)).join('')}</select><input class="preset-value" type="number" data-db-preset="${i}" data-key="value" value="${preset.value}" aria-label="Preset value">${action('cheats-remove-preset', '×', 'danger small', `data-index="${i}" aria-label="Remove preset"`)}</div>`).join('') || '<small>No presets yet.</small>'}</div>`
+        : ''
+    }<details class="section"><summary>Advanced JSON — signatures, checksums and multi-field presets</summary><textarea id="cheats-json" class="json-editor" spellcheck="false" aria-label="Cheat database JSON">${e(state.cheats)}</textarea>${action('cheats-apply-json', 'Apply JSON to editor', 'small')}</details>`,
+    action('close-dialog', 'Close', '', 'data-dialog="cheats-dialog"') +
+      action('cheats-use', 'Use in Save Manager') +
+      action('cheats-save', 'Save JSON…') +
+      action('cheats-install', 'Install to drive…', 'primary'),
+    'cheats-dialog',
+  );
+}
+Object.assign(handlers, {
+  'cheats-validate': async () => {
+    await call('cheats_validate', { json: $('#cheats-json').value });
+    toast('Database structure, addresses, ranges and checksums validated.');
+  },
+  'cheats-use': async () => {
+    await call('cheats_activate', { json: $('#cheats-json').value });
+    if (state.entryIndex !== null && state.backup) {
+      state.entry = await call('backup_entry', { index: state.entryIndex });
+      render();
+    }
+    toast('Validated definitions are active in Save Manager for this session.');
+  },
+  'cheats-apply-json': () => {
+    const db = JSON.parse($('#cheats-json').value);
+    if (!Array.isArray(db.profiles)) throw new Error('Database needs a profiles array.');
+    state.cheats = JSON.stringify(db, null, 2);
+    state.cheatsDirty = true;
+    cheatDialog();
+  },
+  'cheats-new-profile': () => {
+    const db = databaseDraft();
+    db.profiles.push({
+      id: 'custom-' + Date.now(),
+      game: 'New game',
+      filename: 'SaveName',
+      size: 4,
+      encoding: 'be',
+      source: 'https://example.com/save-format',
+      notes: 'Replace with a verified save layout before use.',
+      signature: { offset: 0, width: 1, value: 0 },
+      checksum: { algorithm: 'none', offset: 4, seed: 0 },
+      fields: [{ label: 'Value', offset: 1, width: 1, min: 0, max: 255, mask: 255 }],
+      presets: [],
+    });
+    state.cheatProfile = db.profiles.length - 1;
+    writeDraft(db);
+    cheatDialog();
+  },
+  'cheats-remove-profile': async () => {
+    if (
+      !(await confirmAction(
+        'Remove game profile',
+        'Remove this profile from the draft database?',
+        'Remove profile',
+        true,
+      ))
+    )
+      return;
+    const db = databaseDraft();
+    db.profiles.splice(state.cheatProfile, 1);
+    state.cheatProfile = 0;
+    writeDraft(db);
+    cheatDialog();
+  },
+  'cheats-add-field': () => {
+    const db = databaseDraft();
+    db.profiles[state.cheatProfile].fields.push({
+      label: 'New field',
+      offset: 0,
+      width: 1,
+      min: 0,
+      max: 255,
+      mask: 255,
+    });
+    writeDraft(db);
+    cheatDialog();
+  },
+  'cheats-remove-field': (button) => {
+    const db = databaseDraft(),
+      p = db.profiles[state.cheatProfile],
+      index = Number(button.dataset.index);
+    p.fields.splice(index, 1);
+    p.presets = p.presets.filter(
+      (v) => v.field !== index && !(v.additional || []).some((c) => c.field === index),
+    );
+    for (const preset of p.presets) {
+      if (preset.field > index) preset.field--;
+      for (const c of preset.additional || []) if (c.field > index) c.field--;
+    }
+    writeDraft(db);
+    cheatDialog();
+  },
+  'cheats-add-preset': () => {
+    const db = databaseDraft(),
+      p = db.profiles[state.cheatProfile];
+    if (!p.fields.length) throw new Error('Add a field first.');
+    p.presets.push({ label: 'New preset', field: 0, value: p.fields[0].min });
+    writeDraft(db);
+    cheatDialog();
+  },
+  'cheats-remove-preset': (button) => {
+    const db = databaseDraft();
+    db.profiles[state.cheatProfile].presets.splice(Number(button.dataset.index), 1);
+    writeDraft(db);
+    cheatDialog();
+  },
+});
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-action]');
+  if (button) {
+    event.preventDefault();
+    const handler = handlers[button.dataset.action];
+    if (handler)
+      perform(() => {
+        if (
+          state.browseRoot &&
+          [
+            'add-discs',
+            'copy-open',
+            'move-games',
+            'move-apply',
+            'game-info-edit',
+            'game-info-bulk',
+            'game-info-save',
+            'information-refresh',
+            'information-tools',
+            'media-selected',
+          ].includes(button.dataset.action)
+        )
+          throw new Error('Switch to your PC library to edit or copy games.');
+        return handler(button);
+      });
+    return;
+  }
+  const nav = event.target.closest('[data-page]');
+  if (nav) {
+    perform(async () => {
+      if (state.hexDirty) await commitHex();
+      if (nav.dataset.page === 'updates')
+        state.versionTarget = state.browseRoot || state.prefs.destination || state.prefs.library;
+      if (state.browseRoot && nav.dataset.page !== 'library') {
+        await switchLibrary('');
+      }
+      state.page = nav.dataset.page;
+      if (state.page === 'updates') await refreshInstalledVersions();
+      render();
+    });
+    return;
+  }
+  const tile = event.target.closest('[data-game]');
+  if (tile) {
+    const visible = visibleGames(state.groups, state.filter);
+    const i = visible.findIndex((g) => g.key === tile.dataset.game);
+    if (event.shiftKey && state.anchor !== null) {
+      for (const g of visible.slice(Math.min(i, state.anchor), Math.max(i, state.anchor) + 1))
+        state.selected.add(g.key);
+    } else if (!state.selected.delete(tile.dataset.game)) state.selected.add(tile.dataset.game);
+    state.anchor = i;
+    state.focusedGame = tile.dataset.game;
+    rememberLibraryView();
+    render();
+    announce(`${state.selected.size} games selected`);
+    return;
+  }
+  const entry = event.target.closest('[data-entry]');
+  if (entry)
+    perform(async () => {
+      await commitHex();
+      state.entryIndex = Number(entry.dataset.entry);
+      state.entry = await call('backup_entry', { index: state.entryIndex });
+      render();
+    });
+});
+document.addEventListener('input', (event) => {
+  const n = event.target;
+  if (n.id === 'information-match-query' || n.id === 'information-match-all')
+    renderInformationMatchList();
+  if (n.id === 'information-choice-query') renderInformationChoices();
+  if (n.dataset.infoApply !== undefined) {
+    const input = $(`#game-info-${n.dataset.infoApply}`);
+    if (input) input.disabled = !n.checked;
+    markInformationRestores();
+  }
+  if (n.dataset.infoImport !== undefined) updateInformationImportButton();
+  if (n.id.startsWith('game-info-') && state.informationEditor) {
+    state.informationEditor.restoreFields?.delete(n.id.slice(10));
+    markInformationRestores();
+  }
+  if (n.id === 'library-search') {
+    const cursor = n.selectionStart;
+    state.filter.search = n.value;
+    rememberLibraryView();
+    render();
+    $('#library-search').focus();
+    $('#library-search').setSelectionRange(cursor, cursor);
+  }
+  if (n.id === 'slot-search') {
+    state.slotQuery = n.value;
+    $('#slot-results').innerHTML = slotResults();
+  }
+  if (n.dataset.categoryName !== undefined)
+    state.categoryDraft.categories[Number(n.dataset.categoryName)].name = n.value;
+  if (n.id === 'drive-destination') {
+    state.readiness = null;
+    $('#readiness-results')?.remove();
+  }
+  if (n.dataset.recoveryCopy !== undefined) {
+    if (n.checked) state.cleanupSelected.add(n.dataset.recoveryCopy);
+    else state.cleanupSelected.delete(n.dataset.recoveryCopy);
+    recoveryDialog();
+  }
+  if (n.id === 'hex-editor') state.hexDirty = true;
+  if (n.id === 'cheats-json') {
+    state.cheats = n.value;
+    state.cheatsDirty = true;
+  }
+  if (n.id === 'copy-destination' && state.copy) {
+    state.copy = null;
+    const apply = document.querySelector('[data-action="copy-apply"]');
+    if (apply) {
+      apply.disabled = true;
+      apply.textContent = 'Destination changed — review again';
+    }
+    const body = n.closest('.dialog-body');
+    if (!document.querySelector('[data-action="copy-preview"]')) {
+      const b = document.createElement('button');
+      b.dataset.action = 'copy-preview';
+      b.textContent = 'Review copy';
+      body.append(b);
+    }
+  }
+});
+document.addEventListener('change', (event) => {
+  const n = event.target;
+  perform(async () => {
+    if (n.id === 'pc-library') {
+      const value = n.value;
+      updateLocation();
+      if (value === 'add') {
+        await handlers['choose-library']();
+        return;
+      }
+      if (value === 'manage') {
+        await manageRoots('libraries');
+        return;
+      }
+      if (!value || value === state.prefs.library || !(await resolveDirty())) return;
+      rememberLibraryView();
+      await flushLibraryView();
+      state.prefs.library = value;
+      state.coverCache.clear();
+      await preferences();
+      if (!state.browseRoot) await loadLibrary();
+      return;
+    }
+    if (n.id === 'usb-drive') {
+      const value = n.value;
+      updateLocation();
+      if (value === 'add') {
+        await handlers['add-drive']();
+        return;
+      }
+      if (value === 'manage') {
+        await manageRoots('drives');
+        return;
+      }
+      if (!value || value === state.prefs.destination) return;
+      state.prefs.destination = value;
+      await preferences();
+      if (state.browseRoot) await switchLibrary(value);
+      else await loadLibrary();
+      return;
+    }
+    if (n.id === 'information-choice') renderInformationMatchPreview();
+    if (n.dataset.categoryHidden !== undefined)
+      state.categoryDraft.categories[Number(n.dataset.categoryHidden)].hidden = n.checked;
+    if (n.dataset.categoryRole !== undefined)
+      state.categoryDraft.defaults[n.dataset.categoryRole] = n.value;
+    if (n.id === 'cheat-profile') {
+      state.cheatProfile = Number(n.value);
+      cheatDialog();
+    }
+    if (n.dataset.profileKey) {
+      const db = databaseDraft();
+      db.profiles[state.cheatProfile][n.dataset.profileKey] =
+        n.dataset.profileKey === 'size' ? Number(n.value) : n.value;
+      writeDraft(db);
+    }
+    if (n.dataset.dbField !== undefined) {
+      const db = databaseDraft();
+      db.profiles[state.cheatProfile].fields[Number(n.dataset.dbField)][n.dataset.key] =
+        n.dataset.key === 'label' ? n.value : Number(n.value);
+      writeDraft(db);
+    }
+    if (n.dataset.dbPreset !== undefined) {
+      const db = databaseDraft();
+      db.profiles[state.cheatProfile].presets[Number(n.dataset.dbPreset)][n.dataset.key] =
+        n.dataset.key === 'label' ? n.value : Number(n.value);
+      writeDraft(db);
+    }
+    if (n.id === 'library-search-scope') {
+      state.filter.searchScope = n.value;
+      state.anchor = null;
+      rememberLibraryView();
+      render();
+    }
+    if (n.id === 'library-information') {
+      state.filter.information = n.value;
+      state.anchor = null;
+      rememberLibraryView();
+      render();
+    }
+    if (n.id === 'library-media') {
+      state.filter.media = n.value;
+      state.anchor = null;
+      rememberLibraryView();
+      render();
+    }
+    if (n.id === 'library-region') {
+      state.filter.region = n.value;
+      state.anchor = null;
+      rememberLibraryView();
+      render();
+    }
+    if (n.id === 'quick-scan') {
+      state.prefs.quick = n.checked;
+      await preferences();
+    }
+    if (n.id === 'pref-developer') {
+      state.prefs.developer_mode = n.checked;
+      await developerPreferences();
+    }
+    if (n.id === 'developer-directory') {
+      state.prefs.developer_updates_directory = n.value.trim();
+      await developerPreferences();
+    }
+    if (n.id === 'pref-text-scale') {
+      state.prefs.text_scale = textScale(n.value);
+      applyTheme();
+      await preferences();
+    }
+    if (n.id === 'pref-theme') {
+      state.prefs.theme = n.value;
+      applyTheme();
+      await preferences();
+    }
+    if (n.id === 'pref-software') {
+      state.prefs.software_rendering = n.checked;
+      await preferences();
+    }
+    if (n.id === 'pref-offline') {
+      state.prefs.offline = n.checked;
+      await preferences();
+    }
+    if (n.id === 'version-root') {
+      state.versionTarget = n.value;
+      await refreshInstalledVersions();
+      render();
+    }
+    if (n.id === 'pref-update-notices') {
+      state.prefs.hide_update_notifications = !n.checked;
+      await preferences();
+      renderUpdateNotice();
+    }
+    if (n.id === 'pref-updates') {
+      state.prefs.disable_update_checks = !n.checked;
+      await preferences();
+    }
+    if (n.id === 'media-game') {
+      state.mediaDisc = n.value;
+      render();
+    }
+    if (n.dataset.importCheck !== undefined) {
+      state.plan = await call('edit_import', {
+        index: Number(n.dataset.importCheck),
+        selected: n.checked,
+      });
+      render();
+    }
+    if (n.dataset.importCategory !== undefined && n.value) {
+      state.plan = await call('edit_import', {
+        index: Number(n.dataset.importCategory),
+        category: n.value,
+      });
+      render();
+    }
+    if (n.dataset.cheatField !== undefined) {
+      await commitHex();
+      state.backup = await call('backup_edit', {
+        index: state.entryIndex,
+        field: Number(n.dataset.cheatField),
+        value: Number(n.value),
+      });
+      state.entry = await call('backup_entry', { index: state.entryIndex });
+      render();
+    }
+    if (n.id === 'copy-verify' && state.copy) {
+      state.copy = null;
+      renderCopyDialog();
+    }
+  });
+});
+document.addEventListener('focusin', (event) => {
+  const game = event.target.closest('[data-game]');
+  if (game) {
+    state.focusedGame = game.dataset.game;
+    const previous = document.querySelector('[data-game][tabindex="0"]');
+    if (previous && previous !== game) previous.tabIndex = -1;
+    game.tabIndex = 0;
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (trapDialogTab(event)) return;
+  if (
+    event.target.matches('[data-game]') &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    moveGameFocus(event.target, event.key)
+  ) {
+    event.preventDefault();
+    return;
+  }
+  if (event.target.matches('input,textarea,select')) return;
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === 'a' &&
+    state.page === 'library' &&
+    !document.querySelector('dialog[open]')
+  ) {
+    event.preventDefault();
+    handlers['select-shown']();
+  }
+  if (
+    event.key === 'Escape' &&
+    !document.querySelector('dialog[open]') &&
+    state.page === 'library'
+  ) {
+    state.selected.clear();
+    render();
+  }
+});
+async function prepareClose() {
+  if (state.busy) {
+    toast('Wait for the current operation or cancel it before closing.');
+    return false;
+  }
+  if (
+    hasInformationChanges() &&
+    !(await confirmAction(
+      'Unsaved game information',
+      'Discard your information edits and close the app?',
+      'Discard and close',
+      true,
+    ))
+  )
+    return;
+  if (!(await resolveDirty())) return;
+  if (
+    state.cheatsDirty &&
+    !(await confirmAction(
+      'Unsaved cheat database',
+      'Discard unsaved database edits and close the app?',
+      'Discard and close',
+      true,
+    ))
+  )
+    return;
+  await flushLibraryView();
+  return true;
+}
+async function closeApp() {
+  if (await prepareClose()) await call('quit');
+}
+async function init() {
+  const initial = await call('init');
+  state.prefs = initial.prefs;
+  rememberRoots();
+  state.updateReport = initial.args.includes('--update-ready') ? null : initial.update_report;
+  applyTheme();
+  state.version = initial.version;
+  categories.splice(0, categories.length, ...initial.categories);
+  shell();
+  await listen('operation-progress', ({ payload }) => dialogProgress.updateProgress(payload));
+  await listen('progress', ({ payload }) => {
+    recordActivity(payload);
+    setStatus(String(payload));
+  });
+  let busyFocus = null;
+  await listen('busy', ({ payload }) => {
+    if (payload && !state.busy) busyFocus = document.activeElement;
+    state.busy = payload;
+    document.body.classList.toggle('busy-ui', payload);
+    $('#content')?.setAttribute('aria-busy', String(payload));
+    if (!payload) {
+      const cancel = $('#cancel-job');
+      cancel.disabled = false;
+      cancel.textContent = 'Cancel';
+    }
+    for (const n of document.querySelectorAll('button,input,select,textarea')) {
+      if (['cancel', 'logs', 'close-dialog'].includes(n.dataset.action)) continue;
+      if (payload) {
+        n.dataset.busyLock = n.disabled ? '1' : '0';
+        n.disabled = true;
+      } else if (n.dataset.busyLock !== undefined) {
+        n.disabled = n.dataset.busyLock === '1';
+        delete n.dataset.busyLock;
+      }
+      if (n.closest('dialog')?.dataset.operationBusy === 'true') n.disabled = true;
+    }
+    if (!payload && busyFocus?.isConnected && !busyFocus.disabled) {
+      const dialogs = [...document.querySelectorAll('dialog[open]')];
+      if (!dialogs.length || busyFocus.closest('dialog') === dialogs.at(-1))
+        busyFocus.focus({ preventScroll: true });
+      busyFocus = null;
+    }
+    $('#busy-dot').classList.toggle('hidden', !payload);
+    $('#cancel-job').classList.toggle('hidden', !payload);
+  });
+  await listen('close-requested', () => perform(closeApp));
+  await listen('tauri://drag-drop', ({ payload }) => {
+    if (state.busy || state.browseRoot) return;
+    state.paths = [...new Set([...state.paths, ...payload.paths])];
+    state.plan = null;
+    state.page = 'import';
+    render();
+  });
+  const args = initial.args;
+  const arg = (flag) => {
+    const i = args.indexOf(flag);
+    return i >= 0 ? args[i + 1] : null;
+  };
+  if (!args.includes('--update-exit')) await perform(loadLibrary);
+  await perform(refreshDriveStatus);
+  window.addEventListener('focus', () => {
+    if (!state.busy) perform(refreshDriveStatus);
+  });
+  if (args.includes('--guided-setup')) state.page = 'drive';
+  if (arg('--tab'))
+    state.page = ['library', 'import', 'media', 'drive', 'settings'][
+      Math.max(0, Math.min(4, Number(arg('--tab')) - 1))
+    ];
+  if (arg('--save-slots')) {
+    state.page = 'saves';
+    state.slotDirectory = arg('--save-slots');
+    await perform(refreshSlots);
+  }
+  if (arg('--save-backup')) await perform(() => openBackup(arg('--save-backup')));
+  render();
+  await call('ready');
+  if (arg('--update-failed') && !state.updateReport)
+    toast(
+      `The desktop update failed. Keep the recovery files. Log: ${arg('--update-failed')}`,
+      true,
+    );
+  if (
+    !args.includes('--update-exit') &&
+    (!state.prefs.offline || state.prefs.developer_mode) &&
+    !state.prefs.disable_update_checks
+  )
+    perform(() => checkUpdates(true));
+}
+init().catch((error) => {
+  document.getElementById('app').textContent = `Oh My 3DO could not initialize: ${error}`;
+});
+
+async function inspectWriteDrive(root) {
+  const d = await call('drive_inspect', { root });
+  if (d.mismatch)
+    throw new Error(
+      `A different drive is mounted here. Expected ${d.expected.name}. Check and remember this drive in Drive setup first.`,
+    );
+  return d;
+}
+function showGameDetails(key = [...state.selected][0]) {
+  const group = state.groups.find((g) => g.key === key);
+  if (!group) return;
+  const record = state.records.find((r) => group.discs.includes(r.path));
+  const m = record?.metadata || {};
+  const source = m.description_source || m.source;
+  dialog(
+    group.title,
+    `<dl>${[
+      ['Region', group.region],
+      ['Genre', m.genre],
+      ['Developer', m.developer],
+      ['Publisher', m.publisher],
+      ['Released', m.release_date || m.year],
+      ['Players', m.players],
+    ]
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}${informationDetailBadge(record, k)}</dd>`)
+      .join(
+        '',
+      )}</dl>${informationDetailBadge(record, 'Description')}<p class="game-description">${e(m.description || m.overview || 'No description available. Prepare missing media or edit this game’s information.')}</p><details><summary>Disc files</summary>${group.discs.map((p) => `<p class="path">${pathLabel(p)}</p>`).join('')}</details>${source ? `<p class="note">Description source: ${e(source === 'https://gamesdb.launchbox-app.com/Metadata.zip' ? 'LaunchBox' : source)}</p>` : ''}`,
+    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"') +
+      (state.browseRoot
+        ? ''
+        : action(
+            'game-info-edit',
+            'Edit information…',
+            'primary',
+            `data-game-key="${e(group.key)}"`,
+          )),
+  );
+}
+const informationFields = [
+  ['description', 'Description'],
+  ['genre', 'Genre'],
+  ['developer', 'Developer'],
+  ['publisher', 'Publisher'],
+  ['release_date', 'Release date'],
+  ['year', 'Release year'],
+  ['players', 'Players'],
+];
+function informationPatch() {
+  if (!state.informationEditor) return {};
+  const edit = state.informationEditor;
+  return Object.fromEntries(
+    informationFields
+      .map(([key]) => [key, $(`#game-info-${key}`)?.value])
+      .filter(
+        ([key, value]) =>
+          !edit.restoreFields?.has(key) &&
+          value !== undefined &&
+          (edit.bulk ? $(`[data-info-apply="${key}"]`)?.checked : value !== edit.fields[key]),
+      ),
+  );
+}
+function hasInformationChanges() {
+  return (
+    Object.keys(informationPatch()).length > 0 || !!state.informationEditor?.restoreFields?.size
+  );
+}
+function informationLabel(key, label) {
+  return `<span class="row spread"><label for="game-info-${key}">${label} <small class="badge hidden" data-info-marker="${key}"></small><small data-info-restored="${key}" class="hidden"> · Downloaded value staged</small></label>${action('game-info-restore', 'Restore downloaded', 'quiet small', `data-field="${key}" aria-label="Restore downloaded ${e(label.toLowerCase())}"`)}</span>`;
+}
+async function openInformationEditor(key) {
+  const group = state.groups.find((g) => g.key === key);
+  if (!group) throw new Error('Game selection changed.');
+  const view = await call('game_info_load', { discs: group.discs });
+  state.informationEditor = { ...view, key, restoreFields: new Set() };
+  const d = dialog(
+    'Edit ' + group.title,
+    `<p>Changed fields apply to all ${quantity(group.discs.length, 'disc')} in this game. Your edits are kept when downloading information later.</p><div class="row section">${action('game-info-restore', 'Restore downloaded information…', 'small', 'data-field="all"')}</div><div class="field">${informationLabel('description', 'Description')}<textarea id="game-info-description" rows="7" aria-label="Game description">${e(view.fields.description)}</textarea></div><div class="form-grid">${informationFields
+      .slice(1)
+      .map(
+        ([key, label]) =>
+          `<div class="field">${informationLabel(key, label)}<input id="game-info-${key}" aria-label="${label}" ${key === 'year' || key === 'players' ? `type="number" min="1" max="${key === 'year' ? 9999 : 64}"` : ''} value="${e(view.fields[key])}"></div>`,
+      )
+      .join(
+        '',
+      )}</div><p class="note">Restore previews downloaded values before saving and lets future downloads update those fields again. Fields not supplied by LaunchBox are kept. Copy the games to update your console drive. Undo is available in Settings & tools.</p>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="game-info-dialog"') +
+      action('game-info-save', 'Save information', 'primary'),
+    'game-info-dialog',
+  );
+  d.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    if (!state.busy)
+      perform(() => handlers['close-dialog']({ dataset: { dialog: 'game-info-dialog' } }));
+  });
+  markInformationRestores();
+}
+function markInformationRestores() {
+  const edit = state.informationEditor;
+  if (!edit) return;
+  const patch = informationPatch();
+  document
+    .querySelectorAll('[data-info-restored]')
+    .forEach((n) => n.classList.toggle('hidden', !edit.restoreFields?.has(n.dataset.infoRestored)));
+  document.querySelectorAll('[data-info-marker]').forEach((n) => {
+    const key = n.dataset.infoMarker,
+      count = edit.records.filter((r) => Object.hasOwn(r.overrides || {}, key)).length;
+    const text = edit.restoreFields?.has(key)
+      ? ''
+      : Object.hasOwn(patch, key)
+        ? 'Edited on save'
+        : count === edit.records.length
+          ? 'Edited'
+          : count
+            ? 'Some discs edited'
+            : '';
+    n.textContent = text;
+    n.classList.toggle('hidden', !text);
+    n.title = 'Manual edits are protected from downloaded updates.';
+  });
+}
+function informationValue(value) {
+  return value === null || value === undefined ? '' : String(value);
+}
+function informationDetailBadge(record, label) {
+  const keys =
+    {
+      Description: ['description'],
+      Genre: ['genre'],
+      Developer: ['developer'],
+      Publisher: ['publisher'],
+      Released: ['release_date', 'year'],
+      Players: ['players'],
+    }[label] || [];
+  return keys.some((k) => Object.hasOwn(record?.metadata_overrides || {}, k))
+    ? ' <span class="badge" title="Protected from downloaded updates">Edited</span>'
+    : '';
+}
+async function openBulkInformationEditor() {
+  const discs = selectedDiscs(state.groups, state.selected);
+  if (!discs.length) throw new Error('Select games first.');
+  const view = await call('game_info_load', { discs });
+  const gameCount = state.selected.size;
+  state.informationEditor = { ...view, bulk: true, gameCount, restoreFields: new Set() };
+  const d = dialog(
+    'Edit selected games',
+    `<p>Choose which shared fields to apply to ${gameCount} games (${quantity(discs.length, 'disc')}). Unchecked fields and each game’s description are kept. Checking Apply with a blank value clears that field.</p><div class="form-grid">${informationFields
+      .slice(1)
+      .map(([key, label]) => {
+        const values = view.records.map((r) => informationValue(r.metadata?.[key]));
+        const same = new Set(values).size === 1;
+        return `<div class="field"><label class="row"><input type="checkbox" data-info-apply="${key}">Apply ${e(label.toLowerCase())} <small class="badge hidden" data-info-marker="${key}"></small></label><input id="game-info-${key}" aria-label="${label}" disabled ${key === 'year' || key === 'players' ? `type="number" min="1" max="${key === 'year' ? 9999 : 64}"` : ''} placeholder="${same ? '' : 'Mixed values — choose a shared value'}" value="${same ? e(values[0]) : ''}"></div>`;
+      })
+      .join(
+        '',
+      )}</div><p class="note">Applied values become manual edits protected from future downloads. You can undo the entire change in Settings & tools.</p>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="game-info-dialog"') +
+      action('game-info-save', 'Save information', 'primary'),
+    'game-info-dialog',
+  );
+  d.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    if (!state.busy)
+      perform(() => handlers['close-dialog']({ dataset: { dialog: 'game-info-dialog' } }));
+  });
+  markInformationRestores();
+}
+function informationTools() {
+  dialog(
+    'Metadata tools',
+    `<div class="metadata-tools stack"><section><h3>Match game information</h3><p>Review unmatched games or change an existing LaunchBox match.</p>${action('information-matches', 'Review information matches…')}</section><section><h3>Back up custom edits</h3><p>Export your edits, including cleared fields, or review an import before applying it.</p><div class="row">${action('information-export', 'Export all…', '', 'data-scope="all"')}${action('information-export', `Export selected… (${state.selected.size})`, '', `data-scope="selected" ${state.selected.size ? '' : 'disabled'}`)}${action('information-import-preview', 'Import metadata…')}</div></section><section><h3>Automatic backups</h3><p>Review the five most recent snapshots saved on this computer.</p>${action('information-backups', 'Automatic metadata backups…')}</section></div><p class="note">Manual edits are protected from downloads. Metadata imports and match changes support Undo.</p>`,
+    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+  );
+}
+async function exportInformation(selected) {
+  const discs = selected ? selectedDiscs(state.groups, state.selected) : [];
+  if (selected && !discs.length) throw new Error('Select games first.');
+  const target = await pick('metadata_save');
+  if (!target) return;
+  const result = await call('game_info_export', { target, discs });
+  toast(`Exported custom metadata for ${quantity(result.count, 'disc')}.`);
+}
+async function previewInformationImport() {
+  const file = await pick('metadata');
+  if (!file) return;
+  const preview = await call('game_info_import_preview', { file });
+  showInformationImport(preview, file);
+}
+function showInformationImport(preview, file) {
+  state.informationImport = preview;
+  dialog(
+    'Review custom metadata import',
+    `<p>${pathLabel(file)}</p><p>Changes found for ${quantity(preview.records.length, 'disc')}. Select the entries to import, then review their fields below.</p><p class="note">Entries that replace different manual edits start unchecked. Check them only if you want the imported values. Other fields are kept.</p><div class="stack">${preview.records
+      .map(
+        (r, index) =>
+          `<section class="card"><label class="row"><input type="checkbox" data-info-import="${index}" ${r.conflicts.length ? '' : 'checked'}><strong>${e(r.title)}</strong>${r.conflicts.length ? '<span class="badge warning">Replaces manual edits</span>' : ''}</label><p class="note path">${pathLabel(r.path)}<br>${e(r.matching)}${r.path !== r.source_path ? ` · From ${pathLabel(r.source_path)}` : ''}</p><details ${index === 0 ? 'open' : ''}><summary>Review ${quantity(Object.keys(r.fields).length, 'field')}${r.conflicts.length ? ' · ' + r.conflicts.length + ' manual edits differ' : ''}</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Imported</th></tr></thead><tbody>${Object.entries(
+            r.fields,
+          )
+            .map(
+              ([key, value]) =>
+                `<tr><td>${e(informationFields.find(([k]) => k === key)?.[1] || key)}${r.conflicts.includes(key) ? ' <span class="badge warning">Edited</span>' : ''}</td><td><div class="game-description">${e(informationValue(key === 'description' ? r.original.metadata?.description || r.original.metadata?.overview : r.original.metadata?.[key]) || '(Empty)')}</div></td><td><div class="game-description">${e(informationValue(value) || '(Empty — clears this field)')}</div></td></tr>`,
+            )
+            .join('')}</tbody></table></div></details></section>`,
+      )
+      .join(
+        '',
+      )}</div>${preview.skipped.length ? `<details class="section"><summary>${preview.skipped.length} skipped entries</summary><ul>${preview.skipped.map((text) => `<li>${e(text)}</li>`).join('')}</ul></details>` : ''}<p class="note">Importing saves the checked fields as manual edits. Copy the affected games afterward to update your console drive. Undo is available in Settings & tools.</p>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
+      action(
+        'information-import-save',
+        'Import checked entries',
+        'primary',
+        'id="information-import-save"',
+      ),
+  );
+  updateInformationImportButton();
+}
+function updateInformationImportButton() {
+  const button = $('#information-import-save'),
+    count = document.querySelectorAll('[data-info-import]:checked').length;
+  if (button) {
+    button.disabled = !count;
+    button.textContent = count
+      ? `Import ${count} ${count === 1 ? 'disc' : 'discs'}`
+      : 'Select entries to import';
+  }
+}
+async function openInformationMatches() {
+  state.informationMatches = await call('game_info_matches');
+  const d = state.informationMatches;
+  const unmatched = d.records.filter(
+    (r) => !['Automatic match', 'Chosen match'].includes(d.status[r.path]),
+  ).length;
+  dialog(
+    'Review information matches',
+    `<p>${quantity(unmatched, 'disc')} ${unmatched === 1 ? 'needs' : 'need'} a match. Choose the correct LaunchBox title to preview and apply its information. Manual edits are kept. Chosen matches are remembered for future information downloads and missing-media preparation.</p><div class="row"><input id="information-match-query" type="search" placeholder="Find a library game…" aria-label="Find a game to match"><label><input type="checkbox" id="information-match-all"> Show matched games too</label></div><div id="information-match-list" class="stack section"></div><p class="note">This changes information only. Disc identification, folder names, game files and media associations are kept. Cached LaunchBox information works offline. Undo is available in Settings & tools.</p>`,
+    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+  );
+  renderInformationMatchList();
+}
+function renderInformationMatchList() {
+  const target = $('#information-match-list'),
+    review = state.informationMatches;
+  if (!target || !review) return;
+  const query = ($('#information-match-query')?.value || '').trim().toLocaleLowerCase(),
+    all = $('#information-match-all')?.checked;
+  const games = groupGames(review.records).filter(
+    (g) =>
+      (!query || g.title.toLocaleLowerCase().includes(query)) &&
+      (all || g.discs.some((p) => !['Automatic match', 'Chosen match'].includes(review.status[p]))),
+  );
+  target.innerHTML = games.length
+    ? games
+        .map(
+          (g) =>
+            `<div class="card row spread"><div><strong>${e(g.title)}</strong><p class="note">${e(g.region)} · ${e([...new Set(g.discs.map((p) => review.status[p]))].join('; '))} · ${quantity(g.discs.length, 'disc')}</p></div>${action('information-match-game', 'Choose match…', 'small', `data-key="${e(g.key)}"`)}</div>`,
+        )
+        .join('')
+    : '<p>No games match this view. Clear the search or enable Show matched games too.</p>';
+}
+function openInformationMatch(key) {
+  const review = state.informationMatches,
+    game = groupGames(review.records).find((g) => g.key === key);
+  if (!game) throw new Error('Review information matches again.');
+  state.informationMatchGame = game;
+  state.informationMatchChoice = '';
+  dialog(
+    'Choose information for ' + game.title,
+    `<p>Applies to ${quantity(game.discs.length, 'disc')}. Check the description, release year and publisher before choosing a match.</p><label class="field">Search LaunchBox titles<input id="information-choice-query" type="search" placeholder="Search the downloaded 3DO titles…"></label><label class="field">LaunchBox title<select id="information-choice" size="8" aria-label="LaunchBox title"></select></label><p class="note" id="information-choice-count"></p><div id="information-match-preview"></div>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="information-match-dialog"') +
+      action(
+        'information-match-save',
+        'Use this match',
+        'primary',
+        'id="information-match-save" disabled',
+      ),
+    'information-match-dialog',
+  );
+  renderInformationChoices();
+}
+function renderInformationChoices() {
+  const target = $('#information-choice');
+  if (!target) return;
+  const query = ($('#information-choice-query')?.value || '').trim().toLocaleLowerCase();
+  const choices = state.informationMatches.choices.filter(
+    (m) => !query || String(m.title).toLocaleLowerCase().includes(query),
+  );
+  target.innerHTML =
+    option('', 'Choose a LaunchBox title', true) +
+    choices
+      .map((m) =>
+        option(
+          m.launchbox_id,
+          [m.title, m.year, m.publisher, 'ID ' + m.launchbox_id].filter(Boolean).join(' · '),
+          false,
+        ),
+      )
+      .join('');
+  state.informationMatchChoice = '';
+  $('#information-choice-count').textContent = `${choices.length} matching LaunchBox titles.`;
+  renderInformationMatchPreview();
+}
+function renderInformationMatchPreview() {
+  const review = state.informationMatches,
+    id = $('#information-choice')?.value || '',
+    meta = review?.choices.find((m) => m.launchbox_id === id);
+  state.informationMatchChoice = id;
+  const target = $('#information-match-preview'),
+    button = $('#information-match-save');
+  if (button) button.disabled = !meta;
+  if (!target) return;
+  if (!meta) {
+    target.innerHTML =
+      '<p class="note">Choose a title to preview the changes. No files have been changed.</p>';
+    return;
+  }
+  const game = state.informationMatchGame,
+    records = review.records.filter((r) => game.discs.includes(r.path));
+  target.innerHTML = `<h3>${e(meta.title)}</h3><p class="note">${e([meta.year, meta.publisher, meta.developer].filter(Boolean).join(' · '))} · LaunchBox ID ${e(id)}</p>${records
+    .map(
+      (r, index) =>
+        `<details ${index === 0 ? 'open' : ''}><summary>${pathLabel(r.path)}</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Downloaded</th></tr></thead><tbody>${informationFields
+          .map(([key, label]) => {
+            const current =
+                key === 'description'
+                  ? r.metadata?.description || r.metadata?.overview
+                  : r.metadata?.[key],
+              value = meta[key],
+              manual = Object.hasOwn(r.metadata_overrides || {}, key),
+              supplied = value !== null && value !== undefined && String(value).trim() !== '';
+            return `<tr><td>${e(label)}</td><td><div class="game-description">${e(informationValue(current) || '(Empty)')}</div></td><td><div class="game-description">${manual ? '<span class="badge">Manual edit kept</span>' : supplied ? e(informationValue(value)) : 'Not supplied — current value kept'}</div></td></tr>`;
+          })
+          .join('')}</tbody></table></div></details>`,
+    )
+    .join(
+      '',
+    )}<p class="note">Using this match saves downloaded fields immediately and remembers the LaunchBox entry. Manual edits remain protected; use Restore downloaded in the information editor to remove an override.</p>`;
+}
+async function saveInformationMatch() {
+  const review = state.informationMatches,
+    game = state.informationMatchGame,
+    id = state.informationMatchChoice;
+  if (!review || !game || !id) throw new Error('Choose and preview a LaunchBox title first.');
+  await call('game_info_choose_match', { token: review.token, discs: game.discs, id });
+  state.informationMatches = null;
+  closeDialog('information-match-dialog');
+  closeDialog();
+  await loadLibrary();
+  toast(
+    'Information match saved. Future downloads will use this entry. Copy the games to update your console drive.',
+  );
+}
+async function showInformationBackups() {
+  const result = await call('game_info_backups');
+  dialog(
+    'Automatic metadata backups',
+    `<p>The five newest distinct snapshots of your custom edits are kept for this library. Snapshots are saved before library changes, including metadata edits and updates, imports, media preparation, category changes and Undo.</p><p class="note">Snapshots stay on this computer and are independent of Undo. Restoring opens the normal import review, where you choose entries and resolve conflicts. Only manual information fields are backed up.</p><p class="path">${pathLabel(result.directory)}</p><div class="stack">${result.backups.length ? result.backups.map((b) => `<section class="card row spread"><div><strong>${e(new Date(b.modified * 1000).toLocaleString())}</strong><p class="note">${quantity(b.entries, 'disc')} · ${bytes(b.bytes)}</p></div>${action('information-backup-preview', 'Review restore…', 'small', `data-name="${e(b.name)}"`)}</section>`).join('') : '<p>No snapshots yet. After you edit game information, a snapshot is saved before your next library change.</p>'}</div>`,
+    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
+  );
+}
+async function saveInformationImport() {
+  const plan = state.informationImport;
+  if (!plan) throw new Error('Review a metadata import first.');
+  const discs = [...document.querySelectorAll('[data-info-import]:checked')].map(
+    (n) => plan.records[Number(n.dataset.infoImport)].path,
+  );
+  if (!discs.length) throw new Error('Check at least one entry to import.');
+  await call('game_info_import', { token: plan.token, discs });
+  state.informationImport = null;
+  closeDialog();
+  await loadLibrary();
+  toast(
+    `Imported custom metadata for ${quantity(discs.length, 'disc')}. Copy the games to update your console drive.`,
+  );
+}
+async function previewInformationRestore(field) {
+  const edit = state.informationEditor;
+  if (!edit) throw new Error('Open the information editor first.');
+  if (!edit.restorePreview)
+    edit.restorePreview = await call('game_info_restore_preview', { original: edit.records });
+  const preview = edit.restorePreview,
+    keys = field === 'all' ? informationFields.map(([key]) => key) : [field];
+  edit.restoreRequested = keys.filter((k) => preview.available.includes(k));
+  const patch = informationPatch();
+  const rows = keys
+    .map((key) => {
+      const label = informationFields.find(([k]) => k === key)?.[1] || key;
+      const values = preview.records.map((r, i) => {
+        const old = edit.records[i]?.metadata || {};
+        const current = edit.restoreFields.has(key)
+          ? informationValue(r.fields[key])
+          : Object.hasOwn(patch, key)
+            ? patch[key]
+            : informationValue(key === 'description' ? old.description || old.overview : old[key]);
+        return { path: r.path, current, downloaded: informationValue(r.fields[key]) };
+      });
+      const same = new Set(values.map((v) => JSON.stringify([v.current, v.downloaded]))).size === 1;
+      return (same ? values.slice(0, 1) : values)
+        .map(
+          (v) =>
+            `<tr><td>${e(label)}${!same ? `<small class="path">${pathLabel(v.path)}</small>` : ''}</td><td><div class="game-description">${e(v.current || '(Empty)')}</div></td><td><div class="game-description">${preview.available.includes(key) ? e(v.downloaded) : 'Not supplied for every disc — kept'}</div></td></tr>`,
+        )
+        .join('');
+    })
+    .join('');
+  dialog(
+    'Restore downloaded information',
+    `<p>Review the LaunchBox values below. Choose Use downloaded values, then Save information in the editor to finish. Restored fields can receive future downloaded updates.</p><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current / draft</th><th>Downloaded</th></tr></thead><tbody>${rows}</tbody></table></div><p class="note">Applies to ${quantity(edit.records.length, 'disc')}. Unavailable fields and your other edits are kept.</p>`,
+    action('close-dialog', 'Cancel', '', 'data-dialog="game-info-restore-dialog"') +
+      action(
+        'game-info-stage-restore',
+        'Use downloaded values',
+        'primary',
+        !edit.restoreRequested.length ? 'disabled' : '',
+      ),
+    'game-info-restore-dialog',
+  );
+}
+function stageInformationRestore() {
+  const edit = state.informationEditor;
+  if (!edit?.restorePreview) return;
+  for (const key of edit.restoreRequested) {
+    const input = $(`#game-info-${key}`);
+    if (input) {
+      input.value = informationValue(edit.restorePreview.records[0].fields[key]);
+      edit.restoreFields.add(key);
+    }
+  }
+  markInformationRestores();
+  closeDialog('game-info-restore-dialog');
 }
