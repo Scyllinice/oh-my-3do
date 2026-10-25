@@ -871,11 +871,11 @@ static void text(Menu *menu, int x, int y, const char *string, Color color)
 #endif
 
     /*
-     * Each call takes the next cache slot in order, and finds its picture
-     * already made if that slot last held the same text. text_cursor only
-     * goes back to 0 where a screen resets it (the "Reading folder" notice),
-     * so once every slot is used, the last slot serves all later calls and
-     * their text is rendered again each time.
+     * Each call takes the next cache slot in order. Every screen's drawing
+     * code sets text_cursor back to 0 before it starts, so a screen that
+     * draws the same labels in the same order finds each one already made.
+     * (Playback's few labels use the last 16 slots instead; see draw().)
+     * Past the cache's end, the last slot is reused.
      */
     cached = &menu->text_cache[menu->text_cursor < UI_TEXT_CACHE ? menu->text_cursor++
                                                                  : UI_TEXT_CACHE - 1];
@@ -1877,7 +1877,10 @@ static void media_placeholder(Menu *menu, int folder)
           UI_FONT_SMALL);
 }
 
-/* Count a streamed frame decoded for display, and frames passed over. */
+/* ==== Playing previews ==== */
+
+/* Counts a streamed frame decoded for display, and frames passed over, for
+ * diagnostics. */
 static void stream_shown(Menu *menu, unsigned long spent)
 {
     unsigned long frames = menu->stream.frame;
@@ -1896,8 +1899,9 @@ static void stream_shown(Menu *menu, unsigned long spent)
     if (spent > menu->preview_decode_max_ms)
         menu->preview_decode_max_ms = spent;
 }
-/* Decode the streamed preview up to the frame due, timing it per frame
- * decoded, also apart for passes when the reader was idle throughout. */
+/* Decodes the streamed preview up to the frame due, timing it per frame
+ * decoded: overall, apart for passes when the reader was idle throughout,
+ * and apart for full-screen frames. */
 static int decode_stream(Menu *menu, unsigned long now, int picture, unsigned char *screen)
 {
     PreviewStream *s = &menu->stream;
@@ -1920,20 +1924,22 @@ static int decode_stream(Menu *menu, unsigned long now, int picture, unsigned ch
     }
     return result;
 }
-/* The streamed preview in the browser's TV picture; full screen decodes in
- * draw_full_stream. */
+/* Advances the streamed preview in the browser's TV picture; full screen
+ * decodes in draw_full_stream instead. */
 static void advance_stream(Menu *menu, unsigned long now)
 {
     unsigned long started;
     int result;
     if (menu->preview_priming || menu->full_view)
         return;
+    /* Not due yet: just keep the sound fed. */
     if (preview_stream_due(&menu->stream, now) < menu->stream.frame) {
         preview_stream_audio(&menu->stream, now, 0);
         return;
     }
     started = now_ms(menu);
     result = decode_stream(menu, now, PREVIEW7_TV, NULL);
+    /* A missing chunk pauses the sound too, so they stay in step. */
     preview_stream_audio(&menu->stream, now, result == PREVIEW_STREAM_NOT_READY);
     if (result < 0) {
         stop_preview(menu);
@@ -1942,7 +1948,8 @@ static void advance_stream(Menu *menu, unsigned long now)
     }
     stream_shown(menu, now_ms(menu) - started);
 }
-/* Advance the playing preview to the frame due now, looping audio with it. */
+/* Advances the playing preview to the frame due now, looping the sound
+ * with it. */
 static void advance_preview(Menu *menu, unsigned long now)
 {
     unsigned long elapsed, tick;
@@ -1953,6 +1960,7 @@ static void advance_preview(Menu *menu, unsigned long now)
     }
     if (menu->preview_priming || !menu->preview_cel || !menu->preview.table)
         return;
+    /* The frame due: elapsed ms * fps / 1000, without overflowing. */
     elapsed = now - menu->preview_since;
     tick = (elapsed / 1000) * menu->preview.fps + ((elapsed % 1000) * menu->preview.fps) / 1000;
     if (tick >= menu->preview.frames) {
@@ -1963,6 +1971,7 @@ static void advance_preview(Menu *menu, unsigned long now)
             preview_audio_restart(&menu->preview_audio);
     }
     frame = (unsigned int)tick;
+    /* Decode it if it is a new frame, counting any passed over. */
     if (frame != menu->preview_frame) {
         unsigned long decode_started = now_ms(menu), spent;
         int decoded;
@@ -1987,6 +1996,8 @@ static void advance_preview(Menu *menu, unsigned long now)
             menu->preview_decode_max_ms = spent;
     }
 }
+/* ==== Folders that act as games, and game details ==== */
+
 /* The current folder below the volume, as the metadata index spells paths,
  * with a trailing '/' (empty at the top). Returns its length, or -1 when it
  * and room more bytes do not fit. */
@@ -2021,7 +2032,8 @@ static size_t metadata_folder_game(Menu *menu, const char *prefix, const char **
     size_t used = strlen(prefix), low = 0, high = menu->metadata.count, count = 0, position, i;
     if (used >= sizeof(probe))
         return 0;
-    /* The index is sorted, so everything inside the folder is one run. */
+    /* The index is sorted, so everything inside the folder is one run:
+     * binary search for where the run starts. */
     while (low < high) {
         size_t mid = low + (high - low) / 2;
         if (menu_path_compare(menu->metadata.entries[mid].path, prefix) < 0)
@@ -2029,6 +2041,8 @@ static size_t metadata_folder_game(Menu *menu, const char *prefix, const char **
         else
             high = mid;
     }
+    /* Collect the discs directly in the folder; any deeper path means the
+     * folder holds subfolders of games, so it is an ordinary folder. */
     for (i = low; i < menu->metadata.count; ++i) {
         const char *path = menu->metadata.entries[i].path;
         if (strlen(path) <= used)
@@ -2054,6 +2068,7 @@ static size_t metadata_folder_game(Menu *menu, const char *prefix, const char **
     }
     if (!count)
         return 0;
+    /* Several discs: they must form one complete set (Disc 1, 2, ...). */
     memset(&listing, 0, sizeof(listing));
     listing.entries = pointers;
     listing.count = count;
@@ -2063,7 +2078,7 @@ static size_t metadata_folder_game(Menu *menu, const char *prefix, const char **
         discs[i] = set[i]->name;
     return count;
 }
-/* The same for a folder in the current listing. */
+/* metadata_folder_game for a folder in the current listing. */
 static size_t resolve_folder_game(Menu *menu, const MenuEntry *entry, const char **discs)
 {
     static char prefix[9217];
@@ -2077,8 +2092,14 @@ static size_t resolve_folder_game(Menu *menu, const MenuEntry *entry, const char
     strcat(prefix, "/");
     return metadata_folder_game(menu, prefix, discs);
 }
-/* Cached pointers borrow their listing/index storage. Invalidate before either
- * owner is released, and after an index reload even if malloc reused its address. */
+/*
+ * The cached GameLookup for an entry, making one (and working out whether a
+ * folder acts as a game) if needed. The cached pointers point into the
+ * listing and the metadata index, so the whole cache is dropped whenever
+ * either might have changed: a new listing, a reloaded index (even if
+ * malloc happened to reuse its address, since the count is compared too) or
+ * another folder.
+ */
 static GameLookup *game_lookup(Menu *menu, const MenuEntry *entry)
 {
     GameLookup *lookup;
@@ -2105,6 +2126,8 @@ static GameLookup *game_lookup(Menu *menu, const MenuEntry *entry)
         lookup->count = resolve_folder_game(menu, entry, lookup->discs);
     return lookup;
 }
+/* For a folder acting as a game, fills `discs` with its discs in play order
+ * and returns how many; 0 for an ordinary folder or a file. */
 static size_t folder_game(Menu *menu, const MenuEntry *entry, const char **discs)
 {
     GameLookup *lookup;
@@ -2146,6 +2169,7 @@ static int game_entry(Menu *menu, const MenuEntry *entry)
 {
     return entry && (!entry->is_directory || game_lookup(menu, entry)->count != 0);
 }
+/* Orders TitleHashes by hash, then by position in the list. */
 static int compare_title_hash(const void *a, const void *b)
 {
     const TitleHash *left = (const TitleHash *)a, *right = (const TitleHash *)b;
@@ -2153,8 +2177,31 @@ static int compare_title_hash(const void *a, const void *b)
         return left->hash < right->hash ? -1 : 1;
     return left->index < right->index ? -1 : left->index != right->index;
 }
-/* Compute duplicate markers once per listing, not during every movement.
- * Only a two-byte rank per visible entry survives after the temporary sort. */
+/* Sorts TitleHashes with a Shell sort; the C library's qsort took about a
+ * millisecond per entry on the console (see menu_sort.c). */
+static void sort_title_hashes(TitleHash *hashes, size_t count)
+{
+    static const size_t gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
+    size_t g, k, j;
+    for (g = 0; g < sizeof(gaps) / sizeof(gaps[0]); ++g) {
+        for (k = gaps[g]; k < count; ++k) {
+            TitleHash item = hashes[k];
+            for (j = k; j >= gaps[g] && compare_title_hash(&hashes[j - gaps[g]], &item) > 0;
+                 j -= gaps[g])
+                hashes[j] = hashes[j - gaps[g]];
+            hashes[j] = item;
+        }
+    }
+}
+
+/*
+ * The number shown after a game's title when other games in the list share
+ * it ("Doom [1]", "Doom [2]"), or 0 when its title is unique. Index is the
+ * entry's position among the shown entries.
+ *
+ * Worked out once per listing (not on every move) and kept as a 2-byte rank
+ * per shown entry.
+ */
 static unsigned int title_variant(Menu *menu, size_t index)
 {
     static char first[ODE_MAX_NAME], other[ODE_MAX_NAME];
@@ -2199,19 +2246,9 @@ static unsigned int title_variant(Menu *menu, size_t index)
             hashes[n].hash = hash;
             hashes[n++].index = i;
         }
-        {
-            /* A shell sort; the C library's qsort took ~1 ms per entry. */
-            static const size_t gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
-            size_t g, k;
-            for (g = 0; g < sizeof(gaps) / sizeof(gaps[0]); ++g)
-                for (k = gaps[g]; k < n; ++k) {
-                    TitleHash item = hashes[k];
-                    for (j = k; j >= gaps[g] && compare_title_hash(&hashes[j - gaps[g]], &item) > 0;
-                         j -= gaps[g])
-                        hashes[j] = hashes[j - gaps[g]];
-                    hashes[j] = item;
-                }
-        }
+        sort_title_hashes(hashes, n);
+
+        /* For each group of entries sharing a name hash... */
         for (i = 0; i < n; i = end) {
             size_t games = i;
             for (end = i + 1; end < n && hashes[end].hash == hashes[i].hash; ++end) {
@@ -2227,7 +2264,8 @@ static unsigned int title_variant(Menu *menu, size_t index)
                     hash = (hash ^ (unsigned char)*c) * 16777619UL;
                 hashes[j].title = hash;
             }
-            /* Keep, in order, the games whose title another entry shares. */
+            /* Keep, in order, the games whose title another entry shares
+             * (moving them to the start of the group). */
             for (j = i; j < end; ++j) {
                 size_t k;
                 for (k = i; k < end && (k == j || hashes[k].title != hashes[j].title); ++k) {
@@ -2235,6 +2273,8 @@ static unsigned int title_variant(Menu *menu, size_t index)
                 if (k < end && game_entry(menu, entries[hashes[j].index]))
                     hashes[games++] = hashes[j];
             }
+            /* Number each game among those with exactly its title (the
+             * hashes could collide, so the titles are compared too). */
             for (j = i; j < games; ++j) {
                 size_t k, matches = 0, rank = 0;
                 menu_display_title(first, sizeof(first), entries[hashes[j].index]->name, 0);
@@ -2256,7 +2296,10 @@ static unsigned int title_variant(Menu *menu, size_t index)
     }
     return index < menu->title_variants_count ? menu->title_variants[index] : 0;
 }
-/* Split text into two card lines at a space; returns the first line's length. */
+/* ==== Drawing the browser ==== */
+
+/* Splits text into two title card lines at a space; returns the first
+ * line's length (the whole text if it fits, or a cut mid-word if no space). */
 static size_t card_split(const char *text, int room)
 {
     size_t length = strlen(text), fit = ui_font_fit(text, length, room, UI_FONT_SMALL), split = fit;
@@ -2266,7 +2309,12 @@ static size_t card_split(const char *text, int room)
         --split;
     return split ? split : fit;
 }
-/* One browser row; the selected row's long name scrolls over time. */
+/*
+ * Draws list row i (rows start..start+visible are on screen). The selected
+ * row is highlighted like a lit remote control key, and its long name
+ * scrolls. Rows are queued discs while the queue screen shows, otherwise
+ * "< Back" and the folder's entries; folders get a ">" at the right.
+ */
 static void draw_row(Menu *menu, size_t i, size_t start, size_t selected, int style, int row_height)
 {
     char line[24];
@@ -2307,8 +2355,8 @@ static void draw_row(Menu *menu, size_t i, size_t start, size_t selected, int st
     length = strlen(name);
     scroll_label(menu, x, y, room, name, length, style, ink, background, i == selected);
 }
-/* The whole preview on the TV's 160x120 screen. Playback redraws only this,
- * so the solid list panel is never touched. */
+/* Draws the current preview frame on the TV's 160x120 screen. Playback
+ * redraws only this, so the solid list panel is never touched. */
 static void gecko_video(Menu *menu)
 {
     CCB copy;
@@ -2330,7 +2378,9 @@ static void gecko_video(Menu *menu)
  * many fills, so after it is drawn its pixels are copied from the screen and
  * playback puts the copy back over each new frame. Screen bitmaps hold two
  * lines per 32-bit word: the upper line in the high half. Each row is copied
- * separately, including odd first/last rows, to preserve the full badge. */
+ * separately, including odd first/last rows, to preserve the full badge.
+ *
+ * badge_rect gives the badge's area in screen pixels (after the margin). */
 static void badge_rect(Menu *menu, int *x, int *y, int *w, int *h)
 {
     int margin = menu->config.screen_margin, top, bottom;
@@ -2341,6 +2391,7 @@ static void badge_rect(Menu *menu, int *x, int *y, int *w, int *h)
     *y = top;
     *h = bottom - top;
 }
+/* Copies the badge's pixels from the screen into the `badge` CEL. */
 static void badge_save(Menu *menu)
 {
 #ifndef UI_PREVIEW_GLASS /* the host renderer has no screen bitmap */
@@ -2361,6 +2412,8 @@ static void badge_save(Menu *menu)
     if (!menu->badge)
         return;
     pixels = (unsigned short *)menu->badge->ccb_SourcePtr;
+    /* The CEL's row length, from its preamble: (words per row - 2) is
+     * stored, and each word holds two pixels. */
     stride = (int)((((menu->badge->ccb_PRE1 >> PRE1_WOFFSET10_SHIFT) & 0x3ff) + 2) *
                    2); /* halfwords per row */
     for (row = 0; row < h; ++row) {
@@ -2383,6 +2436,7 @@ static void badge_save(Menu *menu)
     (void)menu;
 #endif
 }
+/* Puts the saved badge back over a new frame (or draws the OSD if none). */
 static void badge_restore(Menu *menu, size_t selected)
 {
     if (menu->osd_hidden)
@@ -2396,7 +2450,12 @@ static void badge_restore(Menu *menu, size_t selected)
 #endif
     osd(menu, selected);
 }
-/* What the playback overlays look like now, short of drawing them. */
+/*
+ * A hash of what the playback overlays (the status message, notice, OSD and
+ * scrolling names) look like now, short of drawing them. While it stays the
+ * same, playback need not redraw them. With `scrolling`, the scroll offsets
+ * of names drawn by scroll_label count too.
+ */
 static unsigned long playback_overlay_key(Menu *menu, const char *message, int scrolling)
 {
     unsigned long key = 2166136261UL, elapsed = menu->scroll_elapsed;
@@ -2413,11 +2472,13 @@ static unsigned long playback_overlay_key(Menu *menu, const char *message, int s
               16777619UL;
     return key;
 }
+/* playback_overlay_key, including the scrolling names. */
 static unsigned long overlay_key(Menu *menu, const char *message)
 {
     return playback_overlay_key(menu, message, 1);
 }
-/* Everything the list panel shows, so playback can tell when it is unchanged. */
+/* A hash of everything the list panel shows, so playback can tell when it
+ * is unchanged (and need not be redrawn). */
 static unsigned long panel_hash(const Menu *menu, size_t selected, size_t total)
 {
     unsigned long hash = 2166136261UL, values[15];
@@ -2450,6 +2511,13 @@ static unsigned long panel_hash(const Menu *menu, size_t selected, size_t total)
     }
     return hash;
 }
+/*
+ * Draws the title card under the TV: the selected game's title (scrolling if
+ * long), then either a status message in amber or two lines of details
+ * (genre and year, publisher). Folders, "Back" and the queue get their own
+ * lines. With `title_only`, just the title line. `scale` is the screen width
+ * after the margin, for measuring text.
+ */
 static void draw_title_card(Menu *menu, const MenuEntry *chosen, size_t total, const char *message,
                             int scale, int title_only)
 {
@@ -2499,6 +2567,7 @@ static void draw_title_card(Menu *menu, const MenuEntry *chosen, size_t total, c
         if (title_only)
             return;
         if (message && *message) {
+            /* A message over two lines, broken at a space. */
             size_t split = card_split(message, 152 * scale / 320);
             memcpy(details, message, split < 95 ? split : 95);
             details[split < 95 ? split : 95] = 0;
@@ -2532,6 +2601,7 @@ static void draw_title_card(Menu *menu, const MenuEntry *chosen, size_t total, c
         }
     }
 }
+/* Draws the TV picture when no preview plays: the cover, or a placeholder. */
 static void browser_picture(Menu *menu, const MenuEntry *chosen, size_t selected)
 {
     if (menu->cover)
@@ -2543,6 +2613,8 @@ static void browser_picture(Menu *menu, const MenuEntry *chosen, size_t selected
         tv_corners(menu);
     }
 }
+/* Which set of control prompts applies (see browser_controls), as a number
+ * that changes when the prompts would. */
 static int browser_controls_key(Menu *menu, const MenuEntry *chosen, size_t total)
 {
     if (!menu->ready || !total)
@@ -2551,6 +2623,7 @@ static int browser_controls_key(Menu *menu, const MenuEntry *chosen, size_t tota
         return 1;
     return game_entry(menu, chosen) ? 3 : 2;
 }
+/* Draws the control prompts under the list. */
 static void browser_controls(Menu *menu, const MenuEntry *chosen, size_t total)
 {
     /* Three prompt rows below the shorter list; help is always discoverable. */
@@ -2573,6 +2646,13 @@ static void browser_controls(Menu *menu, const MenuEntry *chosen, size_t total)
                    0);
     button(menu, 12, 226, "Hold P", "Help", 0);
 }
+/*
+ * The browser is drawn in three layers, each with a hash saying what it
+ * shows (see BrowserFrame): the "shell" (the panel and list, for this
+ * listing and settings), the picture on the TV, and the overlays. A layer
+ * is redrawn into a buffer only when its hash differs from what that buffer
+ * last showed.
+ */
 static unsigned long browser_shell(Menu *menu, size_t total)
 {
     unsigned long hash = panel_hash(menu, 0, total);
@@ -2581,6 +2661,7 @@ static unsigned long browser_shell(Menu *menu, size_t total)
     hash = (hash ^ (unsigned long)menu->metadata.count) * 16777619UL;
     return (hash ^ (unsigned long)menu->config.hide_adult) * 16777619UL;
 }
+/* The picture layer's hash (see browser_shell). */
 static unsigned long browser_picture_key(Menu *menu, const MenuEntry *chosen, size_t selected)
 {
     unsigned long folder =
@@ -2591,6 +2672,7 @@ static unsigned long browser_picture_key(Menu *menu, const MenuEntry *chosen, si
     hash = (hash ^ (unsigned long)menu->preview_off) * 16777619UL;
     return hash;
 }
+/* The overlay layer's hash for a buffer (see browser_shell). */
 static unsigned long browser_overlay_key(Menu *menu, const BrowserFrame *frame, const char *message)
 {
     unsigned long key;
@@ -2605,6 +2687,7 @@ static unsigned long browser_overlay_key(Menu *menu, const BrowserFrame *frame, 
               16777619UL;
     return key;
 }
+/* Records what a screen buffer now shows (see BrowserFrame). */
 static void browser_save(Menu *menu, BrowserFrame *frame, unsigned long shell,
                          unsigned long picture, int controls, size_t selected, size_t start,
                          const char *message)
@@ -2677,20 +2760,353 @@ static int copy_screen(Menu *menu)
     return 0;
 #endif
 }
+/*
+ * What draw() works out once and its helpers share: the list's layout, the
+ * selection and the message to show.
+ */
+typedef struct DrawState {
+    size_t total;            /* rows in the list */
+    size_t selected;         /* the selected row (in the list or the queue) */
+    size_t rows;             /* rows per page */
+    size_t start;            /* the first row on this page */
+    const MenuEntry *chosen; /* the selected entry, or NULL for "< Back" or the queue */
+    const char *message;     /* the status line to show, if any */
+    int style, row_height;
+    int scale; /* the screen width after the margin, for measuring text */
+    unsigned long now;
+} DrawState;
+
+/*
+ * Shows "Reading folder..." while a folder loads. The current path already
+ * names the new folder, but the listing still belongs to the old one, so the
+ * old picture is kept rather than redrawn with the wrong entries.
+ */
+static void draw_loading_notice(Menu *menu)
+{
+    menu->browser_frames[0].valid = menu->browser_frames[1].valid = 0;
+    if (menu->loading_notice)
+        return;
+    menu->text_cursor = 0;
+    menu->text_style = UI_FONT_NORMAL;
+    rectangle(menu, 152, 178, 168, 62, BG);
+    label_on(menu, 160, 181, "Reading folder...", AMBER, UI_FONT_NORMAL, BG);
+    label_on(menu, 160, 203, "Please wait", MUTED, UI_FONT_SMALL, BG);
+    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+    menu->loading_notice = 1;
+}
+
+/* Works out which message the status line shows, in order of priority. */
+static const char *browser_message(Menu *menu, char *line, unsigned long now)
+{
+    const char *message = menu->message;
+
+    if (menu->notice_active && now - menu->notice_since >= 2500UL)
+        menu->notice_active = 0; /* notices last two and a half seconds */
+    if (!message && menu->notice_active)
+        message = menu->notice;
+    if (menu->loading) {
+        strcpy(line, "Reading folder...");
+        message = line;
+    }
+    if (menu->alphabet_active && !menu->notice_active)
+        message = "Choose a letter. A to jump, B to cancel.";
+    if (!menu->ready && menu->bus.last_error < 0) {
+        format(line, "Connection error: %08lx", (unsigned long)menu->bus.last_error);
+        message = line;
+    }
+    return message;
+}
+
+/*
+ * Redraws only what changed in a buffer that already shows this folder's
+ * browser (its shell hash matches; see browser_shell). Returns 1 if it
+ * handled the frame, 0 if a full draw is needed.
+ */
+static int draw_browser_changes(Menu *menu, const DrawState *d, BrowserFrame *frame,
+                                unsigned long shell, unsigned long picture, int controls)
+{
+    unsigned long key = browser_overlay_key(menu, frame, d->message);
+    int moved;
+    size_t i;
+
+    if (!frame->valid || frame->shell != shell || menu->clear_frames)
+        return 0;
+    moved = frame->selected != d->selected;
+
+    if (!moved && frame->picture == picture && frame->overlay == key) {
+        /* Nothing but perhaps the gecko or the alphabet strip changed. */
+        BrowserFrame *front = &menu->browser_frames[menu->screen.sc_curScreen ^ 1];
+        int letter = menu->alphabet_active ? menu->jump_letter : -1;
+        if (frame->gecko != menu->gecko_frame || frame->letter != letter) {
+            if (frame->gecko != menu->gecko_frame)
+                draw_channel_gecko(menu);
+            if (frame->letter != letter)
+                draw_alphabet_change(menu, frame->letter);
+            frame->gecko = menu->gecko_frame;
+            frame->letter = letter;
+            DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+            return 1;
+        }
+        /* Show this ready back buffer if the front still shows an old
+         * selection. Otherwise leave the display alone and poll again. */
+        if (front->valid && front->shell == shell && front->selected == d->selected &&
+            front->picture == picture && front->overlay == key &&
+            front->gecko == menu->gecko_frame && front->letter == letter)
+            menu->screen.sc_curScreen ^= 1;
+        else
+            DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+        return 1;
+    }
+
+    /* The list: a new page means every row; otherwise the old and new
+     * selected rows. */
+    menu->scroll_count = 0;
+    if (frame->start != d->start) {
+        rectangle(menu, 8, 55, 134, (int)d->rows * d->row_height, BG);
+        for (i = d->start; i < d->total && i < d->start + d->rows; ++i)
+            draw_row(menu, i, d->start, d->selected, d->style, d->row_height);
+    } else {
+        if (moved) {
+            rectangle(menu, 8, 55 + (int)(frame->selected - d->start) * d->row_height, 134,
+                      d->row_height, BG);
+            draw_row(menu, frame->selected, d->start, d->selected, d->style, d->row_height);
+        }
+        if (d->total) {
+            rectangle(menu, 8, 55 + (int)(d->selected - d->start) * d->row_height, 134,
+                      d->row_height, BG);
+            draw_row(menu, d->selected, d->start, d->selected, d->style, d->row_height);
+        }
+    }
+
+    /* The TV picture, the channel display, the prompts and the title card. */
+    if (frame->picture != picture)
+        browser_picture(menu, d->chosen, d->selected);
+    if (moved || frame->picture != picture) {
+        rectangle(menu, 152, 0, 168, 34, BG);
+        osd(menu, d->selected);
+    } else if (frame->gecko != menu->gecko_frame) {
+        draw_channel_gecko(menu);
+    }
+    if (frame->controls != controls)
+        browser_controls(menu, d->chosen, d->total);
+    draw_title_card(menu, d->chosen, d->total, d->message, d->scale, 0);
+    if (menu->alphabet_active)
+        draw_alphabet(menu);
+
+    browser_save(menu, frame, shell, picture, controls, d->selected, d->start, d->message);
+    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+    menu->panel_frames = 0;
+    return 1;
+}
+
+/*
+ * The light redraw during preview playback, once both buffers hold this
+ * list panel: the new video frame, and the selected row (its long name may
+ * be scrolling), the OSD and the caption only until both buffers hold their
+ * current look. Drawing those every frame would take most of a 30 fps
+ * frame's time.
+ */
+static void draw_playback_frame(Menu *menu, const DrawState *d)
+{
+    unsigned long key = overlay_key(menu, d->message);
+    unsigned long fixed = playback_overlay_key(menu, d->message, 0);
+
+    /* Text CELs are cached by drawing order: keep these few labels in their
+     * own slots, so the next full draw finds the list's labels still made. */
+    menu->text_cursor = UI_TEXT_CACHE - 16;
+    if (fixed != menu->playback_static_key) {
+        menu->playback_static_key = fixed;
+        menu->playback_static_frames = 0;
+    }
+    if (key != menu->overlay_key) {
+        menu->overlay_key = key;
+        menu->overlay_frames = 0;
+    }
+    if (menu->overlay_frames >= 2 && menu->preview_drawn_decode == menu->preview_decodes) {
+        /* The front already holds this video frame and both buffers have
+         * the current caption. Keep polling without another CEL pass. */
+        menu->screen.sc_curScreen ^= 1;
+        return;
+    }
+
+    gecko_video(menu);
+    if (menu->overlay_frames < 2) {
+        ++menu->overlay_frames;
+        menu->scroll_count = 0;
+        if (menu->view_valid && d->total)
+            draw_row(menu, d->selected, d->start, d->selected, d->style, d->row_height);
+        if (menu->playback_static_frames < 2) {
+            osd(menu, d->selected);
+            draw_title_card(menu, d->chosen, d->total, d->message, d->scale, 0);
+            badge_save(menu);
+            ++menu->playback_static_frames;
+        } else {
+            draw_title_card(menu, d->chosen, d->total, d->message, d->scale, 1);
+            badge_restore(menu, d->selected);
+        }
+        menu->overlay_key = overlay_key(menu, d->message);
+    } else {
+        badge_restore(menu, d->selected);
+    }
+    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+    ++menu->preview_light_draws;
+    menu->preview_draw_ms += now_ms(menu) - d->now;
+}
+
+/* The TV set and what plays on it: static, the preview, a cover or a placeholder. */
+static void draw_tv(Menu *menu, const DrawState *d, int playing)
+{
+    rectangle(menu, 0, 0, 320, 240, BG);
+    tv_set(menu);
+    if (menu->tuning) {
+        tv_static(menu, d->now);
+        ++menu->tuning_draws;
+    } else if (playing) {
+        gecko_video(menu);
+    } else if (menu->preview_cel || menu->cover) {
+        tv_picture(menu, menu->preview_cel ? menu->preview_cel : menu->cover);
+    } else {
+        rectangle(menu, VIDEO_X, VIDEO_Y, USB_PREVIEW_WIDTH, USB_PREVIEW_HEIGHT, HEADER);
+        media_placeholder(menu, d->chosen ? !game_entry(menu, d->chosen)
+                                          : (menu->listing.has_parent && !d->selected));
+        tv_corners(menu);
+    }
+}
+
+/* The logo and the folder heading (or "Disc queue", or the search). */
+static void draw_heading(Menu *menu, const DrawState *d)
+{
+    char line[96];
+
+    if (menu->logo) {
+        CCB logo = *menu->logo;
+        logo.ccb_XPos = 12 << 16;
+        logo.ccb_YPos = 2 << 16;
+        logo.ccb_HDX = 1 << 20;
+        logo.ccb_VDY = 1 << 16;
+        draw_cel(menu, &logo);
+    } else {
+        label_on(menu, 12, 12, "Oh My 3DO", TEXT, UI_FONT_NORMAL, BG);
+    }
+
+    if (menu->review)
+        strcpy(line, "Disc queue");
+    else if (*menu->filter)
+        format(line, "Search: %s", menu->filter);
+    else if (!menu->depth)
+        strcpy(line, "All games");
+    else /* the breadcrumb without its leading "/ " */
+        strcpy(line, menu->breadcrumb[0] == '/' && menu->breadcrumb[1] == ' ' ? menu->breadcrumb + 2
+                                                                              : menu->breadcrumb);
+    line[ui_font_fit(line, strlen(line), 104 * d->scale / 320, UI_FONT_SMALL)] = 0;
+    rectangle(menu, 12, 42, 20, 6, REMOTE_RED);
+    label_on(menu, 38, 38, line, TV_ORANGE, UI_FONT_SMALL, BG);
+}
+
+/* Draws the whole browser into the back buffer and shows it. */
+static void draw_browser_full(Menu *menu, const DrawState *d, BrowserFrame *frame,
+                              unsigned long shell, unsigned long picture, int controls, int playing,
+                              unsigned long hash)
+{
+    size_t i;
+
+    menu->playback_static_frames = 0;
+    menu->scroll_count = 0;
+    crt_cels(menu);
+    /* After loading, clear both screen buffers once, including the margin
+     * border that full-screen video never covers. */
+    if (menu->clear_frames) {
+        rectangle(menu, 0, 0, 320, 240, BG);
+        --menu->clear_frames;
+    }
+    if (menu->review)
+        backdrop(menu);
+    else
+        draw_tv(menu, d, playing);
+
+    /* A solid ground lets changed rows be erased without blending old text. */
+    draw_heading(menu, d);
+    if (menu->view_valid || menu->review) {
+        for (i = d->start; i < d->total && i < d->start + d->rows; ++i)
+            draw_row(menu, i, d->start, d->selected, d->style, d->row_height);
+        if (!d->total) {
+            label_on(menu, 16, 62, menu->review ? "No discs queued" : "Nothing here yet", TEXT,
+                     UI_FONT_NORMAL, BG);
+            label_on(menu, 16, 80, *menu->filter ? "Try another name" : "Choose another folder",
+                     MUTED, UI_FONT_SMALL, BG);
+        }
+    }
+    /* Button prompts under the list: what A and C do right now, then the
+     * ways out (B to the parent folder or the library, L+R into Tools). */
+    browser_controls(menu, d->chosen, d->total);
+
+    if (menu->tuning) {
+        /* Changing channel: no caption, just the tuning notice over the static. */
+        tuning_overlay(menu, d->selected);
+        if (menu->alphabet_active)
+            draw_alphabet(menu);
+        DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+        return;
+    }
+
+    if (!menu->review)
+        osd(menu, d->selected);
+    draw_title_card(menu, d->chosen, d->total, d->message, d->scale, 0);
+    if (menu->alphabet_active)
+        draw_alphabet(menu);
+    if (frame)
+        browser_save(menu, frame, shell, picture, controls, d->selected, d->start, d->message);
+    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
+
+    if (playing) {
+        ++menu->preview_full_draws;
+        menu->preview_draw_ms += now_ms(menu) - d->now;
+    }
+
+    /*
+     * Count how many buffers now hold this list panel, so playback can
+     * switch to light redraws (draw_playback_frame) once both do. Copying
+     * this screen into the other buffer gets there at once.
+     */
+    menu->overlay_frames = 0;
+    if (!playing) {
+        menu->panel_frames = 0;
+    } else if (copy_screen(menu)) {
+        menu->panel_hash = hash;
+        menu->panel_frames = 2;
+        menu->clear_frames = 0;
+    } else if (hash == menu->panel_hash) {
+        ++menu->panel_frames;
+    } else {
+        menu->panel_hash = hash;
+        menu->panel_frames = 1;
+    }
+}
+
+/*
+ * Draws the current screen into the back buffer and shows it: the startup
+ * screen, help, Tools, the full-screen view or the browser. The browser is
+ * the hard case, and draws as little as it can (see browser_shell and
+ * draw_playback_frame).
+ */
 static void draw(Menu *menu)
 {
     char line[96];
-    size_t total, selected = menu->review ? menu->queue_selected : menu->selected;
-    size_t rows = menu_rows(menu), start = (selected / rows) * rows, i;
-    unsigned long now = now_ms(menu);
-    const MenuEntry *chosen = NULL;
-    const char *message = menu->message;
-    int large = menu->config.large_titles, style = large ? UI_FONT_NORMAL : UI_FONT_SMALL;
-    int row_height = large ? 18 : 14, scale = 320 - 2 * menu->config.screen_margin;
+    DrawState d;
     unsigned long hash = 0;
     unsigned long shell = 0, picture = 0;
     BrowserFrame *frame = NULL;
     int playing, browsing, controls = 0;
+
+    d.selected = menu->review ? menu->queue_selected : menu->selected;
+    d.rows = menu_rows(menu);
+    d.start = (d.selected / d.rows) * d.rows;
+    d.now = now_ms(menu);
+    d.chosen = NULL;
+    d.style = menu->config.large_titles ? UI_FONT_NORMAL : UI_FONT_SMALL;
+    d.row_height = menu->config.large_titles ? 18 : 14;
+    d.scale = 320 - 2 * menu->config.screen_margin;
+
     if (menu->tools != TOOL_HOME || menu->help_hold.active || menu->full_view || menu->loading ||
         menu->booting)
         menu->tools_home_drawn = 0;
@@ -2699,31 +3115,22 @@ static void draw(Menu *menu)
     if (menu->launching)
         return;
     if (menu->loading && menu->view_valid && !menu->booting) {
-        /* The path already names the destination, but the owned listing still
-         * belongs to the source. Keep its displayed pixels, rather than
-         * reclassifying root entries as the contents of a nested folder. */
-        menu->browser_frames[0].valid = menu->browser_frames[1].valid = 0;
-        if (!menu->loading_notice) {
-            menu->text_cursor = 0;
-            menu->text_style = UI_FONT_NORMAL;
-            rectangle(menu, 152, 178, 168, 62, BG);
-            label_on(menu, 160, 181, "Reading folder...", AMBER, UI_FONT_NORMAL, BG);
-            label_on(menu, 160, 203, "Please wait", MUTED, UI_FONT_SMALL, BG);
-            DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-            menu->loading_notice = 1;
-        }
+        draw_loading_notice(menu);
         return;
     }
-    total = (menu->view_valid || menu->review) ? row_count(menu) : 0;
+
+    d.total = (menu->view_valid || menu->review) ? row_count(menu) : 0;
     menu->scroll_elapsed =
-        (menu->scroll_paused ? menu->scroll_paused_at : now) - menu->selection_since;
-    menu->gecko_frame = channel_gecko_frame(menu, now);
+        (menu->scroll_paused ? menu->scroll_paused_at : d.now) - menu->selection_since;
+    menu->gecko_frame = channel_gecko_frame(menu, d.now);
     browsing = !menu->booting && !menu->tools && !menu->full_view && !menu->review &&
                !menu->loading && !menu->tuning && !menu->preview_cel && menu->view_valid;
     if (!browsing)
         menu->browser_frames[0].valid = menu->browser_frames[1].valid = 0;
+
+    /* The other screens draw themselves. */
     if (menu->booting) {
-        boot_screen(menu, now);
+        boot_screen(menu, d.now);
         return;
     }
     if (menu->help_hold.active) {
@@ -2739,27 +3146,18 @@ static void draw(Menu *menu)
         draw_full_cover(menu);
         return;
     }
+
     menu->text_cursor = 0;
     menu->text_style = UI_FONT_NORMAL;
-    if (menu->notice_active && now - menu->notice_since >= 2500UL)
-        menu->notice_active = 0;
-    if (!message && menu->notice_active)
-        message = menu->notice;
-    if (menu->loading) {
-        strcpy(line, "Reading folder...");
-        message = line;
-    }
-    if (menu->alphabet_active && !menu->notice_active)
-        message = "Choose a letter. A to jump, B to cancel.";
-    if (!menu->ready && menu->bus.last_error < 0) {
-        format(line, "Connection error: %08lx", (unsigned long)menu->bus.last_error);
-        message = line;
-    }
-    if (menu->view_valid && !menu->review && total && !(menu->listing.has_parent && !selected))
-        chosen = browser_entry(menu, selected - (menu->listing.has_parent ? 1 : 0));
+    d.message = browser_message(menu, line, d.now);
+    if (menu->view_valid && !menu->review && d.total && !(menu->listing.has_parent && !d.selected))
+        d.chosen = browser_entry(menu, d.selected - (menu->listing.has_parent ? 1 : 0));
+
     /* Before deciding what to draw: a frame that fails to decode stops the preview. */
     if (!menu->review)
-        advance_preview(menu, now);
+        advance_preview(menu, d.now);
+    /* A preview is playing when its picture has the TV's shape (a cover
+     * shown in the preview's place does not). */
     playing = !menu->review && !menu->tuning && menu->preview_cel &&
               menu->preview_cel->ccb_Width * USB_PREVIEW_HEIGHT ==
                   menu->preview_cel->ccb_Height * USB_PREVIEW_WIDTH;
@@ -2768,226 +3166,25 @@ static void draw(Menu *menu)
         if (menu->preview_pass_at && pass - menu->preview_pass_at > menu->preview_pass_max_ms)
             menu->preview_pass_max_ms = pass - menu->preview_pass_at;
         menu->preview_pass_at = pass;
-        now = pass;
-        hash = panel_hash(menu, selected, total);
+        d.now = pass;
+        hash = panel_hash(menu, d.selected, d.total);
     }
+
+    /* Draw into the other buffer from here on. */
     menu->screen.sc_curScreen ^= 1;
     if (browsing) {
-        unsigned long key;
         frame = &menu->browser_frames[menu->screen.sc_curScreen];
-        key = browser_overlay_key(menu, frame, message);
-        shell = browser_shell(menu, total);
-        picture = browser_picture_key(menu, chosen, selected);
-        controls = browser_controls_key(menu, chosen, total);
-        if (frame->valid && frame->shell == shell && !menu->clear_frames) {
-            int moved = frame->selected != selected;
-            if (!moved && frame->picture == picture && frame->overlay == key) {
-                BrowserFrame *front = &menu->browser_frames[menu->screen.sc_curScreen ^ 1];
-                int letter = menu->alphabet_active ? menu->jump_letter : -1;
-                if (frame->gecko != menu->gecko_frame || frame->letter != letter) {
-                    if (frame->gecko != menu->gecko_frame)
-                        draw_channel_gecko(menu);
-                    if (frame->letter != letter)
-                        draw_alphabet_change(menu, frame->letter);
-                    frame->gecko = menu->gecko_frame;
-                    frame->letter = letter;
-                    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-                    return;
-                }
-                /* Present a ready back buffer if the front still shows an old
-                 * selection. Otherwise leave the display alone and poll again. */
-                if (front->valid && front->shell == shell && front->selected == selected &&
-                    front->picture == picture && front->overlay == key &&
-                    front->gecko == menu->gecko_frame && front->letter == letter)
-                    menu->screen.sc_curScreen ^= 1;
-                else
-                    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-                return;
-            }
-            menu->scroll_count = 0;
-            if (frame->start != start) {
-                rectangle(menu, 8, 55, 134, (int)rows * row_height, BG);
-                for (i = start; i < total && i < start + rows; ++i)
-                    draw_row(menu, i, start, selected, style, row_height);
-            } else {
-                if (moved) {
-                    rectangle(menu, 8, 55 + (int)(frame->selected - start) * row_height, 134,
-                              row_height, BG);
-                    draw_row(menu, frame->selected, start, selected, style, row_height);
-                }
-                if (total) {
-                    rectangle(menu, 8, 55 + (int)(selected - start) * row_height, 134, row_height,
-                              BG);
-                    draw_row(menu, selected, start, selected, style, row_height);
-                }
-            }
-            if (frame->picture != picture)
-                browser_picture(menu, chosen, selected);
-            if (moved || frame->picture != picture) {
-                rectangle(menu, 152, 0, 168, 34, BG);
-                osd(menu, selected);
-            } else if (frame->gecko != menu->gecko_frame)
-                draw_channel_gecko(menu);
-            if (frame->controls != controls)
-                browser_controls(menu, chosen, total);
-            draw_title_card(menu, chosen, total, message, scale, 0);
-            if (menu->alphabet_active)
-                draw_alphabet(menu);
-            browser_save(menu, frame, shell, picture, controls, selected, start, message);
-            DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-            menu->panel_frames = 0;
+        shell = browser_shell(menu, d.total);
+        picture = browser_picture_key(menu, d.chosen, d.selected);
+        controls = browser_controls_key(menu, d.chosen, d.total);
+        if (draw_browser_changes(menu, &d, frame, shell, picture, controls))
             return;
-        }
     }
     if (playing && !menu->clear_frames && menu->panel_frames >= 2 && hash == menu->panel_hash) {
-        /* Both buffers hold this list panel: redraw the picture, then the
-         * selected row (its long name may be scrolling), OSD and caption
-         * only until both buffers hold their current look. Drawing them
-         * every frame would take most of a 30 fps frame. */
-        unsigned long key = overlay_key(menu, message);
-        unsigned long fixed = playback_overlay_key(menu, message, 0);
-        /* Text cels are cached by drawing order: keep these few apart, so
-         * the next full draw finds the list's labels still rendered. */
-        menu->text_cursor = UI_TEXT_CACHE - 16;
-        if (fixed != menu->playback_static_key) {
-            menu->playback_static_key = fixed;
-            menu->playback_static_frames = 0;
-        }
-        if (key != menu->overlay_key) {
-            menu->overlay_key = key;
-            menu->overlay_frames = 0;
-        }
-        if (menu->overlay_frames >= 2 && menu->preview_drawn_decode == menu->preview_decodes) {
-            /* The front already holds this video frame and both buffers have
-             * the current caption. Keep polling without another cel pass. */
-            menu->screen.sc_curScreen ^= 1;
-            return;
-        }
-        gecko_video(menu);
-        if (menu->overlay_frames < 2) {
-            ++menu->overlay_frames;
-            menu->scroll_count = 0;
-            if (menu->view_valid && total)
-                draw_row(menu, selected, start, selected, style, row_height);
-            if (menu->playback_static_frames < 2) {
-                osd(menu, selected);
-                draw_title_card(menu, chosen, total, message, scale, 0);
-                badge_save(menu);
-                ++menu->playback_static_frames;
-            } else {
-                draw_title_card(menu, chosen, total, message, scale, 1);
-                badge_restore(menu, selected);
-            }
-            menu->overlay_key = overlay_key(menu, message);
-        } else
-            badge_restore(menu, selected);
-        DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-        ++menu->preview_light_draws;
-        menu->preview_draw_ms += now_ms(menu) - now;
+        draw_playback_frame(menu, &d);
         return;
     }
-
-    menu->playback_static_frames = 0;
-    /* Picture: the preview or cover fills the screen behind everything else. */
-    menu->scroll_count = 0;
-    crt_cels(menu);
-    /* After loading, clear both screen buffers once, including the margin
-     * border that full-screen video never covers. */
-    if (menu->clear_frames) {
-        rectangle(menu, 0, 0, 320, 240, BG);
-        --menu->clear_frames;
-    }
-    if (menu->review)
-        backdrop(menu);
-    else {
-        rectangle(menu, 0, 0, 320, 240, BG);
-        tv_set(menu);
-        if (menu->tuning) {
-            tv_static(menu, now);
-            ++menu->tuning_draws;
-        } else if (playing)
-            gecko_video(menu);
-        else if (menu->preview_cel || menu->cover)
-            tv_picture(menu, menu->preview_cel ? menu->preview_cel : menu->cover);
-        else {
-            rectangle(menu, VIDEO_X, VIDEO_Y, USB_PREVIEW_WIDTH, USB_PREVIEW_HEIGHT, HEADER);
-            media_placeholder(menu, chosen ? !game_entry(menu, chosen)
-                                           : (menu->listing.has_parent && !selected));
-            tv_corners(menu);
-        }
-    }
-
-    /* A solid ground lets changed rows be erased without blending old text. */
-    if (menu->logo) {
-        CCB logo = *menu->logo;
-        logo.ccb_XPos = 12 << 16;
-        logo.ccb_YPos = 2 << 16;
-        logo.ccb_HDX = 1 << 20;
-        logo.ccb_VDY = 1 << 16;
-        draw_cel(menu, &logo);
-    } else
-        label_on(menu, 12, 12, "Oh My 3DO", TEXT, UI_FONT_NORMAL, BG);
-    if (menu->review)
-        strcpy(line, "Disc queue");
-    else if (*menu->filter)
-        format(line, "Search: %s", menu->filter);
-    else if (!menu->depth)
-        strcpy(line, "All games");
-    else
-        strcpy(line, menu->breadcrumb[0] == '/' && menu->breadcrumb[1] == ' ' ? menu->breadcrumb + 2
-                                                                              : menu->breadcrumb);
-    line[ui_font_fit(line, strlen(line), 104 * scale / 320, UI_FONT_SMALL)] = 0;
-    rectangle(menu, 12, 42, 20, 6, REMOTE_RED);
-    label_on(menu, 38, 38, line, TV_ORANGE, UI_FONT_SMALL, BG);
-    if (menu->view_valid || menu->review) {
-        for (i = start; i < total && i < start + rows; ++i)
-            draw_row(menu, i, start, selected, style, row_height);
-        if (!total) {
-            label_on(menu, 16, 62, menu->review ? "No discs queued" : "Nothing here yet", TEXT,
-                     UI_FONT_NORMAL, BG);
-            label_on(menu, 16, 80, *menu->filter ? "Try another name" : "Choose another folder",
-                     MUTED, UI_FONT_SMALL, BG);
-        }
-    }
-    /* Button prompts under the list: what A and C do right now, then the
-     * ways out (B to the parent folder or the library, L+R into Tools). */
-    browser_controls(menu, chosen, total);
-
-    if (menu->tuning) {
-        /* Changing channel: no caption, just the tuning notice over the static. */
-        tuning_overlay(menu, selected);
-        if (menu->alphabet_active)
-            draw_alphabet(menu);
-        DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-        return;
-    }
-
-    if (!menu->review)
-        osd(menu, selected);
-
-    draw_title_card(menu, chosen, total, message, scale, 0);
-    if (menu->alphabet_active)
-        draw_alphabet(menu);
-    if (frame)
-        browser_save(menu, frame, shell, picture, controls, selected, start, message);
-    DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
-    if (playing) {
-        ++menu->preview_full_draws;
-        menu->preview_draw_ms += now_ms(menu) - now;
-    }
-    menu->overlay_frames = 0;
-    if (!playing)
-        menu->panel_frames = 0;
-    else if (copy_screen(menu)) {
-        menu->panel_hash = hash;
-        menu->panel_frames = 2;
-        menu->clear_frames = 0;
-    } else if (hash == menu->panel_hash)
-        ++menu->panel_frames;
-    else {
-        menu->panel_hash = hash;
-        menu->panel_frames = 1;
-    }
+    draw_browser_full(menu, &d, frame, shell, picture, controls, playing, hash);
 }
 
 /* Called after every 2 KiB read and every directory batch; 15 redraws a
