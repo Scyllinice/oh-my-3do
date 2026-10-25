@@ -99,9 +99,14 @@ fn disc_save_names_with_job(path: &Path, job: &Job) -> Result<Vec<String>> {
         let mut readable = true;
         for chunk in data.chunks_mut(64 * 1024) {
             job.check()?;
-            if file.read_exact(chunk).is_err() { readable = false; break; }
+            if file.read_exact(chunk).is_err() {
+                readable = false;
+                break;
+            }
         }
-        if !readable { continue; }
+        if !readable {
+            continue;
+        }
         job.check()?;
         for m in saves.captures_iter(&data) {
             let name = String::from_utf8_lossy(&m[1]).into_owned();
@@ -171,9 +176,12 @@ pub fn save_names_text(
         .unwrap_or(Value::Null);
     let mut stamps = serde_json::Map::new();
     let mut rows: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let total=discs.iter().filter(|d|d.to_ascii_lowercase().ends_with(".iso")).count() as u64;
-    let mut completed=0;
-    job.report(0,total,"Reading save-name information");
+    let total = discs
+        .iter()
+        .filter(|d| d.to_ascii_lowercase().ends_with(".iso"))
+        .count() as u64;
+    let mut completed = 0;
+    job.report(0, total, "Reading save-name information");
     for disc in discs {
         if !disc.to_ascii_lowercase().ends_with(".iso") {
             continue;
@@ -192,8 +200,11 @@ pub fn save_names_text(
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect(),
             None => {
-                job.say(format!("Reading save names from {disc} ({}/{total})",completed+1));
-                let result=disc_save_names_with_job(&path,job);
+                job.say(format!(
+                    "Reading save names from {disc} ({}/{total})",
+                    completed + 1
+                ));
+                let result = disc_save_names_with_job(&path, job);
                 job.check()?;
                 result.unwrap_or_default()
             }
@@ -211,7 +222,8 @@ pub fn save_names_text(
             }
         }
         stamps.insert(stamp, json!(names));
-        completed+=1;job.report(completed,total,"Reading save-name information");
+        completed += 1;
+        job.report(completed, total, "Reading save-name information");
     }
     let mut keys: Vec<&String> = rows.keys().collect();
     keys.sort_by_key(|n| (n[1..].to_ascii_lowercase(), n.to_string()));

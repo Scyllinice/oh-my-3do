@@ -136,19 +136,55 @@ fn manual_slot_building_merges_only_chosen_entries_and_is_atomic_at_capacity() {
 
 #[test]
 fn comparison_report_labels_games_preserves_direction_and_exposes_current_editor_index() {
- let reference=Archive{entries:vec![entry("DoomPrefs",&[1,2,3],0),entry("Removed",&[9],0),entry("Same",&[],0)]};
- let current=Archive{entries:vec![entry("Same",&[],0),entry("DoomPrefs",&[1,4,3,5],2),entry("Added",&[8],0)]};
- let report=backup::comparison(&reference,&current);
- assert_eq!((report.added,report.removed,report.changed,report.unchanged),(1,1,1,1));
- let doom=&report.rows[0];assert_eq!(doom.game,"DOOM");assert_eq!(doom.after_index,Some(1));assert_eq!(doom.before_size,Some(3));assert_eq!(doom.after_size,Some(4));assert!(doom.type_changed);
- assert_eq!(doom.changes,vec![(1,Some(2),Some(4)),(3,None,Some(5))]);
- assert_eq!(report.rows[1].after_index,None);assert_eq!(report.rows[3].changes,vec![(0,None,Some(8))]);
+    let reference = Archive {
+        entries: vec![
+            entry("DoomPrefs", &[1, 2, 3], 0),
+            entry("Removed", &[9], 0),
+            entry("Same", &[], 0),
+        ],
+    };
+    let current = Archive {
+        entries: vec![
+            entry("Same", &[], 0),
+            entry("DoomPrefs", &[1, 4, 3, 5], 2),
+            entry("Added", &[8], 0),
+        ],
+    };
+    let report = backup::comparison(&reference, &current);
+    assert_eq!(
+        (
+            report.added,
+            report.removed,
+            report.changed,
+            report.unchanged
+        ),
+        (1, 1, 1, 1)
+    );
+    let doom = &report.rows[0];
+    assert_eq!(doom.game, "DOOM");
+    assert_eq!(doom.after_index, Some(1));
+    assert_eq!(doom.before_size, Some(3));
+    assert_eq!(doom.after_size, Some(4));
+    assert!(doom.type_changed);
+    assert_eq!(
+        doom.changes,
+        vec![(1, Some(2), Some(4)), (3, None, Some(5))]
+    );
+    assert_eq!(report.rows[1].after_index, None);
+    assert_eq!(report.rows[3].changes, vec![(0, None, Some(8))]);
 }
 #[test]
-fn comparison_limits_byte_details_but_counts_all_changes_and_detects_metadata_only_edits(){
- let reference=Archive{entries:vec![entry("Huge",&vec![0;1024],0),entry("Case",&[],0)]};
- let current=Archive{entries:vec![entry("Huge",&vec![1;1024],0),entry("CASE",&[],1)]};
- let report=backup::comparison(&reference,&current);
- assert_eq!(report.changed,2);assert_eq!(report.rows[0].changed_bytes,1024);assert_eq!(report.rows[0].changes.len(),512);
- assert_eq!(report.rows[1].changed_bytes,0);assert!(report.rows[1].type_changed&&report.rows[1].name_changed);
+fn comparison_limits_byte_details_but_counts_all_changes_and_detects_metadata_only_edits() {
+    let reference = Archive {
+        entries: vec![entry("Huge", &vec![0; 1024], 0), entry("Case", &[], 0)],
+    };
+    let current = Archive {
+        entries: vec![entry("Huge", &vec![1; 1024], 0), entry("CASE", &[], 1)],
+    };
+    let report = backup::comparison(&reference, &current);
+    assert_eq!(report.changed, 2);
+    assert_eq!(report.rows[0].changed_bytes, 1024);
+    assert_eq!(report.rows[0].changes.len(), 512);
+    assert_eq!(report.rows[1].changed_bytes, 0);
+    assert!(report.rows[1].type_changed && report.rows[1].name_changed);
 }

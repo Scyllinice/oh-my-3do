@@ -39,7 +39,11 @@ pub fn root(p: &Path) -> Result<PathBuf> {
     }
     Ok(p.canonicalize()?)
 }
-fn safe_with(root: &Path, name: &str, mut check: impl FnMut(&Path, &str, &OsStr) -> Result<()>) -> Result<PathBuf> {
+fn safe_with(
+    root: &Path,
+    name: &str,
+    mut check: impl FnMut(&Path, &str, &OsStr) -> Result<()>,
+) -> Result<PathBuf> {
     if name.is_empty()
         || name.contains(['\\', ':'])
         || name.chars().any(|c| c < ' ' || c == '\u{7f}')
@@ -64,7 +68,9 @@ fn safe_with(root: &Path, name: &str, mut check: impl FnMut(&Path, &str, &OsStr)
         {
             bail!("Reserved FAT filename: {s}")
         }
-        if p.is_dir() { check(&p, s, raw)?; }
+        if p.is_dir() {
+            check(&p, s, raw)?;
+        }
         p.push(raw);
         if is_link(&p) {
             bail!("Links and junctions are unsupported: {}", p.display())
@@ -93,9 +99,14 @@ pub struct ReadPaths {
 }
 impl ReadPaths {
     pub fn new(directory: &Path) -> Result<Self> {
-        Ok(Self { root: root(directory)?, directories: HashMap::new() })
+        Ok(Self {
+            root: root(directory)?,
+            directories: HashMap::new(),
+        })
     }
-    pub fn root(&self) -> &Path { &self.root }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     pub fn path(&mut self, name: &str) -> Result<PathBuf> {
         let directories = &mut self.directories;
         safe_with(&self.root, name, |directory, text, raw| {
@@ -105,12 +116,18 @@ impl ReadPaths {
                     let mut names: HashMap<String, Vec<OsString>> = HashMap::new();
                     for child in fs::read_dir(directory)? {
                         let name = child?.file_name();
-                        names.entry(name.to_string_lossy().to_ascii_lowercase()).or_default().push(name);
+                        names
+                            .entry(name.to_string_lossy().to_ascii_lowercase())
+                            .or_default()
+                            .push(name);
                     }
                     entry.insert(names)
                 }
             };
-            if names.get(&text.to_ascii_lowercase()).is_some_and(|names| names.iter().any(|name| name != raw)) {
+            if names
+                .get(&text.to_ascii_lowercase())
+                .is_some_and(|names| names.iter().any(|name| name != raw))
+            {
                 bail!("Case-colliding path: {name}");
             }
             Ok(())
@@ -150,8 +167,9 @@ fn aligned_buffer() -> (Vec<u8>, usize) {
     (b, start)
 }
 fn hash_file(mut f: File, job: &Job) -> Result<String> {
-    let total = f.metadata()?.len();let mut completed = 0;
-    job.report(0,total,"Verifying file");
+    let total = f.metadata()?.len();
+    let mut completed = 0;
+    job.report(0, total, "Verifying file");
     let mut h = Sha256::new();
     let (mut b, start) = aligned_buffer();
     loop {
@@ -160,7 +178,9 @@ fn hash_file(mut f: File, job: &Job) -> Result<String> {
         if n == 0 {
             break;
         }
-        h.update(&b[start..start + n]);completed += n as u64;job.report(completed,total,"Verifying file");
+        h.update(&b[start..start + n]);
+        completed += n as u64;
+        job.report(completed, total, "Verifying file");
     }
     Ok(format!("{:x}", h.finalize()))
 }
@@ -168,7 +188,10 @@ fn hash_file(mut f: File, job: &Job) -> Result<String> {
 fn open_from_disk(p: &Path) -> Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_FLAG_NO_BUFFERING: u32 = 0x2000_0000;
-    Ok(fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_NO_BUFFERING).open(p)?)
+    Ok(fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_NO_BUFFERING)
+        .open(p)?)
 }
 #[cfg(target_os = "linux")]
 fn open_from_disk(p: &Path) -> Result<File> {
@@ -179,7 +202,11 @@ fn open_from_disk(p: &Path) -> Result<File> {
     const POSIX_FADV_DONTNEED: i32 = 4;
     let f = File::open(p)?;
     let error = unsafe { posix_fadvise(f.as_raw_fd(), 0, 0, POSIX_FADV_DONTNEED) };
-    anyhow::ensure!(error == 0, "Could not bypass the read cache for {} (error {error})", p.display());
+    anyhow::ensure!(
+        error == 0,
+        "Could not bypass the read cache for {} (error {error})",
+        p.display()
+    );
     Ok(f)
 }
 #[cfg(target_os = "macos")]
@@ -190,7 +217,11 @@ fn open_from_disk(p: &Path) -> Result<File> {
     }
     const F_NOCACHE: i32 = 48;
     let f = File::open(p)?;
-    anyhow::ensure!(unsafe { fcntl(f.as_raw_fd(), F_NOCACHE, 1) } != -1, "Could not bypass the read cache for {}", p.display());
+    anyhow::ensure!(
+        unsafe { fcntl(f.as_raw_fd(), F_NOCACHE, 1) } != -1,
+        "Could not bypass the read cache for {}",
+        p.display()
+    );
     Ok(f)
 }
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
@@ -218,8 +249,9 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     fs::create_dir_all(parent)?;
     let mut t = tempfile::NamedTempFile::new_in(parent)?;
     let mut src = File::open(source)?;
-    let total = before.0.saturating_mul(2).max(1);let mut completed = 0;
-    job.report(0,total,"Copying and verifying file");
+    let total = before.0.saturating_mul(2).max(1);
+    let mut completed = 0;
+    job.report(0, total, "Copying and verifying file");
     let mut hash = Sha256::new();
     let mut b = vec![0; 1024 * 1024];
     loop {
@@ -229,14 +261,16 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
             break;
         }
         t.write_all(&b[..n])?;
-        hash.update(&b[..n]);completed += n as u64;job.report(completed,total,"Copying and verifying file");
+        hash.update(&b[..n]);
+        completed += n as u64;
+        job.report(completed, total, "Copying and verifying file");
     }
     t.as_file().sync_all()?;
     let actual_hash = format!("{:x}", hash.finalize());
     if expected.is_some_and(|h| h != actual_hash) {
         bail!("Source contents changed since scan: {}", source.display())
     }
-    let verify_job = job.progress_range(before.0,before.0,total,"Copying and verifying file");
+    let verify_job = job.progress_range(before.0, before.0, total, "Copying and verifying file");
     if stamp(source)? != before || sha256_from_disk(t.path(), &verify_job)? != actual_hash {
         bail!(
             "Source changed or copy verification failed: {}",
@@ -245,13 +279,17 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     }
     // Set through the writing handle: Windows restamps a written file when
     // that handle closes, overriding a date set through any other handle.
-    t.as_file().set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(before.1 as u64))?;
+    t.as_file()
+        .set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(before.1 as u64))?;
     job.check()?;
     drop(t.persist_noclobber(target).map_err(|e| e.error)?);
     if !same_time(stamp(target)?.1, before.1) {
-        job.say(format!("Copied and verified, but the drive did not keep the original date: {}", target.display()));
+        job.say(format!(
+            "Copied and verified, but the drive did not keep the original date: {}",
+            target.display()
+        ));
     }
-    job.report(total,total,"Copying and verifying file");
+    job.report(total, total, "Copying and verifying file");
     Ok(actual_hash)
 }
 pub fn outside(p: &Path, root: &Path) -> Result<()> {

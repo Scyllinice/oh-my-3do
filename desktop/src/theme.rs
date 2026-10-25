@@ -35,20 +35,42 @@ pub fn bold(size: f32) -> FontId {
 pub fn install(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     for (name, data) in [
-        ("ark12", &include_bytes!("../../vendor/fonts/ark-pixel-12px-latin.ttf")[..]),
-        ("ark10", &include_bytes!("../../vendor/fonts/ark-pixel-10px-latin.ttf")[..]),
-        ("atkinson", &include_bytes!("../../vendor/fonts/AtkinsonHyperlegible-Regular.ttf")[..]),
-        ("atkinson-bold", &include_bytes!("../../vendor/fonts/AtkinsonHyperlegible-Bold.ttf")[..]),
+        (
+            "ark12",
+            &include_bytes!("../../vendor/fonts/ark-pixel-12px-latin.ttf")[..],
+        ),
+        (
+            "ark10",
+            &include_bytes!("../../vendor/fonts/ark-pixel-10px-latin.ttf")[..],
+        ),
+        (
+            "atkinson",
+            &include_bytes!("../../vendor/fonts/AtkinsonHyperlegible-Regular.ttf")[..],
+        ),
+        (
+            "atkinson-bold",
+            &include_bytes!("../../vendor/fonts/AtkinsonHyperlegible-Bold.ttf")[..],
+        ),
     ] {
-        fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(data)));
+        fonts
+            .font_data
+            .insert(name.into(), Arc::new(FontData::from_static(data)));
     }
     // egui's own fonts stay as fallbacks for symbols the bundled ones lack.
     let fallback = fonts.families[&FontFamily::Proportional].clone();
     let family = |first: &str| [vec![first.to_owned()], fallback.clone()].concat();
-    fonts.families.insert(FontFamily::Proportional, family("atkinson"));
-    fonts.families.insert(FontFamily::Name("bold".into()), family("atkinson-bold"));
-    fonts.families.insert(FontFamily::Name("pixel".into()), family("ark12"));
-    fonts.families.insert(FontFamily::Name("pixel10".into()), family("ark10"));
+    fonts
+        .families
+        .insert(FontFamily::Proportional, family("atkinson"));
+    fonts
+        .families
+        .insert(FontFamily::Name("bold".into()), family("atkinson-bold"));
+    fonts
+        .families
+        .insert(FontFamily::Name("pixel".into()), family("ark12"));
+    fonts
+        .families
+        .insert(FontFamily::Name("pixel10".into()), family("ark10"));
     ctx.set_fonts(fonts);
 
     let mut visuals = egui::Visuals::dark();
@@ -102,7 +124,11 @@ pub fn install(ctx: &egui::Context) {
 pub fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(text.to_uppercase()).font(pixel(24.)).color(TEXT));
+        ui.label(
+            RichText::new(text.to_uppercase())
+                .font(pixel(24.))
+                .color(TEXT),
+        );
         let (rect, _) = ui.allocate_exact_size(egui::vec2(124., 24.), egui::Sense::hover());
         let y = rect.center().y;
         ui.painter().rect_filled(

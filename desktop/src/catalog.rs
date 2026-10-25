@@ -38,7 +38,7 @@ pub fn download(url: &str, path: &Path, max: u64, job: &Job) -> Result<()> {
         .build()?;
     let mut response = client.get(url).send()?.error_for_status()?;
     let expected = response.content_length();
-    job.report(0,expected.unwrap_or(0),"Downloading");
+    job.report(0, expected.unwrap_or(0), "Downloading");
     if expected.is_some_and(|n| n > max) {
         bail!("Download exceeds size limit")
     }
@@ -57,7 +57,7 @@ pub fn download(url: &str, path: &Path, max: u64, job: &Job) -> Result<()> {
             bail!("Download exceeds size limit")
         };
         tmp.write_all(&buf[..n])?;
-        job.report(total,expected.unwrap_or(0),"Downloading");
+        job.report(total, expected.unwrap_or(0), "Downloading");
         if total / (8 * 1024 * 1024) > last_progress {
             last_progress = total / (8 * 1024 * 1024);
             job.say(format!("Downloaded {} MiB", total / 1024 / 1024));
@@ -272,7 +272,10 @@ fn read_dat(path: &Path) -> Result<Vec<Game>> {
     parse_dat(std::str::from_utf8(&raw)?)
 }
 fn metadata<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Value>> {
-    Ok(metadata_candidates(input,job)?.into_iter().filter_map(|(key,v)|(v.len()==1).then(||(key,v[0].clone()))).collect())
+    Ok(metadata_candidates(input, job)?
+        .into_iter()
+        .filter_map(|(key, v)| (v.len() == 1).then(|| (key, v[0].clone())))
+        .collect())
 }
 fn metadata_candidates<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String, Vec<Value>>> {
     let mut r = Reader::from_reader(input);
@@ -302,9 +305,15 @@ fn metadata_candidates<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String
                     .push_str(&quick_xml::escape::unescape(&e.decode()?)?);
             }
             Event::GeneralRef(e) if depth == 3 => {
-                let value=data.entry(field.clone()).or_default();
-                if let Some(c)=e.resolve_char_ref()? {value.push(c);} else {
-                    let name=e.decode()?;value.push_str(quick_xml::escape::resolve_predefined_entity(&name).context("Unknown XML entity")?);
+                let value = data.entry(field.clone()).or_default();
+                if let Some(c) = e.resolve_char_ref()? {
+                    value.push(c);
+                } else {
+                    let name = e.decode()?;
+                    value.push_str(
+                        quick_xml::escape::resolve_predefined_entity(&name)
+                            .context("Unknown XML entity")?,
+                    );
                 }
             }
             Event::CData(e) if depth == 3 => {
@@ -314,7 +323,9 @@ fn metadata_candidates<R: BufRead>(input: R, job: &Job) -> Result<HashMap<String
             }
             Event::End(_) => {
                 if depth == 2 {
-                    for value in data.values_mut(){*value=value.trim().to_owned();}
+                    for value in data.values_mut() {
+                        *value = value.trim().to_owned();
+                    }
                     count += 1;
                     if count % 10000 == 0 {
                         job.check()?;
@@ -481,14 +492,29 @@ pub fn load(cache: &Path, offline: bool, job: &Job) -> Result<Catalog> {
 }
 
 /// Reuse the cached metadata ZIP offline; title collisions stay unresolved.
-pub fn information(cache:&Path,offline:bool,job:&Job)->Result<HashMap<String,Value>>{
- Ok(information_candidates(cache,offline,job)?.into_iter().filter_map(|(key,v)|(v.len()==1).then(||(key,v[0].clone()))).collect())
+pub fn information(cache: &Path, offline: bool, job: &Job) -> Result<HashMap<String, Value>> {
+    Ok(information_candidates(cache, offline, job)?
+        .into_iter()
+        .filter_map(|(key, v)| (v.len() == 1).then(|| (key, v[0].clone())))
+        .collect())
 }
 /// Includes colliding titles for explicit user selection; automatic matches stay unique.
-pub fn information_candidates(cache:&Path,offline:bool,job:&Job)->Result<HashMap<String,Vec<Value>>>{
- let path=cache.join("launchbox.zip");
- if !path.is_file(){if offline{bail!("No game information cached. Turn off offline mode to download it first.");}download(LAUNCHBOX,&path,256*1024*1024,job)?;}
- let mut zip=zip::ZipArchive::new(File::open(path)?)?;let xml=zip.by_name("Metadata.xml")?;
- if xml.size()>1200*1024*1024{bail!("Oversized game information XML");}
- metadata_candidates(BufReader::new(xml),job)
+pub fn information_candidates(
+    cache: &Path,
+    offline: bool,
+    job: &Job,
+) -> Result<HashMap<String, Vec<Value>>> {
+    let path = cache.join("launchbox.zip");
+    if !path.is_file() {
+        if offline {
+            bail!("No game information cached. Turn off offline mode to download it first.");
+        }
+        download(LAUNCHBOX, &path, 256 * 1024 * 1024, job)?;
+    }
+    let mut zip = zip::ZipArchive::new(File::open(path)?)?;
+    let xml = zip.by_name("Metadata.xml")?;
+    if xml.size() > 1200 * 1024 * 1024 {
+        bail!("Oversized game information XML");
+    }
+    metadata_candidates(BufReader::new(xml), job)
 }

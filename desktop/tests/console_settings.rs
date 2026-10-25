@@ -1,4 +1,7 @@
-use oh_my_3do_library::{console_config::{self as config, Settings}, library, usb, Job};
+use oh_my_3do_library::{
+    console_config::{self as config, Settings},
+    library, usb, Job,
+};
 use std::{collections::BTreeMap, fs, path::Path, sync::atomic::Ordering};
 
 fn put(root: &Path, data: &[u8]) {
@@ -7,20 +10,42 @@ fn put(root: &Path, data: &[u8]) {
     fs::write(path, data).unwrap();
 }
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    walkdir::WalkDir::new(root).into_iter().map(Result::unwrap)
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .map(Result::unwrap)
         .filter(|e| e.file_type().is_file())
-        .map(|e| (e.path().strip_prefix(root).unwrap().to_string_lossy().into_owned(), fs::read(e.path()).unwrap()))
+        .map(|e| {
+            (
+                e.path()
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                fs::read(e.path()).unwrap(),
+            )
+        })
         .collect()
 }
 fn changed() -> Settings {
-    Settings { folder_workaround: 2, usb_covers: false, screen_margin: 12,
-        large_titles: true, remember_position: false, recent_games: false,
-        video_previews: true, preview_sound: false, hide_adult: true }
+    Settings {
+        folder_workaround: 2,
+        usb_covers: false,
+        screen_margin: 12,
+        large_titles: true,
+        remember_position: false,
+        recent_games: false,
+        video_previews: true,
+        preview_sound: false,
+        hide_adult: true,
+    }
 }
 
 #[test]
 fn defaults_and_every_setting_round_trip_in_the_console_format() {
-    assert_eq!(Settings::parse(include_bytes!("../../ohmy3do.ini")).unwrap(), Settings::default());
+    assert_eq!(
+        Settings::parse(include_bytes!("../../ohmy3do.ini")).unwrap(),
+        Settings::default()
+    );
     assert_eq!(Settings::parse(b"").unwrap(), Settings::default());
     assert!(Settings::default().video_previews);
     assert!(!Settings::parse(b"video_previews=0").unwrap().video_previews);
@@ -28,7 +53,10 @@ fn defaults_and_every_setting_round_trip_in_the_console_format() {
     let text = settings.encode().unwrap();
     assert!(text.len() < 512 && text.ends_with(b"; End of Oh My 3DO settings.\r\n"));
     assert_eq!(Settings::parse(&text).unwrap(), settings);
-    let legacy = Settings::parse(b"\xef\xbb\xbf[library]\r\n hide_adult = 1 ; comment\r\nscreen_margin=09 # margin\r\n").unwrap();
+    let legacy = Settings::parse(
+        b"\xef\xbb\xbf[library]\r\n hide_adult = 1 ; comment\r\nscreen_margin=09 # margin\r\n",
+    )
+    .unwrap();
     assert!(legacy.hide_adult && legacy.usb_covers && legacy.preview_sound);
     assert_eq!(legacy.screen_margin, 9);
 }
@@ -45,25 +73,49 @@ fn console_written_padding_nul_and_old_tails_are_supported() {
     assert!(!Settings::parse(&old).unwrap().usb_covers);
     // A pre-hide_adult generated INI remains valid with the option off.
     let text = Settings::default().encode().unwrap();
-    let text = String::from_utf8(text).unwrap().replace("hide_adult=0\r\n", "");
+    let text = String::from_utf8(text)
+        .unwrap()
+        .replace("hide_adult=0\r\n", "");
     assert!(!Settings::parse(text.as_bytes()).unwrap().hide_adult);
 }
 
 #[test]
 fn invalid_values_keys_sections_and_buffer_boundaries_are_rejected() {
-    for text in ["hide_adult=2\n", "screen_margin=13\n", "folder_workaround=3\n",
-        "usb_covers=-1\n", "usb_covers=001\n", "usb_covers=1x\n",
-        "usb_covers=1\nusb_covers=0\n", "theme=gecko\n", "[unknown]\n",
-        "screen_margin=1\u{b}\n", "; End of Oh My 3DO settings.\n"] {
-        assert!(Settings::parse(text.as_bytes()).is_err(), "Accepted {text:?}");
+    for text in [
+        "hide_adult=2\n",
+        "screen_margin=13\n",
+        "folder_workaround=3\n",
+        "usb_covers=-1\n",
+        "usb_covers=001\n",
+        "usb_covers=1x\n",
+        "usb_covers=1\nusb_covers=0\n",
+        "theme=gecko\n",
+        "[unknown]\n",
+        "screen_margin=1\u{b}\n",
+        "; End of Oh My 3DO settings.\n",
+    ] {
+        assert!(
+            Settings::parse(text.as_bytes()).is_err(),
+            "Accepted {text:?}"
+        );
     }
     assert!(Settings::parse(&vec![b' '; 512]).is_err());
     let mut bom = b"\xef\xbb\xbf# comment".to_vec();
     bom.resize(512, b' ');
     assert!(Settings::parse(&bom).is_err());
     assert!(Settings::parse(&vec![b' '; 513]).is_err());
-    assert!(Settings { screen_margin: 13, ..Default::default() }.encode().is_err());
-    assert!(Settings { folder_workaround: 3, ..Default::default() }.encode().is_err());
+    assert!(Settings {
+        screen_margin: 13,
+        ..Default::default()
+    }
+    .encode()
+    .is_err());
+    assert!(Settings {
+        folder_workaround: 3,
+        ..Default::default()
+    }
+    .encode()
+    .is_err());
 }
 
 #[test]
@@ -95,7 +147,13 @@ fn missing_ini_loads_without_writing_and_creation_is_undoable() {
     let loaded = config::load(&root).unwrap();
     assert!(!loaded.exists());
     assert!(!root.join(".ohmy3do").exists());
-    let saved = config::save(&loaded, &Settings::default(), &tmp.path().join("cache"), &Job::default()).unwrap();
+    let saved = config::save(
+        &loaded,
+        &Settings::default(),
+        &tmp.path().join("cache"),
+        &Job::default(),
+    )
+    .unwrap();
     assert!(saved.loaded.exists());
     library::undo(&saved.journal).unwrap();
     assert!(!root.join(config::PATH).exists());
@@ -137,7 +195,10 @@ fn invalid_files_cancelled_saves_and_later_edits_are_preserved() {
     let cancelled = Job::default();
     cancelled.cancel.store(true, Ordering::Relaxed);
     assert!(config::save(&loaded, &changed(), &cache, &cancelled).is_err());
-    assert_eq!(fs::read(root.join(config::PATH)).unwrap(), b"hide_adult=0\n");
+    assert_eq!(
+        fs::read(root.join(config::PATH)).unwrap(),
+        b"hide_adult=0\n"
+    );
     let saved = config::save(&loaded, &changed(), &cache, &Job::default()).unwrap();
     put(&root, b"# Later edit\nhide_adult=0\n");
     let before = snapshot(&root);
@@ -155,7 +216,9 @@ fn exported_ini_is_accepted_by_the_actual_console_c_parser() {
     let binary = tmp.path().join("config_check");
     let ini = tmp.path().join("ohmy3do.ini");
     fs::write(&ini, changed().encode().unwrap()).unwrap();
-    fs::write(&code, r#"
+    fs::write(
+        &code,
+        r#"
 #include "menu_config.h"
 #include <assert.h>
 #include <stdio.h>
@@ -169,11 +232,22 @@ int main(int argc, char **argv) {
     assert(c.video_previews && !c.preview_sound && c.hide_adult);
     return 0;
 }
-"#).unwrap();
-    assert!(Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
-        .arg("-std=c89").arg("-I").arg(repo.join("src"))
-        .arg(repo.join("src/menu_config.c")).arg(&code).arg("-o").arg(&binary)
-        .status().unwrap().success());
+"#,
+    )
+    .unwrap();
+    assert!(
+        Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
+            .arg("-std=c89")
+            .arg("-I")
+            .arg(repo.join("src"))
+            .arg(repo.join("src/menu_config.c"))
+            .arg(&code)
+            .arg("-o")
+            .arg(&binary)
+            .status()
+            .unwrap()
+            .success()
+    );
     assert!(Command::new(binary).arg(ini).status().unwrap().success());
 }
 

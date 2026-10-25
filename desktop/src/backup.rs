@@ -226,20 +226,39 @@ pub fn comparison(before: &Archive, after: &Archive) -> Comparison {
     let mut result = Comparison::default();
     for diff in compare(before, after) {
         let state = match diff.state {
-            State::Added => {result.added += 1; "Added"},
-            State::Removed => {result.removed += 1; "Removed"},
-            State::Changed => {result.changed += 1; "Changed"},
-            State::Unchanged => {result.unchanged += 1; "Unchanged"},
+            State::Added => {
+                result.added += 1;
+                "Added"
+            }
+            State::Removed => {
+                result.removed += 1;
+                "Removed"
+            }
+            State::Changed => {
+                result.changed += 1;
+                "Changed"
+            }
+            State::Unchanged => {
+                result.unchanged += 1;
+                "Unchanged"
+            }
         };
         let name = diff.name(before, after).label();
         result.rows.push(ComparisonRow {
-            game: crate::saves::known_title(&name).unwrap_or(&name).to_owned(), name,
-            state: state.into(), changed_bytes: diff.changed_bytes,
-            type_changed: diff.type_changed, name_changed: diff.name_changed,
-            before_size: diff.before.map(|i|before.entries[i].data.len()),
-            after_size: diff.after.map(|i|after.entries[i].data.len()),
+            game: crate::saves::known_title(&name).unwrap_or(&name).to_owned(),
+            name,
+            state: state.into(),
+            changed_bytes: diff.changed_bytes,
+            type_changed: diff.type_changed,
+            name_changed: diff.name_changed,
+            before_size: diff.before.map(|i| before.entries[i].data.len()),
+            after_size: diff.after.map(|i| after.entries[i].data.len()),
             after_index: diff.after,
-            changes: diff.byte_changes(before, after).into_iter().take(512).collect(),
+            changes: diff
+                .byte_changes(before, after)
+                .into_iter()
+                .take(512)
+                .collect(),
         });
     }
     result

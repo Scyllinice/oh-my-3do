@@ -19,8 +19,12 @@ pub fn rx(s: &'static str) -> Regex {
     if let Some(pattern) = patterns.read().expect("regex cache").get(s) {
         return pattern.clone();
     }
-    patterns.write().expect("regex cache")
-        .entry(s).or_insert_with(|| Regex::new(s).expect("constant regex")).clone()
+    patterns
+        .write()
+        .expect("regex cache")
+        .entry(s)
+        .or_insert_with(|| Regex::new(s).expect("constant regex"))
+        .clone()
 }
 pub fn title_key(s: &str) -> String {
     let s = rx(r"\([^)]*\)|\[[^]]*\]").replace_all(s, "");
@@ -179,18 +183,27 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
             let mut names: HashMap<String, Vec<PathBuf>> = HashMap::new();
             for entry in fs::read_dir(parent)? {
                 let entry = entry?;
-                names.entry(entry.file_name().to_string_lossy().to_ascii_lowercase())
-                    .or_default().push(entry.path());
+                names
+                    .entry(entry.file_name().to_string_lossy().to_ascii_lowercase())
+                    .or_default()
+                    .push(entry.path());
             }
             siblings = Some(names);
         }
-        let matches = siblings.as_ref().unwrap().get(&name.to_ascii_lowercase())
-            .map(Vec::as_slice).unwrap_or(&[]);
+        let matches = siblings
+            .as_ref()
+            .unwrap()
+            .get(&name.to_ascii_lowercase())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if matches.len() != 1 || !matches[0].is_file() || f::is_link(&matches[0]) {
             bail!("Missing or ambiguous CUE track: {name}")
         }
         let q = matches[0].canonicalize()?;
-        if q.extension().unwrap_or_default().eq_ignore_ascii_case("cue") {
+        if q.extension()
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("cue")
+        {
             bail!("A CUE track cannot be another CUE")
         }
         if !refs.contains(&q) {
@@ -205,7 +218,9 @@ pub fn cue_refs(p: &Path) -> Result<(String, Vec<PathBuf>)> {
     Ok((text, refs))
 }
 pub fn redundant_cue(p: &Path) -> Result<Option<PathBuf>> {
-    let Ok((text, refs)) = cue_refs(p) else { return Ok(None); };
+    let Ok((text, refs)) = cue_refs(p) else {
+        return Ok(None);
+    };
     Ok(redundant_cue_from_refs(&text, &refs))
 }
 // Collection already has validated text and track paths; reuse that parse.
@@ -269,13 +284,12 @@ pub fn collect(
                         && (e.depth() == 0
                             || !e.file_type().is_dir()
                             || !e.file_name().to_string_lossy().starts_with('.')
-                                && !["$boot", "system"]
-                                    .contains(
-                                        &e.file_name()
-                                            .to_string_lossy()
-                                            .to_ascii_lowercase()
-                                            .as_str(),
-                                    ))
+                                && !["$boot", "system"].contains(
+                                    &e.file_name()
+                                        .to_string_lossy()
+                                        .to_ascii_lowercase()
+                                        .as_str(),
+                                ))
                 })
             {
                 job.check()?;
@@ -287,7 +301,10 @@ pub fn collect(
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_ascii_lowercase();
-                    if !e.file_name().to_string_lossy().eq_ignore_ascii_case("Oh My 3DO - Folder Navigation Helper (Keep).iso")
+                    if !e
+                        .file_name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case("Oh My 3DO - Folder Navigation Helper (Keep).iso")
                         && ["iso", "cue"].contains(&ext.as_str())
                         && !(e.depth() == 1
                             && ["boot.iso", "menu-demo.iso"].contains(
@@ -302,7 +319,13 @@ pub fn collect(
                 }
             }
         } else {
-            anyhow::ensure!(!p.file_name().unwrap_or_default().to_string_lossy().eq_ignore_ascii_case("Oh My 3DO - Folder Navigation Helper (Keep).iso"), "The navigation helper is not a game");
+            anyhow::ensure!(
+                !p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("Oh My 3DO - Folder Navigation Helper (Keep).iso"),
+                "The navigation helper is not a game"
+            );
             let ext = p
                 .extension()
                 .unwrap_or_default()

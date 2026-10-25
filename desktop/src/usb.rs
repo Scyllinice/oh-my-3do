@@ -1,9 +1,7 @@
 use crate::{
-    disc as d, fsutil as f,
+    categories, disc as d, fsutil as f,
     library::{self, Journal},
-    media,
-    categories,
-    Job,
+    media, Job,
 };
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -105,7 +103,11 @@ pub fn find(path: &Path) -> Result<Vec<String>> {
 pub fn inventory(root: &Path, job: &Job) -> Result<(Vec<(String, String)>, usize)> {
     inventory_selected(root, None, job)
 }
-fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Job) -> Result<(Vec<(String, String)>, usize)> {
+fn inventory_selected(
+    root: &Path,
+    selected: Option<&BTreeSet<String>>,
+    job: &Job,
+) -> Result<(Vec<(String, String)>, usize)> {
     let boot = f::safe(root, "boot.iso")?;
     d::issue(&boot)?;
     if fs::metadata(&boot)?.len() > 16 * 1024 * 1024 {
@@ -130,7 +132,9 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
         bail!("Find index is stale. Rebuild indexes on the Library tab first.")
     }
     if let Some(selected) = selected {
-        if !selected.iter().all(|p| games.contains(p)) { bail!("Selected games changed; reload the game list"); }
+        if !selected.iter().all(|p| games.contains(p)) {
+            bail!("Selected games changed; reload the game list");
+        }
     }
     let chosen = |path: &str| selected.is_none_or(|s| s.contains(path));
     let mut files = BTreeSet::from([
@@ -139,7 +143,9 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
         ".ohmy3do/library.3di".into(),
     ]);
     for (disc, set) in &sets {
-        if !chosen(&library::relative(root, disc)?) { continue; }
+        if !chosen(&library::relative(root, disc)?) {
+            continue;
+        }
         for p in set {
             files.insert(library::relative(root, p)?);
         }
@@ -163,16 +169,28 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
         }
         files.insert(".ohmy3do/metadata.3di".into());
     }
-    for path in &games {if chosen(path) {let name=crate::game_info::filename(path);if f::safe(root,&name)?.is_file(){beside.insert(crate::game_info::drive_filename(path),name);}}}
-    let cheats=f::safe(root,crate::save_cheats::JSON_PATH)?;
-    if cheats.is_file(){
-        let db=crate::save_cheats::Database::read(&cheats)?;
-        let binary=f::safe(root,crate::save_cheats::BINARY_PATH)?;
+    for path in &games {
+        if chosen(path) {
+            let name = crate::game_info::filename(path);
+            if f::safe(root, &name)?.is_file() {
+                beside.insert(crate::game_info::drive_filename(path), name);
+            }
+        }
+    }
+    let cheats = f::safe(root, crate::save_cheats::JSON_PATH)?;
+    if cheats.is_file() {
+        let db = crate::save_cheats::Database::read(&cheats)?;
+        let binary = f::safe(root, crate::save_cheats::BINARY_PATH)?;
         files.insert(crate::save_cheats::JSON_PATH.into());
-        if binary.is_file(){
-            if fs::metadata(&binary)?.len()>crate::save_cheats::MAX_BINARY as u64{bail!("Oversized console cheat database");}
-            if !db.matches_binary(&fs::read(&binary)?)?{bail!("Cheat database source and console file differ; reinstall them with the database editor");}
-            files.insert(crate::save_cheats::JSON_PATH.into());files.insert(crate::save_cheats::BINARY_PATH.into());
+        if binary.is_file() {
+            if fs::metadata(&binary)?.len() > crate::save_cheats::MAX_BINARY as u64 {
+                bail!("Oversized console cheat database");
+            }
+            if !db.matches_binary(&fs::read(&binary)?)? {
+                bail!("Cheat database source and console file differ; reinstall them with the database editor");
+            }
+            files.insert(crate::save_cheats::JSON_PATH.into());
+            files.insert(crate::save_cheats::BINARY_PATH.into());
         }
     }
     let names = f::safe(root, ".ohmy3do/save-names.txt")?;
@@ -192,7 +210,9 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
             let Some(disc) = homes.get(&game) else {
                 bail!("Media index refers to a missing game")
             };
-            if !chosen(disc) { continue; }
+            if !chosen(disc) {
+                continue;
+            }
             let extension = Path::new(&name)
                 .extension()
                 .unwrap_or_default()
@@ -286,15 +306,27 @@ fn personal(name: &str) -> bool {
 }
 /// Category/Region/Game folders that changed category in staging but are
 /// still at their old place on the drive. Staging's own folders are never moved.
-fn folder_moves(target: &Path, files: &[(String, String)], source_config: &categories::Categories) -> Result<Vec<(String, String)>> {
-    let target_config=categories::load(target)?;
-    let mut moves=vec![];
+fn folder_moves(
+    target: &Path,
+    files: &[(String, String)],
+    source_config: &categories::Categories,
+) -> Result<Vec<(String, String)>> {
+    let target_config = categories::load(target)?;
+    let mut moves = vec![];
     for category in &source_config.categories {
-        if let Some(old)=target_config.categories.iter().find(|c|c.id==category.id && c.name!=category.name) {
-            if f::safe(target,&old.name)?.exists() {
-                if !f::safe(target,&old.name)?.is_dir() {bail!("Category path is occupied by a file: {}",old.name);}
-                if f::safe(target,&category.name)?.exists() {bail!("Both category folders exist on the drive: {} and {}. Resolve them before copying.",old.name,category.name);}
-                moves.push((old.name.clone(),category.name.clone()));
+        if let Some(old) = target_config
+            .categories
+            .iter()
+            .find(|c| c.id == category.id && c.name != category.name)
+        {
+            if f::safe(target, &old.name)?.exists() {
+                if !f::safe(target, &old.name)?.is_dir() {
+                    bail!("Category path is occupied by a file: {}", old.name);
+                }
+                if f::safe(target, &category.name)?.exists() {
+                    bail!("Both category folders exist on the drive: {} and {}. Resolve them before copying.",old.name,category.name);
+                }
+                moves.push((old.name.clone(), category.name.clone()));
             }
         }
     }
@@ -307,10 +339,20 @@ fn folder_moves(target: &Path, files: &[(String, String)], source_config: &categ
     }
     let mut found = HashMap::new();
     for category in target_config.names() {
-        if moves.iter().any(|(old,_)|old==&category) {continue;}
-        let Ok(regions) = fs::read_dir(target.join(&category)) else { continue };
-        for region in regions.flatten().filter(|e| e.path().is_dir() && !f::is_link(&e.path())) {
-            for game in fs::read_dir(region.path())?.flatten().filter(|e| e.path().is_dir() && !f::is_link(&e.path())) {
+        if moves.iter().any(|(old, _)| old == &category) {
+            continue;
+        }
+        let Ok(regions) = fs::read_dir(target.join(&category)) else {
+            continue;
+        };
+        for region in regions
+            .flatten()
+            .filter(|e| e.path().is_dir() && !f::is_link(&e.path()))
+        {
+            for game in fs::read_dir(region.path())?
+                .flatten()
+                .filter(|e| e.path().is_dir() && !f::is_link(&e.path()))
+            {
                 let folder = format!(
                     "{category}/{}/{}",
                     region.file_name().to_string_lossy(),
@@ -324,12 +366,20 @@ fn folder_moves(target: &Path, files: &[(String, String)], source_config: &categ
         }
     }
     for folder in wanted.values() {
-        if moves.iter().any(|(_,new)|folder.starts_with(&format!("{new}/"))) {continue;}
+        if moves
+            .iter()
+            .any(|(_, new)| folder.starts_with(&format!("{new}/")))
+        {
+            continue;
+        }
         if target.join(folder).exists() {
             continue;
         }
         // One unambiguous match only; anything else is copied as before.
-        if let Some([old]) = found.get(&f::fold(folder.split_once('/').unwrap().1)).map(Vec::as_slice) {
+        if let Some([old]) = found
+            .get(&f::fold(folder.split_once('/').unwrap().1))
+            .map(Vec::as_slice)
+        {
             moves.push((old.clone(), folder.clone()));
         }
     }
@@ -339,7 +389,11 @@ fn folder_moves(target: &Path, files: &[(String, String)], source_config: &categ
 fn moved_paths(target: &Path, moves: &[(String, String)]) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for (old, new) in moves {
-        for entry in walkdir::WalkDir::new(target.join(old)).follow_links(false).into_iter().flatten() {
+        for entry in walkdir::WalkDir::new(target.join(old))
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+        {
             if let Ok(rest) = entry.path().strip_prefix(target.join(old)) {
                 let rest = rest.to_string_lossy().replace('\\', "/");
                 if entry.file_type().is_file() {
@@ -358,7 +412,9 @@ fn report_path(source: &Path, target: &Path, cache: &Path) -> PathBuf {
     cache.join("usb-copy").join(format!("{key}.json"))
 }
 fn read_report(path: &Path) -> Option<CopyPlan> {
-    fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok())
+    fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
 }
 /// Saves the copy record, keeping earlier verified entries a smaller copy
 /// did not touch, so one game's copy doesn't discard the whole drive's record.
@@ -372,7 +428,9 @@ fn save_report(path: &Path, plan: &CopyPlan) -> Result<()> {
     }
     f::atomic(path, &serde_json::to_vec_pretty(&report)?)
 }
-fn plan_cheat_exists(root:&Path,name:&str)->bool {root.join(name).exists()}
+fn plan_cheat_exists(root: &Path, name: &str) -> bool {
+    root.join(name).exists()
+}
 pub fn plan(
     source: &Path,
     target: &Path,
@@ -383,15 +441,37 @@ pub fn plan(
     plan_impl(source, target, cache, verify, None, job)
 }
 /// Selection contains complete game groups from `choices`, never individual tracks.
-pub fn plan_selected(source: &Path, target: &Path, cache: &Path, verify: bool, selected: &[String], job: &Job) -> Result<CopyPlan> {
+pub fn plan_selected(
+    source: &Path,
+    target: &Path,
+    cache: &Path,
+    verify: bool,
+    selected: &[String],
+    job: &Job,
+) -> Result<CopyPlan> {
     let indexed = find(&f::safe(&f::root(source)?, ".ohmy3do/library.3di")?)?;
-    if !selected.iter().all(|p| indexed.contains(p)) { bail!("Selected games changed; reload the game list"); }
+    if !selected.iter().all(|p| indexed.contains(p)) {
+        bail!("Selected games changed; reload the game list");
+    }
     let config = categories::load(source)?;
-    let groups = selected.iter().map(|p| f::fold(&game_label(p,&config))).collect::<BTreeSet<_>>();
-    let expanded = indexed.into_iter().filter(|p| groups.contains(&f::fold(&game_label(p,&config)))).collect();
+    let groups = selected
+        .iter()
+        .map(|p| f::fold(&game_label(p, &config)))
+        .collect::<BTreeSet<_>>();
+    let expanded = indexed
+        .into_iter()
+        .filter(|p| groups.contains(&f::fold(&game_label(p, &config))))
+        .collect();
     plan_impl(source, target, cache, verify, Some(expanded), job)
 }
-fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected: Option<BTreeSet<String>>, job: &Job) -> Result<CopyPlan> {
+fn plan_impl(
+    source: &Path,
+    target: &Path,
+    cache: &Path,
+    verify: bool,
+    selected: Option<BTreeSet<String>>,
+    job: &Job,
+) -> Result<CopyPlan> {
     let source = f::root(source)?;
     let target = f::root(target)?;
     if source.starts_with(&target) || target.starts_with(&source) {
@@ -403,23 +483,37 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
     let (mut files, games) = inventory_selected(&source, selected.as_ref(), job)?;
     let report = report_path(&source, &target, cache);
     let previous: HashMap<String, CopyItem> = read_report(&report)
-        .map(|p| p.files.into_iter().map(|file| (file.path.clone(), file)).collect())
+        .map(|p| {
+            p.files
+                .into_iter()
+                .map(|file| (file.path.clone(), file))
+                .collect()
+        })
         .unwrap_or_default();
-    categories::for_transfer(&source,&target)?;
+    categories::for_transfer(&source, &target)?;
     let moves = folder_moves(&target, &files, &categories::load(&source)?)?;
-    let selection = selected.as_ref().map(|s| s.iter().cloned().collect::<Vec<_>>());
+    let selection = selected
+        .as_ref()
+        .map(|s| s.iter().cloned().collect::<Vec<_>>());
     let generated = if let Some(selected) = &selection {
         crate::usb_selection::indexes(&source, &target, selected, &moves, job)?
-    } else { BTreeMap::new() };
-    files.retain(|(name,_)| !generated.contains_key(name));
+    } else {
+        BTreeMap::new()
+    };
+    files.retain(|(name, _)| !generated.contains_key(name));
     let remaps = moved_paths(&target, &moves);
     let mut items = vec![];
     let mut bytes = 0;
     const REVIEW_UNITS: u64 = 1_000_000;
-    let review_total = (files.len()+generated.len()).max(1) as u64 * REVIEW_UNITS;
-    job.report(0,review_total,"Reviewing files");
-    for (review_index,(name, source_name)) in files.into_iter().enumerate() {
-        let file_job = job.progress_range(review_index as u64*REVIEW_UNITS,REVIEW_UNITS,review_total,"Reviewing files");
+    let review_total = (files.len() + generated.len()).max(1) as u64 * REVIEW_UNITS;
+    job.report(0, review_total, "Reviewing files");
+    for (review_index, (name, source_name)) in files.into_iter().enumerate() {
+        let file_job = job.progress_range(
+            review_index as u64 * REVIEW_UNITS,
+            REVIEW_UNITS,
+            review_total,
+            "Reviewing files",
+        );
         job.check()?;
         let src = f::safe(&source, &source_name)?;
         // A file in a folder that will move is compared where it is now.
@@ -451,9 +545,20 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
             config(&dest)?
         }
         let mut trusted = false;
-        let cheat_file=[crate::save_cheats::JSON_PATH,crate::save_cheats::BINARY_PATH].contains(&name.as_str());
-        let preserve_cheats=cheat_file && [crate::save_cheats::JSON_PATH,crate::save_cheats::BINARY_PATH].iter().any(|path|plan_cheat_exists(&target,path));
-        let remapped = personal(&name) && !cheat_file
+        let cheat_file = [
+            crate::save_cheats::JSON_PATH,
+            crate::save_cheats::BINARY_PATH,
+        ]
+        .contains(&name.as_str());
+        let preserve_cheats = cheat_file
+            && [
+                crate::save_cheats::JSON_PATH,
+                crate::save_cheats::BINARY_PATH,
+            ]
+            .iter()
+            .any(|path| plan_cheat_exists(&target, path));
+        let remapped = personal(&name)
+            && !cheat_file
             && dest.is_file()
             && !moves.is_empty()
             && if name == ".ohmy3do/last-position.txt" {
@@ -496,7 +601,20 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
             if !verify && size == ds.0 && (receipt || (disc && f::same_time(source_stamp, ds.1))) {
                 trusted = receipt;
                 "unchanged"
-            } else if size == ds.0 && f::sha256(&src, &file_job.progress_range(0,size.max(1),size.max(1)*2,"Checking source"))? == f::sha256(&dest, &file_job.progress_range(size.max(1),size.max(1),size.max(1)*2,"Checking destination"))? {
+            } else if size == ds.0
+                && f::sha256(
+                    &src,
+                    &file_job.progress_range(0, size.max(1), size.max(1) * 2, "Checking source"),
+                )? == f::sha256(
+                    &dest,
+                    &file_job.progress_range(
+                        size.max(1),
+                        size.max(1),
+                        size.max(1) * 2,
+                        "Checking destination",
+                    ),
+                )?
+            {
                 trusted = true;
                 "unchanged"
             } else if disc {
@@ -517,33 +635,81 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
             destination_stamp,
             verified: trusted,
         });
-        job.report((review_index as u64+1)*REVIEW_UNITS,review_total,"Reviewing files");
+        job.report(
+            (review_index as u64 + 1) * REVIEW_UNITS,
+            review_total,
+            "Reviewing files",
+        );
     }
-    for (generated_index,(name, content)) in generated.iter().enumerate() {
+    for (generated_index, (name, content)) in generated.iter().enumerate() {
         let dest = f::safe(&target, name)?;
-        if dest.exists() && !dest.is_file() { bail!("Destination is occupied: {name}"); }
-        let destination_stamp = if dest.is_file() { Some(f::stamp(&dest)?.1) } else { None };
-        let status = if destination_stamp.is_none() { "copy" } else if fs::read(&dest)? == *content { "unchanged" } else { "update" };
-        if status != "unchanged" { bytes += content.len() as u64; }
-        items.push(CopyItem { path: name.clone(), source_path: None, status: status.into(), size: content.len() as u64, source_stamp: 0, destination_stamp, verified: status == "unchanged" });
-        job.report(review_total-(generated.len() as u64-generated_index as u64-1)*REVIEW_UNITS,review_total,"Reviewing files");
+        if dest.exists() && !dest.is_file() {
+            bail!("Destination is occupied: {name}");
+        }
+        let destination_stamp = if dest.is_file() {
+            Some(f::stamp(&dest)?.1)
+        } else {
+            None
+        };
+        let status = if destination_stamp.is_none() {
+            "copy"
+        } else if fs::read(&dest)? == *content {
+            "unchanged"
+        } else {
+            "update"
+        };
+        if status != "unchanged" {
+            bytes += content.len() as u64;
+        }
+        items.push(CopyItem {
+            path: name.clone(),
+            source_path: None,
+            status: status.into(),
+            size: content.len() as u64,
+            source_stamp: 0,
+            destination_stamp,
+            verified: status == "unchanged",
+        });
+        job.report(
+            review_total - (generated.len() as u64 - generated_index as u64 - 1) * REVIEW_UNITS,
+            review_total,
+            "Reviewing files",
+        );
     }
     // Descriptions now sit beside their discs; the menu no longer reads these.
     let old_info = f::safe(&target, ".ohmy3do/info")?;
     if old_info.is_dir() {
-        let mut names = fs::read_dir(&old_info)?.map(|entry| Ok(entry?.file_name())).collect::<Result<Vec<_>>>()?;
+        let mut names = fs::read_dir(&old_info)?
+            .map(|entry| Ok(entry?.file_name()))
+            .collect::<Result<Vec<_>>>()?;
         names.sort();
         for file_name in names {
-            let Some(file_name) = file_name.to_str() else { continue };
-            if !crate::game_info::old_drive_file(file_name, &old_info.join(file_name))? { continue; }
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            if !crate::game_info::old_drive_file(file_name, &old_info.join(file_name))? {
+                continue;
+            }
             let name = format!(".ohmy3do/info/{file_name}");
             let (size, stamp) = f::stamp(&f::safe(&target, &name)?)?;
-            items.push(CopyItem { path: name, source_path: None, status: "remove".into(), size, source_stamp: 0, destination_stamp: Some(stamp), verified: false });
+            items.push(CopyItem {
+                path: name,
+                source_path: None,
+                status: "remove".into(),
+                size,
+                source_stamp: 0,
+                destination_stamp: Some(stamp),
+                verified: false,
+            });
         }
     }
     // Menu-written lists on the drive follow moved folders even when staging has none.
     let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
-    for name in [".ohmy3do/favorites.txt", ".ohmy3do/recent.txt", ".ohmy3do/last-position.txt"] {
+    for name in [
+        ".ohmy3do/favorites.txt",
+        ".ohmy3do/recent.txt",
+        ".ohmy3do/last-position.txt",
+    ] {
         let dest = f::safe(&target, name)?;
         if moves.is_empty() || items.iter().any(|i| i.path == name) || !dest.is_file() {
             continue;
@@ -597,13 +763,27 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
         bail!("Insufficient free space for this copy and its working-space reserve; review the copy again")
     }
     if let Some(selected) = &plan.selection {
-        if crate::usb_selection::indexes(&plan.source, &plan.destination, selected, &plan.moves, job)? != plan.generated {
+        if crate::usb_selection::indexes(
+            &plan.source,
+            &plan.destination,
+            selected,
+            &plan.moves,
+            job,
+        )? != plan.generated
+        {
             bail!("Library or USB indexes changed since preview; review the copy again");
         }
     }
-    let category_config=categories::for_transfer(&plan.source,&plan.destination)?;
-    let total_bytes = plan.files.iter().filter(|file| ["copy","update"].contains(&file.status.as_str())).map(|file|file.size).sum::<u64>().max(1);
-    let mut completed_bytes = 0u64;job.report(0,total_bytes,"Copying and verifying files");
+    let category_config = categories::for_transfer(&plan.source, &plan.destination)?;
+    let total_bytes = plan
+        .files
+        .iter()
+        .filter(|file| ["copy", "update"].contains(&file.status.as_str()))
+        .map(|file| file.size)
+        .sum::<u64>()
+        .max(1);
+    let mut completed_bytes = 0u64;
+    job.report(0, total_bytes, "Copying and verifying files");
     let mut tx = Journal::new(&plan.destination, cache)?;
     let mut receipt = plan.clone();
     let result = (|| -> Result<()> {
@@ -649,18 +829,32 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 continue;
             };
             job.check()?;
-            let file_job = job.progress_range(completed_bytes,file.size,total_bytes,"Copying and verifying files");
+            let file_job = job.progress_range(
+                completed_bytes,
+                file.size,
+                total_bytes,
+                "Copying and verifying files",
+            );
             if let Some(content) = plan.generated.get(&file.path) {
                 let dest = f::safe(&plan.destination, &file.path)?;
-                let stamp = if dest.exists() { Some(f::stamp(&dest)?.1) } else { None };
-                if stamp != file.destination_stamp { bail!("Destination changed since preview: {}", file.path); }
+                let stamp = if dest.exists() {
+                    Some(f::stamp(&dest)?.1)
+                } else {
+                    None
+                };
+                if stamp != file.destination_stamp {
+                    bail!("Destination changed since preview: {}", file.path);
+                }
                 job.check()?;
                 tx.write(&file.path, content)?;
-                if f::read_from_disk(&dest)? != *content { bail!("Index copy readback failed"); }
+                if f::read_from_disk(&dest)? != *content {
+                    bail!("Index copy readback failed");
+                }
                 receipt.files[i].status = "verified".into();
                 receipt.files[i].verified = true;
                 receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
-                completed_bytes += file.size;job.report(completed_bytes,total_bytes,"Copying and verifying files");
+                completed_bytes += file.size;
+                job.report(completed_bytes, total_bytes, "Copying and verifying files");
                 continue;
             }
             let src = f::safe(
@@ -698,20 +892,50 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 };
                 let bytes = fs::read(&src)?;
                 tx.write(&file.path, &bytes)?;
-                if f::sha256_from_disk(&dest, &file_job.progress_range(0,file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? != f::sha256(&src, &file_job.progress_range(file.size.max(1),file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? {
+                if f::sha256_from_disk(
+                    &dest,
+                    &file_job.progress_range(
+                        0,
+                        file.size.max(1),
+                        file.size.max(1) * 2,
+                        "Verifying copied file",
+                    ),
+                )? != f::sha256(
+                    &src,
+                    &file_job.progress_range(
+                        file.size.max(1),
+                        file.size.max(1),
+                        file.size.max(1) * 2,
+                        "Verifying copied file",
+                    ),
+                )? {
                     bail!("Copy readback failed")
                 }
             }
             receipt.files[i].status = "verified".into();
             receipt.files[i].verified = true;
             receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
-            completed_bytes += file.size;job.report(completed_bytes,total_bytes,"Copying and verifying files");
+            completed_bytes += file.size;
+            job.report(completed_bytes, total_bytes, "Copying and verifying files");
         }
-        for (i, file) in plan.files.iter().enumerate().filter(|(_, file)| file.status == "remove") {
+        for (i, file) in plan
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| file.status == "remove")
+        {
             job.check()?;
             let dest = f::safe(&plan.destination, &file.path)?;
-            if !dest.exists() { continue; }
-            if f::stamp(&dest)? != (file.size, file.destination_stamp.context("Missing destination stamp")?) {
+            if !dest.exists() {
+                continue;
+            }
+            if f::stamp(&dest)?
+                != (
+                    file.size,
+                    file.destination_stamp
+                        .context("Missing destination stamp")?,
+                )
+            {
                 bail!("Destination changed since preview: {}", file.path)
             }
             job.say(format!("Removing old {}", file.path));
@@ -729,11 +953,14 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
             }
         }
         crate::setup::ensure_support(&plan.destination, &mut tx, &Default::default(), job)?;
-        tx.write(categories::PATH,&category_config.encode()?)?;
-        let save_slots=crate::save_catalog::scan(&plan.destination.join(".ohmy3do/saves"),job)?;
-        crate::save_catalog::write(&save_slots,&mut tx,".ohmy3do/saves/",job)?;
+        tx.write(categories::PATH, &category_config.encode()?)?;
+        let save_slots = crate::save_catalog::scan(&plan.destination.join(".ohmy3do/saves"), job)?;
+        crate::save_catalog::write(&save_slots, &mut tx, ".ohmy3do/saves/", job)?;
         tx.finish()?;
-        save_report(&report_path(&plan.source, &plan.destination, cache), &receipt)?;
+        save_report(
+            &report_path(&plan.source, &plan.destination, cache),
+            &receipt,
+        )?;
         Ok(())
     })();
     if let Err(error) = result {
@@ -777,23 +1004,40 @@ pub struct GameChoice {
 }
 fn game_label(path: &str, config: &categories::Categories) -> String {
     let parts = path.split('/').collect::<Vec<_>>();
-    if parts.len() >= 4 && config.contains(parts[0]) { parts[..3].join("/") } else { path.into() }
+    if parts.len() >= 4 && config.contains(parts[0]) {
+        parts[..3].join("/")
+    } else {
+        path.into()
+    }
 }
 pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
     let root = f::root(root)?;
-    let indexed = find(&f::safe(&root, ".ohmy3do/library.3di")?)?.into_iter().collect::<BTreeSet<_>>();
+    let indexed = find(&f::safe(&root, ".ohmy3do/library.3di")?)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let sets = d::collect(&[root.clone()], None, job)?;
-    let actual = sets.iter().map(|(p,_)| library::relative(&root,p)).collect::<Result<BTreeSet<_>>>()?;
-    if indexed != actual { bail!("Find index is stale. Rebuild indexes on the Library tab first."); }
+    let actual = sets
+        .iter()
+        .map(|(p, _)| library::relative(&root, p))
+        .collect::<Result<BTreeSet<_>>>()?;
+    if indexed != actual {
+        bail!("Find index is stale. Rebuild indexes on the Library tab first.");
+    }
     let config = categories::load(&root)?;
     let mut groups = BTreeMap::<String, GameChoice>::new();
     for (disc, files) in sets {
         job.check()?;
-        let path = library::relative(&root,&disc)?;
-        let label = game_label(&path,&config);
-        let group = groups.entry(f::fold(&label)).or_insert_with(|| GameChoice { label, discs: vec![], bytes: 0 });
+        let path = library::relative(&root, &disc)?;
+        let label = game_label(&path, &config);
+        let group = groups.entry(f::fold(&label)).or_insert_with(|| GameChoice {
+            label,
+            discs: vec![],
+            bytes: 0,
+        });
         group.discs.push(path);
-        for file in files { group.bytes += fs::metadata(file)?.len(); }
+        for file in files {
+            group.bytes += fs::metadata(file)?.len();
+        }
     }
     Ok((root, groups.into_values().collect()))
 }
@@ -816,22 +1060,49 @@ pub struct StorageEstimate {
     pub fits: bool,
 }
 pub fn storage_estimate(plan: &CopyPlan) -> Result<StorageEstimate> {
-    Ok(estimate_with_space(plan, fs2::available_space(&plan.destination)?))
+    Ok(estimate_with_space(
+        plan,
+        fs2::available_space(&plan.destination)?,
+    ))
 }
 /// Separate space arithmetic from filesystem queries for deterministic checks.
 pub fn estimate_with_space(plan: &CopyPlan, available: u64) -> StorageEstimate {
-    let mut estimate = StorageEstimate {games:0,covers:0,previews:0,support:0,total:0,to_copy:0,reserve:0,required:0,available,remaining:0,shortfall:0,fits:false};
+    let mut estimate = StorageEstimate {
+        games: 0,
+        covers: 0,
+        previews: 0,
+        support: 0,
+        total: 0,
+        to_copy: 0,
+        reserve: 0,
+        required: 0,
+        available,
+        remaining: 0,
+        shortfall: 0,
+        fits: false,
+    };
     for file in plan.files.iter().filter(|file| file.status != "remove") {
         let name = file.path.to_ascii_lowercase();
-        let support = name.starts_with(".ohmy3do/") || name.contains("/.ohmy3do/") || name == "boot.iso";
-        let bucket = if support && (name.ends_with(".3dc") || name.ends_with(".png")) { &mut estimate.covers }
-            else if support && name.ends_with(".3dv") { &mut estimate.previews }
-            else if support { &mut estimate.support } else { &mut estimate.games };
+        let support =
+            name.starts_with(".ohmy3do/") || name.contains("/.ohmy3do/") || name == "boot.iso";
+        let bucket = if support && (name.ends_with(".3dc") || name.ends_with(".png")) {
+            &mut estimate.covers
+        } else if support && name.ends_with(".3dv") {
+            &mut estimate.previews
+        } else if support {
+            &mut estimate.support
+        } else {
+            &mut estimate.games
+        };
         *bucket = bucket.saturating_add(file.size);
         estimate.total = estimate.total.saturating_add(file.size);
-        if ["copy", "update"].contains(&file.status.as_str()) { estimate.to_copy = estimate.to_copy.saturating_add(file.size); }
+        if ["copy", "update"].contains(&file.status.as_str()) {
+            estimate.to_copy = estimate.to_copy.saturating_add(file.size);
+        }
     }
-    estimate.reserve = (8 * 1024 * 1024).max(estimate.to_copy / 100).max((plan.files.len() as u64).saturating_mul(16 * 1024));
+    estimate.reserve = (8 * 1024 * 1024)
+        .max(estimate.to_copy / 100)
+        .max((plan.files.len() as u64).saturating_mul(16 * 1024));
     estimate.required = estimate.to_copy.saturating_add(estimate.reserve);
     estimate.fits = estimate.required <= available;
     estimate.remaining = available.saturating_sub(estimate.required);

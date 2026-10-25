@@ -57,7 +57,8 @@ impl Slot {
             }
         }
         haystack.push_str(&self.aliases.join(" "));
-        haystack.push(' ');haystack.push_str(&self.notes);
+        haystack.push(' ');
+        haystack.push_str(&self.notes);
         let haystack = haystack.to_ascii_lowercase();
         query
             .split_whitespace()
@@ -150,7 +151,9 @@ fn mapping(directory: &Path) -> Vec<(String, String, bool)> {
                 .ok()
                 .and_then(|file| {
                     let mut b = Vec::new();
-                    file.take(crate::saves::SAVE_NAMES_BYTES as u64).read_to_end(&mut b).ok()?;
+                    file.take(crate::saves::SAVE_NAMES_BYTES as u64)
+                        .read_to_end(&mut b)
+                        .ok()?;
                     (b.len() < crate::saves::SAVE_NAMES_BYTES).then_some(b)
                 })
                 .unwrap_or_default();
@@ -231,7 +234,10 @@ pub fn scan(directory: &Path, job: &Job) -> Result<Vec<Slot>> {
             id,
             Slot {
                 id,
-                notes:crate::slot_notes::read(&path).ok().flatten().unwrap_or_default(),
+                notes: crate::slot_notes::read(&path)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 path,
                 label,
                 files,

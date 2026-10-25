@@ -3,10 +3,16 @@ fn main() {
     // A precompiled resource keeps native and cargo-xwin builds independent
     // of the host's resource compiler. Regenerate it with prepare-branding.py.
     println!("cargo:rerun-if-changed=../assets/app-icon.res");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && std::env::var_os("CARGO_FEATURE_LEGACY_UI").is_some() {
-        let icon = std::fs::canonicalize("../assets/app-icon.res")
-            .expect("Missing Windows icon resource; run tools/prepare-branding.py --windows-resource");
-        println!("cargo:rustc-link-arg-bin=oh-my-3do-library={}", icon.display());
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var_os("CARGO_FEATURE_LEGACY_UI").is_some()
+    {
+        let icon = std::fs::canonicalize("../assets/app-icon.res").expect(
+            "Missing Windows icon resource; run tools/prepare-branding.py --windows-resource",
+        );
+        println!(
+            "cargo:rustc-link-arg-bin=oh-my-3do-library={}",
+            icon.display()
+        );
     }
     let source = "../tools/preview-encoder.c";
     println!("cargo:rerun-if-changed={source}");
@@ -16,7 +22,11 @@ fn main() {
         .file(source)
         .define(
             "OH3DO_THREAD_LOCAL",
-            if msvc { "__declspec(thread)" } else { "__thread" },
+            if msvc {
+                "__declspec(thread)"
+            } else {
+                "__thread"
+            },
         )
         .opt_level(2)
         .warnings(true)
@@ -28,7 +38,11 @@ fn main() {
     println!("cargo:rerun-if-changed=../src/preview_v7.c");
     println!("cargo:rerun-if-changed=../src/preview_v7.h");
     let mut build = cc::Build::new();
-    build.file(streamed).include("../src").opt_level(2).warnings(true);
+    build
+        .file(streamed)
+        .include("../src")
+        .opt_level(2)
+        .warnings(true);
     if !msvc {
         build.flag("-std=c99");
     }

@@ -19,8 +19,10 @@ fn main() {
             if let Err(e) = &result {
                 let _ = fs::write(&plan.log, format!("{e:#}"));
                 if let Err(restart) = oh_my_3do_library::self_update::restart_previous(&plan) {
-                    let _ = oh_my_3do_library::self_update::record_result(&plan,
-                        &Err(anyhow::anyhow!("{e:#}\n{restart:#}")));
+                    let _ = oh_my_3do_library::self_update::record_result(
+                        &plan,
+                        &Err(anyhow::anyhow!("{e:#}\n{restart:#}")),
+                    );
                 }
             }
             result
@@ -50,7 +52,9 @@ fn main() {
     let handle = state.clone();
     let mut context = tauri::generate_context!();
     if args.iter().any(|a| a == "--update-exit") {
-        for window in &mut context.config_mut().app.windows { window.visible = false; }
+        for window in &mut context.config_mut().app.windows {
+            window.visible = false;
+        }
     }
     let result = tauri::Builder::default()
         .manage(bridge::Bridge(state))

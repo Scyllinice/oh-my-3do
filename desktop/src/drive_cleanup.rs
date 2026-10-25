@@ -102,7 +102,10 @@ pub fn review(root: &Path, job: &Job) -> Result<Plan> {
             // Links are never followed or removed, but one inside a support
             // folder would keep that folder from being cleaned out.
             if inside_support_folder(&root, path) {
-                bail!("Links are unsupported inside Oh My 3DO folders: {}", path.display());
+                bail!(
+                    "Links are unsupported inside Oh My 3DO folders: {}",
+                    path.display()
+                );
             }
             continue;
         }
@@ -119,7 +122,11 @@ pub fn review(root: &Path, job: &Job) -> Result<Plan> {
     plan.saves = plan
         .files
         .iter()
-        .filter(|file| file.path.to_ascii_lowercase().starts_with(".ohmy3do/saves/"))
+        .filter(|file| {
+            file.path
+                .to_ascii_lowercase()
+                .starts_with(".ohmy3do/saves/")
+        })
         .cloned()
         .collect();
     plan.bytes = plan.files.iter().map(|file| file.bytes).sum();
@@ -133,7 +140,11 @@ pub fn apply(plan: &Plan, saves_to: Option<&Path>, job: &Job) -> Result<Cleaned>
         review(&plan.root, job)? == *plan,
         "The drive changed since the review. Review cleanup again."
     );
-    let mut cleaned = Cleaned { files: 0, saves_copied_to: None, warnings: vec![] };
+    let mut cleaned = Cleaned {
+        files: 0,
+        saves_copied_to: None,
+        warnings: vec![],
+    };
 
     if let (Some(destination), false) = (saves_to, plan.saves.is_empty()) {
         cleaned.saves_copied_to = Some(copy_saves(plan, destination, job)?);
@@ -158,7 +169,9 @@ pub fn apply(plan: &Plan, saves_to: Option<&Path>, job: &Job) -> Result<Cleaned>
         let path = f::safe(&plan.root, folder)?;
         if path.is_dir() {
             if let Err(error) = fs::remove_dir(&path) {
-                cleaned.warnings.push(format!("Kept {}: {error}", path.display()));
+                cleaned
+                    .warnings
+                    .push(format!("Kept {}: {error}", path.display()));
             }
         }
     }
@@ -191,7 +204,12 @@ fn copy_saves(plan: &Plan, destination: &Path, job: &Job) -> Result<PathBuf> {
         let target = folder.join(inside_saves);
         let step = save.bytes.max(1) * 2;
         // copy_new reads each copy back from the disk and compares it.
-        f::copy_new(&source, &target, &job.progress_range(done, step, total, "Copying save backups"), None)?;
+        f::copy_new(
+            &source,
+            &target,
+            &job.progress_range(done, step, total, "Copying save backups"),
+            None,
+        )?;
         done += step;
     }
     Ok(folder)
@@ -199,7 +217,11 @@ fn copy_saves(plan: &Plan, destination: &Path, job: &Job) -> Result<PathBuf> {
 
 fn add_file(plan: &mut Plan, root: &Path, path: &Path) -> Result<()> {
     let (bytes, modified) = f::stamp(path)?;
-    plan.files.push(Entry { path: library::relative(root, path)?, bytes, modified });
+    plan.files.push(Entry {
+        path: library::relative(root, path)?,
+        bytes,
+        modified,
+    });
     Ok(())
 }
 
@@ -217,10 +239,13 @@ fn is_menu_image(path: &Path) -> Result<bool> {
 /// The 2 KiB placeholder the app puts in category folders, recognized by name
 /// and exact contents.
 fn is_navigation_helper(path: &Path) -> Result<bool> {
-    let named = path
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(setup::NAVIGATION_HELPER));
-    Ok(named && fs::metadata(path)?.len() == 2048 && fs::read(path)? == setup::navigation_helper_data())
+    let named = path.file_name().is_some_and(|name| {
+        name.to_string_lossy()
+            .eq_ignore_ascii_case(setup::NAVIGATION_HELPER)
+    });
+    Ok(named
+        && fs::metadata(path)?.len() == 2048
+        && fs::read(path)? == setup::navigation_helper_data())
 }
 
 fn is_support_folder(name: &std::ffi::OsStr) -> bool {
@@ -229,12 +254,22 @@ fn is_support_folder(name: &std::ffi::OsStr) -> bool {
 
 /// Whether `path` lies inside any `.ohmy3do` folder on the drive.
 fn inside_support_folder(root: &Path, path: &Path) -> bool {
-    path.strip_prefix(root)
-        .is_ok_and(|relative| relative.parent().is_some_and(|parent| parent.iter().any(is_support_folder)))
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative
+            .parent()
+            .is_some_and(|parent| parent.iter().any(is_support_folder))
+    })
 }
 
 /// Folders the operating system keeps on removable drives.
 fn is_system_folder(name: &std::ffi::OsStr) -> bool {
     let name = name.to_string_lossy().to_ascii_lowercase();
-    ["system volume information", "$recycle.bin", ".trashes", ".spotlight-v100", ".fseventsd"].contains(&name.as_str())
+    [
+        "system volume information",
+        "$recycle.bin",
+        ".trashes",
+        ".spotlight-v100",
+        ".fseventsd",
+    ]
+    .contains(&name.as_str())
 }

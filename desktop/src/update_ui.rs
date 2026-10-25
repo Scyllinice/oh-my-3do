@@ -22,15 +22,24 @@ pub enum Action {
     },
 }
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-struct Pending { desktop: bool, boot: bool }
+struct Pending {
+    desktop: bool,
+    boot: bool,
+}
 impl Pending {
     fn for_report(report: &Check) -> Self {
         Self {
-            desktop: updates::is_newer(&report.desktop.version, env!("CARGO_PKG_VERSION")).unwrap_or(false),
-            boot: report.targets.iter().any(|t| t.digest.as_deref() != Some(&report.boot_digest)),
+            desktop: updates::is_newer(&report.desktop.version, env!("CARGO_PKG_VERSION"))
+                .unwrap_or(false),
+            boot: report
+                .targets
+                .iter()
+                .any(|t| t.digest.as_deref() != Some(&report.boot_digest)),
         }
     }
-    fn any(self) -> bool { self.desktop || self.boot }
+    fn any(self) -> bool {
+        self.desktop || self.boot
+    }
     fn title(self) -> &'static str {
         match (self.desktop, self.boot) {
             (true, true) => "Desktop and boot image updates",
@@ -119,12 +128,25 @@ impl Updates {
             {
                 self.check(ui.ctx(), roots.clone());
             }
-            if self.report.as_ref().is_some_and(|r| Pending::for_report(r).any()) && ui.button("View update details…").clicked() {
+            if self
+                .report
+                .as_ref()
+                .is_some_and(|r| Pending::for_report(r).any())
+                && ui.button("View update details…").clicked()
+            {
                 self.visible = true;
             }
-            if ui.add_enabled(!offline && !self.checking(), egui::Button::new("Check another library / USB folder…")).clicked() {
+            if ui
+                .add_enabled(
+                    !offline && !self.checking(),
+                    egui::Button::new("Check another library / USB folder…"),
+                )
+                .clicked()
+            {
                 if let Some(root) = rfd::FileDialog::new().pick_folder() {
-                    let mut all=roots; all.push(root); self.check(ui.ctx(),all);
+                    let mut all = roots;
+                    all.push(root);
+                    self.check(ui.ctx(), all);
                 }
             }
         });
@@ -148,7 +170,9 @@ impl Updates {
     ) -> Option<Action> {
         let report = self.report.clone()?;
         let pending = Pending::for_report(&report);
-        if !self.visible || !pending.any() { return None; }
+        if !self.visible || !pending.any() {
+            return None;
+        }
         let mut visible = self.visible;
         let mut action = None;
         egui::Window::new(pending.title())
@@ -212,70 +236,114 @@ impl Updates {
 mod tests {
     use super::*;
     fn completed_check(newer: bool, digest: Option<&str>) -> Updates {
-        let current=env!("CARGO_PKG_VERSION");
-        let major=current.split('.').next().unwrap().parse::<u64>().unwrap();
-        let latest=if newer {format!("{}.0.0",major+1)} else {current.to_owned()};
+        let current = env!("CARGO_PKG_VERSION");
+        let major = current.split('.').next().unwrap().parse::<u64>().unwrap();
+        let latest = if newer {
+            format!("{}.0.0", major + 1)
+        } else {
+            current.to_owned()
+        };
         let release=Release::parse(&serde_json::to_vec(&serde_json::json!({
             "tag_name":format!("v{latest}"),"draft":false,"prerelease":false,"body":"","assets":[]
         })).unwrap()).unwrap();
-        let report=Check {menu:release.clone(),desktop:release,boot_digest:"published".into(),targets:vec![BootState {
-            root:PathBuf::from("test-library"),digest:digest.map(str::to_owned)
-        }],warnings:vec![]};
-        let (sender,receiver)=mpsc::channel();sender.send(Ok(report)).unwrap();
-        let mut state=Updates {receiver:Some(receiver),attempted:true,..Default::default()};
-        state.tick(&egui::Context::default(),false,vec![]);
+        let report = Check {
+            menu: release.clone(),
+            desktop: release,
+            boot_digest: "published".into(),
+            targets: vec![BootState {
+                root: PathBuf::from("test-library"),
+                digest: digest.map(str::to_owned),
+            }],
+            warnings: vec![],
+        };
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok(report)).unwrap();
+        let mut state = Updates {
+            receiver: Some(receiver),
+            attempted: true,
+            ..Default::default()
+        };
+        state.tick(&egui::Context::default(), false, vec![]);
         state
     }
     fn rendered_text(state: &mut Updates) -> String {
         fn collect(shape: &egui::epaint::Shape, text: &mut String) {
             match shape {
-                egui::epaint::Shape::Text(t) => {text.push_str(&t.galley.job.text);text.push('\n');}
-                egui::epaint::Shape::Vec(v) => for s in v {collect(s,text)},
+                egui::epaint::Shape::Text(t) => {
+                    text.push_str(&t.galley.job.text);
+                    text.push('\n');
+                }
+                egui::epaint::Shape::Vec(v) => {
+                    for s in v {
+                        collect(s, text)
+                    }
+                }
                 _ => (),
             }
         }
-        let ctx=egui::Context::default();
-        let mut text=String::new();
+        let ctx = egui::Context::default();
+        let mut text = String::new();
         for _ in 0..3 {
-            let output=ctx.run(egui::RawInput::default(),|ctx| {state.window(ctx,false,vec![]);});
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                state.window(ctx, false, vec![]);
+            });
             text.clear();
-            for shape in &output.shapes {collect(&shape.shape,&mut text);}
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut text);
+            }
         }
         text
     }
     #[test]
     fn no_window_when_everything_matches() {
-        let state=completed_check(false,Some("published"));
-        assert!(!state.visible);assert!(state.status.contains("up to date"));
+        let state = completed_check(false, Some("published"));
+        assert!(!state.visible);
+        assert!(state.status.contains("up to date"));
     }
     #[test]
     fn boot_only_offer_contains_no_desktop_information() {
-        for digest in [None,Some("local-build")] {
-            let mut state=completed_check(false,digest);
+        for digest in [None, Some("local-build")] {
+            let mut state = completed_check(false, digest);
             assert!(state.visible);
-            let text=rendered_text(&mut state);
-            assert!(text.contains("Console boot.iso update"),"{text}");
-            assert!(!text.contains("Desktop") && !text.contains("desktop") && !text.contains("portable app"),"{text}");
+            let text = rendered_text(&mut state);
+            assert!(text.contains("Console boot.iso update"), "{text}");
+            assert!(
+                !text.contains("Desktop")
+                    && !text.contains("desktop")
+                    && !text.contains("portable app"),
+                "{text}"
+            );
         }
     }
     #[test]
     fn desktop_only_offer_contains_no_boot_information() {
-        let mut state=completed_check(true,Some("published"));
+        let mut state = completed_check(true, Some("published"));
         assert!(state.visible);
-        let text=rendered_text(&mut state);
-        assert!(text.contains("Desktop app update available"),"{text}");
-        assert!(!text.contains("boot.iso") && !text.contains("console powered"),"{text}");
+        let text = rendered_text(&mut state);
+        assert!(text.contains("Desktop app update available"), "{text}");
+        assert!(
+            !text.contains("boot.iso") && !text.contains("console powered"),
+            "{text}"
+        );
     }
     #[test]
     fn combined_offer_shows_both_then_removes_completed_boot_update() {
-        let mut state=completed_check(true,Some("local-build"));
-        let text=rendered_text(&mut state);
-        assert!(text.contains("Desktop app update available") && text.contains("Console boot.iso update"),"{text}");
+        let mut state = completed_check(true, Some("local-build"));
+        let text = rendered_text(&mut state);
+        assert!(
+            text.contains("Desktop app update available")
+                && text.contains("Console boot.iso update"),
+            "{text}"
+        );
         state.installed_boot(std::path::Path::new("test-library"));
         assert!(state.visible);
-        let text=rendered_text(&mut state);
-        assert!(text.contains("Desktop app update available") && !text.contains("boot.iso"),"{text}");
-        let mut boot_only=completed_check(false,Some("local-build"));
-        boot_only.installed_boot(std::path::Path::new("test-library"));assert!(!boot_only.visible);
+        let text = rendered_text(&mut state);
+        assert!(
+            text.contains("Desktop app update available") && !text.contains("boot.iso"),
+            "{text}"
+        );
+        let mut boot_only = completed_check(false, Some("local-build"));
+        boot_only.installed_boot(std::path::Path::new("test-library"));
+        assert!(!boot_only.visible);
     }
 }

@@ -176,7 +176,9 @@ pub fn for_transfer(source: &Path, target: &Path) -> Result<Categories> {
     let configured = f::safe(target, PATH)?.exists();
     for category in &mut config.categories {
         if let Some(old) = previous.categories.iter().find(|old| old.id == category.id) {
-            if configured || old.hidden { category.hidden = old.hidden; }
+            if configured || old.hidden {
+                category.hidden = old.hidden;
+            }
         }
     }
     for old in previous.categories {
@@ -186,6 +188,8 @@ pub fn for_transfer(source: &Path, target: &Path) -> Result<Categories> {
             config.categories.push(old);
         }
     }
-    config.validate().context("Library and drive categories conflict; resolve them in Manage categories before copying")?;
+    config.validate().context(
+        "Library and drive categories conflict; resolve them in Manage categories before copying",
+    )?;
     Ok(config)
 }

@@ -1,6 +1,7 @@
 use crate::{
+    categories,
     disc::{self as d, rx},
-    fsutil as f, media, categories,
+    fsutil as f, media,
     model::*,
     Job,
 };
@@ -242,8 +243,10 @@ pub fn choose_import_category(entry: &mut Entry, catalog: &Catalog, category: &s
         assign(entry, &catalog.games[index], Some(index), Some(category));
     } else {
         let game = Game {
-            name: entry.title.clone(), release: entry.title.clone(),
-            region: Some(entry.region.clone()), ..Default::default()
+            name: entry.title.clone(),
+            release: entry.title.clone(),
+            region: Some(entry.region.clone()),
+            ..Default::default()
         };
         assign(entry, &game, None, Some(category));
         entry.confidence = "unverified".into();
@@ -574,7 +577,9 @@ pub fn scan(
             // do not match an audio disc against the game catalog.
             entry.region = d::primary_region(&entry.title);
             entry.confidence = "audio-only".into();
-            entry.reason = "Audio-only disc: choose a category to import without a verified catalog match".into();
+            entry.reason =
+                "Audio-only disc: choose a category to import without a verified catalog match"
+                    .into();
         } else {
             identify(&mut entry, &catalog, quick);
         }
@@ -586,7 +591,9 @@ pub fn scan(
         entries,
     };
     let config = categories::load(&plan.root)?;
-    for entry in &mut plan.entries { apply_category_defaults(entry, &config); }
+    for entry in &mut plan.entries {
+        apply_category_defaults(entry, &config);
+    }
     collisions(&mut plan)?;
     Ok(plan)
 }
@@ -597,7 +604,9 @@ pub fn apply_category_defaults(entry: &mut Entry, config: &categories::Categorie
             let old = format!("{}/", entry.category);
             let new = format!("{name}/");
             entry.target = entry.target.replacen(&old, &new, 1);
-            for file in &mut entry.files { file.target = file.target.replacen(&old, &new, 1); }
+            for file in &mut entry.files {
+                file.target = file.target.replacen(&old, &new, 1);
+            }
             entry.category = name;
         }
     }
@@ -676,7 +685,7 @@ pub struct Journal {
 }
 impl Journal {
     pub fn new(root: &Path, cache: &Path) -> Result<Self> {
-        crate::game_info::backup_custom(root,cache)?;
+        crate::game_info::backup_custom(root, cache)?;
         let path = cache
             .join("native-transactions")
             .join(format!("{}.json", uuid::Uuid::new_v4()));
@@ -718,14 +727,18 @@ impl Journal {
     pub fn ensure_directory(&mut self, name: &str) -> Result<()> {
         let path = f::safe(&self.root, name)?;
         if path.exists() {
-            if !path.is_dir() { bail!("Expected a directory: {name}") }
+            if !path.is_dir() {
+                bail!("Expected a directory: {name}")
+            }
             return Ok(());
         }
         self.parents(&path.join("placeholder"))
     }
     pub fn write(&mut self, name: &str, data: &[u8]) -> Result<()> {
         let p = f::safe(&self.root, name)?;
-        if p.exists() && !p.is_file() { bail!("Expected a regular file: {name}") }
+        if p.exists() && !p.is_file() {
+            bail!("Expected a regular file: {name}")
+        }
         let before = if p.is_file() {
             if fs::metadata(&p)?.len() > 16 * 1024 * 1024 {
                 bail!("Oversized support file")
@@ -749,7 +762,9 @@ impl Journal {
     /// Deletes a small file; undo writes it back.
     pub fn remove(&mut self, name: &str) -> Result<()> {
         let p = f::safe(&self.root, name)?;
-        if !p.is_file() { bail!("Expected a regular file: {name}") }
+        if !p.is_file() {
+            bail!("Expected a regular file: {name}")
+        }
         if fs::metadata(&p)?.len() > 16 * 1024 * 1024 {
             bail!("Oversized support file")
         };
@@ -781,8 +796,12 @@ impl Journal {
             // Journal creation hashes first; include that pass so the copy bar
             // does not reach the end and restart before transfer/readback.
             let bytes = fs::metadata(source)?.len().max(1);
-            copy_job = job.progress_range(bytes,bytes*2,bytes*3,"Copying and verifying file");
-            f::sha256(source, &job.progress_range(0,bytes,bytes*3,"Copying and verifying file"))?
+            copy_job =
+                job.progress_range(bytes, bytes * 2, bytes * 3, "Copying and verifying file");
+            f::sha256(
+                source,
+                &job.progress_range(0, bytes, bytes * 3, "Copying and verifying file"),
+            )?
         };
         self.created.push(Created {
             path: name.into(),
@@ -819,7 +838,10 @@ impl Journal {
         self.save()
     }
     pub fn undo(&mut self) -> Result<()> {
-        anyhow::ensure!(self.state != "removal-committed", "Permanent title removal cannot be undone");
+        anyhow::ensure!(
+            self.state != "removal-committed",
+            "Permanent title removal cannot be undone"
+        );
         if self.state == "undone" {
             bail!("Transaction is already undone")
         }
@@ -872,7 +894,10 @@ impl Journal {
             }
         }
         for entry in self.moves.iter().rev() {
-            let (from, to) = (f::safe(&self.root, &entry.from)?, f::safe(&self.root, &entry.to)?);
+            let (from, to) = (
+                f::safe(&self.root, &entry.from)?,
+                f::safe(&self.root, &entry.to)?,
+            );
             if to.exists() && !from.exists() {
                 fs::rename(to, from)?;
             } else if !from.exists() {
@@ -903,7 +928,7 @@ pub fn undo(path: &Path) -> Result<()> {
     if f::root(&journal.root)? != journal.root {
         bail!("Transaction root changed")
     };
-    crate::game_info::backup_custom(&journal.root,cache)?;
+    crate::game_info::backup_custom(&journal.root, cache)?;
     journal.undo()
 }
 pub fn relative(root: &Path, p: &Path) -> Result<String> {
@@ -968,10 +993,17 @@ pub fn beside_index(data: &[u8]) -> Result<Vec<u8>> {
 pub fn read_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, String>> {
     read_media_index_impl(root, folder, false)
 }
-pub(crate) fn read_drive_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, String>> {
+pub(crate) fn read_drive_media_index(
+    root: &Path,
+    folder: &str,
+) -> Result<BTreeMap<String, String>> {
     read_media_index_impl(root, folder, true)
 }
-fn read_media_index_impl(root: &Path, folder: &str, beside: bool) -> Result<BTreeMap<String, String>> {
+fn read_media_index_impl(
+    root: &Path,
+    folder: &str,
+    beside: bool,
+) -> Result<BTreeMap<String, String>> {
     let path = f::safe(root, &format!(".ohmy3do/{folder}/index.3di"))?;
     if !path.exists() || (beside && fs::metadata(&path)?.len() == 0) {
         return Ok(BTreeMap::new());
@@ -1074,7 +1106,13 @@ pub fn build_indexes_after_removal(root: &Path, tx: &mut Journal, job: &Job) -> 
     crate::setup::ensure_navigation(root, tx, job)?;
     build_indexes_impl(root, tx, job, false, false)
 }
-fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bool, scan_save_names: bool) -> Result<()> {
+fn build_indexes_impl(
+    root: &Path,
+    tx: &mut Journal,
+    job: &Job,
+    missing_only: bool,
+    scan_save_names: bool,
+) -> Result<()> {
     let sets = d::collect(&[root.to_owned()], None, job)?;
     let mut names = sets
         .iter()
@@ -1115,19 +1153,49 @@ fn build_indexes_impl(root: &Path, tx: &mut Journal, job: &Job, missing_only: bo
     data.extend_from_slice(b"END3DL01");
     write_index(root, tx, ".ohmy3do/library.3di", &data, missing_only)?;
     let db = database(root)?;
-    for (name,data) in crate::game_info::files(&db)? {write_index(root,tx,&name,&data,missing_only)?;}
-    write_index(root, tx, ".ohmy3do/metadata.3di", &metadata_bytes(&db, &names)?, missing_only)?;
-    if !scan_save_names { return Ok(()); }
+    for (name, data) in crate::game_info::files(&db)? {
+        write_index(root, tx, &name, &data, missing_only)?;
+    }
+    write_index(
+        root,
+        tx,
+        ".ohmy3do/metadata.3di",
+        &metadata_bytes(&db, &names)?,
+        missing_only,
+    )?;
+    if !scan_save_names {
+        return Ok(());
+    }
     let titles = db["games"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|g| Some((f::fold(g["path"].as_str()?), g["title"].as_str()?.to_owned())))
+        .filter_map(|g| {
+            Some((
+                f::fold(g["path"].as_str()?),
+                g["title"].as_str()?.to_owned(),
+            ))
+        })
         .collect();
     let saves = crate::saves::save_names_text(root, &names, &titles, job)?;
-    write_index(root, tx, ".ohmy3do/save-names-cache.json", &saves.cache, missing_only)?;
-    write_index(root, tx, ".ohmy3do/save-names.txt", saves.text.as_bytes(), missing_only)?;
-    job.say(format!("Indexed {} save names for the Save manager", saves.count));
+    write_index(
+        root,
+        tx,
+        ".ohmy3do/save-names-cache.json",
+        &saves.cache,
+        missing_only,
+    )?;
+    write_index(
+        root,
+        tx,
+        ".ohmy3do/save-names.txt",
+        saves.text.as_bytes(),
+        missing_only,
+    )?;
+    job.say(format!(
+        "Indexed {} save names for the Save manager",
+        saves.count
+    ));
     Ok(())
 }
 
@@ -1189,9 +1257,15 @@ pub fn metadata_bytes(db: &Value, names: &[String]) -> Result<Vec<u8>> {
         .map(|p| (f::fold(p), p))
         .collect::<HashMap<_, _>>();
     // Folder recognition needs every disc, even without a catalog record.
-    let mut records = names.iter().map(|path| (
-        f::fold(path), (path.clone(), [String::new(), String::new(), String::new()])
-    )).collect::<BTreeMap<_, _>>();
+    let mut records = names
+        .iter()
+        .map(|path| {
+            (
+                f::fold(path),
+                (path.clone(), [String::new(), String::new(), String::new()]),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut seen = HashSet::new();
     for record in db["games"].as_array().context("Invalid library records")? {
         let key = f::fold(record["path"].as_str().unwrap_or(""));
@@ -1408,8 +1482,15 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
     let mut sources = HashSet::new();
     for entry in &entries {
         if !entry.resolvable() {
-            bail!("Choose a category or identify {} before importing{}", entry.title,
-                if entry.blocked { format!(": {}", entry.reason) } else { String::new() })
+            bail!(
+                "Choose a category or identify {} before importing{}",
+                entry.title,
+                if entry.blocked {
+                    format!(": {}", entry.reason)
+                } else {
+                    String::new()
+                }
+            )
         }
         for file in &entry.files {
             let path = f::safe(&root, &file.target)?;
@@ -1444,18 +1525,32 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
         media::prepare_entry(entry, prefs, cache, &mut prepared, job)?;
     }
     let category_config = categories::load(&root)?;
-    for entry in &entries { anyhow::ensure!(category_config.contains(&entry.category),"Unknown category: {}",entry.category); }
+    for entry in &entries {
+        anyhow::ensure!(
+            category_config.contains(&entry.category),
+            "Unknown category: {}",
+            entry.category
+        );
+    }
     let marker = f::safe(&root, ".ohmy3do/ohmy3do.ini")?;
     let mut tx = Journal::new(&root, cache)?;
     job.say(format!("Undo journal: {}", tx.path.display()));
     let result = (|| -> Result<()> {
-        if !root.join(categories::PATH).exists() { tx.write(categories::PATH,&category_config.encode()?)?; }
+        if !root.join(categories::PATH).exists() {
+            tx.write(categories::PATH, &category_config.encode()?)?;
+        }
         if !marker.exists() {
             tx.write(".ohmy3do/ohmy3do.ini", include_bytes!("../../ohmy3do.ini"))?;
         }
         let mut records = vec![];
-        let import_total = entries.iter().flat_map(|entry|&entry.files).map(|file|file.fingerprint.size).sum::<u64>().max(1);
-        let mut imported_bytes = 0u64;job.report(0,import_total,"Importing and verifying discs");
+        let import_total = entries
+            .iter()
+            .flat_map(|entry| &entry.files)
+            .map(|file| file.fingerprint.size)
+            .sum::<u64>()
+            .max(1);
+        let mut imported_bytes = 0u64;
+        job.report(0, import_total, "Importing and verifying discs");
         for (n, entry) in entries.iter().enumerate() {
             job.check()?;
             job.say(format!(
@@ -1473,9 +1568,19 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
                     &file.source,
                     &file.target,
                     Some(&file.fingerprint.sha256),
-                    &job.progress_range(imported_bytes,file.fingerprint.size,import_total,"Importing and verifying discs"),
+                    &job.progress_range(
+                        imported_bytes,
+                        file.fingerprint.size,
+                        import_total,
+                        "Importing and verifying discs",
+                    ),
                 )?;
-                imported_bytes += file.fingerprint.size;job.report(imported_bytes,import_total,"Importing and verifying discs");
+                imported_bytes += file.fingerprint.size;
+                job.report(
+                    imported_bytes,
+                    import_total,
+                    "Importing and verifying discs",
+                );
             }
             if entry
                 .source
@@ -1566,7 +1671,12 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
             if written.insert(relative.clone()) {
                 write_asset(&mut tx, &root, &relative, &asset.path)?;
                 if let Some(large) = &asset.large {
-                    write_asset(&mut tx, &root, &format!(".ohmy3do/covers/{}", media::large_name(&asset.name)), large)?;
+                    write_asset(
+                        &mut tx,
+                        &root,
+                        &format!(".ohmy3do/covers/{}", media::large_name(&asset.name)),
+                        large,
+                    )?;
                 }
             }
         }
@@ -1609,12 +1719,26 @@ pub fn update_media(
     update_media_mode(root, prefs, cache, provided, false, None, job)
 }
 /// One transaction for the chosen discs; unrelated records and media are retained.
-pub fn update_selected_media(root:&Path,prefs:&Preferences,cache:&Path,discs:&[String],job:&Job)->Result<PathBuf>{
-    let db=database(root)?;
-    let available:HashSet<_>=db["games"].as_array().context("Invalid library")?.iter().filter_map(|r|r["path"].as_str().map(f::fold)).collect();
-    let selected:HashSet<_>=discs.iter().map(|p|f::fold(p)).collect();
-    anyhow::ensure!(!selected.is_empty()&&selected.iter().all(|p|available.contains(p)),"Select existing library games first");
-    update_media_mode(root,prefs,cache,None,false,Some(&selected),job)
+pub fn update_selected_media(
+    root: &Path,
+    prefs: &Preferences,
+    cache: &Path,
+    discs: &[String],
+    job: &Job,
+) -> Result<PathBuf> {
+    let db = database(root)?;
+    let available: HashSet<_> = db["games"]
+        .as_array()
+        .context("Invalid library")?
+        .iter()
+        .filter_map(|r| r["path"].as_str().map(f::fold))
+        .collect();
+    let selected: HashSet<_> = discs.iter().map(|p| f::fold(p)).collect();
+    anyhow::ensure!(
+        !selected.is_empty() && selected.iter().all(|p| available.contains(p)),
+        "Select existing library games first"
+    );
+    update_media_mode(root, prefs, cache, None, false, Some(&selected), job)
 }
 type MediaWork = (Value, String, Entry, bool, bool);
 /// Prepares media for many discs at once, one disc per worker thread at a
@@ -1634,29 +1758,38 @@ fn prepare_parallel(
         .min(total.max(1));
     let queue = std::sync::Mutex::new(work.iter_mut());
     let (done, failed) = (std::sync::Mutex::new(0usize), AtomicBool::new(false));
-    let worker_job = job.quiet_progress();job.report(0,total as u64,"Preparing media");
+    let worker_job = job.quiet_progress();
+    job.report(0, total as u64, "Preparing media");
     let results = std::thread::scope(|s| {
         let handles = (0..workers)
             .map(|_| {
                 s.spawn(|| -> Result<media::Outputs> {
                     let mut out = media::Outputs::new();
                     while !failed.load(Relaxed) {
-                        let Some((_, path, entry, cover, preview)) =
-                            queue.lock().unwrap().next()
+                        let Some((_, path, entry, cover, preview)) = queue.lock().unwrap().next()
                         else {
                             break;
                         };
                         if !(*cover || *preview) {
                             continue;
                         }
-                        let result =
-                            media::prepare_missing(entry, prefs, cache, &mut out, *cover, *preview, &worker_job);
+                        let result = media::prepare_missing(
+                            entry,
+                            prefs,
+                            cache,
+                            &mut out,
+                            *cover,
+                            *preview,
+                            &worker_job,
+                        );
                         if result.is_err() {
                             failed.store(true, Relaxed);
                             result?;
                         }
-                        let mut completed = done.lock().unwrap();*completed += 1;let n = *completed;
-                        job.report(n as u64,total as u64,"Preparing media");
+                        let mut completed = done.lock().unwrap();
+                        *completed += 1;
+                        let n = *completed;
+                        job.report(n as u64, total as u64, "Preparing media");
                         job.say(format!("Media {n} of {total} ready: {path}"));
                     }
                     Ok(out)
@@ -1665,7 +1798,10 @@ fn prepare_parallel(
             .collect::<Vec<_>>();
         handles
             .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| bail!("Media worker stopped unexpectedly")))
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| bail!("Media worker stopped unexpectedly"))
+            })
             .collect::<Vec<_>>()
     });
     for result in results {
@@ -1689,8 +1825,12 @@ fn update_media_mode(
     let root = f::root(root)?;
     let _lock = lock_library(&root, cache)?;
     let mut db = database(&root)?;
-    let include_info=provided.is_none()&&!rebuild;
-    let info_changed=if include_info {crate::game_info::fill_missing(&mut db,prefs,cache,selected,job)?} else {0};
+    let include_info = provided.is_none() && !rebuild;
+    let info_changed = if include_info {
+        crate::game_info::fill_missing(&mut db, prefs, cache, selected, job)?
+    } else {
+        0
+    };
     let mut covers = read_media_index(&root, "covers")?;
     let mut previews = read_media_index(&root, "previews")?;
     let mut outputs = media::Outputs::new();
@@ -1701,7 +1841,9 @@ fn update_media_mode(
     for record in db["games"].as_array().context("Invalid library records")? {
         job.check()?;
         let path = record["path"].as_str().context("Missing disc path")?;
-        if selected.is_some_and(|set| !set.contains(&f::fold(path))) { continue; }
+        if selected.is_some_and(|set| !set.contains(&f::fold(path))) {
+            continue;
+        }
         let source = f::safe(&root, path)?;
         if !source.is_file() {
             bail!("Missing database disc: {path}")
@@ -1781,7 +1923,13 @@ fn update_media_mode(
         let want_cover = entry.cover.is_some() || (!rebuild && !existing("cover", &covers)?);
         let want_preview =
             entry.preview.is_some() || (!rebuild && !existing("preview", &previews)?);
-        work.push((record.clone(), path.to_owned(), entry, want_cover, want_preview));
+        work.push((
+            record.clone(),
+            path.to_owned(),
+            entry,
+            want_cover,
+            want_preview,
+        ));
     }
     prepare_parallel(&mut work, prefs, cache, &mut outputs, job)?;
     for (record, path, ..) in &work {
@@ -1804,10 +1952,19 @@ fn update_media_mode(
             records.push(changed)
         }
     }
-    let description_files=if include_info {crate::game_info::files_for(&db,selected)?}else{BTreeMap::new()};
-    let metadata_file=if include_info && (info_changed>0 || (!description_files.is_empty()&&!root.join(".ohmy3do/metadata.3di").is_file())) {
-        Some(crate::game_info::console_metadata(&root,&db)?)
-    }else{None};
+    let description_files = if include_info {
+        crate::game_info::files_for(&db, selected)?
+    } else {
+        BTreeMap::new()
+    };
+    let metadata_file = if include_info
+        && (info_changed > 0
+            || (!description_files.is_empty() && !root.join(".ohmy3do/metadata.3di").is_file()))
+    {
+        Some(crate::game_info::console_metadata(&root, &db)?)
+    } else {
+        None
+    };
     let mut tx = Journal::new(&root, cache)?;
     let result = (|| -> Result<()> {
         let mut written = HashSet::new();
@@ -1824,17 +1981,29 @@ fn update_media_mode(
             if written.insert(name.clone()) {
                 write_asset(&mut tx, &root, &name, &asset.path)?;
                 if let Some(large) = &asset.large {
-                    write_asset(&mut tx, &root, &format!(".ohmy3do/covers/{}", media::large_name(&asset.name)), large)?;
+                    write_asset(
+                        &mut tx,
+                        &root,
+                        &format!(".ohmy3do/covers/{}", media::large_name(&asset.name)),
+                        large,
+                    )?;
                 }
             }
         }
-        for (name,data) in &description_files {
+        for (name, data) in &description_files {
             job.check()?;
-            let path=f::safe(&root,name)?;
-            if !path.is_file()||fs::metadata(&path)?.len()!=data.len() as u64||fs::read(&path)?!=*data {tx.write(name,data)?;}
+            let path = f::safe(&root, name)?;
+            if !path.is_file()
+                || fs::metadata(&path)?.len() != data.len() as u64
+                || fs::read(&path)? != *data
+            {
+                tx.write(name, data)?;
+            }
         }
-        if let Some(bytes)=&metadata_file {tx.write(".ohmy3do/metadata.3di",bytes)?;}
-        if !records.is_empty() || info_changed>0 {
+        if let Some(bytes) = &metadata_file {
+            tx.write(".ohmy3do/metadata.3di", bytes)?;
+        }
+        if !records.is_empty() || info_changed > 0 {
             if !covers.is_empty() {
                 tx.write(".ohmy3do/covers/index.3di", &media_index(&covers)?)?;
             }
@@ -1879,21 +2048,32 @@ pub fn remap_lines(raw: &[u8], map: &HashMap<String, String>) -> Option<Vec<u8>>
 
 /// The saved menu position after discs move: it follows a moved disc, and
 /// returns to the USB root when it was inside a moved folder.
-pub fn remap_position(raw: &[u8], map: &HashMap<String, String>, folders: &[String]) -> Option<Vec<u8>> {
+pub fn remap_position(
+    raw: &[u8],
+    map: &HashMap<String, String>,
+    folders: &[String],
+) -> Option<Vec<u8>> {
     let text = String::from_utf8_lossy(raw.split(|b| *b == 0).next().unwrap_or(&[])).into_owned();
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() != 3 || lines[0] != "OH3DO_POSITION1" {
         return None;
     }
     let folder = lines[1].strip_prefix("/Storage/").unwrap_or("");
-    let current = if folder.is_empty() { lines[2].to_owned() } else { format!("{folder}/{}", lines[2]) };
+    let current = if folder.is_empty() {
+        lines[2].to_owned()
+    } else {
+        format!("{folder}/{}", lines[2])
+    };
     if let Some(new) = map.get(&f::fold(&current)) {
         let (dir, name) = new.rsplit_once('/').unwrap_or(("", new));
         return Some(format!("OH3DO_POSITION1\n/Storage/{dir}\n{name}\n").into_bytes());
     }
     folders
         .iter()
-        .any(|old| f::fold(&current).starts_with(&f::fold(&format!("{old}/"))) || f::fold(folder) == f::fold(old))
+        .any(|old| {
+            f::fold(&current).starts_with(&f::fold(&format!("{old}/")))
+                || f::fold(folder) == f::fold(old)
+        })
         .then(|| b"OH3DO_POSITION1\n/Storage\n\n".to_vec())
 }
 
@@ -1908,7 +2088,13 @@ pub fn recategorize(
     job: &Job,
 ) -> Result<PathBuf> {
     let config = categories::load(root)?;
-    let category = config.categories.iter().find(|c|c.name.eq_ignore_ascii_case(category)).context("Unknown category")?.name.as_str();
+    let category = config
+        .categories
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(category))
+        .context("Unknown category")?
+        .name
+        .as_str();
     let _lock = lock_library(root, cache)?;
     let db = database(root)?;
     let mut folders = BTreeMap::new();
@@ -1929,27 +2115,70 @@ pub fn recategorize(
     }
     move_category_folders(root, db, folders, None, cache, job)
 }
-pub fn configure_categories(root:&Path, old:&categories::Categories, new:&categories::Categories, cache:&Path, job:&Job)->Result<PathBuf> {
-    let _lock=lock_library(root,cache)?;
-    anyhow::ensure!(&categories::load(root)?==old,"Categories changed on disk; reopen the editor");
-    let mut folders=BTreeMap::new();
+pub fn configure_categories(
+    root: &Path,
+    old: &categories::Categories,
+    new: &categories::Categories,
+    cache: &Path,
+    job: &Job,
+) -> Result<PathBuf> {
+    let _lock = lock_library(root, cache)?;
+    anyhow::ensure!(
+        &categories::load(root)? == old,
+        "Categories changed on disk; reopen the editor"
+    );
+    let mut folders = BTreeMap::new();
     for category in &old.categories {
-        let previous=f::safe(root,&category.name)?;
-        anyhow::ensure!(!previous.exists() || previous.is_dir(),"Category path is occupied by a file: {}",category.name);
-        if let Some(next)=new.categories.iter().find(|c|c.id==category.id) {
-            if next.name!=category.name && previous.exists() {
-                anyhow::ensure!(!f::safe(root,&next.name)?.exists(),"Destination category already exists: {}",next.name);
-                folders.insert(category.name.clone(),next.name.clone());
+        let previous = f::safe(root, &category.name)?;
+        anyhow::ensure!(
+            !previous.exists() || previous.is_dir(),
+            "Category path is occupied by a file: {}",
+            category.name
+        );
+        if let Some(next) = new.categories.iter().find(|c| c.id == category.id) {
+            if next.name != category.name && previous.exists() {
+                anyhow::ensure!(
+                    !f::safe(root, &next.name)?.exists(),
+                    "Destination category already exists: {}",
+                    next.name
+                );
+                folders.insert(category.name.clone(), next.name.clone());
             }
-        } else { anyhow::ensure!(!previous.exists() || (previous.is_dir() && fs::read_dir(&previous)?.next().is_none()),"Move games out of {} before removing it",category.name); if previous.exists() {folders.insert(category.name.clone(),format!(".ohmy3do/removed-categories/{}",uuid::Uuid::new_v4()));} }
+        } else {
+            anyhow::ensure!(
+                !previous.exists()
+                    || (previous.is_dir() && fs::read_dir(&previous)?.next().is_none()),
+                "Move games out of {} before removing it",
+                category.name
+            );
+            if previous.exists() {
+                folders.insert(
+                    category.name.clone(),
+                    format!(".ohmy3do/removed-categories/{}", uuid::Uuid::new_v4()),
+                );
+            }
+        }
     }
-    move_category_folders(root,database(root)?,folders,Some(new),cache,job)
+    move_category_folders(root, database(root)?, folders, Some(new), cache, job)
 }
-fn move_category_folders(root:&Path, mut db:Value, folders:BTreeMap<String,String>, config:Option<&categories::Categories>, cache:&Path, job:&Job)->Result<PathBuf> {
+fn move_category_folders(
+    root: &Path,
+    mut db: Value,
+    folders: BTreeMap<String, String>,
+    config: Option<&categories::Categories>,
+    cache: &Path,
+    job: &Job,
+) -> Result<PathBuf> {
     let mut map = HashMap::new();
-    for record in db["games"].as_array_mut().context("Invalid library records")? {
+    for record in db["games"]
+        .as_array_mut()
+        .context("Invalid library records")?
+    {
         let path = record["path"].as_str().unwrap_or("").to_owned();
-        if let Some((old, new)) = folders.iter().find(|(old, _)| path.starts_with(&format!("{old}/"))) {
+        if let Some((old, new)) = folders
+            .iter()
+            .find(|(old, _)| path.starts_with(&format!("{old}/")))
+        {
             let moved = format!("{new}{}", &path[old.len()..]);
             map.insert(f::fold(&path), moved.clone());
             record["path"] = json!(moved);
@@ -1968,22 +2197,34 @@ fn move_category_folders(root:&Path, mut db:Value, folders:BTreeMap<String,Strin
             job.say(format!("Moving {old} to {new}"));
             tx.rename(old, new)?;
         }
-        if let Some(config)=config { tx.write(categories::PATH,&config.encode()?)?; }
+        if let Some(config) = config {
+            tx.write(categories::PATH, &config.encode()?)?;
+        }
         write_database(&mut tx, db, vec![], &[])?;
         for (folder, index) in [("covers", &mut covers), ("previews", &mut previews)] {
             let moved: Vec<(String, String)> = index
                 .iter()
-                .filter_map(|(game, media)| Some((f::fold(map.get(&f::fold(game))?), media.clone())))
+                .filter_map(|(game, media)| {
+                    Some((f::fold(map.get(&f::fold(game))?), media.clone()))
+                })
                 .collect();
             if !moved.is_empty() {
                 index.retain(|game, _| !map.contains_key(&f::fold(game)));
                 index.extend(moved);
-                tx.write(&format!(".ohmy3do/{folder}/index.3di"), &media_index(index)?)?;
+                tx.write(
+                    &format!(".ohmy3do/{folder}/index.3di"),
+                    &media_index(index)?,
+                )?;
             }
         }
         for name in ["favorites.txt", "recent.txt"] {
             let path = f::safe(root, &format!(".ohmy3do/{name}"))?;
-            if let Some(text) = path.is_file().then(|| fs::read(&path)).transpose()?.and_then(|raw| remap_lines(&raw, &map)) {
+            if let Some(text) = path
+                .is_file()
+                .then(|| fs::read(&path))
+                .transpose()?
+                .and_then(|raw| remap_lines(&raw, &map))
+            {
                 tx.write(&format!(".ohmy3do/{name}"), &text)?;
             }
         }

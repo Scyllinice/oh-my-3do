@@ -38,9 +38,17 @@ fn prepared_drive(root: &Path) {
     put(root, ".ohmy3do/saves/slot-catalog.3di", b"catalog");
     put(root, "Games/USA/Game/Game.iso", b"disc");
     put(root, "Games/USA/Game/.ohmy3do/cover.3dc", b"cover");
-    put(root, &format!("Games/{}", setup::NAVIGATION_HELPER), &helper());
+    put(
+        root,
+        &format!("Games/{}", setup::NAVIGATION_HELPER),
+        &helper(),
+    );
     put(root, "Games/USA/Game/notes.txt", b"mine");
-    put(root, "Games/USA/Other/Oh My 3DO - Folder Navigation Helper (Keep).iso", b"not ours");
+    put(
+        root,
+        "Games/USA/Other/Oh My 3DO - Folder Navigation Helper (Keep).iso",
+        b"not ours",
+    );
 }
 
 #[test]
@@ -72,10 +80,21 @@ fn cleanup_removes_only_menu_files_and_keeps_games() {
     assert!(cleaned.warnings.is_empty());
     assert!(!root.join(".ohmy3do").exists());
     assert!(!root.join("Games/USA/Game/.ohmy3do").exists());
-    assert_eq!(fs::read(root.join("Games/USA/Game/Game.iso")).unwrap(), b"disc");
-    assert_eq!(fs::read(root.join("Games/USA/Game/notes.txt")).unwrap(), b"mine");
-    assert_eq!(fs::read(root.join("menu-demo.iso")).unwrap(), b"another menu");
-    assert!(root.join("Games/USA/Other/Oh My 3DO - Folder Navigation Helper (Keep).iso").exists());
+    assert_eq!(
+        fs::read(root.join("Games/USA/Game/Game.iso")).unwrap(),
+        b"disc"
+    );
+    assert_eq!(
+        fs::read(root.join("Games/USA/Game/notes.txt")).unwrap(),
+        b"mine"
+    );
+    assert_eq!(
+        fs::read(root.join("menu-demo.iso")).unwrap(),
+        b"another menu"
+    );
+    assert!(root
+        .join("Games/USA/Other/Oh My 3DO - Folder Navigation Helper (Keep).iso")
+        .exists());
 }
 
 #[test]
@@ -92,7 +111,10 @@ fn cleanup_copies_save_backups_to_the_pc_first() {
     let copied = cleaned.saves_copied_to.unwrap();
     assert_eq!(copied, pc.canonicalize().unwrap().join("Oh My 3DO saves 2"));
     assert_eq!(fs::read(copied.join("Game/SAVE1")).unwrap(), b"save one");
-    assert_eq!(fs::read(copied.join("slot-catalog.3di")).unwrap(), b"catalog");
+    assert_eq!(
+        fs::read(copied.join("slot-catalog.3di")).unwrap(),
+        b"catalog"
+    );
     assert!(!root.join(".ohmy3do").exists());
 }
 

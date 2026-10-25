@@ -1,7 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-mod theme;
-mod save_ui;
 mod cheat_ui;
+mod save_ui;
+mod theme;
 mod update_ui;
 use eframe::egui::{self, Color32, RichText};
 use oh_my_3do_library::{
@@ -20,9 +20,9 @@ use std::{
 };
 
 enum Outcome {
-    Downloaded {path: PathBuf, desktop: bool},
-    BootUpdated {journal: PathBuf, root: PathBuf},
-    DrivePrepared {journal: PathBuf, root: PathBuf},
+    Downloaded { path: PathBuf, desktop: bool },
+    BootUpdated { journal: PathBuf, root: PathBuf },
+    DrivePrepared { journal: PathBuf, root: PathBuf },
     Scan(Plan),
     Imported(PathBuf),
     Updated(PathBuf),
@@ -92,7 +92,11 @@ fn groups(records: &[Value]) -> Vec<Group> {
             folder: folder.clone(),
             title: disc.replace(&text(&r["title"]), "").into_owned(),
             region: text(&r["region"]),
-            category: if movable { parts[0].to_owned() } else { text(&r["category"]) },
+            category: if movable {
+                parts[0].to_owned()
+            } else {
+                text(&r["category"])
+            },
             genre: text(&r["metadata"]["genre"]),
             publisher: text(&r["metadata"]["publisher"]),
             cover: None,
@@ -241,7 +245,10 @@ impl App {
         let cover_context = cc.egui_ctx.clone();
         std::thread::spawn(move || {
             while let Ok((key, source)) = cover_requests.recv() {
-                if cover_images.send((key, load_thumbnail(&source).ok())).is_err() {
+                if cover_images
+                    .send((key, load_thumbnail(&source).ok()))
+                    .is_err()
+                {
                     break;
                 }
                 cover_context.request_repaint();
@@ -276,7 +283,8 @@ impl App {
             receiver,
             busy: false,
             cancel: Arc::new(AtomicBool::new(false)),
-            status: "Choose a library to manage games, or use Prepare USB to set up a drive.".into(),
+            status: "Choose a library to manage games, or use Prepare USB to set up a drive."
+                .into(),
             logs: vec![],
             release_dialog: false,
             release_search: String::new(),
@@ -450,27 +458,36 @@ impl App {
                     self.console_pending = false;
                     match result {
                         Err(e) => {
-                            if console_pending { self.console_error = Some(e.clone()); }
+                            if console_pending {
+                                self.console_error = Some(e.clone());
+                            }
                             self.error(e);
-                        },
+                        }
                         Ok(outcome) => match outcome {
-                            Outcome::Downloaded {path, desktop} => {
+                            Outcome::Downloaded { path, desktop } => {
                                 self.status = if desktop {
                                     format!("Verified download saved to {}. Close this app and extract the ZIP to update it.", path.display())
-                                } else {format!("Verified boot.iso saved to {}",path.display())};
-                                if let Some(parent) = path.parent() { open(parent); }
+                                } else {
+                                    format!("Verified boot.iso saved to {}", path.display())
+                                };
+                                if let Some(parent) = path.parent() {
+                                    open(parent);
+                                }
                             }
-                            Outcome::DrivePrepared {journal, root} => {
-                                self.last_journal=Some(journal);
-                                self.usb_plan=None;
-                                self.records_stale=true;
+                            Outcome::DrivePrepared { journal, root } => {
+                                self.last_journal = Some(journal);
+                                self.usb_plan = None;
+                                self.records_stale = true;
                                 self.status=format!("Drive ready: {}. Menu and save support installed; no games copied.",root.display());
                             }
-                            Outcome::BootUpdated {journal, root} => {
+                            Outcome::BootUpdated { journal, root } => {
                                 self.last_journal = Some(journal);
                                 self.usb_plan = None;
                                 self.updates.installed_boot(&root);
-                                self.status = format!("Updated boot.iso in {}. Cold boot the console to use it.",root.display());
+                                self.status = format!(
+                                    "Updated boot.iso in {}. Cold boot the console to use it.",
+                                    root.display()
+                                );
                             }
                             Outcome::Scan(plan) => {
                                 self.status=format!("{} disc entries scanned. Review names and locations, then check entries to import.",plan.entries.len());
@@ -487,7 +504,8 @@ impl App {
                             }
                             Outcome::Updated(path) => {
                                 self.last_journal = Some(path);
-                                self.status="Library updated. See the log for anything skipped.".into();
+                                self.status =
+                                    "Library updated. See the log for anything skipped.".into();
                                 self.records.clear();
                                 self.records_stale = true;
                                 self.covers.clear();
@@ -499,7 +517,7 @@ impl App {
                                 self.usb_plan = Some(plan)
                             }
                             Outcome::Copied(path) => {
-                                self.library_copy_open=false;
+                                self.library_copy_open = false;
                                 self.last_journal = Some(path);
                                 self.usb_plan = None;
                                 self.status =
@@ -516,13 +534,15 @@ impl App {
                                 self.status = if loaded.exists() {
                                     "Console settings loaded".into()
                                 } else {
-                                    "No console settings file yet. Defaults are ready to save.".into()
+                                    "No console settings file yet. Defaults are ready to save."
+                                        .into()
                                 };
                                 self.console_loaded = Some(loaded);
                                 self.console_error = None;
                             }
                             Outcome::ConsoleSaved(saved) => {
-                                self.console_journal = Some((saved.loaded.root.clone(), saved.journal.clone()));
+                                self.console_journal =
+                                    Some((saved.loaded.root.clone(), saved.journal.clone()));
                                 self.last_journal = Some(saved.journal);
                                 self.console_edit = saved.loaded.settings.clone();
                                 self.console_loaded = Some(saved.loaded);
@@ -531,7 +551,9 @@ impl App {
                                 self.status = "Console settings saved and verified.".into();
                             }
                             Outcome::ConsoleRestored(loaded) => {
-                                if self.console_journal.as_ref().is_some_and(|(_, path)| self.last_journal.as_ref() == Some(path)) {
+                                if self.console_journal.as_ref().is_some_and(|(_, path)| {
+                                    self.last_journal.as_ref() == Some(path)
+                                }) {
                                     self.last_journal = None;
                                 }
                                 self.console_journal = None;
@@ -593,7 +615,10 @@ impl App {
         while let Ok((key, image)) = self.cover_receiver.try_recv() {
             self.covers_pending.remove(&key);
             if let Some(image) = image {
-                self.covers.insert(key.clone(), ctx.load_texture(format!("cover:{key}"), image, egui::TextureOptions::NEAREST));
+                self.covers.insert(
+                    key.clone(),
+                    ctx.load_texture(format!("cover:{key}"), image, egui::TextureOptions::NEAREST),
+                );
             }
         }
         if let Some(texture) = self.covers.get(name) {
@@ -635,7 +660,11 @@ impl App {
             *categories.entry(g.category.as_str()).or_default() += 1;
             *regions.entry(g.region.as_str()).or_default() += 1;
         }
-        let adult = self.groups.iter().filter(|g| adult_suggestion(g) && g.category != "Adult").count();
+        let adult = self
+            .groups
+            .iter()
+            .filter(|g| adult_suggestion(g) && g.category != "Adult")
+            .count();
         let mut pick_category = None;
         let mut pick_region = None;
         let mut pick_adult = false;
@@ -645,47 +674,89 @@ impl App {
             .frame(egui::Frame::new().fill(theme::HEADER).inner_margin(14.))
             .show_inside(ui, |ui| {
                 let row = |ui: &mut egui::Ui, selected: bool, label: &str, count: usize| {
-                    let text = RichText::new(label).color(if selected { theme::INK } else { theme::MUTED });
-                    let button = egui::Button::new("").fill(if selected { theme::LIME } else { egui::Color32::TRANSPARENT });
+                    let text = RichText::new(label).color(if selected {
+                        theme::INK
+                    } else {
+                        theme::MUTED
+                    });
+                    let button = egui::Button::new("").fill(if selected {
+                        theme::LIME
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    });
                     let response = ui.add_sized([ui.available_width(), 28.], button);
                     let ink = if selected { theme::INK } else { theme::MUTED };
-                    let font = if selected { theme::bold(15.) } else { egui::FontId::proportional(15.) };
-                    ui.painter().text(response.rect.left_center() + egui::vec2(10., 0.), egui::Align2::LEFT_CENTER, text.text(), font.clone(), ink);
-                    ui.painter().text(response.rect.right_center() - egui::vec2(10., 0.), egui::Align2::RIGHT_CENTER, count.to_string(), font, ink);
+                    let font = if selected {
+                        theme::bold(15.)
+                    } else {
+                        egui::FontId::proportional(15.)
+                    };
+                    ui.painter().text(
+                        response.rect.left_center() + egui::vec2(10., 0.),
+                        egui::Align2::LEFT_CENTER,
+                        text.text(),
+                        font.clone(),
+                        ink,
+                    );
+                    ui.painter().text(
+                        response.rect.right_center() - egui::vec2(10., 0.),
+                        egui::Align2::RIGHT_CENTER,
+                        count.to_string(),
+                        font,
+                        ink,
+                    );
                     response.clicked()
                 };
-                egui::ScrollArea::vertical().id_salt("filters").show(ui, |ui| {
-                    theme::section(ui, "Categories");
-                    if row(ui, !self.lib_adult && self.lib_category.is_none(), "All", self.groups.len()) {
-                        pick_category = Some(None);
-                    }
-                    for c in CATEGORIES {
-                        if let Some(&n) = categories.get(c) {
-                            if row(ui, !self.lib_adult && self.lib_category.as_deref() == Some(c), c, n) {
-                                pick_category = Some(Some(c.to_owned()));
+                egui::ScrollArea::vertical()
+                    .id_salt("filters")
+                    .show(ui, |ui| {
+                        theme::section(ui, "Categories");
+                        if row(
+                            ui,
+                            !self.lib_adult && self.lib_category.is_none(),
+                            "All",
+                            self.groups.len(),
+                        ) {
+                            pick_category = Some(None);
+                        }
+                        for c in CATEGORIES {
+                            if let Some(&n) = categories.get(c) {
+                                if row(
+                                    ui,
+                                    !self.lib_adult && self.lib_category.as_deref() == Some(c),
+                                    c,
+                                    n,
+                                ) {
+                                    pick_category = Some(Some(c.to_owned()));
+                                }
                             }
                         }
-                    }
-                    ui.add_space(10.);
-                    theme::section(ui, "Region");
-                    if row(ui, self.lib_region.is_none(), "All regions", self.groups.len()) {
-                        pick_region = Some(None);
-                    }
-                    let mut by_count: Vec<_> = regions.iter().filter(|(r, _)| !r.is_empty()).collect();
-                    by_count.sort_by_key(|(r, n)| (std::cmp::Reverse(**n), r.to_string()));
-                    for (r, n) in by_count.into_iter().take(8) {
-                        if row(ui, self.lib_region.as_deref() == Some(*r), r, *n) {
-                            pick_region = Some(Some(r.to_string()));
-                        }
-                    }
-                    if adult > 0 {
                         ui.add_space(10.);
-                        theme::section(ui, "Review");
-                        if row(ui, self.lib_adult, "Possibly adult", adult) {
-                            pick_adult = true;
+                        theme::section(ui, "Region");
+                        if row(
+                            ui,
+                            self.lib_region.is_none(),
+                            "All regions",
+                            self.groups.len(),
+                        ) {
+                            pick_region = Some(None);
                         }
-                    }
-                });
+                        let mut by_count: Vec<_> =
+                            regions.iter().filter(|(r, _)| !r.is_empty()).collect();
+                        by_count.sort_by_key(|(r, n)| (std::cmp::Reverse(**n), r.to_string()));
+                        for (r, n) in by_count.into_iter().take(8) {
+                            if row(ui, self.lib_region.as_deref() == Some(*r), r, *n) {
+                                pick_region = Some(Some(r.to_string()));
+                            }
+                        }
+                        if adult > 0 {
+                            ui.add_space(10.);
+                            theme::section(ui, "Review");
+                            if row(ui, self.lib_adult, "Possibly adult", adult) {
+                                pick_adult = true;
+                            }
+                        }
+                    });
             });
         if let Some(c) = pick_category {
             self.lib_category = c;
@@ -705,7 +776,9 @@ impl App {
         let title = if self.lib_adult {
             "Possibly adult".to_owned()
         } else {
-            self.lib_category.clone().unwrap_or_else(|| "All discs".into())
+            self.lib_category
+                .clone()
+                .unwrap_or_else(|| "All discs".into())
         };
         egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 4, top: 6, bottom: 0 }).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -817,7 +890,11 @@ impl App {
     fn move_bar(&mut self, ui: &mut egui::Ui) {
         let count = self.lib_selected.len();
         let mut confirm = false;
-        let movable=self.groups.iter().filter(|g| self.lib_selected.contains(&g.folder)).all(|g| g.movable);
+        let movable = self
+            .groups
+            .iter()
+            .filter(|g| self.lib_selected.contains(&g.folder))
+            .all(|g| g.movable);
         egui::Frame::new()
             .fill(theme::HEADER)
             .stroke(egui::Stroke::new(2., theme::LIME))
@@ -859,9 +936,13 @@ impl App {
             }
             let (root, cache, category) = (self.root(), self.cache.clone(), self.move_to.clone());
             match root {
-                Ok(root) => self.start(&format!("Moving {count} games to {category}"), move |job| {
-                    Ok(Outcome::Updated(library::recategorize(&root, &discs, &category, &cache, &job)?))
-                }),
+                Ok(root) => {
+                    self.start(&format!("Moving {count} games to {category}"), move |job| {
+                        Ok(Outcome::Updated(library::recategorize(
+                            &root, &discs, &category, &cache, &job,
+                        )?))
+                    })
+                }
                 Err(e) => self.error(e),
             }
         }
@@ -1354,7 +1435,10 @@ impl App {
         });
     }
     fn staging_setup_ui(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.setup_visible, "Set up a PC staging library (optional)");
+        ui.checkbox(
+            &mut self.setup_visible,
+            "Set up a PC staging library (optional)",
+        );
         if self.setup_visible {
             ui.group(|ui| {
                 ui.label(RichText::new("1. Choose an existing folder for your staging library").strong().color(theme::TEXT));
@@ -1384,18 +1468,32 @@ impl App {
         self.drive_setup_ui(ui);
         ui.add_space(12.);
         ui.label("To copy games, select them in Library and choose Copy selected to USB.");
-        if ui.button("Go to Library").clicked() { self.tab=Tab::Library; }
+        if ui.button("Go to Library").clicked() {
+            self.tab = Tab::Library;
+        }
     }
     fn open_library_copy(&mut self) {
-        self.library_copy_discs=self.groups.iter().filter(|g| self.lib_selected.contains(&g.folder)).flat_map(|g| g.discs.clone()).collect();
-        self.library_copy_titles=self.groups.iter().filter(|g| self.lib_selected.contains(&g.folder)).map(|g| g.title.clone()).collect();
-        self.library_copy_root=self.root().ok();
-        self.usb_plan=None;
-        self.library_copy_open=true;
+        self.library_copy_discs = self
+            .groups
+            .iter()
+            .filter(|g| self.lib_selected.contains(&g.folder))
+            .flat_map(|g| g.discs.clone())
+            .collect();
+        self.library_copy_titles = self
+            .groups
+            .iter()
+            .filter(|g| self.lib_selected.contains(&g.folder))
+            .map(|g| g.title.clone())
+            .collect();
+        self.library_copy_root = self.root().ok();
+        self.usb_plan = None;
+        self.library_copy_open = true;
     }
     fn library_copy_window(&mut self, ctx: &egui::Context) {
-        if !self.library_copy_open { return; }
-        let mut open=true;
+        if !self.library_copy_open {
+            return;
+        }
+        let mut open = true;
         egui::Window::new("Copy selected games to USB").id(egui::Id::new("library_usb_copy"))
             .open(&mut open).collapsible(false).default_width(690.).max_height(620.).vscroll(true).show(ctx,|ui| {
                 ui.add_enabled_ui(!self.busy,|ui| {
@@ -1411,14 +1509,22 @@ impl App {
                     self.usb_copy_review_ui(ui,&selected,current);
                 });
             });
-        self.library_copy_open=open;
+        self.library_copy_open = open;
     }
-    fn usb_copy_review_ui(&mut self, ui: &mut egui::Ui, selected: &[String], selection_current: bool) {
+    fn usb_copy_review_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        selected: &[String],
+        selection_current: bool,
+    ) {
         ui.collapsing("Copy options & details", |ui| {
             if ui.checkbox(&mut self.verify,"Verify existing disc contents (slower)").changed() { self.usb_plan=None; }
             ui.label("Settings, favorites, history and saves on the drive are preserved. Selected games follow category changes. Different existing disc contents block copying; nothing is deleted.");
         });
-        if ui.add_enabled(selection_current,theme::primary("Validate & preview copy")).clicked() {
+        if ui
+            .add_enabled(selection_current, theme::primary("Validate & preview copy"))
+            .clicked()
+        {
             let selected = selected.to_vec();
             let (root, target, cache, verify) = (
                 self.root(),
@@ -1437,19 +1543,29 @@ impl App {
         }
         if let Some(plan) = &self.usb_plan {
             ui.separator();
-            ui.label(RichText::new(usb::summary(plan)).strong().color(theme::TEXT));
+            ui.label(
+                RichText::new(usb::summary(plan))
+                    .strong()
+                    .color(theme::TEXT),
+            );
             let mut apply = false;
             ui.collapsing("Show file details", |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("usb_rows")
-                .max_height(320.)
-                .show(ui, |ui| {
-                    for item in &plan.files {
-                        ui.label(format!("{:10} {}", item.status, item.path));
-                    }
-                });
+                egui::ScrollArea::vertical()
+                    .id_salt("usb_rows")
+                    .max_height(320.)
+                    .show(ui, |ui| {
+                        for item in &plan.files {
+                            ui.label(format!("{:10} {}", item.status, item.path));
+                        }
+                    });
             });
-            if ui.add_enabled(selection_current,theme::primary("Copy reviewed files to USB")).clicked() {
+            if ui
+                .add_enabled(
+                    selection_current,
+                    theme::primary("Copy reviewed files to USB"),
+                )
+                .clicked()
+            {
                 apply = true
             }
             if apply {
@@ -1469,7 +1585,9 @@ impl App {
         }
     }
     fn load_console_settings(&mut self) {
-        if self.busy { return; }
+        if self.busy {
+            return;
+        }
         let root = PathBuf::from(self.console_root.trim());
         self.console_error = None;
         self.console_pending = true;
@@ -1480,36 +1598,75 @@ impl App {
     fn console_settings_ui(&mut self, ui: &mut egui::Ui) {
         if !self.console_initialized {
             self.console_initialized = true;
-            if self.console_root.is_empty() { self.console_root = self.prefs.library.clone(); }
-            if !self.console_root.is_empty() { self.load_console_settings(); }
+            if self.console_root.is_empty() {
+                self.console_root = self.prefs.library.clone();
+            }
+            if !self.console_root.is_empty() {
+                self.load_console_settings();
+            }
         }
-        ui.label(RichText::new("Console settings").strong().color(theme::TEXT));
+        ui.label(
+            RichText::new("Console settings")
+                .strong()
+                .color(theme::TEXT),
+        );
         ui.label("Choose the library or USB root folder. These settings control the 3DO menu.");
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.prefs.library.is_empty(), egui::Button::new("Use library folder")).clicked() {
+            if ui
+                .add_enabled(
+                    !self.prefs.library.is_empty(),
+                    egui::Button::new("Use library folder"),
+                )
+                .clicked()
+            {
                 self.console_root = self.prefs.library.clone();
                 self.load_console_settings();
             }
-            if ui.add_enabled(!self.prefs.destination.is_empty(), egui::Button::new("Use USB destination")).clicked() {
+            if ui
+                .add_enabled(
+                    !self.prefs.destination.is_empty(),
+                    egui::Button::new("Use USB destination"),
+                )
+                .clicked()
+            {
                 self.console_root = self.prefs.destination.clone();
                 self.load_console_settings();
             }
         });
         directory_row(ui, "Settings folder", &mut self.console_root);
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.console_root.trim().is_empty(), egui::Button::new("Load / reload settings")).clicked() {
+            if ui
+                .add_enabled(
+                    !self.console_root.trim().is_empty(),
+                    egui::Button::new("Load / reload settings"),
+                )
+                .clicked()
+            {
                 self.load_console_settings();
             }
-            ui.label(RichText::new(console_config::PATH).small().color(theme::MUTED));
+            ui.label(
+                RichText::new(console_config::PATH)
+                    .small()
+                    .color(theme::MUTED),
+            );
         });
         if let Some(error) = &self.console_error {
             ui.colored_label(theme::RED, error);
         }
-        let loaded_here = self.console_loaded.as_ref()
+        let loaded_here = self
+            .console_loaded
+            .as_ref()
             .is_some_and(|loaded| loaded.root.to_string_lossy() == self.console_root);
         if !loaded_here {
-            ui.label(RichText::new("Load this folder before editing its console settings.").color(theme::MUTED));
-        } else if self.console_loaded.as_ref().is_some_and(|loaded| !loaded.exists()) {
+            ui.label(
+                RichText::new("Load this folder before editing its console settings.")
+                    .color(theme::MUTED),
+            );
+        } else if self
+            .console_loaded
+            .as_ref()
+            .is_some_and(|loaded| !loaded.exists())
+        {
             ui.label("No INI file yet. Save to create it with these defaults.");
         }
         ui.add_enabled_ui(loaded_here && !self.busy, |ui| {
@@ -1580,18 +1737,32 @@ impl App {
         ui.separator();
         ui.label(RichText::new("Updates").strong().color(theme::TEXT));
         let mut automatic = !self.prefs.disable_update_checks;
-        if ui.checkbox(&mut automatic, "Check for updates on startup").changed() {
+        if ui
+            .checkbox(&mut automatic, "Check for updates on startup")
+            .changed()
+        {
             self.prefs.disable_update_checks = !automatic;
             self.save_preferences();
         }
-        self.updates.controls(ui, self.prefs.offline, vec![PathBuf::from(&self.prefs.library), PathBuf::from(&self.prefs.destination)]);
+        self.updates.controls(
+            ui,
+            self.prefs.offline,
+            vec![
+                PathBuf::from(&self.prefs.library),
+                PathBuf::from(&self.prefs.destination),
+            ],
+        );
         ui.separator();
         self.save_browser.show_button(ui);
         self.cheat_database.button(ui, &self.prefs.destination);
         ui.separator();
         self.console_settings_ui(ui);
         ui.separator();
-        ui.label(RichText::new("Desktop preferences").strong().color(theme::TEXT));
+        ui.label(
+            RichText::new("Desktop preferences")
+                .strong()
+                .color(theme::TEXT),
+        );
         if let Some(state) = ui
             .ctx()
             .data(|data| data.get_temp::<String>(egui::Id::new("graphics")))
@@ -1681,8 +1852,14 @@ impl App {
                 let (root, cache) = (self.root(), self.cache.clone());
                 match root {
                     Ok(root) => self.start("Installing menu boot image and support", move |job| {
-                        let journal=oh_my_3do_library::setup::install_local(&root,&cache,&source,&Default::default(),&job)?;
-                        Ok(Outcome::DrivePrepared{journal,root})
+                        let journal = oh_my_3do_library::setup::install_local(
+                            &root,
+                            &cache,
+                            &source,
+                            &Default::default(),
+                            &job,
+                        )?;
+                        Ok(Outcome::DrivePrepared { journal, root })
                     }),
                     Err(e) => self.error(e),
                 }
@@ -1739,23 +1916,59 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frame_started = Instant::now();
         self.poll();
-        let update_roots = vec![PathBuf::from(&self.prefs.library), PathBuf::from(&self.prefs.destination)];
-        self.updates.tick(ctx, !self.prefs.offline && !self.prefs.disable_update_checks && self.screenshot.is_none() && self.profile.is_none(), update_roots.clone());
-        if let Some(action) = self.updates.window(ctx, !self.busy && !self.prefs.offline, update_roots) {
+        let update_roots = vec![
+            PathBuf::from(&self.prefs.library),
+            PathBuf::from(&self.prefs.destination),
+        ];
+        self.updates.tick(
+            ctx,
+            !self.prefs.offline
+                && !self.prefs.disable_update_checks
+                && self.screenshot.is_none()
+                && self.profile.is_none(),
+            update_roots.clone(),
+        );
+        if let Some(action) =
+            self.updates
+                .window(ctx, !self.busy && !self.prefs.offline, update_roots)
+        {
             match action {
-                update_ui::Action::Desktop {release, platform, path} => self.start("Downloading desktop update",move |job| {
-                    oh_my_3do_library::updates::download_desktop(&release,&platform,&path,&job)?;
-                    Ok(Outcome::Downloaded {path,desktop:true})
+                update_ui::Action::Desktop {
+                    release,
+                    platform,
+                    path,
+                } => self.start("Downloading desktop update", move |job| {
+                    oh_my_3do_library::updates::download_desktop(&release, &platform, &path, &job)?;
+                    Ok(Outcome::Downloaded {
+                        path,
+                        desktop: true,
+                    })
                 }),
-                update_ui::Action::BootDownload {release, digest, path} => self.start("Downloading boot.iso",move |job| {
-                    oh_my_3do_library::updates::download_boot(&release,&digest,&path,&job)?;
-                    Ok(Outcome::Downloaded {path,desktop:false})
+                update_ui::Action::BootDownload {
+                    release,
+                    digest,
+                    path,
+                } => self.start("Downloading boot.iso", move |job| {
+                    oh_my_3do_library::updates::download_boot(&release, &digest, &path, &job)?;
+                    Ok(Outcome::Downloaded {
+                        path,
+                        desktop: false,
+                    })
                 }),
-                update_ui::Action::Boot {release, target, digest} => {
+                update_ui::Action::Boot {
+                    release,
+                    target,
+                    digest,
+                } => {
                     let cache = self.cache.clone();
                     self.start("Updating boot.iso", move |job| {
-                        let journal=oh_my_3do_library::updates::install_boot(&release,&target,&digest,&cache,&job)?;
-                        Ok(Outcome::BootUpdated {journal,root:target.root})
+                        let journal = oh_my_3do_library::updates::install_boot(
+                            &release, &target, &digest, &cache, &job,
+                        )?;
+                        Ok(Outcome::BootUpdated {
+                            journal,
+                            root: target.root,
+                        })
                     });
                 }
             }
@@ -1769,7 +1982,11 @@ impl eframe::App for App {
             self.status = "Cancelling safely; waiting for rollback to finish".into();
         }
         egui::TopBottomPanel::top("header")
-            .frame(egui::Frame::new().fill(theme::HEADER).inner_margin(egui::Margin::symmetric(20, 10)))
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::HEADER)
+                    .inner_margin(egui::Margin::symmetric(20, 10)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add(egui::Image::new(&self.logo).fit_to_exact_size(egui::vec2(
@@ -1790,12 +2007,36 @@ impl eframe::App for App {
                         {
                             let on = self.tab == tab;
                             let mut job = egui::text::LayoutJob::default();
-                            job.append(&format!("CH{} ", n + 1), 0., egui::TextFormat::simple(theme::pixel(12.), if on { theme::INK } else { theme::OSD }));
-                            job.append(label, 0., egui::TextFormat::simple(theme::pixel_small(20.), if on { theme::INK } else { theme::TEXT }));
-                            if ui.add(egui::Button::new(job).fill(if on { theme::LIME } else { theme::PANEL }).min_size(egui::vec2(0., 36.))).clicked() {
+                            job.append(
+                                &format!("CH{} ", n + 1),
+                                0.,
+                                egui::TextFormat::simple(
+                                    theme::pixel(12.),
+                                    if on { theme::INK } else { theme::OSD },
+                                ),
+                            );
+                            job.append(
+                                label,
+                                0.,
+                                egui::TextFormat::simple(
+                                    theme::pixel_small(20.),
+                                    if on { theme::INK } else { theme::TEXT },
+                                ),
+                            );
+                            if ui
+                                .add(
+                                    egui::Button::new(job)
+                                        .fill(if on { theme::LIME } else { theme::PANEL })
+                                        .min_size(egui::vec2(0., 36.)),
+                                )
+                                .clicked()
+                            {
                                 self.tab = tab;
                                 self.filter.clear();
-                                if tab == Tab::Media && self.records.is_empty() && !self.prefs.library.is_empty() {
+                                if tab == Tab::Media
+                                    && self.records.is_empty()
+                                    && !self.prefs.library.is_empty()
+                                {
                                     self.load_records();
                                 }
                             }
@@ -1803,8 +2044,17 @@ impl eframe::App for App {
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_enabled_ui(!self.busy, |ui| {
-                            let label = if self.prefs.library.is_empty() { "Choose library…".to_owned() } else { format!("{}   Change…", self.prefs.library) };
-                            if ui.add(egui::Button::new(RichText::new(label).color(theme::MUTED)).fill(theme::INK).stroke(egui::Stroke::new(2., theme::LINE)))
+                            let label = if self.prefs.library.is_empty() {
+                                "Choose library…".to_owned()
+                            } else {
+                                format!("{}   Change…", self.prefs.library)
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(RichText::new(label).color(theme::MUTED))
+                                        .fill(theme::INK)
+                                        .stroke(egui::Stroke::new(2., theme::LINE)),
+                                )
                                 .on_hover_text("Library folder")
                                 .clicked()
                             {
@@ -1827,38 +2077,42 @@ impl eframe::App for App {
                 });
             });
         egui::TopBottomPanel::bottom("status")
-            .frame(egui::Frame::new().fill(theme::HEADER).inner_margin(egui::Margin::symmetric(20, 6)))
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::HEADER)
+                    .inner_margin(egui::Margin::symmetric(20, 6)),
+            )
             .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if self.busy {
-                    ui.spinner();
-                    if ui.button("Cancel safely").clicked() {
-                        self.cancel.store(true, Ordering::Relaxed);
-                        self.status = "Cancelling safely…".into();
+                ui.horizontal(|ui| {
+                    if self.busy {
+                        ui.spinner();
+                        if ui.button("Cancel safely").clicked() {
+                            self.cancel.store(true, Ordering::Relaxed);
+                            self.status = "Cancelling safely…".into();
+                        }
                     }
-                }
-                ui.label(RichText::new(&self.status).color(theme::MUTED));
+                    ui.label(RichText::new(&self.status).color(theme::MUTED));
+                });
+                egui::CollapsingHeader::new("Activity log").show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("logs")
+                        .max_height(130.)
+                        .stick_to_bottom(true)
+                        .show_rows(
+                            ui,
+                            ui.text_style_height(&egui::TextStyle::Small),
+                            self.logs.len(),
+                            |ui, rows| {
+                                for row in rows {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(&self.logs[row]).small())
+                                            .truncate(),
+                                    );
+                                }
+                            },
+                        );
+                });
             });
-            egui::CollapsingHeader::new("Activity log").show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("logs")
-                    .max_height(130.)
-                    .stick_to_bottom(true)
-                    .show_rows(
-                        ui,
-                        ui.text_style_height(&egui::TextStyle::Small),
-                        self.logs.len(),
-                        |ui, rows| {
-                            for row in rows {
-                                ui.add(
-                                    egui::Label::new(RichText::new(&self.logs[row]).small())
-                                        .truncate(),
-                                );
-                            }
-                        },
-                    );
-            });
-        });
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::BG))
             .show(ctx, |ui| {
@@ -1866,18 +2120,20 @@ impl eframe::App for App {
                     if self.tab == Tab::Library {
                         return self.library_ui(ui);
                     }
-                    egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 14)).show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt(("page", self.tab as usize))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| match self.tab {
-                                Tab::Library => {}
-                                Tab::Import => self.import_ui(ui),
-                                Tab::Media => self.media_ui(ui),
-                                Tab::Usb => self.usb_ui(ui),
-                                Tab::Settings => self.settings_ui(ui),
-                            });
-                    });
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(24, 14))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt(("page", self.tab as usize))
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| match self.tab {
+                                    Tab::Library => {}
+                                    Tab::Import => self.import_ui(ui),
+                                    Tab::Media => self.media_ui(ui),
+                                    Tab::Usb => self.usb_ui(ui),
+                                    Tab::Settings => self.settings_ui(ui),
+                                });
+                        });
                 });
             });
         self.library_copy_window(ctx);
@@ -1890,12 +2146,17 @@ impl eframe::App for App {
         // Capture only this app's framebuffer for repeatable packaging smoke tests.
         // Wait for the library and its visible covers before capturing.
         let records_ready = !matches!(self.tab, Tab::Library | Tab::Media) || !self.records_stale;
-        if !self.busy && !self.updates.checking() && records_ready && self.covers_pending.is_empty() {
+        if !self.busy && !self.updates.checking() && records_ready && self.covers_pending.is_empty()
+        {
             self.settled_frames += 1;
         } else {
             self.settled_frames = 0;
         }
-        if self.screenshot.is_some() && self.frames >= 3 && (self.settled_frames >= 10 || self.frames == 900) && !self.screenshot_requested {
+        if self.screenshot.is_some()
+            && self.frames >= 3
+            && (self.settled_frames >= 10 || self.frames == 900)
+            && !self.screenshot_requested
+        {
             self.screenshot_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
@@ -1965,10 +2226,22 @@ fn main() -> eframe::Result<()> {
         .windows(2)
         .find(|w| w[0] == "--screenshot")
         .map(|w| PathBuf::from(&w[1]));
-    let compare_backup=args.windows(2).find(|w|w[0]=="--compare-backup").map(|w|PathBuf::from(&w[1]));
-    let save_slots=args.windows(2).find(|w|w[0]=="--save-slots").map(|w|PathBuf::from(&w[1]));
-    let save_backup = args.windows(2).find(|w| w[0] == "--save-backup").map(|w| PathBuf::from(&w[1]));
-    let cheat_database = args.windows(2).find(|w|w[0]=="--cheat-database").map(|w|PathBuf::from(&w[1]));
+    let compare_backup = args
+        .windows(2)
+        .find(|w| w[0] == "--compare-backup")
+        .map(|w| PathBuf::from(&w[1]));
+    let save_slots = args
+        .windows(2)
+        .find(|w| w[0] == "--save-slots")
+        .map(|w| PathBuf::from(&w[1]));
+    let save_backup = args
+        .windows(2)
+        .find(|w| w[0] == "--save-backup")
+        .map(|w| PathBuf::from(&w[1]));
+    let cheat_database = args
+        .windows(2)
+        .find(|w| w[0] == "--cheat-database")
+        .map(|w| PathBuf::from(&w[1]));
     let guided_setup = args.iter().any(|a| a == "--guided-setup");
     let check_updates = args.iter().any(|a| a == "--check-updates");
     let profile = args
@@ -1987,8 +2260,10 @@ fn main() -> eframe::Result<()> {
     let mut options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../../assets/app-icon.png"))
-                .expect("Bundled app icon must be a valid PNG"))
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../assets/app-icon.png"))
+                    .expect("Bundled app icon must be a valid PNG"),
+            )
             .with_inner_size([1220., 850.])
             .with_min_inner_size([980., 680.]),
         ..Default::default()
@@ -2068,18 +2343,44 @@ fn main() -> eframe::Result<()> {
                 app.prefs.library = library;
             }
             if let Some(n) = channel {
-                app.tab = [Tab::Library, Tab::Import, Tab::Media, Tab::Usb, Tab::Settings][n.clamp(1, 5) - 1];
+                app.tab = [
+                    Tab::Library,
+                    Tab::Import,
+                    Tab::Media,
+                    Tab::Usb,
+                    Tab::Settings,
+                ][n.clamp(1, 5) - 1];
             }
-            if guided_setup { app.tab = Tab::Usb; }
+            if guided_setup {
+                app.tab = Tab::Usb;
+            }
             if check_updates && !app.prefs.offline {
-                app.updates.check(&cc.egui_ctx,vec![PathBuf::from(&app.prefs.library),PathBuf::from(&app.prefs.destination)]);
+                app.updates.check(
+                    &cc.egui_ctx,
+                    vec![
+                        PathBuf::from(&app.prefs.library),
+                        PathBuf::from(&app.prefs.destination),
+                    ],
+                );
             }
-            if let Some(path)=cheat_database {if let Err(error)=app.cheat_database.open_file(&path){app.error(error);}}
+            if let Some(path) = cheat_database {
+                if let Err(error) = app.cheat_database.open_file(&path) {
+                    app.error(error);
+                }
+            }
             if let Some(path) = save_backup {
-                if let Err(error) = app.save_browser.open_file(&path) { app.error(error); }
+                if let Err(error) = app.save_browser.open_file(&path) {
+                    app.error(error);
+                }
             }
-            if let Some(path)=save_slots {app.save_browser.browse_slots(path);}
-            if let Some(path)=compare_backup {if let Err(error)=app.save_browser.compare_file(&path){app.error(error);}}
+            if let Some(path) = save_slots {
+                app.save_browser.browse_slots(path);
+            }
+            if let Some(path) = compare_backup {
+                if let Err(error) = app.save_browser.compare_file(&path) {
+                    app.error(error);
+                }
+            }
             if let Some(path) = profile {
                 // Explicit diagnostic mode: exercise a large list without
                 // importing files or reading/changing the library.

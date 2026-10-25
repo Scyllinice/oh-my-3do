@@ -31,7 +31,9 @@ pub struct Install {
     #[serde(default)]
     pub assets: Vec<Asset>,
 }
-fn restart_default() -> bool { true }
+fn restart_default() -> bool {
+    true
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Report {
@@ -44,23 +46,42 @@ pub struct Report {
 /// Persist failures before attempting to reopen the old app, including failures
 /// during an update on exit (which must leave the application closed).
 pub fn record_result(plan: &Install, result: &Result<()>) -> Result<()> {
-    let detail = match result { Ok(()) => "Updated and startup verified successfully.".into(), Err(e) => format!("{e:#}") };
+    let detail = match result {
+        Ok(()) => "Updated and startup verified successfully.".into(),
+        Err(e) => format!("{e:#}"),
+    };
     fs::write(&plan.log, &detail)?;
-    let report = Report { executable: plan.executable.clone(), success: result.is_ok(),
-        previous_intact: f::sha256(&plan.executable, &Job::default()).ok().as_deref() == Some(&plan.original_sha256),
-        detail, log: plan.log.clone() };
-    let directory = plan.log.parent().and_then(Path::parent).context("Missing update cache directory")?;
-    f::atomic(&directory.join("last-result.json"), &serde_json::to_vec_pretty(&report)?)
+    let report = Report {
+        executable: plan.executable.clone(),
+        success: result.is_ok(),
+        previous_intact: f::sha256(&plan.executable, &Job::default()).ok().as_deref()
+            == Some(&plan.original_sha256),
+        detail,
+        log: plan.log.clone(),
+    };
+    let directory = plan
+        .log
+        .parent()
+        .and_then(Path::parent)
+        .context("Missing update cache directory")?;
+    f::atomic(
+        &directory.join("last-result.json"),
+        &serde_json::to_vec_pretty(&report)?,
+    )
 }
 pub fn last_report(cache: &Path, executable: &Path) -> Option<Report> {
     let bytes = fs::read(cache.join("self-update/last-result.json")).ok()?;
-    if bytes.len() > 64 * 1024 { return None; }
+    if bytes.len() > 64 * 1024 {
+        return None;
+    }
     let report: Report = serde_json::from_slice(&bytes).ok()?;
     (report.executable == executable.canonicalize().ok()?).then_some(report)
 }
 pub fn discard(plan: &Install, path: &Path) -> Result<()> {
-    ensure!(f::sha256(&plan.staged, &Job::default())? == plan.new_sha256,
-        "Staged update changed; keep its recovery files and check updates again");
+    ensure!(
+        f::sha256(&plan.staged, &Job::default())? == plan.new_sha256,
+        "Staged update changed; keep its recovery files and check updates again"
+    );
     fs::remove_file(&plan.staged)?;
     let _ = fs::remove_file(path);
     Ok(())
@@ -324,7 +345,9 @@ pub fn apply(plan: &Install) -> Result<()> {
         );
         let mut command = Command::new(&plan.executable);
         command.arg("--update-ready").arg(&plan.ready);
-        if !plan.restart { command.arg("--update-exit"); }
+        if !plan.restart {
+            command.arg("--update-exit");
+        }
         Ok(command.spawn()?)
     })();
     let mut child = match launch {

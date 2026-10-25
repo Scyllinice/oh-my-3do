@@ -185,9 +185,13 @@ fn copying_custom_categories_preserves_the_consoles_visibility_choices() {
     .unwrap();
     let mut target_config = Categories::default();
     target_config.categories[0].hidden = true;
-    target_config.categories.push(Category{id:"drive-only".into(),name:"Drive extras".into(),hidden:true});
-    put(t,"Games/USA/Extra/extra.iso",b"extra");
-    put(t,"Drive extras/USA/Only/only.iso",b"only");
+    target_config.categories.push(Category {
+        id: "drive-only".into(),
+        name: "Drive extras".into(),
+        hidden: true,
+    });
+    put(t, "Games/USA/Extra/extra.iso", b"extra");
+    put(t, "Drive extras/USA/Only/only.iso", b"only");
     put(t, categories::PATH, &target_config.encode().unwrap());
     put(r, "Collection/USA/Test/Disc 1.iso", b"one");
     put(r, "Collection/USA/Test/Disc 2.iso", b"two");
@@ -208,7 +212,10 @@ fn copying_custom_categories_preserves_the_consoles_visibility_choices() {
     let copied = categories::load(t).unwrap();
     assert_eq!(copied.categories[0].name, "Collection");
     assert!(copied.categories[0].hidden);
-    assert!(copied.categories.iter().any(|c|c.name=="Drive extras"&&c.hidden));
+    assert!(copied
+        .categories
+        .iter()
+        .any(|c| c.name == "Drive extras" && c.hidden));
     assert!(t.join("Collection/USA/Extra/extra.iso").is_file());
     assert!(!t.join("Games").exists());
 }
@@ -258,17 +265,33 @@ int main(int argc,char **argv){char data[8192];FILE *f;size_t n;if(argc!=2)retur
 
 #[test]
 fn removing_an_empty_category_is_undoable() {
-    let root=tempfile::tempdir().unwrap();let cache=tempfile::tempdir().unwrap();let r=root.path();
-    let old=Categories::default();put(r,categories::PATH,&old.encode().unwrap());fs::create_dir(r.join("Demos")).unwrap();
-    let mut new=old.clone();new.categories.remove(1);new.defaults.insert("Demos".into(),"category-0".into());
-    let journal=categories::save(r,&old,&new,cache.path(),&Job::default()).unwrap();
-    assert!(!r.join("Demos").exists());library::undo(&journal).unwrap();assert!(r.join("Demos").is_dir());assert_eq!(categories::load(r).unwrap(),old);
+    let root = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let r = root.path();
+    let old = Categories::default();
+    put(r, categories::PATH, &old.encode().unwrap());
+    fs::create_dir(r.join("Demos")).unwrap();
+    let mut new = old.clone();
+    new.categories.remove(1);
+    new.defaults.insert("Demos".into(), "category-0".into());
+    let journal = categories::save(r, &old, &new, cache.path(), &Job::default()).unwrap();
+    assert!(!r.join("Demos").exists());
+    library::undo(&journal).unwrap();
+    assert!(r.join("Demos").is_dir());
+    assert_eq!(categories::load(r).unwrap(), old);
 }
 
 #[test]
 fn a_fresh_drive_inherits_the_librarys_initial_visibility() {
-    let root=tempfile::tempdir().unwrap();let target=tempfile::tempdir().unwrap();
-    let mut config=Categories::default();config.categories[0].hidden=true;
-    put(root.path(),categories::PATH,&config.encode().unwrap());
-    assert!(categories::for_transfer(root.path(),target.path()).unwrap().categories[0].hidden);
+    let root = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let mut config = Categories::default();
+    config.categories[0].hidden = true;
+    put(root.path(), categories::PATH, &config.encode().unwrap());
+    assert!(
+        categories::for_transfer(root.path(), target.path())
+            .unwrap()
+            .categories[0]
+            .hidden
+    );
 }

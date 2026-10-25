@@ -369,7 +369,12 @@ fn lead_frames(first: &[u8]) -> Vec<Vec<u8>> {
         return vec![];
     }
     (0..STREAM_LEAD_FRAMES)
-        .map(|i| first.iter().map(|&v| (v as usize * i / STREAM_LEAD_FRAMES) as u8).collect())
+        .map(|i| {
+            first
+                .iter()
+                .map(|&v| (v as usize * i / STREAM_LEAD_FRAMES) as u8)
+                .collect()
+        })
         .collect()
 }
 extern "C" {
@@ -417,8 +422,17 @@ fn memory_available() -> u64 {
         extern "system" {
             fn GlobalMemoryStatusEx(status: *mut Status) -> i32;
         }
-        let mut status = Status { length: std::mem::size_of::<Status>() as u32, load: 0, total_phys: 0, avail_phys: 0,
-            total_page: 0, avail_page: 0, total_virtual: 0, avail_virtual: 0, avail_extended: 0 };
+        let mut status = Status {
+            length: std::mem::size_of::<Status>() as u32,
+            load: 0,
+            total_phys: 0,
+            avail_phys: 0,
+            total_page: 0,
+            avail_page: 0,
+            total_virtual: 0,
+            avail_virtual: 0,
+            avail_extended: 0,
+        };
         // SAFETY: status is a MEMORYSTATUSEX with its length set.
         if unsafe { GlobalMemoryStatusEx(&mut status) } != 0 {
             return status.avail_phys;
@@ -440,7 +454,11 @@ impl EncodeSlot {
         }
         while state.0 >= state.1 {
             job.check()?;
-            state = ENCODES.1.wait_timeout(state, Duration::from_millis(200)).unwrap().0;
+            state = ENCODES
+                .1
+                .wait_timeout(state, Duration::from_millis(200))
+                .unwrap()
+                .0;
         }
         state.0 += 1;
         Ok(EncodeSlot)
@@ -507,7 +525,14 @@ pub fn encode_stream(frames: &[u8], audio: Option<&[u8]>) -> Result<Vec<u8>> {
 }
 /// Run exe and hand each complete `size`-byte block of its output to each(),
 /// up to `max` blocks. Returns how many.
-fn stream(exe: &Path, args: &[String], size: usize, max: usize, job: &Job, mut each: impl FnMut(&[u8]) -> Result<()>) -> Result<usize> {
+fn stream(
+    exe: &Path,
+    args: &[String],
+    size: usize,
+    max: usize,
+    job: &Job,
+    mut each: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<usize> {
     let mut child = command(exe)
         .args(args)
         .stdout(Stdio::piped())
@@ -518,7 +543,10 @@ fn stream(exe: &Path, args: &[String], size: usize, max: usize, job: &Job, mut e
     let stderr = child.stderr.take().unwrap();
     let err = std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        stderr.take(64 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+        stderr
+            .take(64 * 1024)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
     });
     let mut block = vec![0u8; size];
     let mut count = 0;
@@ -547,7 +575,9 @@ fn stream(exe: &Path, args: &[String], size: usize, max: usize, job: &Job, mut e
         let _ = child.kill();
     }
     let status = child.wait()?;
-    let stderr = err.join().map_err(|_| anyhow::anyhow!("Video error thread failed"))??;
+    let stderr = err
+        .join()
+        .map_err(|_| anyhow::anyhow!("Video error thread failed"))??;
     result?;
     if !status.success() {
         bail!("Video tool failed: {}", String::from_utf8_lossy(&stderr))
@@ -557,7 +587,14 @@ fn stream(exe: &Path, args: &[String], size: usize, max: usize, job: &Job, mut e
 
 pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> Result<()> {
     let (ffmpeg, ffprobe) = video_exes(prefs)?;
-    let mut a = args(&["-v", "error", "-show_streams", "-show_format", "-of", "json"]);
+    let mut a = args(&[
+        "-v",
+        "error",
+        "-show_streams",
+        "-show_format",
+        "-of",
+        "json",
+    ]);
     a.push(source.to_string_lossy().into_owned());
     let info: Value = serde_json::from_slice(&capture(&ffprobe, &a, 1024 * 1024, job)?)?;
     let streams = info["streams"].as_array().context("No video streams")?;
@@ -587,12 +624,31 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
         "fps={PREVIEW_FPS},scale={STREAM_WIDTH}:{STREAM_HEIGHT}:force_original_aspect_ratio=decrease:flags=area,\
          pad={STREAM_WIDTH}:{STREAM_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x081021"
     );
-    a.extend(args(&["-map", "0:v:0", "-an", "-sn", "-t", &seconds.to_string(), "-vf", &filter,
-        "-frames:v", &reserve.to_string(), "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]));
+    a.extend(args(&[
+        "-map",
+        "0:v:0",
+        "-an",
+        "-sn",
+        "-t",
+        &seconds.to_string(),
+        "-vf",
+        &filter,
+        "-frames:v",
+        &reserve.to_string(),
+        "-pix_fmt",
+        "rgb24",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]));
     job.say("Reading preview frames");
     let (mut lead, mut count) = (0, 0);
     stream(&ffmpeg, &a, STREAM_FRAME, reserve, job, |frame| {
-        let mut pictures = if count == 0 { lead_frames(frame) } else { vec![] };
+        let mut pictures = if count == 0 {
+            lead_frames(frame)
+        } else {
+            vec![]
+        };
         lead += pictures.len();
         pictures.push(frame.to_vec());
         for picture in pictures {
@@ -616,9 +672,26 @@ pub fn preview(source: &Path, target: &Path, prefs: &Preferences, job: &Job) -> 
         let seconds = (count - lead) as f64 / PREVIEW_FPS as f64;
         let mut a = args(&["-v", "error", "-nostdin", "-i"]);
         a.push(source.to_string_lossy().into_owned());
-        a.extend(args(&["-map", "0:a:0", "-vn", "-sn", "-t", &seconds.to_string(), "-ac", "1", "-ar", "11025",
-            "-af", &format!("volume=0.8,afade=t=in:d=0.01,afade=t=out:st={}:d=0.01", (seconds - 0.01).max(0.)),
-            "-f", "s8", "pipe:1"]));
+        a.extend(args(&[
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-sn",
+            "-t",
+            &seconds.to_string(),
+            "-ac",
+            "1",
+            "-ar",
+            "11025",
+            "-af",
+            &format!(
+                "volume=0.8,afade=t=in:d=0.01,afade=t=out:st={}:d=0.01",
+                (seconds - 0.01).max(0.)
+            ),
+            "-f",
+            "s8",
+            "pipe:1",
+        ]));
         let source = capture(&ffmpeg, &a, samples + 8192, job)?;
         let silence = samples - (count - lead) * 11025 / PREVIEW_FPS;
         audio = vec![0; silence];
@@ -946,7 +1019,9 @@ pub fn prepare_missing(
                 }
                 validate(&target)?;
                 let large = if kind == "cover" {
-                    let large = cache.join("converted-native").join(format!("{key}-large.3dc"));
+                    let large = cache
+                        .join("converted-native")
+                        .join(format!("{key}-large.3dc"));
                     if !large.exists() {
                         large_cover(&source, &large)?
                     }
@@ -1060,8 +1135,15 @@ pub fn validate(path: &Path) -> Result<()> {
     let height = u16::from_be_bytes(data[10..12].try_into()?) as usize;
     if data.starts_with(b"OM3DCOV2") {
         let bytes = be(&data, 12)? as usize;
-        let large = path.to_string_lossy().to_ascii_lowercase().ends_with("-large.3dc");
-        let (size, limit) = if large { ((192, 240), 192 * 240 * 2 + 1024) } else { ((96, 120), 32768) };
+        let large = path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("-large.3dc");
+        let (size, limit) = if large {
+            ((192, 240), 192 * 240 * 2 + 1024)
+        } else {
+            ((96, 120), 32768)
+        };
         if (width, height) != size
             || bytes == 0
             || bytes > limit
@@ -1091,7 +1173,10 @@ pub fn validate(path: &Path) -> Result<()> {
     {
         bail!("Invalid preview bounds/checksum")
     }
-    if (width, height, fps) != (PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_FPS) || frames == 0 || frames > PREVIEW_FRAMES {
+    if (width, height, fps) != (PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_FPS)
+        || frames == 0
+        || frames > PREVIEW_FRAMES
+    {
         bail!("Invalid preview size, rate or length")
     }
     let video = be(&data, 24)? as usize;
@@ -1130,8 +1215,15 @@ fn validate_stream(data: &[u8]) -> Result<()> {
     if data.len() < 2048 {
         bail!("Truncated streamed preview")
     }
-    let (chunk_frames, frames, chunks, preroll) = (h16(14), be(data, 16)? as usize, h16(20), h16(22));
-    let (entries4, entries2, rate, max_chunk, slots) = (h16(24), h16(26), be(data, 28)?, be(data, 32)? as usize, h16(44));
+    let (chunk_frames, frames, chunks, preroll) =
+        (h16(14), be(data, 16)? as usize, h16(20), h16(22));
+    let (entries4, entries2, rate, max_chunk, slots) = (
+        h16(24),
+        h16(26),
+        be(data, 28)?,
+        be(data, 32)? as usize,
+        h16(44),
+    );
     if (h16(8), h16(10), h16(12)) != (STREAM_WIDTH, STREAM_HEIGHT, PREVIEW_FPS)
         || !(1..=30).contains(&chunk_frames)
         || !(1..=STREAM_MAX_FRAMES).contains(&frames)
@@ -1177,7 +1269,12 @@ fn validate_stream(data: &[u8]) -> Result<()> {
             || c16(12) != first2
             || first4 + n4 > entries4
             || first2 + n2 > entries2
-            || audio != if rate != 0 { samples_to(first + count) - samples_to(first) } else { 0 }
+            || audio
+                != if rate != 0 {
+                    samples_to(first + count) - samples_to(first)
+                } else {
+                    0
+                }
             || entries + video > size
             || video < (count + 1) * 4
             || be(chunk, entries)? as usize != (count + 1) * 4
@@ -1281,6 +1378,8 @@ mod tests {
         let lead = lead_frames(&vec![200u8; STREAM_FRAME]);
         assert_eq!(lead.len(), STREAM_LEAD_FRAMES);
         assert!(lead[0].iter().all(|&v| v == 0));
-        assert!(lead[STREAM_LEAD_FRAMES - 1].iter().all(|&v| v as usize == 200 * 11 / 12));
+        assert!(lead[STREAM_LEAD_FRAMES - 1]
+            .iter()
+            .all(|&v| v as usize == 200 * 11 / 12));
     }
 }

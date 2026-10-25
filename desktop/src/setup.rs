@@ -25,7 +25,8 @@ pub(crate) fn download(client: &Client, url: &str, limit: usize, job: &Job) -> R
         response.content_length().is_none_or(|n| n <= limit as u64),
         "Download exceeds size limit"
     );
-    let expected = response.content_length().unwrap_or(0);job.report(0,expected,"Downloading");
+    let expected = response.content_length().unwrap_or(0);
+    job.report(0, expected, "Downloading");
     let mut bytes = Vec::new();
     let mut stream = response.take(limit as u64 + 1);
     let mut buffer = [0u8; 32768];
@@ -37,7 +38,7 @@ pub(crate) fn download(client: &Client, url: &str, limit: usize, job: &Job) -> R
         }
         bytes.extend_from_slice(&buffer[..n]);
         ensure!(bytes.len() <= limit, "Download exceeds size limit");
-        job.report(bytes.len() as u64,expected,"Downloading");
+        job.report(bytes.len() as u64, expected, "Downloading");
     }
     Ok(bytes)
 }
@@ -68,7 +69,10 @@ pub fn install_release(
     job: &Job,
 ) -> Result<PathBuf> {
     let release = crate::updates::latest(crate::updates::Component::Menu, job)?;
-    job.say(format!("Downloading menu {} from Scyllinice/oh-my-3do", release.tag));
+    job.say(format!(
+        "Downloading menu {} from Scyllinice/oh-my-3do",
+        release.tag
+    ));
     let image = release.bytes("boot.iso", LIMIT, &client()?, job)?;
     // The shared release reader validates repository URLs and checksums. Keep
     // the 3DO volume-header validation before starting the installation journal.
@@ -77,10 +81,16 @@ pub fn install_release(
     install_verified(root, cache, &image, settings, job)
 }
 /// Install a checksum-pinned local developer menu using the normal journal.
-pub fn install_developer(directory: &Path, root: &Path, cache: &Path,
-    settings: &console_config::Settings, job: &Job) -> Result<PathBuf> {
-    let release = crate::updates::local_release(directory, crate::updates::Component::Menu, job)?
-        .context("No local menu-update.json was found in the developer update directory")?;
+pub fn install_developer(
+    directory: &Path,
+    root: &Path,
+    cache: &Path,
+    settings: &console_config::Settings,
+    job: &Job,
+) -> Result<PathBuf> {
+    let release =
+        crate::updates::local_release(directory, crate::updates::Component::Menu, job)?
+            .context("No local menu-update.json was found in the developer update directory")?;
     let image = release.bytes("boot.iso", LIMIT, &client()?, job)?;
     let digest = format!("{:x}", Sha256::digest(&image));
     verify_image(&image, &format!("{digest}  boot.iso"))?;
@@ -151,7 +161,12 @@ pub fn ensure_support(
     if !ini.exists() || ini.metadata()?.len() == 0 {
         tx.write(console_config::PATH, &settings.encode()?)?;
     }
-    if !f::safe(root, crate::categories::PATH)?.exists() { tx.write(crate::categories::PATH,&crate::categories::load(root)?.encode()?)?; }
+    if !f::safe(root, crate::categories::PATH)?.exists() {
+        tx.write(
+            crate::categories::PATH,
+            &crate::categories::load(root)?.encode()?,
+        )?;
+    }
     library::build_missing_indexes(root, tx, job)?;
     let catalog = f::safe(root, ".ohmy3do/saves/slot-catalog.3di")?;
     ensure!(
@@ -175,7 +190,11 @@ pub fn ensure_navigation(root: &Path, tx: &mut library::Journal, job: &Job) -> R
         job.check()?;
         let path = f::safe(root, &relative)?;
         if path.exists() {
-            ensure!(path.is_file() && fs::read(&path)? == data, "Navigation helper path is occupied: {}", path.display());
+            ensure!(
+                path.is_file() && fs::read(&path)? == data,
+                "Navigation helper path is occupied: {}",
+                path.display()
+            );
         } else {
             tx.write(&relative, &data)?;
             ensure!(fs::read(path)? == data, "Navigation helper readback failed");
@@ -198,28 +217,64 @@ pub(crate) fn navigation_helper_data() -> [u8; 2048] {
 /// Expected helper paths, without creating files or validating disc payloads.
 pub(crate) fn navigation_helpers(root: &Path, job: &Job) -> Result<Vec<String>> {
     let mut folders = std::collections::BTreeSet::new();
-    for entry in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| {
-        !f::is_link(e.path()) && (e.depth() == 0 || !e.file_type().is_dir() ||
-            !e.file_name().to_string_lossy().starts_with('.') &&
-            !["$boot", "system", "system volume information"].contains(&e.file_name().to_string_lossy().to_ascii_lowercase().as_str()))
-    }) {
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            !f::is_link(e.path())
+                && (e.depth() == 0
+                    || !e.file_type().is_dir()
+                    || !e.file_name().to_string_lossy().starts_with('.')
+                        && !["$boot", "system", "system volume information"].contains(
+                            &e.file_name()
+                                .to_string_lossy()
+                                .to_ascii_lowercase()
+                                .as_str(),
+                        ))
+        })
+    {
         job.check()?;
         let entry = entry?;
-        if !entry.file_type().is_file() || entry.file_name().to_string_lossy().eq_ignore_ascii_case(NAVIGATION_HELPER) {
+        if !entry.file_type().is_file()
+            || entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(NAVIGATION_HELPER)
+        {
             continue;
         }
-        let extension = entry.path().extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
-        if !["iso", "cue"].contains(&extension.as_str()) { continue; }
-        if entry.path().parent() == Some(root) { continue; }
+        let extension = entry
+            .path()
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        if !["iso", "cue"].contains(&extension.as_str()) {
+            continue;
+        }
+        if entry.path().parent() == Some(root) {
+            continue;
+        }
         let mut parent = entry.path().parent().and_then(Path::parent);
         while let Some(folder) = parent {
-            if folder == root { break; }
+            if folder == root {
+                break;
+            }
             ensure!(folder.starts_with(root), "Disc is outside the drive");
             folders.insert(folder.to_owned());
             parent = folder.parent();
         }
     }
-    folders.into_iter().map(|folder| Ok(folder.strip_prefix(root)?.join(NAVIGATION_HELPER).to_string_lossy().replace('\\', "/"))).collect()
+    folders
+        .into_iter()
+        .map(|folder| {
+            Ok(folder
+                .strip_prefix(root)?
+                .join(NAVIGATION_HELPER)
+                .to_string_lossy()
+                .replace('\\', "/"))
+        })
+        .collect()
 }
 /// Offline setup/repair from a local menu, with no staging library required.
 pub fn install_local(

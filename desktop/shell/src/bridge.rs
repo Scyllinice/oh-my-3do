@@ -36,9 +36,9 @@ struct Inner {
     removal: Option<(core::title_removal::Plan, Option<String>)>,
     import: Option<Plan>,
     copy: Option<usb::CopyPlan>,
-    information_restore: Option<(String,core::game_info::RestorePlan)>,
-    information_import: Option<(String,core::game_info::ImportPlan)>,
-    information_matches: Option<(String,core::game_info::MatchReview)>,
+    information_restore: Option<(String, core::game_info::RestorePlan)>,
+    information_import: Option<(String, core::game_info::ImportPlan)>,
+    information_matches: Option<(String, core::game_info::MatchReview)>,
     last: Option<PathBuf>,
     config: Option<console_config::Loaded>,
     backup: Option<Backup>,
@@ -160,9 +160,17 @@ fn pick(a: &Value) -> Result<Value> {
             .add_filter("Cheat database", &["json"])
             .set_file_name("save-cheats.json")
             .save_file()),
-        "support_save" => json!(dialog.add_filter("Support report", &["txt"]).set_file_name("Oh-My-3DO-support-report.txt").save_file()),
-        "metadata" => json!(dialog.add_filter("Custom game metadata", &["json"]).pick_file()),
-        "metadata_save" => json!(dialog.add_filter("Custom game metadata", &["json"]).set_file_name("Oh-My-3DO-custom-metadata.json").save_file()),
+        "support_save" => json!(dialog
+            .add_filter("Support report", &["txt"])
+            .set_file_name("Oh-My-3DO-support-report.txt")
+            .save_file()),
+        "metadata" => json!(dialog
+            .add_filter("Custom game metadata", &["json"])
+            .pick_file()),
+        "metadata_save" => json!(dialog
+            .add_filter("Custom game metadata", &["json"])
+            .set_file_name("Oh-My-3DO-custom-metadata.json")
+            .save_file()),
         _ => bail!("Unknown file chooser"),
     })
 }
@@ -173,19 +181,36 @@ pub fn cancel(state: tauri::State<'_, Bridge>) {
 
 /// Preference-only writes do not lock the GUI controls or steal search focus.
 #[tauri::command]
-pub async fn save_library_views(state: tauri::State<'_, Bridge>, views: std::collections::BTreeMap<String, LibraryView>) -> Result<(), String> {
-    let backend=state.0.clone();
+pub async fn save_library_views(
+    state: tauri::State<'_, Bridge>,
+    views: std::collections::BTreeMap<String, LibraryView>,
+) -> Result<(), String> {
+    let backend = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<()> {
-        let mut inner=backend.inner.lock().map_err(|_|anyhow::anyhow!("Preferences unavailable"))?;
-        let mut prefs=inner.prefs.clone();
-        prefs.library_views=views;
-        f::atomic(&backend.cache.join("native-settings.json"),&serde_json::to_vec_pretty(&prefs)?)?;
-        inner.prefs=prefs;
+        let mut inner = backend
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Preferences unavailable"))?;
+        let mut prefs = inner.prefs.clone();
+        prefs.library_views = views;
+        f::atomic(
+            &backend.cache.join("native-settings.json"),
+            &serde_json::to_vec_pretty(&prefs)?,
+        )?;
+        inner.prefs = prefs;
         Ok(())
-    }).await.map_err(|e|e.to_string())?.map_err(|e|format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
 }
 #[tauri::command]
-pub async fn cover(state: tauri::State<'_, Bridge>, name: String, browser_root: Option<String>, token: Option<String>) -> Result<String, String> {
+pub async fn cover(
+    state: tauri::State<'_, Bridge>,
+    name: String,
+    browser_root: Option<String>,
+    token: Option<String>,
+) -> Result<String, String> {
     let backend = state.0.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<String> {
         let root = {
@@ -196,12 +221,21 @@ pub async fn cover(state: tauri::State<'_, Bridge>, name: String, browser_root: 
             if let Some(path) = &browser_root {
                 let root = f::root(Path::new(path))?;
                 if let Some(token) = &token {
-                    ensure!(core::drive_identity::inspect(&root, &inner.prefs)?.token == *token, "Drive changed; refresh the browser");
+                    ensure!(
+                        core::drive_identity::inspect(&root, &inner.prefs)?.token == *token,
+                        "Drive changed; refresh the browser"
+                    );
                 }
                 root
-            } else { root(&inner)? }
+            } else {
+                root(&inner)?
+            }
         };
-        let relative = if browser_root.is_some() { name } else { format!(".ohmy3do/covers/{name}") };
+        let relative = if browser_root.is_some() {
+            name
+        } else {
+            format!(".ohmy3do/covers/{name}")
+        };
         let p = f::safe(&root, &relative)?;
         ensure!(
             fs::metadata(&p)?.len() <= 32 * 1024 * 1024,
@@ -247,8 +281,12 @@ pub async fn request(
         }),
         progress: Arc::new(move |progress| {
             let mut last = last_progress.lock().unwrap();
-            if progress.phase != last.1 || progress.completed == progress.total || last.0.elapsed() >= std::time::Duration::from_millis(100) {
-                last.0 = std::time::Instant::now();last.1 = progress.phase.clone();
+            if progress.phase != last.1
+                || progress.completed == progress.total
+                || last.0.elapsed() >= std::time::Duration::from_millis(100)
+            {
+                last.0 = std::time::Instant::now();
+                last.1 = progress.phase.clone();
                 let _ = progress_events.emit("operation-progress", json!({"request_id":request_id,"completed":progress.completed,"total":progress.total,"phase":progress.phase}));
             }
         }),
@@ -304,7 +342,9 @@ fn dispatch(
             if let Some(i) = args.iter().position(|a| a == "--update-ready") {
                 if let Some(path) = args.get(i + 1) {
                     fs::write(path, b"ready")?;
-                    if args.iter().any(|a| a == "--update-exit") { app.exit(0); }
+                    if args.iter().any(|a| a == "--update-exit") {
+                        app.exit(0);
+                    }
                 }
             }
             Ok(Value::Null)
@@ -320,7 +360,9 @@ fn dispatch(
                 &state.cache.join("native-settings.json"),
                 &serde_json::to_vec_pretty(&prefs)?,
             )?;
-            if prefs.developer_mode != s.prefs.developer_mode || prefs.developer_updates_directory != s.prefs.developer_updates_directory {
+            if prefs.developer_mode != s.prefs.developer_mode
+                || prefs.developer_updates_directory != s.prefs.developer_updates_directory
+            {
                 s.release = None;
             }
             s.prefs = prefs;
@@ -331,19 +373,33 @@ fn dispatch(
             job.check()?;
             let root = root(s)?;
             let db = library::database(&root)?;
-            let mut records=db["games"].as_array().cloned().unwrap_or_default();
-            let destination = if s.prefs.destination.is_empty() { None } else { f::root(Path::new(&s.prefs.destination)).ok() };
-            let mut presence=destination.as_ref().map(|target|core::drive_browser::PresenceScan::new(&root,target)).transpose()?;
-            let mut paths=f::ReadPaths::new(&root)?;
-            let total=records.len() as u64;job.report(0,total,"Reading PC library");
-            for (index,record) in records.iter_mut().enumerate() {
+            let mut records = db["games"].as_array().cloned().unwrap_or_default();
+            let destination = if s.prefs.destination.is_empty() {
+                None
+            } else {
+                f::root(Path::new(&s.prefs.destination)).ok()
+            };
+            let mut presence = destination
+                .as_ref()
+                .map(|target| core::drive_browser::PresenceScan::new(&root, target))
+                .transpose()?;
+            let mut paths = f::ReadPaths::new(&root)?;
+            let total = records.len() as u64;
+            job.report(0, total, "Reading PC library");
+            for (index, record) in records.iter_mut().enumerate() {
                 job.check()?;
-                record["on_drive"] = json!(record["path"].as_str().and_then(|path|presence.as_mut().and_then(|scan|scan.check(path).ok())));
-                for (field,folder) in [("cover","covers"),("preview","previews")] {
-                    let missing=record[field].as_str().is_none_or(|name|paths.path(&format!(".ohmy3do/{folder}/{name}")).map_or(true,|p|!p.is_file()));
-                    record[format!("{field}_missing")]=json!(missing);
+                record["on_drive"] = json!(record["path"]
+                    .as_str()
+                    .and_then(|path| presence.as_mut().and_then(|scan| scan.check(path).ok())));
+                for (field, folder) in [("cover", "covers"), ("preview", "previews")] {
+                    let missing = record[field].as_str().is_none_or(|name| {
+                        paths
+                            .path(&format!(".ohmy3do/{folder}/{name}"))
+                            .map_or(true, |p| !p.is_file())
+                    });
+                    record[format!("{field}_missing")] = json!(missing);
                 }
-                job.report(index as u64+1,total,"Reading PC library");
+                job.report(index as u64 + 1, total, "Reading PC library");
             }
             job.check()?;
             Ok(
@@ -415,7 +471,10 @@ fn dispatch(
                 entry.selected = entry.resolvable();
             }
             if let Some(v) = a["selected"].as_bool() {
-                ensure!(!v || entry.resolvable(), "Choose a category or identify this disc before selecting it");
+                ensure!(
+                    !v || entry.resolvable(),
+                    "Choose a category or identify this disc before selecting it"
+                );
                 entry.selected = v;
             }
             library::collisions(plan)?;
@@ -428,22 +487,39 @@ fn dispatch(
             Ok(json!({"journal":s.last}))
         }
         "titles_remove_review" => {
-            s.removal=None;
-            let target=if a["browser_root"].as_str().is_some() { f::root(&path(a,"browser_root")?)? } else {root(s)?};
-            let token=if a["browser_root"].as_str().is_some() {
-                let token=text(a,"drive_token")?;
-                core::drive_identity::check(&target,&s.prefs,token)?;Some(token.to_owned())
-            }else{None};
-            let plan=core::title_removal::review(&target,&strings(a,"discs")?,job)?;
-            let response=json!(plan);s.removal=Some((plan,token));Ok(response)
+            s.removal = None;
+            let target = if a["browser_root"].as_str().is_some() {
+                f::root(&path(a, "browser_root")?)?
+            } else {
+                root(s)?
+            };
+            let token = if a["browser_root"].as_str().is_some() {
+                let token = text(a, "drive_token")?;
+                core::drive_identity::check(&target, &s.prefs, token)?;
+                Some(token.to_owned())
+            } else {
+                None
+            };
+            let plan = core::title_removal::review(&target, &strings(a, "discs")?, job)?;
+            let response = json!(plan);
+            s.removal = Some((plan, token));
+            Ok(response)
         }
         "titles_remove" => {
-            let (plan,token)=s.removal.take().context("Review title removal first")?;
-            if let Some(token)=token {core::drive_identity::check(&plan.root,&s.prefs,&token)?;}
-            else {ensure!(plan.root==root(s)?,"Library changed. Review removal again.");}
-            let result=core::title_removal::apply(&plan,&state.cache,job);
+            let (plan, token) = s.removal.take().context("Review title removal first")?;
+            if let Some(token) = token {
+                core::drive_identity::check(&plan.root, &s.prefs, &token)?;
+            } else {
+                ensure!(
+                    plan.root == root(s)?,
+                    "Library changed. Review removal again."
+                );
+            }
+            let result = core::title_removal::apply(&plan, &state.cache, job);
             // Earlier journals may restore metadata for now-deleted game files.
-            s.last=None;s.copy=None;s.import=None;
+            s.last = None;
+            s.copy = None;
+            s.import = None;
             Ok(json!(result?))
         }
         "move" => {
@@ -456,15 +532,29 @@ fn dispatch(
             )?);
             Ok(json!({"journal":s.last}))
         }
-        "drive_inspect" => Ok(json!(core::drive_identity::inspect(&path(a,"root")?,&s.prefs)?)),
+        "drive_inspect" => Ok(json!(core::drive_identity::inspect(
+            &path(a, "root")?,
+            &s.prefs
+        )?)),
         "drive_remember" => {
-            let value=core::drive_identity::remember(&path(a,"root")?,text(a,"name")?,&mut s.prefs,text(a,"token")?)?;
-            f::atomic(&state.cache.join("native-settings.json"),&serde_json::to_vec_pretty(&s.prefs)?)?;
+            let value = core::drive_identity::remember(
+                &path(a, "root")?,
+                text(a, "name")?,
+                &mut s.prefs,
+                text(a, "token")?,
+            )?;
+            f::atomic(
+                &state.cache.join("native-settings.json"),
+                &serde_json::to_vec_pretty(&s.prefs)?,
+            )?;
             Ok(json!({"identity":value,"prefs":s.prefs}))
         }
         "copy_preview" => {
-            let drive=core::drive_identity::inspect(&path(a,"destination")?,&s.prefs)?;
-            ensure!(!drive.mismatch,"Different drive at this location. Inspect and remember it in Drive setup first.");
+            let drive = core::drive_identity::inspect(&path(a, "destination")?, &s.prefs)?;
+            ensure!(
+                !drive.mismatch,
+                "Different drive at this location. Inspect and remember it in Drive setup first."
+            );
             let plan = usb::plan_selected(
                 &root(s)?,
                 &path(a, "destination")?,
@@ -474,13 +564,23 @@ fn dispatch(
                 job,
             )?;
             if a["existing_only"].as_bool().unwrap_or(false) {
-                if let Some(expected) = a["drive_token"].as_str() { ensure!(drive.token == expected, "Drive changed; refresh and review again"); }
+                if let Some(expected) = a["drive_token"].as_str() {
+                    ensure!(
+                        drive.token == expected,
+                        "Drive changed; refresh and review again"
+                    );
+                }
                 ensure!(plan.moves.is_empty(), "Drive categories differ. Use the normal copy review to reconcile folders first.");
-                ensure!(plan.files.iter().all(|file| {
-                    let name = file.path.to_ascii_lowercase();
-                    let support = name == "boot.iso" || name.starts_with(".ohmy3do/") || name.contains("/.ohmy3do/");
-                    support || file.status == "unchanged"
-                }), "Some game files are missing. Use Copy selected to USB to repair them first.");
+                ensure!(
+                    plan.files.iter().all(|file| {
+                        let name = file.path.to_ascii_lowercase();
+                        let support = name == "boot.iso"
+                            || name.starts_with(".ohmy3do/")
+                            || name.contains("/.ohmy3do/");
+                        support || file.status == "unchanged"
+                    }),
+                    "Some game files are missing. Use Copy selected to USB to repair them first."
+                );
             }
             let value = json!({"summary":usb::summary(&plan),"bytes":plan.bytes,"games":plan.games,"folders_to_move":plan.moves.len(),"files":plan.files,"destination":plan.destination,"storage":usb::storage_estimate(&plan)?,"drive":drive});
             s.copy = Some(plan);
@@ -492,81 +592,140 @@ fn dispatch(
                 f::root(&path(a, "destination")?)? == p.destination && root(s)? == p.source,
                 "Folders changed; preview again"
             );
-            core::drive_identity::check(&p.destination,&s.prefs,text(a,"drive_token")?)?;
+            core::drive_identity::check(&p.destination, &s.prefs, text(a, "drive_token")?)?;
             s.last = Some(usb::apply(p, &state.cache, job)?);
             s.copy = None;
             Ok(json!({"journal":s.last}))
         }
         "drive_eject" => {
-            let target=path(a,"root")?;
-            let canonical=f::root(&target)?;
-            let library_closed=Path::new(&s.prefs.library).canonicalize().is_ok_and(|p|p.starts_with(&canonical));
-            let backup_closed=s.backup.as_ref().and_then(|b|b.path.as_ref()).is_some_and(|p|p.canonicalize().is_ok_and(|p|p.starts_with(&canonical)));
-            let mut protected=vec![state.cache.clone(),std::env::current_exe()?];
-            if let Some(file)=s.backup.as_ref().filter(|b|b.dirty).and_then(|b|b.path.clone()){protected.push(file);}
-            let result=core::eject::eject(&target,&protected)?;
-            if backup_closed{s.backup=None;}
-            s.copy=None;s.cleanup=None;
-            Ok(json!({"root":result.root,"message":result.message,"backup_closed":backup_closed,"library_closed":library_closed}))
+            let target = path(a, "root")?;
+            let canonical = f::root(&target)?;
+            let library_closed = Path::new(&s.prefs.library)
+                .canonicalize()
+                .is_ok_and(|p| p.starts_with(&canonical));
+            let backup_closed = s
+                .backup
+                .as_ref()
+                .and_then(|b| b.path.as_ref())
+                .is_some_and(|p| p.canonicalize().is_ok_and(|p| p.starts_with(&canonical)));
+            let mut protected = vec![state.cache.clone(), std::env::current_exe()?];
+            if let Some(file) = s
+                .backup
+                .as_ref()
+                .filter(|b| b.dirty)
+                .and_then(|b| b.path.clone())
+            {
+                protected.push(file);
+            }
+            let result = core::eject::eject(&target, &protected)?;
+            if backup_closed {
+                s.backup = None;
+            }
+            s.copy = None;
+            s.cleanup = None;
+            Ok(
+                json!({"root":result.root,"message":result.message,"backup_closed":backup_closed,"library_closed":library_closed}),
+            )
         }
         "drive_cleanup_review" => {
-            s.drive_cleanup=None;
-            let plan=core::drive_cleanup::review(&path(a,"root")?,job)?;
-            let response=json!(plan);
-            s.drive_cleanup=Some(plan);
+            s.drive_cleanup = None;
+            let plan = core::drive_cleanup::review(&path(a, "root")?, job)?;
+            let response = json!(plan);
+            s.drive_cleanup = Some(plan);
             Ok(response)
         }
         "drive_cleanup" => {
-            let plan=s.drive_cleanup.take().context("Review drive cleanup first")?;
+            let plan = s
+                .drive_cleanup
+                .take()
+                .context("Review drive cleanup first")?;
             // Save backups go to the chosen PC folder, or are deleted only when
             // the person explicitly chose not to keep them.
-            let saves_to=a["saves_to"].as_str().filter(|p|!p.is_empty()).map(PathBuf::from);
-            ensure!(plan.saves.is_empty()||saves_to.is_some()||a["skip_saves"].as_bool()==Some(true),"Choose where to keep the save backups");
-            let open_backup_on_drive=s.backup.as_ref().and_then(|b|b.path.as_ref()).is_some_and(|p|p.canonicalize().is_ok_and(|p|p.starts_with(&plan.root)));
-            ensure!(!(open_backup_on_drive&&s.backup.as_ref().is_some_and(|b|b.dirty)),"Save or close the open save backup from this drive first");
-            let cleaned=core::drive_cleanup::apply(&plan,saves_to.as_deref(),job)?;
-            if open_backup_on_drive{s.backup=None;}
-            s.copy=None;s.cleanup=None;
+            let saves_to = a["saves_to"]
+                .as_str()
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from);
+            ensure!(
+                plan.saves.is_empty()
+                    || saves_to.is_some()
+                    || a["skip_saves"].as_bool() == Some(true),
+                "Choose where to keep the save backups"
+            );
+            let open_backup_on_drive = s
+                .backup
+                .as_ref()
+                .and_then(|b| b.path.as_ref())
+                .is_some_and(|p| p.canonicalize().is_ok_and(|p| p.starts_with(&plan.root)));
+            ensure!(
+                !(open_backup_on_drive && s.backup.as_ref().is_some_and(|b| b.dirty)),
+                "Save or close the open save backup from this drive first"
+            );
+            let cleaned = core::drive_cleanup::apply(&plan, saves_to.as_deref(), job)?;
+            if open_backup_on_drive {
+                s.backup = None;
+            }
+            s.copy = None;
+            s.cleanup = None;
             Ok(json!({"cleaned":cleaned,"backup_closed":open_backup_on_drive}))
         }
-        "drive_status" => Ok(json!(strings(a,"roots")?.iter().map(|root|core::eject::status(Path::new(root))).collect::<Vec<_>>())),
-        "drive_check" => Ok(json!(core::readiness::check(&path(a,"root")?,job)?)),
+        "drive_status" => Ok(json!(strings(a, "roots")?
+            .iter()
+            .map(|root| core::eject::status(Path::new(root)))
+            .collect::<Vec<_>>())),
+        "drive_check" => Ok(json!(core::readiness::check(&path(a, "root")?, job)?)),
         "support_export" => {
-            core::support_report::export(&path(a,"root")?, &path(a,"target")?, &strings(a,"activity")?, job)?;
+            core::support_report::export(
+                &path(a, "root")?,
+                &path(a, "target")?,
+                &strings(a, "activity")?,
+                job,
+            )?;
             Ok(json!(true))
         }
         "recovery_scan" => {
-            let inventory=core::recovery::scan(&path(a,"directory")?,job)?;
-            let result=json!(inventory);
-            s.cleanup=Some(inventory);
+            let inventory = core::recovery::scan(&path(a, "directory")?, job)?;
+            let result = json!(inventory);
+            s.cleanup = Some(inventory);
             Ok(result)
         }
         "recovery_remove" => {
-            let selected=strings(a,"selected")?;
-            let review=s.cleanup.as_ref().context("Scan recovery copies first")?;
-            if let Some(open)=s.backup.as_ref().and_then(|b|b.path.as_ref()) {
-                let open=open.canonicalize()?;
-                ensure!(!selected.iter().any(|n|review.directory.join(n)==open),"Close the open recovery copy before deleting it");
+            let selected = strings(a, "selected")?;
+            let review = s.cleanup.as_ref().context("Scan recovery copies first")?;
+            if let Some(open) = s.backup.as_ref().and_then(|b| b.path.as_ref()) {
+                let open = open.canonicalize()?;
+                ensure!(
+                    !selected.iter().any(|n| review.directory.join(n) == open),
+                    "Close the open recovery copy before deleting it"
+                );
             }
-            let removed=core::recovery::remove(review,&selected,job)?;
-            s.cleanup=None;
+            let removed = core::recovery::remove(review, &selected, job)?;
+            s.cleanup = None;
             Ok(json!(removed))
         }
         "drive_setup" => {
             let dest = path(a, "destination")?;
-            core::drive_identity::check(&dest,&s.prefs,text(a,"drive_token")?)?;
+            core::drive_identity::check(&dest, &s.prefs, text(a, "drive_token")?)?;
             let settings: console_config::Settings =
                 serde_json::from_value(a["settings"].clone()).unwrap_or_default();
             s.last = Some(if a["release"].as_bool() == Some(true) {
                 if s.prefs.developer_mode {
-                    ensure!(!s.prefs.developer_updates_directory.is_empty(), "Choose a local update directory in Settings & tools");
-                    setup::install_developer(Path::new(&s.prefs.developer_updates_directory), &dest, &state.cache, &settings, job)?
+                    ensure!(
+                        !s.prefs.developer_updates_directory.is_empty(),
+                        "Choose a local update directory in Settings & tools"
+                    );
+                    setup::install_developer(
+                        Path::new(&s.prefs.developer_updates_directory),
+                        &dest,
+                        &state.cache,
+                        &settings,
+                        job,
+                    )?
                 } else {
-                ensure!(
-                    !s.prefs.offline,
-                    "Turn off offline mode to download the menu"
-                );
-                setup::install_release(&dest, &state.cache, &settings, job)?
+                    ensure!(
+                        !s.prefs.offline,
+                        "Turn off offline mode to download the menu"
+                    );
+                    setup::install_release(&dest, &state.cache, &settings, job)?
                 }
             } else {
                 setup::install_local(&dest, &state.cache, &path(a, "source")?, &settings, job)?
@@ -610,67 +769,144 @@ fn dispatch(
             Ok(json!({"journal":s.last}))
         }
         "media_selected" => {
-            s.last=Some(library::update_selected_media(&root(s)?,&s.prefs,&state.cache,&strings(a,"discs")?,job)?);
+            s.last = Some(library::update_selected_media(
+                &root(s)?,
+                &s.prefs,
+                &state.cache,
+                &strings(a, "discs")?,
+                job,
+            )?);
             Ok(json!({"journal":s.last}))
         }
-        "game_info_load" => Ok(json!(core::game_info::edit_view(&root(s)?,&strings(a,"discs")?)?)),
+        "game_info_load" => Ok(json!(core::game_info::edit_view(
+            &root(s)?,
+            &strings(a, "discs")?
+        )?)),
         "game_info_matches" => {
-            let review=core::game_info::review_matches(&root(s)?,&s.prefs,&state.cache,job)?;
-            let token=uuid::Uuid::new_v4().to_string();
-            let value=json!({"token":token,"records":review.records,"choices":review.choices,"status":review.status});
-            s.information_matches=Some((token,review));Ok(value)
+            let review = core::game_info::review_matches(&root(s)?, &s.prefs, &state.cache, job)?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let value = json!({"token":token,"records":review.records,"choices":review.choices,"status":review.status});
+            s.information_matches = Some((token, review));
+            Ok(value)
         }
         "game_info_choose_match" => {
-            let (token,review)=s.information_matches.as_ref().context("Review information matches first")?;
-            ensure!(token==text(a,"token")?,"Information match review changed; reopen it");
-            s.last=Some(core::game_info::choose_match(&root(s)?,review,&strings(a,"discs")?,text(a,"id")?,&state.cache,job)?);
-            s.information_matches=None;Ok(json!({"journal":s.last}))
+            let (token, review) = s
+                .information_matches
+                .as_ref()
+                .context("Review information matches first")?;
+            ensure!(
+                token == text(a, "token")?,
+                "Information match review changed; reopen it"
+            );
+            s.last = Some(core::game_info::choose_match(
+                &root(s)?,
+                review,
+                &strings(a, "discs")?,
+                text(a, "id")?,
+                &state.cache,
+                job,
+            )?);
+            s.information_matches = None;
+            Ok(json!({"journal":s.last}))
         }
-        "game_info_backups" => Ok(json!(core::game_info::backups(&root(s)?,&state.cache)?)),
+        "game_info_backups" => Ok(json!(core::game_info::backups(&root(s)?, &state.cache)?)),
         "game_info_backup_preview" => {
-            let plan=core::game_info::preview_backup(&root(s)?,&state.cache,text(a,"name")?,job)?;
-            let token=uuid::Uuid::new_v4().to_string();
-            let value=json!({"token":token,"records":plan.records,"skipped":plan.skipped});
-            s.information_import=Some((token,plan));Ok(value)
+            let plan =
+                core::game_info::preview_backup(&root(s)?, &state.cache, text(a, "name")?, job)?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let value = json!({"token":token,"records":plan.records,"skipped":plan.skipped});
+            s.information_import = Some((token, plan));
+            Ok(value)
         }
         "game_info_export" => {
-            let count=core::game_info::export_custom(&root(s)?,&path(a,"target")?,&strings(a,"discs")?,job)?;
+            let count = core::game_info::export_custom(
+                &root(s)?,
+                &path(a, "target")?,
+                &strings(a, "discs")?,
+                job,
+            )?;
             Ok(json!({"count":count}))
         }
         "game_info_import_preview" => {
-            let plan=core::game_info::preview_import(&root(s)?,&path(a,"file")?,job)?;
-            let token=uuid::Uuid::new_v4().to_string();
-            let value=json!({"token":token,"records":plan.records,"skipped":plan.skipped});
-            s.information_import=Some((token,plan));Ok(value)
+            let plan = core::game_info::preview_import(&root(s)?, &path(a, "file")?, job)?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let value = json!({"token":token,"records":plan.records,"skipped":plan.skipped});
+            s.information_import = Some((token, plan));
+            Ok(value)
         }
         "game_info_import" => {
-            let (token,plan)=s.information_import.as_ref().context("Preview custom metadata before importing")?;
-            ensure!(token==text(a,"token")?,"Import preview changed; review it again");
-            s.last=Some(core::game_info::import_custom(&root(s)?,plan,&strings(a,"discs")?,&state.cache,job)?);
-            s.information_import=None;Ok(json!({"journal":s.last}))
+            let (token, plan) = s
+                .information_import
+                .as_ref()
+                .context("Preview custom metadata before importing")?;
+            ensure!(
+                token == text(a, "token")?,
+                "Import preview changed; review it again"
+            );
+            s.last = Some(core::game_info::import_custom(
+                &root(s)?,
+                plan,
+                &strings(a, "discs")?,
+                &state.cache,
+                job,
+            )?);
+            s.information_import = None;
+            Ok(json!({"journal":s.last}))
         }
         "game_info_restore_preview" => {
-            let original:Vec<core::game_info::EditRecord>=serde_json::from_value(a["original"].clone())?;
-            let plan=core::game_info::preview_restore(&root(s)?,&original,&s.prefs,&state.cache,job)?;
-            let token=uuid::Uuid::new_v4().to_string();
-            let value=json!({"token":token,"records":plan.records,"available":plan.available});
-            s.information_restore=Some((token,plan));Ok(value)
+            let original: Vec<core::game_info::EditRecord> =
+                serde_json::from_value(a["original"].clone())?;
+            let plan = core::game_info::preview_restore(
+                &root(s)?,
+                &original,
+                &s.prefs,
+                &state.cache,
+                job,
+            )?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let value = json!({"token":token,"records":plan.records,"available":plan.available});
+            s.information_restore = Some((token, plan));
+            Ok(value)
         }
         "game_info_save" => {
-            let expected:Vec<core::game_info::EditRecord>=serde_json::from_value(a["original"].clone())?;
-            let fields:Vec<String>=if a["restore_fields"].is_array(){strings(a,"restore_fields")?}else{vec![]};
-            s.last=Some(if fields.is_empty(){
-                core::game_info::save_edits(&root(s)?,&expected,&a["patch"],&state.cache,job)?
-            }else{
-                let (token,plan)=s.information_restore.as_ref().context("Preview downloaded information before restoring")?;
-                ensure!(token==text(a,"restore_token")?,"Restore preview changed; review it again");
-                core::game_info::save_edits_restoring(&root(s)?,&expected,&a["patch"],plan,&fields,&state.cache,job)?
+            let expected: Vec<core::game_info::EditRecord> =
+                serde_json::from_value(a["original"].clone())?;
+            let fields: Vec<String> = if a["restore_fields"].is_array() {
+                strings(a, "restore_fields")?
+            } else {
+                vec![]
+            };
+            s.last = Some(if fields.is_empty() {
+                core::game_info::save_edits(&root(s)?, &expected, &a["patch"], &state.cache, job)?
+            } else {
+                let (token, plan) = s
+                    .information_restore
+                    .as_ref()
+                    .context("Preview downloaded information before restoring")?;
+                ensure!(
+                    token == text(a, "restore_token")?,
+                    "Restore preview changed; review it again"
+                );
+                core::game_info::save_edits_restoring(
+                    &root(s)?,
+                    &expected,
+                    &a["patch"],
+                    plan,
+                    &fields,
+                    &state.cache,
+                    job,
+                )?
             });
-            s.information_restore=None;
+            s.information_restore = None;
             Ok(json!({"journal":s.last}))
         }
         "game_information" => {
-            s.last=Some(core::game_info::refresh(&root(s)?,&s.prefs,&state.cache,job)?);
+            s.last = Some(core::game_info::refresh(
+                &root(s)?,
+                &s.prefs,
+                &state.cache,
+                job,
+            )?);
             Ok(json!({"journal":s.last}))
         }
         "media_rebuild" => {
@@ -714,8 +950,8 @@ fn dispatch(
         "slots" => slots(&path(a, "directory")?, &state.cache, job),
         "slot_notes_read" => Ok(json!({"notes":core::slot_notes::read(&path(a,"path")?)?})),
         "slot_notes_save" => {
-            let p=path(a,"path")?;
-            core::slot_notes::save(&p,text(a,"notes")?,a["original"].as_str())?;
+            let p = path(a, "path")?;
+            core::slot_notes::save(&p, text(a, "notes")?, a["original"].as_str())?;
             Ok(json!(true))
         }
         "slot_label" => {
@@ -900,7 +1136,7 @@ fn dispatch(
         "backup_compare" => {
             let before = Archive::read(&path(a, "path")?)?;
             let after = &s.backup.as_ref().context("Open a backup")?.archive;
-            Ok(json!(backup::comparison(&before,after)))
+            Ok(json!(backup::comparison(&before, after)))
         }
         "cheats_validate" => {
             let db = save_cheats::Database::parse(text(a, "json")?.as_bytes())?;
@@ -963,18 +1199,30 @@ fn dispatch(
                 "Turn off offline mode to check for updates"
             );
             let roots = [
-                    PathBuf::from(&s.prefs.library),
-                    PathBuf::from(&s.prefs.destination),
-                    a["root"].as_str().map(PathBuf::from).unwrap_or_default(),
-                ];
+                PathBuf::from(&s.prefs.library),
+                PathBuf::from(&s.prefs.destination),
+                a["root"].as_str().map(PathBuf::from).unwrap_or_default(),
+            ];
             let check: updates::Offers = if s.prefs.developer_mode {
-                ensure!(!s.prefs.developer_updates_directory.is_empty(), "Choose a local update directory in Settings & tools");
+                ensure!(
+                    !s.prefs.developer_updates_directory.is_empty(),
+                    "Choose a local update directory in Settings & tools"
+                );
                 updates::check_local(Path::new(&s.prefs.developer_updates_directory), &roots, job)?
-            } else { updates::check(&roots, job)?.into() };
+            } else {
+                updates::check(&roots, job)?.into()
+            };
             if let (Some(menu), Some(digest)) = (&check.menu, &check.boot_digest) {
                 updates::remember_menu(&state.cache, digest, &menu.version)?;
             }
-            let newer = check.desktop.as_ref().map(|r|r.desktop_available(&std::env::current_exe()?, env!("CARGO_PKG_VERSION"), job)).transpose()?.unwrap_or(false);
+            let newer = check
+                .desktop
+                .as_ref()
+                .map(|r| {
+                    r.desktop_available(&std::env::current_exe()?, env!("CARGO_PKG_VERSION"), job)
+                })
+                .transpose()?
+                .unwrap_or(false);
             let targets = check
                 .targets
                 .iter()
@@ -992,7 +1240,7 @@ fn dispatch(
         "boot_update" => {
             let check = s.release.as_ref().context("Check for updates first")?;
             let target = path(a, "root")?;
-            core::drive_identity::check(&target,&s.prefs,text(a,"drive_token")?)?;
+            core::drive_identity::check(&target, &s.prefs, text(a, "drive_token")?)?;
             let expected = check
                 .targets
                 .iter()
@@ -1001,19 +1249,27 @@ fn dispatch(
             s.last = Some(updates::install_boot(
                 check.menu.as_ref().context("No menu update was found")?,
                 expected,
-                check.boot_digest.as_deref().context("Missing menu checksum")?,
+                check
+                    .boot_digest
+                    .as_deref()
+                    .context("Missing menu checksum")?,
                 &state.cache,
                 job,
             )?);
             Ok(json!({"journal":s.last}))
         }
         "self_update_cancel" => {
-            if let Some((plan, path, _)) = &s.pending_update { self_update::discard(plan, path)?; }
+            if let Some((plan, path, _)) = &s.pending_update {
+                self_update::discard(plan, path)?;
+            }
             s.pending_update = None;
             Ok(Value::Null)
         }
         "self_update_apply" => {
-            let (plan, path, _) = s.pending_update.as_mut().context("No update is waiting to install")?;
+            let (plan, path, _) = s
+                .pending_update
+                .as_mut()
+                .context("No update is waiting to install")?;
             plan.restart = true;
             f::atomic(path, &serde_json::to_vec_pretty(plan)?)?;
             self_update::start(plan, path)?;
@@ -1022,14 +1278,23 @@ fn dispatch(
             Ok(Value::Null)
         }
         "self_update" => {
-            ensure!(s.pending_update.is_none(), "An update is already ready to install");
+            ensure!(
+                s.pending_update.is_none(),
+                "An update is already ready to install"
+            );
             let release = &s
                 .release
                 .as_ref()
                 .context("Check for updates first")?
-                .desktop.as_ref().context("No desktop update was found")?;
+                .desktop
+                .as_ref()
+                .context("No desktop update was found")?;
             ensure!(
-                release.desktop_available(&std::env::current_exe()?, env!("CARGO_PKG_VERSION"), job)?,
+                release.desktop_available(
+                    &std::env::current_exe()?,
+                    env!("CARGO_PKG_VERSION"),
+                    job
+                )?,
                 "The latest desktop version is already installed"
             );
             let work = state.cache.join("self-update");
@@ -1044,7 +1309,10 @@ fn dispatch(
             let (plan, path) =
                 self_update::stage(&zip, &std::env::current_exe()?, &state.cache, job)?;
             let _ = fs::remove_file(zip);
-            if release.binary_digest().is_some_and(|expected|expected != plan.new_sha256) {
+            if release
+                .binary_digest()
+                .is_some_and(|expected| expected != plan.new_sha256)
+            {
                 self_update::discard(&plan, &path)?;
                 bail!("Local executable checksum does not match the offered build. Check local builds again.");
             }

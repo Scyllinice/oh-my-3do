@@ -1,28 +1,28 @@
 pub mod backup;
-pub mod save_catalog;
 pub mod catalog;
 pub mod categories;
 pub mod console_config;
 pub mod disc;
+pub mod drive_cleanup;
+pub mod eject;
 pub mod fsutil;
 pub mod library;
 pub mod media;
 pub mod model;
-pub mod saves;
-pub mod save_archive;
-pub mod save_editor;
-pub mod save_cheats;
-pub mod setup;
 pub mod readiness;
 pub mod recovery;
+pub mod save_archive;
+pub mod save_catalog;
+pub mod save_cheats;
+pub mod save_editor;
+pub mod saves;
+pub mod self_update;
+pub mod setup;
 pub mod support_report;
-pub mod eject;
 pub mod title_removal;
-pub mod drive_cleanup;
+pub mod updates;
 pub mod usb;
 mod usb_selection;
-pub mod updates;
-pub mod self_update;
 use anyhow::{bail, Result};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -60,20 +60,45 @@ impl Job {
         Ok(())
     }
     pub fn report(&self, completed: u64, total: u64, phase: impl Into<String>) {
-        (self.progress)(Progress { completed: if total == 0 { 0 } else { completed.min(total) }, total, phase: phase.into() });
+        (self.progress)(Progress {
+            completed: if total == 0 { 0 } else { completed.min(total) },
+            total,
+            phase: phase.into(),
+        });
     }
-    pub fn phase(&self, phase: impl Into<String>) { self.report(0, 0, phase); }
+    pub fn phase(&self, phase: impl Into<String>) {
+        self.report(0, 0, phase);
+    }
     /// Map a nested operation (bytes, files or stages) to a parent's work range.
-    pub fn progress_range(&self, base: u64, span: u64, total: u64, phase: impl Into<String>) -> Self {
+    pub fn progress_range(
+        &self,
+        base: u64,
+        span: u64,
+        total: u64,
+        phase: impl Into<String>,
+    ) -> Self {
         let mut child = self.clone();
-        let progress = self.progress.clone();let phase = phase.into();
+        let progress = self.progress.clone();
+        let phase = phase.into();
         child.progress = Arc::new(move |p| {
-            let offset = if p.total == 0 { 0 } else { (span as u128 * p.completed.min(p.total) as u128 / p.total as u128) as u64 };
-            progress(Progress { completed: base.saturating_add(offset).min(total), total, phase: phase.clone() });
+            let offset = if p.total == 0 {
+                0
+            } else {
+                (span as u128 * p.completed.min(p.total) as u128 / p.total as u128) as u64
+            };
+            progress(Progress {
+                completed: base.saturating_add(offset).min(total),
+                total,
+                phase: phase.clone(),
+            });
         });
         child
     }
-    pub fn quiet_progress(&self) -> Self { let mut child = self.clone();child.progress = Arc::new(|_| {});child }
+    pub fn quiet_progress(&self) -> Self {
+        let mut child = self.clone();
+        child.progress = Arc::new(|_| {});
+        child
+    }
     pub fn say(&self, s: impl Into<String>) {
         (self.log)(s.into())
     }
@@ -85,7 +110,7 @@ pub fn cache_dir() -> std::path::PathBuf {
 }
 
 pub mod drive_identity;
-pub mod slot_notes;
 pub mod game_info;
+pub mod slot_notes;
 
 pub mod drive_browser;
