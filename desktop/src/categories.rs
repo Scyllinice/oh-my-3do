@@ -1,4 +1,9 @@
-//! Shared, library-local category names and console visibility.
+//! Categories: the top-level folders of a library or drive (Games, Demos
+//! and so on), which the person can rename, add to, and hide on the
+//! console. They are kept in .ohmy3do/categories.json, which the console
+//! menu reads too (and rewrites when a category is shown or hidden there).
+//! A library or drive without the file has the built-in categories.
+
 use crate::{fsutil as f, library, model::CATEGORIES, Job};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -7,21 +12,36 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+/// Where the categories are kept, in a library or on a drive.
 pub const PATH: &str = ".ohmy3do/categories.json";
+
+/// The largest categories file (the size of the console's buffer for it).
 pub const LIMIT: usize = 8192;
+
+/// One category.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Category {
+    /// A permanent ID, so a renamed category is still recognized.
     pub id: String,
+    /// Its folder's name.
     pub name: String,
+    /// Not shown on the console (the desktop always shows it).
     pub hidden: bool,
 }
+
+/// The contents of categories.json.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Categories {
+    /// Always 1.
     pub schema: u32,
     pub categories: Vec<Category>,
+    /// For each built-in category name, the ID of the category that discs
+    /// of that kind are imported into.
     pub defaults: BTreeMap<String, String>,
 }
+
 impl Default for Categories {
+    /// The built-in categories, each its own import destination.
     fn default() -> Self {
         let categories: Vec<_> = CATEGORIES
             .iter()
@@ -45,6 +65,10 @@ impl Default for Categories {
     }
 }
 impl Categories {
+    /// Checks the categories can be used: 1 to 32 of them, with valid
+    /// unique IDs, names that are unique (ignoring case) and usable as
+    /// folder names on a FAT drive, and an import destination for every
+    /// built-in category.
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == 1 && !self.categories.is_empty() && self.categories.len() <= 32,
@@ -107,6 +131,7 @@ impl Categories {
         }
         Ok(())
     }
+    /// The categories as the bytes of categories.json.
     pub fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
         let mut bytes = serde_json::to_vec_pretty(self)?;
@@ -117,14 +142,17 @@ impl Categories {
         bytes.push(b'\n');
         Ok(bytes)
     }
+    /// The categories' folder names.
     pub fn names(&self) -> Vec<String> {
         self.categories.iter().map(|c| c.name.clone()).collect()
     }
+    /// Whether a category has this name (ignoring case).
     pub fn contains(&self, name: &str) -> bool {
         self.categories
             .iter()
             .any(|c| c.name.eq_ignore_ascii_case(name))
     }
+    /// The folder that discs of built-in category `role` are imported into.
     pub fn destination(&self, role: &str) -> Option<&str> {
         let id = self.defaults.get(role)?;
         self.categories
@@ -133,6 +161,9 @@ impl Categories {
             .map(|c| c.name.as_str())
     }
 }
+/// The categories of the library or drive at `root`. Without a
+/// categories.json, the built-in ones, with Adult hidden if the console's
+/// settings hide adult games.
 pub fn load(root: &Path) -> Result<Categories> {
     let path = f::safe(root, PATH)?;
     if !path.exists() {
@@ -148,11 +179,16 @@ pub fn load(root: &Path) -> Result<Categories> {
     }
     let raw = fs::read(&path)?;
     ensure!(raw.len() <= LIMIT, "Category configuration exceeds 8 KiB");
+    // When the console rewrites the file it ends the JSON with a zero
+    // byte: the ODE cannot shorten a file, so old bytes may follow it.
     let raw = raw.split(|b| *b == 0).next().unwrap_or(&[]);
     let config: Categories = serde_json::from_slice(raw).context("Invalid categories.json")?;
     config.validate()?;
     Ok(config)
 }
+/// Saves new categories to the library at `root`, if its categories are
+/// still `expected` (what the editor opened with), renaming folders to
+/// match (see `library::configure_categories`). Returns what that returns.
 pub fn save(
     root: &Path,
     expected: &Categories,
@@ -168,8 +204,10 @@ pub fn save(
     library::configure_categories(root, expected, config, cache, job)
 }
 
-/// Category definitions follow staging; per-drive visibility and drive-only
-/// categories survive subsequent (including selected-game) transfers.
+/// The categories to write to the drive at `target` when copying from the
+/// library at `source`: the library's categories, but keeping what the
+/// drive had chosen to hide, and keeping categories that exist only on the
+/// drive.
 pub fn for_transfer(source: &Path, target: &Path) -> Result<Categories> {
     let mut config = load(source)?;
     let previous = load(target)?;
