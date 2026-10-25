@@ -1,12 +1,38 @@
-//! The console's OM3DSAV1 format. Keep validation in sync with src/save_archive.c.
+//! Save backups: the OM3DSAV1 files the console's Save Manager writes, one
+//! per backup slot, holding copies of saves from the console's NVRAM. The
+//! checks here must match the console's (src/save_archive.c).
+//!
+//! The layout (numbers are 32-bit big-endian):
+//!
+//! ```text
+//! offset 0   8 bytes  "OM3DSAV1"
+//!        8   4        the backup's length in bytes
+//!       12   4        the number of saves (at most 128)
+//!       16   4        CRC-32 of everything after the header
+//!       20   4        reserved, 0
+//!       24   ...      for each save, a 48-byte record and then its data:
+//!                       0  32  name, zero-padded
+//!                      32   4  file type
+//!                      36   4  size of the data
+//!                      40   4  CRC-32 of the data
+//!                      44   4  reserved, 0
+//! ```
+//!
+//! A whole backup is at most 64 KiB.
+
 use anyhow::{bail, ensure, Context, Result};
 use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+/// The largest backup file.
 pub const MAX_BYTES: usize = 65536;
+
+/// The most saves in one backup.
 pub const MAX_FILES: usize = 128;
+
+/// One save in a backup.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     /// Raw filename bytes: console filenames are not required to be UTF-8.
@@ -15,17 +41,23 @@ pub struct Entry {
     pub data: Vec<u8>,
 }
 impl Entry {
+    /// The save's name as text (each byte as a character).
     pub fn label(&self) -> String {
         self.name.iter().map(|b| char::from(*b)).collect()
     }
 }
+/// A backup's saves.
 #[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Archive {
     pub entries: Vec<Entry>,
 }
+
+/// The big-endian 32-bit number at `offset`.
 fn word(bytes: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
+/// Whether a save name is one the console can store: 1 to 31 bytes, no
+/// control characters or path separators, not "." or "..".
 fn valid_name(name: &[u8]) -> bool {
     !name.is_empty()
         && name.len() < 32
@@ -36,7 +68,9 @@ fn valid_name(name: &[u8]) -> bool {
             .all(|b| *b >= 32 && !matches!(*b, 127 | b'/' | b'\\' | b':'))
 }
 impl Archive {
-    /// Merge into an in-memory draft. A failed bounds/validation check changes nothing.
+    /// Adds saves to this backup, replacing any of the same name (ignoring
+    /// case, and keeping the existing name's case). If the result would not
+    /// be a valid backup, nothing changes.
     pub fn merge_entries(&mut self, incoming: &[Entry]) -> Result<()> {
         let mut next = self.clone();
         for e in incoming {
@@ -57,9 +91,13 @@ impl Archive {
         *self = next;
         Ok(())
     }
+    /// Reads a backup file.
     pub fn read(path: &Path) -> Result<Self> {
         Ok(Self::read_with_bytes(path)?.0)
     }
+    /// Reads a backup file, returning also the file's bytes. The file may be
+    /// longer than the backup (the console cannot shorten a file it
+    /// rewrites); the backup is the length its header gives.
     pub fn read_with_bytes(path: &Path) -> Result<(Self, Vec<u8>)> {
         let data = read_bytes(path)?;
         ensure!(data.len() >= 24, "Truncated backup header");
@@ -67,6 +105,8 @@ impl Archive {
         ensure!((24..=data.len()).contains(&length), "Invalid backup length");
         Ok((Self::parse(&data[..length])?, data))
     }
+    /// Reads a backup from exactly its bytes, checking everything: header,
+    /// checksums, names (unique, ignoring case) and that nothing is left over.
     pub fn parse(data: &[u8]) -> Result<Self> {
         ensure!(
             (24..=MAX_BYTES).contains(&data.len()) && &data[..8] == b"OM3DSAV1",
@@ -122,6 +162,7 @@ impl Archive {
         ensure!(pos == data.len(), "Unexpected bytes inside backup");
         Ok(archive)
     }
+    /// The backup's bytes, checked by reading them back.
     pub fn encode(&self) -> Result<Vec<u8>> {
         ensure!(self.entries.len() <= MAX_FILES, "Too many saves");
         let mut bytes = vec![0u8; 24];
@@ -148,20 +189,25 @@ impl Archive {
         Self::parse(&bytes)?;
         Ok(bytes)
     }
+    /// Writes the backup to `path` with `save_bytes`.
     pub fn save(&self, path: &Path, expected: Option<&[u8]>) -> Result<Saved> {
         save_bytes(path, &self.encode()?, expected)
     }
+    /// Writes the backup to a new file (never replacing one).
     pub fn save_copy(&self, path: &Path) -> Result<()> {
         write_new(path, &self.encode()?)
     }
 }
+/// What `save_bytes` wrote.
 #[derive(Debug)]
 pub struct Saved {
     pub bytes: Vec<u8>,
+    /// The recovery copy of the file it replaced, if it replaced one.
     pub backup: Option<PathBuf>,
 }
-/// Keep physical bytes, including the firmware's possible old tail, for conflict
-/// checks and exact recovery copies.
+
+/// A save file's bytes exactly as on disk (any old bytes after the end
+/// included), for spotting changes and for exact recovery copies.
 pub fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     fs::File::open(path)?
@@ -170,6 +216,8 @@ pub fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     ensure!(data.len() <= MAX_BYTES, "Save file exceeds 64 KiB");
     Ok(data)
 }
+/// Like `read_bytes`, but None if there is no file, and an error if it is
+/// not a regular file.
 pub fn existing_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
@@ -183,8 +231,10 @@ pub fn existing_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
         Err(error) => Err(error.into()),
     }
 }
-/// Replace only the version the caller reviewed; preserve it beside the file
-/// before publishing the complete replacement atomically.
+/// Writes `bytes` to `path`, but only if the file still holds `expected`
+/// (what the person reviewed; None if there should be no file yet). The old
+/// file is first kept beside it as a recovery copy ("NAME.<id>.bak"); then
+/// the new file replaces it all at once, and is read back to check.
 pub fn save_bytes(path: &Path, bytes: &[u8], expected: Option<&[u8]>) -> Result<Saved> {
     ensure!(bytes.len() <= MAX_BYTES, "Save file exceeds 64 KiB");
     ensure!(
@@ -246,7 +296,7 @@ pub fn save_bytes(path: &Path, bytes: &[u8], expected: Option<&[u8]>) -> Result<
         backup,
     })
 }
-/// Atomic publication without overwriting any existing file (including the input).
+/// Writes a new file all at once, failing if anything is already there.
 pub fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -261,6 +311,8 @@ pub fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
         .context("Choose a new filename; existing files are preserved")?;
     Ok(())
 }
+/// Bytes from hex digits typed in the editor (spaces and line breaks
+/// ignored).
 pub fn decode_hex(text: &str) -> Result<Vec<u8>> {
     let digits: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     ensure!(
