@@ -50,8 +50,9 @@ int nvram_snapshot(SaveArchive *a, NvramInfo *info) {
     if (step()) return -1;
     return fixture(a,writes);
 }
+#define SAVE_STORE 1
 static int save_root_operation(Menu *m, int action, const char *path, SaveArchive *a) {
-    (void)m; assert(action == 1 && !writes && a->count == 2);
+    (void)m; assert(action == SAVE_STORE && !writes && a->count == 2);
     assert(!memcmp(a->entries[0].data,"old",3));
     recovery_path=path;
     if (step()) return -1;

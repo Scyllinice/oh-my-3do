@@ -100,6 +100,17 @@
 #define TOOL_SLOT_QUERY      26 /* typing a slot search */
 #define TOOL_CATEGORIES      27 /* which categories are shown */
 
+/* What save_root_operation does at the drive's root. */
+#define SAVE_LOAD           0 /* read a backup slot */
+#define SAVE_STORE          1 /* write a backup slot */
+#define SAVE_TEST           2 /* check the drive can be written to */
+#define SAVE_SETTINGS       3 /* write ohmy3do.ini */
+#define SAVE_LOAD_TARGET    4 /* read a slot about to be written (may be empty) */
+#define SAVE_STORE_CHECKED  5 /* write a slot, if it still holds what was read */
+#define SAVE_READ_LABELS    6 /* read the slot page's labels */
+#define SAVE_WRITE_LABELS   7 /* write the slot page's labels */
+#define SAVE_SEARCH_CATALOG 8 /* search the slot catalog */
+
 /* The deepest folder the browser follows. */
 #define MAX_DEPTH 32
 
@@ -5513,6 +5524,9 @@ static void export_diagnostics(Menu *menu)
     menu->tool_message = menu->diagnostics_result > 0 ? "Saved USB diagnostics.txt."
                                                       : "USB export unavailable or failed.";
 }
+/* ==== Favorites and opening saved games ==== */
+
+/* At the root: reads favorites.txt into menu->favorites. */
 static int favorites_read(void *context)
 {
     Menu *menu = (Menu *)context;
@@ -5526,6 +5540,11 @@ static int favorites_read(void *context)
     free(data);
     return result;
 }
+/*
+ * Opens the Favorites screen: reads favorites.txt from the drive's root.
+ * Favorites are saved relative to the volume, so when browsing a device in
+ * the device list, its label becomes the prefix for opening them.
+ */
 static void open_favorites(Menu *menu)
 {
     ArtRouteStep route[MAX_DEPTH];
@@ -5566,11 +5585,14 @@ static void open_favorites(Menu *menu)
                           ? NULL
                           : "C adds the selected browser game.");
 }
+/* An addition to or removal from favorites.txt, through art_at_root. */
 typedef struct FavoritesEdit {
     Menu *menu;
     const char *path;
     int remove;
 } FavoritesEdit;
+/* At the root: re-reads favorites.txt, applies the edit and writes it back.
+ * Returns 0, 1 if there was nothing to change, or -1. */
 static int favorites_edit_at_root(void *context)
 {
     FavoritesEdit *edit = (FavoritesEdit *)context;
@@ -5599,12 +5621,18 @@ static int favorites_edit_at_root(void *context)
         edit->menu->favorites_valid = 0;
     return result;
 }
+/*
+ * Adds the game selected in the browser to favorites.txt (C in Favorites),
+ * or with `remove`, removes the favorite selected on screen (X). Saved as
+ * the disc's path below the volume, for a folder acting as its game its
+ * first disc's.
+ */
 static void edit_favorites(Menu *menu, int remove)
 {
     ArtRouteStep route[MAX_DEPTH];
     FavoritesEdit edit;
     char path[FAVORITE_PATH];
-    size_t used = 0;
+    size_t used = 0, visible;
     unsigned int i, first = menu->depth && !(menu->path_ids[0] & 0xffffffUL) ? 1 : 0;
     int result;
     if (menu->demo || !menu->ready || menu->ode.navigation_failed || menu->bus.timed_out ||
@@ -5633,6 +5661,7 @@ static void edit_favorites(Menu *menu, int remove)
         game = folder_game(menu, entry, discs);
         if (!entry || (entry->is_directory && !game))
             goto select_game;
+        /* The folders below the volume (skipping a device label)... */
         for (i = first; i < menu->depth; ++i) {
             size_t n = strlen(menu->path[i]);
             if (used + n + 1 >= sizeof(path))
@@ -5667,12 +5696,9 @@ static void edit_favorites(Menu *menu, int remove)
         menu->tool_message = remove ? "Favorite already removed." : "Game is already a favorite.";
     else
         menu->tool_message = remove ? "Favorite removed and saved." : "Favorite added and saved.";
-    if (menu->tool_selected >=
-        menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult))
-        menu->tool_selected =
-            menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult)
-                ? menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult) - 1
-                : 0;
+    visible = menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult);
+    if (menu->tool_selected >= visible)
+        menu->tool_selected = visible ? visible - 1 : 0;
     return;
 select_game:
     menu->tool_message = "Select a game in the browser first.";
@@ -5681,8 +5707,9 @@ too_long:
     menu->tool_message = "Favorite path is too long.";
 }
 /* Whether a saved /Storage disc path lies in a folder that acts as its game;
- * if so, folder receives that folder's path. The index's paths start below
- * the volume, so a first part that is a volume label is tried without. */
+ * if so, `folder` receives that folder's path. The metadata's paths start
+ * below the volume, so when the first part may be a volume label, the path
+ * is tried without it too. */
 static int saved_game_folder(Menu *menu, const char *path, char *folder, size_t size)
 {
     static char prefix[9217];
@@ -5710,8 +5737,9 @@ static int saved_game_folder(Menu *menu, const char *path, char *folder, size_t 
     }
     return 0;
 }
-/* Find, favorites and recent games save discs; one in a folder that acts as
- * its game shows that folder selected, as browsing to the game would. */
+/* Opens a disc's folder in the browser with the disc selected, for Find,
+ * Favorites and Recent. A disc in a folder that acts as its game shows that
+ * folder selected instead, as browsing to the game would. */
 static void open_saved_path(Menu *menu, const char *path)
 {
     static char folder[ENTRY_PATH_BYTES];
@@ -5744,6 +5772,7 @@ static void open_saved_path(Menu *menu, const char *path)
     }
     free(location);
 }
+/* A on a row of Favorites or Recent: opens that game in the browser. */
 static void open_favorite(Menu *menu)
 {
     char path[FAVORITE_PATH + ODE_MAX_NAME + 10];
@@ -5765,6 +5794,31 @@ static void open_favorite(Menu *menu)
     strcat(path, selected);
     open_saved_path(menu, path);
 }
+/* ==== Settings ==== */
+
+/* The rows of Tools > Settings, in order. */
+enum {
+    SETTING_MARGIN,
+    SETTING_LARGE_TITLES,
+    SETTING_FOLDER_WORKAROUND,
+    SETTING_COVERS,
+    SETTING_VIDEO_PREVIEWS,
+    SETTING_REMEMBER_POSITION,
+    SETTING_RECENT_GAMES,
+    SETTING_PREVIEW_SOUND,
+    SETTING_CATEGORIES,
+    SETTING_DISPLAY_DEFAULTS,
+    SETTING_DISCARD,
+    SETTING_SAVE,
+    SETTING_ROWS
+};
+
+/*
+ * The settings as the Settings screen shows them. Display settings and
+ * preview sound change menu->config directly, as they take effect at once;
+ * the rest take effect at the next startup, so their edits are kept in the
+ * menu's settings_* fields until then.
+ */
 static void settings_values(const Menu *menu, MenuConfig *settings)
 {
     *settings = menu->config;
@@ -5774,6 +5828,7 @@ static void settings_values(const Menu *menu, MenuConfig *settings)
     settings->recent_games = menu->settings_recent_games;
     settings->video_previews = menu->settings_video_previews;
 }
+/* Whether the Settings screen has changes not yet saved to the drive. */
 static int config_dirty(const Menu *menu)
 {
     MenuConfig current;
@@ -5788,6 +5843,7 @@ static int config_dirty(const Menu *menu)
            current.video_previews != saved->video_previews ||
            current.preview_sound != saved->preview_sound || current.hide_adult != saved->hide_adult;
 }
+/* Puts every setting back as last saved (X in Settings). */
 static void discard_config(Menu *menu)
 {
     menu->config.preview_sound = menu->saved_config.preview_sound;
@@ -5803,59 +5859,75 @@ static void discard_config(Menu *menu)
     menu->tool_message = "Unsaved settings discarded.";
     selection_changed(menu);
 }
+/* Saves the settings to ohmy3do.ini (C in Settings). Refused if the file
+ * did not load, so a file the menu misread is never overwritten. */
 static void save_config(Menu *menu)
 {
     if (menu->config_result != 0) {
         menu->tool_message = "Load a valid INI before saving.";
         return;
     }
-    if (!save_root_operation(menu, 3, MENU_CONFIG_NAME, NULL)) {
+    if (!save_root_operation(menu, SAVE_SETTINGS, MENU_CONFIG_NAME, NULL)) {
         settings_values(menu, &menu->saved_config);
         menu->tool_message = "Saved. Non-display: after reboot.";
     }
 }
+/*
+ * A, Left or Right on a Settings row: changes the setting (`direction` -1
+ * or 1 steps the screen margin), or does what the row says. Display
+ * changes redraw the browser underneath, via selection_changed.
+ */
 static void change_config(Menu *menu, int direction)
 {
     menu->tool_message = "Changed. C:Save to USB";
-    if (menu->tool_selected == 11) {
+    switch (menu->tool_selected) {
+    case SETTING_SAVE:
         save_config(menu);
         return;
-    }
-    if (menu->tool_selected == 7) {
+    case SETTING_PREVIEW_SOUND:
         menu->config.preview_sound = !menu->config.preview_sound;
         return;
-    }
-    if (menu->tool_selected == 8) {
+    case SETTING_CATEGORIES:
         menu->tools = TOOL_CATEGORIES;
         menu->tool_selected = 0;
         menu->tool_message =
             menu->categories_valid ? NULL : "Invalid categories.json. Repair on PC.";
         return;
-    }
-    if (menu->tool_selected == 4) {
+    case SETTING_VIDEO_PREVIEWS:
         menu->settings_video_previews = !menu->settings_video_previews;
         return;
-    }
-    if (!menu->tool_selected)
-        menu->config.screen_margin = (menu->config.screen_margin + direction + 13) % 13;
-    else if (menu->tool_selected == 1)
+    case SETTING_MARGIN:
+        menu->config.screen_margin =
+            (menu->config.screen_margin + direction + MENU_MARGIN_MAX + 1) % (MENU_MARGIN_MAX + 1);
+        break;
+    case SETTING_LARGE_TITLES:
         menu->config.large_titles = !menu->config.large_titles;
-    else if (menu->tool_selected == 2)
+        break;
+    case SETTING_FOLDER_WORKAROUND:
         menu->settings_folder_workaround = (menu->settings_folder_workaround + 1) % 3;
-    else if (menu->tool_selected == 3)
+        break;
+    case SETTING_COVERS:
         menu->settings_usb_covers = !menu->settings_usb_covers;
-    else if (menu->tool_selected == 5)
+        break;
+    case SETTING_REMEMBER_POSITION:
         menu->settings_remember_position = !menu->settings_remember_position;
-    else if (menu->tool_selected == 6)
+        break;
+    case SETTING_RECENT_GAMES:
         menu->settings_recent_games = !menu->settings_recent_games;
-    else if (menu->tool_selected == 10)
+        break;
+    case SETTING_DISCARD:
         discard_config(menu);
-    else {
+        break;
+    default: /* SETTING_DISPLAY_DEFAULTS */
         menu->config.screen_margin = menu->config.large_titles = 0;
+        break;
     }
     selection_changed(menu);
 }
 
+/* ==== Reordering favorites ==== */
+
+/* Leaves reordering (B), putting the list back as it was before. */
 static void cancel_favorites_move(Menu *menu)
 {
     int result = 0;
@@ -5870,6 +5942,8 @@ static void cancel_favorites_move(Menu *menu)
     menu->tool_message =
         result < 0 ? "Reload favorites before opening." : "Local ordering edits discarded.";
 }
+/* Starts reordering favorites (R), keeping the list as it is now so the
+ * save can check nobody changed the file meanwhile, and so B can undo. */
 static void begin_favorites_move(Menu *menu)
 {
     if (!menu->favorites_valid ||
@@ -5888,6 +5962,8 @@ static void begin_favorites_move(Menu *menu)
     menu->favorites_move = 1;
     menu->tool_message = NULL;
 }
+/* Saves the new order (A while reordering), if favorites.txt on the drive
+ * still holds what it did when reordering began. */
 static void save_favorites_order(Menu *menu)
 {
     MenuFavorites current;
@@ -5923,7 +5999,15 @@ done:
     free(latest);
     free(desired);
 }
+/* ==== Find ==== */
+
+/* The on-screen keyboard: four rows of ten keys. */
 static const char find_keys[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.";
+#define FIND_KEY_COLUMNS 10
+#define FIND_KEYS        40
+
+/* Called while the search index loads: B cancels (returns 1); otherwise
+ * redraws the "Loading" message now and then. */
 static int search_progress(void *context, size_t games)
 {
     Menu *menu = (Menu *)context;
@@ -5941,6 +6025,9 @@ static int search_progress(void *context, size_t games)
     }
     return 0;
 }
+/* Loading the search index at the root, through art_at_root. `prefix` is
+ * the menu path the index's paths are below ("/Storage", plus the device
+ * label in the device list). */
 typedef struct SearchIndexRead {
     Menu *menu;
     char prefix[ODE_MAX_NAME + 10];
@@ -5949,6 +6036,8 @@ static int index_cancel(void *context)
 {
     return search_progress(context, 0);
 }
+/* Loads the search index; if memory runs short, drops the cover cache and
+ * tries once more. */
 static int read_search_index(void *context)
 {
     SearchIndexRead *read = (SearchIndexRead *)context;
@@ -5961,6 +6050,12 @@ static int read_search_index(void *context)
     }
     return result;
 }
+/*
+ * Searches the library for menu->find_query and shows the results. The
+ * library's index (library.3di, written by the desktop app) is loaded
+ * on the first search on a volume and kept; `rebuild` reloads it. Games in
+ * hidden categories (and adult games when hidden) are left out.
+ */
 static void search_library(Menu *menu, int rebuild)
 {
     ArtRouteStep route[MAX_DEPTH];
@@ -6022,6 +6117,8 @@ static void search_library(Menu *menu, int rebuild)
         }
         menu->catalog_volume = volume;
     }
+
+    /* Match the names, not their folders. */
     menu->search_count = 0;
     for (i = 0; i < menu->catalog.count; ++i) {
         const char *path = menu->catalog.paths[i], *name = strrchr(path, '/');
@@ -6035,17 +6132,20 @@ static void search_library(Menu *menu, int rebuild)
     menu->tool_selected = 0;
     menu->selection_since = now_ms(menu);
 }
+/* The Find keyboard: the pad moves around the keys (wrapping), A types,
+ * X deletes, C clears and Start searches. */
 static void find_input(Menu *menu, u32 pressed)
 {
     size_t length = strlen(menu->find_query);
+    unsigned int row = menu->find_key / FIND_KEY_COLUMNS * FIND_KEY_COLUMNS;
     if (pressed & ControlLeft)
-        menu->find_key = menu->find_key / 10 * 10 + (menu->find_key + 9) % 10;
+        menu->find_key = row + (menu->find_key + FIND_KEY_COLUMNS - 1) % FIND_KEY_COLUMNS;
     if (pressed & ControlRight)
-        menu->find_key = menu->find_key / 10 * 10 + (menu->find_key + 1) % 10;
+        menu->find_key = row + (menu->find_key + 1) % FIND_KEY_COLUMNS;
     if (pressed & ControlUp)
-        menu->find_key = (menu->find_key + 30) % 40;
+        menu->find_key = (menu->find_key + FIND_KEYS - FIND_KEY_COLUMNS) % FIND_KEYS;
     if (pressed & ControlDown)
-        menu->find_key = (menu->find_key + 10) % 40;
+        menu->find_key = (menu->find_key + FIND_KEY_COLUMNS) % FIND_KEYS;
     if ((pressed & ControlA) && length < sizeof(menu->find_query) - 1) {
         menu->find_query[length++] = find_keys[menu->find_key];
         menu->find_query[length] = 0;
@@ -6054,10 +6154,13 @@ static void find_input(Menu *menu, u32 pressed)
         menu->find_query[length - 1] = 0;
     if (pressed & ControlC)
         menu->find_query[0] = 0;
-    if (pressed & ControlStart) {
+    if (pressed & ControlStart)
         search_library(menu, 0);
-    }
 }
+
+/* ==== Tools screen helpers ==== */
+
+/* A line of text in the Tools panel, `row` lines down. */
 static void tool_line(Menu *menu, int row, const char *line, Color color)
 {
     text(menu, 22, 82 + row * 12, line, color);
@@ -6108,6 +6211,14 @@ static void control_badges(Menu *menu, int x, int y, const char *controls, int l
         controls = *next ? next + 1 : next;
     }
 }
+/*
+ * Backup slots. The Slots screen shows slots a page of 8 at a time; on the
+ * first page (when not choosing where to back up to), rows 8 and 9 are the
+ * two recovery slots, which the menu writes automatically before a restore.
+ * With a slot search, the rows are its results instead.
+ */
+
+/* The slot's file, below .ohmy3do. */
 static void slot_path(char *path, unsigned int slot)
 {
     if (slot == SAVE_RECOVERY_SLOT)
@@ -6117,6 +6228,7 @@ static void slot_path(char *path, unsigned int slot)
     else
         format(path, "saves/slot%02lu.3ds", (unsigned long)slot + 1);
 }
+/* How many rows the Slots screen shows. */
 static size_t slot_count(const Menu *menu)
 {
     unsigned long remaining = SAVE_SLOT_LIMIT - menu->slot_page * 8;
@@ -6124,6 +6236,7 @@ static size_t slot_count(const Menu *menu)
         return menu->slot_results.count;
     return remaining < 8 ? (size_t)remaining : !menu->backup_mode && !menu->slot_page ? 10 : 8;
 }
+/* The slot shown on `row`. */
 static unsigned int slot_at(const Menu *menu, size_t row)
 {
     if (menu->slot_filtered)
@@ -6132,6 +6245,8 @@ static unsigned int slot_at(const Menu *menu, size_t row)
            : row == 9 ? SAVE_RECOVERY2_SLOT
                       : (unsigned int)(menu->slot_page * 8 + row);
 }
+/* Turns to the page showing `slot` and selects it (in the search results
+ * if it is there, otherwise leaving the search). */
 static void slot_select(Menu *menu, unsigned int slot)
 {
     size_t i;
@@ -6151,6 +6266,7 @@ static void slot_select(Menu *menu, unsigned int slot)
         menu->tool_selected = slot % 8;
     }
 }
+/* The labels file for the current slot page. */
 static void slot_labels_path(const Menu *menu, char *path)
 {
     if (!menu->slot_page)
@@ -6158,10 +6274,12 @@ static void slot_labels_path(const Menu *menu, char *path)
     else
         format(path, "saves/slot-labels-%lu.txt", menu->slot_page);
 }
+/* Searches the slot catalog for menu->slot_query, showing the matching
+ * slots, or back to the search options if the catalog can't be read. */
 static void slot_search(Menu *menu)
 {
     menu->tool_selected = 0;
-    if (!save_root_operation(menu, 8, NULL, NULL)) {
+    if (!save_root_operation(menu, SAVE_SEARCH_CATALOG, NULL, NULL)) {
         menu->slot_filtered = 1;
         menu->tools = TOOL_SLOTS;
         menu->tool_message = menu->slot_results.count ? NULL : "No matching indexed slots.";
@@ -6169,12 +6287,15 @@ static void slot_search(Menu *menu)
         menu->tools = TOOL_SLOT_FIND;
     }
 }
+/* The save selected in a backup's list: in the hex editor's copy, the copy
+ * being made, or NVRAM, whichever is open. */
 static const SaveEntry *backup_entry(const Menu *menu)
 {
     return menu->hex_archive.bytes     ? &menu->hex_archive.entries[menu->save_selected]
            : menu->copy_original.bytes ? &menu->copy_original.entries[menu->save_selected]
                                        : &menu->nvram.entries[menu->save_selected];
 }
+/* Ends copying a backup to another slot, back on the source backup. */
 static void finish_copy(Menu *menu)
 {
     save_archive_free(&menu->backup);
@@ -6187,8 +6308,11 @@ static void finish_copy(Menu *menu)
     save_archive_free(&menu->pending);
 }
 
-/* Wrap the original strings into pages instead of truncating distinguishing
- * region/revision/disc suffixes. This view performs no ODE operations. */
+/* ==== Game details (C+Start) ==== */
+
+/* Adds `value` to the details, word-wrapped (rather than cut off, which
+ * could hide a region or revision at the end of a name). Rows count on
+ * across calls; only those on the current page (10 rows) are drawn. */
 static void game_details_text(Menu *menu, const char *value, size_t *row, Color ink)
 {
     char line[97];
@@ -6223,6 +6347,8 @@ static void game_details_text(Menu *menu, const char *value, size_t *row, Color 
         }
     }
 }
+/* Draws the details of the selected game: genre, publisher, release,
+ * description, its file name, location and discs. Sends no ODE commands. */
 static void draw_game_details(Menu *menu)
 {
     const MenuEntry *entry = NULL;
@@ -6271,7 +6397,8 @@ static void draw_game_details(Menu *menu)
            (unsigned long)menu->game_details_pages);
     label_on(menu, 254, 64, line, MUTED, UI_FONT_SMALL, PANEL);
 }
-/* Explicit details requests may read optional text; browsing never does. */
+/* Opens the details of the selected game, reading its description from the
+ * drive. Only opening the details reads it: browsing never does. */
 static void open_game_details(Menu *menu)
 {
     const MenuEntry *entry = NULL;
@@ -7205,7 +7332,7 @@ static void draw_tools(Menu *menu)
 
 typedef struct SaveRootOperation {
     Menu *menu;
-    int action; /* 0 load, 1 save, 2 USB test, 3 settings, 4 target, 5 checked save */
+    int action; /* SAVE_LOAD, SAVE_STORE, ... */
     const char *path;
     SaveArchive *archive;
 } SaveRootOperation;
@@ -7226,15 +7353,16 @@ static int save_root_callback(void *context)
     void *previous_context = ode->progress_context;
     int result;
     op->menu->read_count = 0;
-    if (op->action == 1 || op->action == 5 || op->action == 7)
+    if (op->action == SAVE_STORE || op->action == SAVE_STORE_CHECKED ||
+        op->action == SAVE_WRITE_LABELS)
         op->menu->slot_catalog_stale = 0;
     ode->progress = save_progress;
     ode->progress_context = op->menu;
-    if (op->action == 8)
+    if (op->action == SAVE_SEARCH_CATALOG)
         result = save_catalog_search(ode, ode_bus_read_buffer, &op->menu->save_names,
                                      op->menu->slot_query, !op->menu->backup_mode,
                                      &op->menu->slot_results);
-    else if (op->action == 6 || op->action == 7) {
+    else if (op->action == SAVE_READ_LABELS || op->action == SAVE_WRITE_LABELS) {
         char text[SAVE_SLOT_LABEL_FILE_BYTES], path[48];
         size_t length;
         SaveSlotLabels current;
@@ -7242,12 +7370,12 @@ static int save_root_callback(void *context)
         result = usb_file_text(ode, ode_bus_read_buffer, path, text, sizeof(text), &length);
         if (!result)
             result = save_slot_labels_parse(&current, text, length);
-        if (!result && op->action == 6) {
+        if (!result && op->action == SAVE_READ_LABELS) {
             op->menu->slot_labels = current;
             op->menu->slot_labels_valid = 1;
             op->menu->slot_labels_page = op->menu->slot_page;
         }
-        if (!result && op->action == 7) {
+        if (!result && op->action == SAVE_WRITE_LABELS) {
             if (memcmp(&current, &op->menu->slot_labels_before, sizeof(current)))
                 result = -1;
             else if (save_slot_labels_format(&op->menu->slot_labels, text, sizeof(text)) < 0)
@@ -7260,22 +7388,22 @@ static int save_root_callback(void *context)
                     op->menu->slot_catalog_stale = 1;
             }
         }
-    } else if (op->action == 3) {
+    } else if (op->action == SAVE_SETTINGS) {
         MenuConfig settings;
         settings_values(op->menu, &settings);
         result = menu_settings_save(ode, ode_bus_read_buffer, &settings);
-    } else if (op->action == 5)
+    } else if (op->action == SAVE_STORE_CHECKED)
         result = save_usb_store_checked(ode, ode_bus_read_buffer, op->path, op->archive,
                                         op->menu->backup_slot_valid ? &op->menu->backup : NULL);
-    else if (op->action == 4)
+    else if (op->action == SAVE_LOAD_TARGET)
         result = save_usb_load_target(ode, ode_bus_read_buffer, op->path, op->archive);
-    else if (op->action == 2)
+    else if (op->action == SAVE_TEST)
         result = save_usb_test(ode, ode_bus_read_buffer);
-    else if (op->action == 1)
+    else if (op->action == SAVE_STORE)
         result = save_usb_store(ode, ode_bus_read_buffer, op->path, op->archive);
     else
         result = save_usb_load(ode, ode_bus_read_buffer, op->path, op->archive);
-    if (!result && (op->action == 1 || op->action == 5)) {
+    if (!result && (op->action == SAVE_STORE || op->action == SAVE_STORE_CHECKED)) {
         unsigned int slot;
         char labels_path[48], text[SAVE_SLOT_LABEL_FILE_BYTES];
         size_t length;
@@ -7330,7 +7458,8 @@ static int save_root_operation(Menu *menu, int action, const char *path, SaveArc
     op.action = action;
     op.path = path;
     op.archive = archive;
-    menu->tool_message = action && action != 4 && action != 6 && action != 8
+    menu->tool_message = action != SAVE_LOAD && action != SAVE_LOAD_TARGET &&
+                                 action != SAVE_READ_LABELS && action != SAVE_SEARCH_CATALOG
                              ? "Writing / verifying USB..."
                              : "Reading / validating backup...";
     draw(menu);
@@ -7341,8 +7470,9 @@ static int save_root_operation(Menu *menu, int action, const char *path, SaveArc
         menu->tool_message = "USB I/O failed. Restart console.";
         return -1;
     }
-    menu->tool_message = result < 0 ? action == 8 ? "Refresh slot catalog in desktop app."
-                                                  : "USB failed. Check .ohmy3do/saves."
+    menu->tool_message = result < 0 ? action == SAVE_SEARCH_CATALOG
+                                          ? "Refresh slot catalog in desktop app."
+                                          : "USB failed. Check .ohmy3do/saves."
                                     : NULL;
     return result;
 }
@@ -7466,7 +7596,7 @@ static void scan_nvram(Menu *menu)
 }
 static int test_save_usb(Menu *menu)
 {
-    int result = save_root_operation(menu, 2, NULL, NULL);
+    int result = save_root_operation(menu, SAVE_TEST, NULL, NULL);
     menu->usb_tested = result < 0 ? -1 : 1;
     return result;
 }
@@ -7494,7 +7624,7 @@ static void restore_selected(Menu *menu)
     }
     /* The complete current filesystem must reach USB and be reread before the
      * first write to NVRAM. A directory-restore failure also cancels restore. */
-    if (save_root_operation(menu, 1, recovery, &current) < 0)
+    if (save_root_operation(menu, SAVE_STORE, recovery, &current) < 0)
         goto done;
     menu->tool_message = "Restoring internal save...";
     draw(menu);
@@ -7610,7 +7740,7 @@ static void tools_input(Menu *menu, u32 pressed)
                 menu->slot_filtered = 0;
                 menu->tools = TOOL_SLOTS;
                 menu->tool_selected = 0;
-                save_root_operation(menu, 6, NULL, NULL);
+                save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
             }
         }
         return;
@@ -7674,7 +7804,7 @@ static void tools_input(Menu *menu, u32 pressed)
                 slot_select(menu, (unsigned int)(number - 1));
                 menu->tools = TOOL_SLOTS;
                 memset(&menu->slot_labels, 0, sizeof(menu->slot_labels));
-                save_root_operation(menu, 6, NULL, NULL);
+                save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
             }
         }
         return;
@@ -7703,7 +7833,7 @@ static void tools_input(Menu *menu, u32 pressed)
             ++menu->slot_page;
         menu->tool_selected = 0;
         memset(&menu->slot_labels, 0, sizeof(menu->slot_labels));
-        save_root_operation(menu, 6, NULL, NULL);
+        save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
         return;
     }
     if ((page == TOOL_SAVES ||
@@ -7748,7 +7878,7 @@ static void tools_input(Menu *menu, u32 pressed)
         if (pressed & ControlStart) {
             menu->slot_labels_before = menu->slot_labels;
             strcpy(menu->slot_labels.labels[menu->slot_name_slot % 8], menu->slot_label_edit);
-            if (!save_root_operation(menu, 7, NULL, NULL)) {
+            if (!save_root_operation(menu, SAVE_WRITE_LABELS, NULL, NULL)) {
                 menu->tools = TOOL_SLOTS;
                 menu->tool_message = "Slot name saved and verified.";
                 if (menu->slot_filtered) {
@@ -7804,7 +7934,7 @@ static void tools_input(Menu *menu, u32 pressed)
             return;
         }
         menu->slot_page = menu->slot_name_slot / 8;
-        if (!save_root_operation(menu, 6, NULL, NULL)) {
+        if (!save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL)) {
             strcpy(menu->slot_label_edit, menu->slot_labels.labels[menu->slot_name_slot % 8]);
             menu->find_key = 0;
             menu->tools = TOOL_SLOT_NAME;
@@ -7818,7 +7948,7 @@ static void tools_input(Menu *menu, u32 pressed)
             return;
         slot_path(path, slot_at(menu, menu->tool_selected));
         save_archive_free(&menu->compare_archive);
-        if (save_root_operation(menu, 4, path, &menu->compare_archive) >= 0) {
+        if (save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->compare_archive) >= 0) {
             menu->compare_slot = slot_at(menu, menu->tool_selected);
             menu->compare_choosing = 1;
             menu->tool_message = "Choose the second slot, then A.";
@@ -7907,7 +8037,7 @@ static void tools_input(Menu *menu, u32 pressed)
             save_archive_free(&menu->pending);
         }
         if (menu->tools == TOOL_SLOTS && menu->slot_labels_page != menu->slot_page)
-            save_root_operation(menu, 6, NULL, NULL);
+            save_root_operation(menu, SAVE_READ_LABELS, NULL, NULL);
         return;
     }
     if (page == TOOL_RESULTS) {
@@ -8116,7 +8246,7 @@ static void tools_input(Menu *menu, u32 pressed)
             save_archive_free(&menu->backup);
             if (menu->backup_merge) {
                 const SaveEntry *entry = backup_entry(menu);
-                int loaded = save_root_operation(menu, 4, path, &menu->backup);
+                int loaded = save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->backup);
                 if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready)
                     return;
                 if (loaded < 0) {
@@ -8129,7 +8259,8 @@ static void tools_input(Menu *menu, u32 pressed)
                     return;
                 }
             } else
-                menu->backup_slot_valid = !save_root_operation(menu, 0, path, &menu->backup);
+                menu->backup_slot_valid =
+                    !save_root_operation(menu, SAVE_LOAD, path, &menu->backup);
             if (menu->ode.navigation_failed || menu->bus.timed_out || !menu->ready)
                 return;
             menu->tools = TOOL_BACKUP_DETAILS;
@@ -8139,7 +8270,7 @@ static void tools_input(Menu *menu, u32 pressed)
         } else if (menu->compare_choosing) {
             slot_path(path, menu->backup_slot);
             save_archive_free(&menu->backup);
-            if (save_root_operation(menu, 4, path, &menu->backup) >= 0) {
+            if (save_root_operation(menu, SAVE_LOAD_TARGET, path, &menu->backup) >= 0) {
                 menu->compare_choosing = 0;
                 menu->tools = TOOL_COMPARE;
                 menu->tool_selected = 0;
@@ -8147,7 +8278,7 @@ static void tools_input(Menu *menu, u32 pressed)
         } else {
             slot_path(path, menu->backup_slot);
             save_archive_free(&menu->backup);
-            if (!save_root_operation(menu, 0, path, &menu->backup)) {
+            if (!save_root_operation(menu, SAVE_LOAD, path, &menu->backup)) {
                 menu->tools = TOOL_ARCHIVE;
                 menu->tool_selected = 0;
             } else if (menu->tool_message &&
