@@ -1,4 +1,7 @@
-//! The console INI, shared by the desktop editor and USB validation.
+//! The console menu's settings file, .ohmy3do/ohmy3do.ini: read and checked
+//! exactly as the menu reads it (src/menu_config.c), for the desktop's
+//! settings editor and for checking drives.
+
 use crate::{fsutil as f, library, Job};
 use anyhow::{bail, Context, Result};
 use std::{
@@ -7,9 +10,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Where the settings are kept, in a library or on a drive.
 pub const PATH: &str = ".ohmy3do/ohmy3do.ini";
+
+/// The largest settings file the menu reads.
 const LIMIT: usize = 512;
+
+/// The line that ends a settings file the app or menu wrote.
 const END: &str = "; End of Oh My 3DO settings.";
+
+/// The settings' names, in the order `Settings::parse` keeps their values.
+/// hide_adult came last and may be missing from older files.
 const KEYS: [&str; 9] = [
     "folder_workaround",
     "usb_covers",
@@ -21,6 +32,7 @@ const KEYS: [&str; 9] = [
     "preview_sound",
     "hide_adult",
 ];
+/// A line without spaces, tabs and carriage returns at either end.
 fn trim(mut text: &[u8]) -> &[u8] {
     while text
         .first()
@@ -37,11 +49,13 @@ fn trim(mut text: &[u8]) -> &[u8] {
     text
 }
 
+/// The menu's settings (see docs for what each does on the console).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     /// 0 = automatic (FCare), 1 = always, 2 = off.
     pub folder_workaround: u8,
     pub usb_covers: bool,
+    /// 0 to 12.
     pub screen_margin: u8,
     pub large_titles: bool,
     pub remember_position: bool,
@@ -51,6 +65,7 @@ pub struct Settings {
     pub hide_adult: bool,
 }
 impl Default for Settings {
+    /// The menu's defaults, used when there is no settings file.
     fn default() -> Self {
         Self {
             folder_workaround: 0,
@@ -66,6 +81,12 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Reads a settings file as the menu does: "key=value" lines (values of
+    /// one or two digits, optionally followed by a comment), comments
+    /// starting with ';' or '#', and section headers, which are ignored.
+    /// Unknown, repeated or out-of-range settings are errors; missing ones
+    /// keep their defaults. A file that fills the menu's whole buffer must
+    /// end with the end line, so a cut-off file is noticed.
     pub fn parse(data: &[u8]) -> Result<Self> {
         if data.len() > LIMIT {
             bail!("Config exceeds 512 bytes")
@@ -74,12 +95,15 @@ impl Settings {
         let data = data.split(|b| *b == 0).next().unwrap_or_default();
         let length = data.len();
         let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
+        // The defaults, in KEYS order.
         let mut values = [0u8, 1, 0, 0, 1, 1, 1, 1, 0];
         let mut seen = [false; 9];
         let mut ended = false;
         for raw in data.split(|b| *b == b'\n') {
             let raw = trim(raw);
             if raw == END.as_bytes() {
+                // A written file has every setting (hide_adult excepted,
+                // for files written before it existed).
                 if !seen[..8].iter().all(|s| *s) {
                     bail!("Incomplete generated configuration")
                 }
@@ -120,9 +144,9 @@ impl Settings {
                 bail!("Invalid value for {key}")
             }
             let number = value[..digits].parse::<u8>()?;
-            let maximum = match index {
-                0 => 2,
-                2 => 12,
+            let maximum = match KEYS[index] {
+                "folder_workaround" => 2,
+                "screen_margin" => 12,
                 _ => 1,
             };
             if number > maximum {
@@ -147,6 +171,7 @@ impl Settings {
             hide_adult: values[8] != 0,
         })
     }
+    /// The settings as a settings file, checked by reading it back.
     pub fn encode(&self) -> Result<Vec<u8>> {
         let text = format!(
             "; Saved by Oh My 3DO Library.\r\n\
@@ -170,8 +195,9 @@ impl Settings {
     }
 }
 
-/// Retain exact original bytes, including comments and console padding, for
-/// conflict detection. The normal undo journal restores those bytes on undo.
+/// Settings loaded for editing. The file's exact bytes (comments, padding
+/// and all) are kept, so saving can tell if the file changed meanwhile; the
+/// undo journal puts those bytes back on undo.
 #[derive(Clone)]
 pub struct Loaded {
     pub root: PathBuf,
@@ -179,14 +205,18 @@ pub struct Loaded {
     original: Option<Vec<u8>>,
 }
 impl Loaded {
+    /// Whether there was a settings file (rather than just the defaults).
     pub fn exists(&self) -> bool {
         self.original.is_some()
     }
 }
+/// The result of a save: the settings as now on disk, and the undo journal.
 pub struct Saved {
     pub loaded: Loaded,
     pub journal: PathBuf,
 }
+
+/// The settings file's bytes, or None if there is none.
 fn read(root: &Path) -> Result<Option<Vec<u8>>> {
     let path = f::safe(root, PATH)?;
     let file = match fs::File::open(&path) {
@@ -204,6 +234,8 @@ fn read(root: &Path) -> Result<Option<Vec<u8>>> {
     }
     Ok(Some(data))
 }
+/// Loads the settings of the library or drive at `root` (the defaults if it
+/// has no settings file).
 pub fn load(root: &Path) -> Result<Loaded> {
     let root = f::root(root)?;
     let original = read(&root)?;
@@ -218,6 +250,9 @@ pub fn load(root: &Path) -> Result<Loaded> {
         original,
     })
 }
+/// Saves `settings` over what `loaded` read, if the file has not changed
+/// since. The write goes through the library's undo journal and is read back;
+/// if anything fails, the old file is put back.
 pub fn save(loaded: &Loaded, settings: &Settings, cache: &Path, job: &Job) -> Result<Saved> {
     let bytes = settings.encode()?;
     let root = f::root(&loaded.root)?;
