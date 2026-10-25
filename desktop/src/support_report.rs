@@ -1,4 +1,8 @@
-//! User-exported, bounded plain-text diagnostics; excludes save/game payloads.
+//! The support report: a plain-text file the person can export and send
+//! with a bug report. It holds the drive's readiness check, the console's
+//! own diagnostics.txt and the app's recent activity log, with file paths
+//! but never any game or save data, and is limited in size.
+
 use crate::{fsutil as f, readiness, Job};
 use anyhow::{ensure, Context, Result};
 use std::{
@@ -7,11 +11,32 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
+/// Every report starts with this line; exporting only replaces files that do.
 const HEADER: &str = "Oh My 3DO support report\n";
+
+/// The largest report allowed.
 const LIMIT: usize = 2 * 1024 * 1024;
+
+/// Writes the support report for the drive at `root`, with the last 500
+/// lines of `activity` (the app's activity log).
 pub fn collect(root: &Path, activity: &[String], job: &Job) -> Result<String> {
     let root = f::root(root)?;
-    let mut report=format!("{HEADER}App version: {}\nPlatform: {} / {}\nGenerated (Unix UTC seconds): {}\nDrive: {}\n\nIncludes file paths and diagnostic text; no game or save payloads.\n\n",env!("CARGO_PKG_VERSION"),std::env::consts::OS,std::env::consts::ARCH,SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),root.display());
+
+    // About the app, the computer and the drive.
+    let mut report = format!(
+        "{HEADER}App version: {}\n\
+         Platform: {} / {}\n\
+         Generated (Unix UTC seconds): {}\n\
+         Drive: {}\n\n\
+         Includes file paths and diagnostic text; no game or save payloads.\n\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+        root.display()
+    );
+
+    // The drive's readiness check.
     let readiness = readiness::check(&root, job)?;
     report.push_str(&format!(
         "READINESS\n{} errors, {} warnings\n",
@@ -24,6 +49,9 @@ pub fn collect(root: &Path, activity: &[String], job: &Job) -> Result<String> {
         }
     }
     job.check()?;
+
+    // What the console menu exported (its first 4 KiB, without the padding
+    // the menu adds to fill the file).
     report.push_str("\nCONSOLE DIAGNOSTICS\n");
     let diagnostics = f::safe(&root, ".ohmy3do/diagnostics.txt")?;
     if diagnostics.is_file() {
@@ -42,6 +70,8 @@ pub fn collect(root: &Path, activity: &[String], job: &Job) -> Result<String> {
     } else {
         report.push_str("No console diagnostics found. Export them from the console's Diagnostics tool if needed.\n");
     }
+
+    // The app's recent activity, each line cut to 2048 characters.
     report.push_str("\nDESKTOP ACTIVITY (most recent 500 messages)\n");
     for line in activity
         .iter()
@@ -57,6 +87,10 @@ pub fn collect(root: &Path, activity: &[String], job: &Job) -> Result<String> {
     ensure!(report.len() <= LIMIT, "Support report exceeds size limit");
     Ok(report)
 }
+/// Writes the support report to `target`, a .txt file. An existing file is
+/// replaced only if it is an earlier support report that does not change
+/// while the report is being made; the console's own diagnostics.txt is
+/// never replaced. The written file is read back to check it.
 pub fn export(root: &Path, target: &Path, activity: &[String], job: &Job) -> Result<()> {
     ensure!(
         target
