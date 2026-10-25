@@ -87,7 +87,7 @@ for source, names in {
         "usb_fast_cover",
         "usb_preview_frame",
     ],
-    "usb_art.c": ["usb_file_read"],
+    "usb_file.c": ["usb_file_read"],
     "png_decode.c": ["pngle_feed"],
     "png_inflate.c": ["tinfl_decompress"],
 }.items():

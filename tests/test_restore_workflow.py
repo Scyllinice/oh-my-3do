@@ -97,6 +97,7 @@ with tempfile.TemporaryDirectory(prefix="oh3do-restore-") as directory:
             str(code),
             "src/save_archive.c",
             "src/usb_art.c",
+            "src/usb_file.c",
             "src/menu_ui.c",
             "src/menu_categories.c",
             "src/cover_catalog.c",

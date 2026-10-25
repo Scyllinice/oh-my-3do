@@ -1758,6 +1758,7 @@ def main():
                 str(ROOT / "src/menu_categories.c"),
                 str(ROOT / "src/ui_font.c"),
                 str(ROOT / "src/usb_art.c"),
+                str(ROOT / "src/usb_file.c"),
                 str(ROOT / "src/cover_cache.c"),
                 str(ROOT / "src/usb_media.c"),
                 str(ROOT / "src/preview_v5.c"),
