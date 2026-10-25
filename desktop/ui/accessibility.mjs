@@ -26,7 +26,7 @@ export function restoreFocus(snapshot,root=document){
 function revealFocus(node){(node.querySelector('.game-title')||node).scrollIntoView({block:'nearest',inline:'nearest'});}
 export function focusHeading(root){
  const heading=root?.querySelector('h1,h2');if(!heading)return false;
- heading.tabIndex=-1;const focused=focusElement(heading);if(focused&&root.tagName!=='DIALOG')heading.scrollIntoView({block:'start',inline:'nearest'});return focused;
+ heading.tabIndex=-1;const focused=focusElement(heading);if(focused&&root.tagName!=='DIALOG'){root.scrollTop=0;heading.scrollIntoView({block:'nearest',inline:'nearest'});}return focused;
 }
 export function trapDialogTab(event,document=globalThis.document){
  // WebKitGTK reports Shift+Tab as an Unidentified key with the Tab code.
