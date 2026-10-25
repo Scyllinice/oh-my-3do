@@ -30,6 +30,17 @@ fn copy_reports_incremental_transfer_and_readback_without_changing_bytes() {
     assert!(events.iter().any(|p|p.completed>bytes.len() as u64&&p.completed<total));
 }
 #[test]
+fn copy_keeps_the_source_date_and_verified_files_read_back_from_disk() {
+    let dir=tempfile::tempdir().unwrap();let source=dir.path().join("source.iso");let target=dir.path().join("target.iso");
+    let bytes=vec![91;2*1024*1024+5];std::fs::write(&source,&bytes).unwrap();
+    filetime::set_file_mtime(&source,filetime::FileTime::from_unix_time(1_402_444_800,123_456_700)).unwrap();
+    fsutil::copy_new(&source,&target,&Job::default(),None).unwrap();
+    assert!(fsutil::same_time(fsutil::stamp(&target).unwrap().1,fsutil::stamp(&source).unwrap().1));
+    assert_eq!(fsutil::read_from_disk(&target).unwrap(),bytes);
+    assert_eq!(fsutil::sha256_from_disk(&target,&Job::default()).unwrap(),fsutil::sha256(&source,&Job::default()).unwrap());
+    assert!(fsutil::same_time(10_000_000_000,11_999_999_999));assert!(!fsutil::same_time(10_000_000_000,12_000_000_001));
+}
+#[test]
 fn cancel_during_copy_progress_never_publishes_a_partial_file() {
     let dir=tempfile::tempdir().unwrap();let source=dir.path().join("source.iso");let target=dir.path().join("target.iso");
     std::fs::write(&source,vec![19;3*1024*1024]).unwrap();

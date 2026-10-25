@@ -802,6 +802,18 @@ fn usb_copy_places_media_beside_each_disc() {
         .files
         .iter()
         .all(|f| ["unchanged", "preserve"].contains(&f.status.as_str())));
+    // Verified media is trusted by its receipt; only a full verify rereads it.
+    let copied_preview = dest.join("Games/USA/Road Rash/.ohmy3do/clip.3dv");
+    let stamp = fs::metadata(&copied_preview).unwrap().modified().unwrap();
+    let mut altered = synthetic_preview();
+    altered[0] ^= 1;
+    fs::write(&copied_preview, &altered).unwrap();
+    filetime::set_file_mtime(&copied_preview, filetime::FileTime::from_system_time(stamp)).unwrap();
+    let status = |plan: &usb::CopyPlan| plan.files.iter().find(|f| f.path == "Games/USA/Road Rash/.ohmy3do/clip.3dv").unwrap().status.clone();
+    assert_eq!(status(&usb::plan(&root, &dest, &cache, false, &Job::default()).unwrap()), "unchanged");
+    assert_eq!(status(&usb::plan(&root, &dest, &cache, true, &Job::default()).unwrap()), "update");
+    fs::write(&copied_preview, synthetic_preview()).unwrap();
+    filetime::set_file_mtime(&copied_preview, filetime::FileTime::from_system_time(stamp)).unwrap();
     // Library edits refuse a prepared drive rather than misreading its media.
     assert!(library::read_media_index(&dest, "covers").is_err());
     library::undo(&journal).unwrap();
@@ -1481,6 +1493,26 @@ fn selected_usb_copy_is_additive_and_preserves_existing_metadata_media_and_saves
     let meta=fs::read(dest.join(".ohmy3do/metadata.3di")).unwrap();assert!(meta.windows(9).any(|s|s==b"Adventure"));assert!(meta.windows(6).any(|s|s==b"Puzzle"));
     assert_eq!(fs::read(dest.join(".ohmy3do/saves/personal.bin")).unwrap(),b"keep");assert_eq!(fs::read(dest.join(".ohmy3do/ohmy3do.ini")).unwrap(),b"folder_workaround=1\n");
     library::undo(&journal).unwrap();assert_eq!(snapshot(&dest),before);
+}
+#[test]
+fn copying_one_game_keeps_the_verified_record_of_the_others() {
+    let t=tempfile::tempdir().unwrap(); let root=t.path().join("library");let dest=t.path().join("usb");let cache=t.path().join("cache");
+    fs::create_dir(&dest).unwrap(); let first="Games/USA/First/first.iso";let second="Games/Japan/Second/second.iso";
+    put(&root,first,b"one");put(&root,second,b"two");
+    put(&root,".ohmy3do/library.json",&serde_json::to_vec(&json!({"schema":1,"sources":[],"games":[{"path":first},{"path":second}]})).unwrap());
+    usb_selection_fixture(&root,&cache);
+    put(&root,".ohmy3do/previews/one.3dv",&synthetic_preview());
+    put(&root,".ohmy3do/previews/two.3dv",&synthetic_preview());
+    put(&root,".ohmy3do/previews/index.3di",&library::media_index(&BTreeMap::from([(f::fold(first),"one.3dv".into()),(f::fold(second),"two.3dv".into())])).unwrap());
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[first.into(),second.into()],&Job::default()).unwrap();usb::apply(&p,&cache,&Job::default()).unwrap();
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[second.into()],&Job::default()).unwrap();usb::apply(&p,&cache,&Job::default()).unwrap();
+    // Same size and date: only the earlier record can vouch for it without rereading.
+    let copied=dest.join("Games/USA/First/.ohmy3do/one.3dv");
+    let stamp=fs::metadata(&copied).unwrap().modified().unwrap();
+    let mut altered=synthetic_preview();altered[0]^=1;fs::write(&copied,&altered).unwrap();
+    filetime::set_file_mtime(&copied,filetime::FileTime::from_system_time(stamp)).unwrap();
+    let p=usb::plan_selected(&root,&dest,&cache,false,&[first.into()],&Job::default()).unwrap();
+    assert_eq!(p.files.iter().find(|f|f.path=="Games/USA/First/.ohmy3do/one.3dv").unwrap().status,"unchanged");
 }
 #[test]
 fn selected_usb_copy_rejects_changed_indexes_and_supports_empty_selection() {

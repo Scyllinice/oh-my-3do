@@ -117,21 +117,85 @@ impl ReadPaths {
         })
     }
 }
+/// Modification times within the coarsest drive resolution (FAT's two seconds).
+pub fn same_time(a: u128, b: u128) -> bool {
+    a.abs_diff(b) <= 2_000_000_000
+}
 pub fn sha256(p: &Path, job: &Job) -> Result<String> {
-    let mut f = File::open(p)?;
+    hash_file(File::open(p)?, job)
+}
+/// Like `sha256`, but read from the drive itself rather than the system's
+/// cache, so a readback after writing checks what actually reached the card.
+/// The file must already be flushed.
+pub fn sha256_from_disk(p: &Path, job: &Job) -> Result<String> {
+    hash_file(open_from_disk(p)?, job)
+}
+pub fn read_from_disk(p: &Path) -> Result<Vec<u8>> {
+    let mut f = open_from_disk(p)?;
+    let (mut b, start) = aligned_buffer();
+    let mut out = vec![];
+    loop {
+        let n = f.read(&mut b[start..start + BLOCK])?;
+        if n == 0 {
+            return Ok(out);
+        }
+        out.extend_from_slice(&b[start..start + n]);
+    }
+}
+const BLOCK: usize = 1024 * 1024;
+/// Unbuffered Windows reads need sector-aligned memory.
+fn aligned_buffer() -> (Vec<u8>, usize) {
+    let b = vec![0; BLOCK + 4096];
+    let start = b.as_ptr().align_offset(4096);
+    (b, start)
+}
+fn hash_file(mut f: File, job: &Job) -> Result<String> {
     let total = f.metadata()?.len();let mut completed = 0;
     job.report(0,total,"Verifying file");
     let mut h = Sha256::new();
-    let mut b = vec![0; 1024 * 1024];
+    let (mut b, start) = aligned_buffer();
     loop {
         job.check()?;
-        let n = f.read(&mut b)?;
+        let n = f.read(&mut b[start..start + BLOCK])?;
         if n == 0 {
             break;
         }
-        h.update(&b[..n]);completed += n as u64;job.report(completed,total,"Verifying file");
+        h.update(&b[start..start + n]);completed += n as u64;job.report(completed,total,"Verifying file");
     }
     Ok(format!("{:x}", h.finalize()))
+}
+#[cfg(windows)]
+fn open_from_disk(p: &Path) -> Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_NO_BUFFERING: u32 = 0x2000_0000;
+    Ok(fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_NO_BUFFERING).open(p)?)
+}
+#[cfg(target_os = "linux")]
+fn open_from_disk(p: &Path) -> Result<File> {
+    use std::os::fd::AsRawFd;
+    extern "C" {
+        fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> i32;
+    }
+    const POSIX_FADV_DONTNEED: i32 = 4;
+    let f = File::open(p)?;
+    let error = unsafe { posix_fadvise(f.as_raw_fd(), 0, 0, POSIX_FADV_DONTNEED) };
+    anyhow::ensure!(error == 0, "Could not bypass the read cache for {} (error {error})", p.display());
+    Ok(f)
+}
+#[cfg(target_os = "macos")]
+fn open_from_disk(p: &Path) -> Result<File> {
+    use std::os::fd::AsRawFd;
+    extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    const F_NOCACHE: i32 = 48;
+    let f = File::open(p)?;
+    anyhow::ensure!(unsafe { fcntl(f.as_raw_fd(), F_NOCACHE, 1) } != -1, "Could not bypass the read cache for {}", p.display());
+    Ok(f)
+}
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn open_from_disk(p: &Path) -> Result<File> {
+    Ok(File::open(p)?)
 }
 pub fn atomic(p: &Path, data: &[u8]) -> Result<()> {
     let parent = p.parent().context("Missing parent")?;
@@ -173,21 +237,20 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
         bail!("Source contents changed since scan: {}", source.display())
     }
     let verify_job = job.progress_range(before.0,before.0,total,"Copying and verifying file");
-    if stamp(source)? != before || sha256(t.path(), &verify_job)? != actual_hash {
+    if stamp(source)? != before || sha256_from_disk(t.path(), &verify_job)? != actual_hash {
         bail!(
             "Source changed or copy verification failed: {}",
             source.display()
         )
     }
-    filetime::set_file_mtime(
-        t.path(),
-        filetime::FileTime::from_unix_time(
-            (before.1 / 1_000_000_000) as i64,
-            (before.1 % 1_000_000_000) as u32,
-        ),
-    )?;
+    // Set through the writing handle: Windows restamps a written file when
+    // that handle closes, overriding a date set through any other handle.
+    t.as_file().set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(before.1 as u64))?;
     job.check()?;
-    t.persist_noclobber(target).map_err(|e| e.error)?;
+    drop(t.persist_noclobber(target).map_err(|e| e.error)?);
+    if !same_time(stamp(target)?.1, before.1) {
+        job.say(format!("Copied and verified, but the drive did not keep the original date: {}", target.display()));
+    }
     job.report(total,total,"Copying and verifying file");
     Ok(actual_hash)
 }

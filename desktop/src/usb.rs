@@ -357,6 +357,21 @@ fn report_path(source: &Path, target: &Path, cache: &Path) -> PathBuf {
     );
     cache.join("usb-copy").join(format!("{key}.json"))
 }
+fn read_report(path: &Path) -> Option<CopyPlan> {
+    fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+/// Saves the copy record, keeping earlier verified entries a smaller copy
+/// did not touch, so one game's copy doesn't discard the whole drive's record.
+fn save_report(path: &Path, plan: &CopyPlan) -> Result<()> {
+    let mut report = plan.clone();
+    if let Some(old) = read_report(path) {
+        let known: HashSet<String> = report.files.iter().map(|file| file.path.clone()).collect();
+        report.files.extend(old.files.into_iter().filter(|file| {
+            !known.contains(&file.path) && (file.verified || file.status == "verified")
+        }));
+    }
+    f::atomic(path, &serde_json::to_vec_pretty(&report)?)
+}
 fn plan_cheat_exists(root:&Path,name:&str)->bool {root.join(name).exists()}
 pub fn plan(
     source: &Path,
@@ -387,9 +402,9 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
     job.say("Validating staging and media");
     let (mut files, games) = inventory_selected(&source, selected.as_ref(), job)?;
     let report = report_path(&source, &target, cache);
-    let previous = fs::read(&report)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<CopyPlan>(&b).ok());
+    let previous: HashMap<String, CopyItem> = read_report(&report)
+        .map(|p| p.files.into_iter().map(|file| (file.path.clone(), file)).collect())
+        .unwrap_or_default();
     categories::for_transfer(&source,&target)?;
     let moves = folder_moves(&target, &files, &categories::load(&source)?)?;
     let selection = selected.as_ref().map(|s| s.iter().cloned().collect::<Vec<_>>());
@@ -468,19 +483,17 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
                 && !name.contains("/.ohmy3do/")
                 && name != "boot.iso";
             let receipt = previous
-                .as_ref()
-                .and_then(|p| {
-                    p.files
-                        .iter()
-                        .find(|r| r.path == name && (r.verified || r.status == "verified"))
-                })
+                .get(&name)
+                .filter(|r| r.verified || r.status == "verified")
                 .is_some_and(|r| {
                     r.size == size
                         && r.source_stamp == source_stamp
                         && r.destination_stamp == Some(ds.1)
                         && ds.0 == size
                 });
-            if disc && !verify && size == ds.0 && (source_stamp == ds.1 || receipt) {
+            // A receipt from the last verified copy spares rereading unchanged
+            // media too; previews alone can be gigabytes on a slow card.
+            if !verify && size == ds.0 && (receipt || (disc && f::same_time(source_stamp, ds.1))) {
                 trusted = receipt;
                 "unchanged"
             } else if size == ds.0 && f::sha256(&src, &file_job.progress_range(0,size.max(1),size.max(1)*2,"Checking source"))? == f::sha256(&dest, &file_job.progress_range(size.max(1),size.max(1),size.max(1)*2,"Checking destination"))? {
@@ -551,7 +564,7 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
         selection,
         generated,
     };
-    f::atomic(&report, &serde_json::to_vec_pretty(&plan)?)?;
+    save_report(&report, &plan)?;
     job.say(format!(
         "USB preview: {} files; {} folders to move; {} disc entries; {:.2} GiB to copy",
         plan.files.len(),
@@ -630,7 +643,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 if stamp != file.destination_stamp { bail!("Destination changed since preview: {}", file.path); }
                 job.check()?;
                 tx.write(&file.path, content)?;
-                if fs::read(&dest)? != *content { bail!("Index copy readback failed"); }
+                if f::read_from_disk(&dest)? != *content { bail!("Index copy readback failed"); }
                 receipt.files[i].status = "verified".into();
                 receipt.files[i].verified = true;
                 receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
@@ -657,7 +670,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 };
                 let content = library::beside_index(&fs::read(&src)?)?;
                 tx.write(&file.path, &content)?;
-                if fs::read(&dest)? != content {
+                if f::read_from_disk(&dest)? != content {
                     bail!("Copy readback failed")
                 }
             } else if file.status == "copy" {
@@ -672,7 +685,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
                 };
                 let bytes = fs::read(&src)?;
                 tx.write(&file.path, &bytes)?;
-                if f::sha256(&dest, &file_job.progress_range(0,file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? != f::sha256(&src, &file_job.progress_range(file.size.max(1),file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? {
+                if f::sha256_from_disk(&dest, &file_job.progress_range(0,file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? != f::sha256(&src, &file_job.progress_range(file.size.max(1),file.size.max(1),file.size.max(1)*2,"Verifying copied file"))? {
                     bail!("Copy readback failed")
                 }
             }
@@ -692,10 +705,7 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
         let save_slots=crate::save_catalog::scan(&plan.destination.join(".ohmy3do/saves"),job)?;
         crate::save_catalog::write(&save_slots,&mut tx,".ohmy3do/saves/",job)?;
         tx.finish()?;
-        f::atomic(
-            &report_path(&plan.source, &plan.destination, cache),
-            &serde_json::to_vec_pretty(&receipt)?,
-        )?;
+        save_report(&report_path(&plan.source, &plan.destination, cache), &receipt)?;
         Ok(())
     })();
     if let Err(error) = result {
