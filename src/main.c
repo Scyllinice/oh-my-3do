@@ -7671,11 +7671,11 @@ int main(int argc, char **argv)
             help_action = menu_help_poll(&menu.help_hold, now_ms(&menu), !!(buttons & ControlStart),
                                          !!(pressed & ControlStart), !!(released & ControlStart),
                                          !!(buttons & ~ControlStart));
-            if (menu.help_hold.pending || help_action == 2)
+            if (menu.help_hold.pending || help_action == MENU_HELP_OPEN)
                 pressed &= ~ControlStart;
-            if (help_action == 1)
+            if (help_action == MENU_HELP_TAP)
                 pressed |= ControlStart;
-            if (help_action == 2) {
+            if (help_action == MENU_HELP_OPEN) {
                 stop_preview(&menu);
                 menu.browser_frames[0].valid = menu.browser_frames[1].valid = 0;
                 draw(&menu);
