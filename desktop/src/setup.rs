@@ -1,4 +1,9 @@
-//! Guided installation of the latest stable console menu, independently of the app version.
+//! Setting up a drive for the console: installing the menu (boot.iso) and
+//! the support files it needs (.ohmy3do with its settings, categories,
+//! indexes and saves folder, and the folder navigation helpers). The menu
+//! comes from the latest stable release, whatever the app's own version,
+//! or from a local file.
+
 use crate::{console_config, fsutil as f, library, Job};
 use anyhow::{ensure, Context, Result};
 use reqwest::blocking::Client;
@@ -9,7 +14,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+/// The largest menu image accepted.
 const LIMIT: usize = 16 * 1024 * 1024;
+
+/// The HTTP client used for downloads.
 pub(crate) fn client() -> Result<Client> {
     Ok(Client::builder()
         .user_agent("OhMy3DO-Library")
@@ -18,6 +26,8 @@ pub(crate) fn client() -> Result<Client> {
         .build()?)
 }
 
+/// Downloads `url` into memory, reporting progress, failing if it is bigger
+/// than `limit` bytes.
 pub(crate) fn download(client: &Client, url: &str, limit: usize, job: &Job) -> Result<Vec<u8>> {
     job.check()?;
     let response = client.get(url).send()?.error_for_status()?;
@@ -42,6 +52,9 @@ pub(crate) fn download(client: &Client, url: &str, limit: usize, job: &Job) -> R
     }
     Ok(bytes)
 }
+/// Checks a downloaded menu image against its published checksum line
+/// ("<sha256>  boot.iso") and that it is a 3DO disc image (its volume
+/// header starts 1, five 'Z's, 1).
 pub fn verify_image(image: &[u8], checksum: &str) -> Result<()> {
     let fields: Vec<_> = checksum.split_whitespace().collect();
     ensure!(
@@ -61,7 +74,9 @@ pub fn verify_image(image: &[u8], checksum: &str) -> Result<()> {
     );
     Ok(())
 }
-/// Network work completes and verifies before the library is changed.
+/// Downloads the latest stable menu and installs it on the drive at `root`
+/// with `install_verified`. The download is finished and checked before the
+/// drive is touched. Returns the undo journal's path.
 pub fn install_release(
     root: &Path,
     cache: &Path,
@@ -80,7 +95,8 @@ pub fn install_release(
     verify_image(&image, &format!("{digest}  boot.iso"))?;
     install_verified(root, cache, &image, settings, job)
 }
-/// Install a checksum-pinned local developer menu using the normal journal.
+/// In developer mode: installs the menu from a local folder of release files
+/// (checked against its menu-update.json), and remembers its version.
 pub fn install_developer(
     directory: &Path,
     root: &Path,
@@ -98,7 +114,10 @@ pub fn install_developer(
     crate::updates::remember_menu(cache, &digest, &release.version)?;
     Ok(result)
 }
-/// Install an already verified menu image with rollback and readback.
+/// Installs a checked menu image on the drive at `root`: the support files
+/// (`ensure_support`), the slot catalog rebuilt if there was one, then
+/// boot.iso, read back to check. Everything goes through the undo journal
+/// and is undone if any step fails. Returns the journal's path.
 pub fn install_verified(
     root: &Path,
     cache: &Path,
@@ -139,8 +158,11 @@ pub fn install_verified(
     Ok(tx.path)
 }
 
-/// Required runtime layout shared by setup, boot updates and USB preparation.
-/// Existing settings, save archives, media and indexes are never replaced here.
+/// Creates whatever the menu needs that the drive at `root` is missing:
+/// navigation helpers, the .ohmy3do folders, the cheat database, settings
+/// (`settings`, if there are none), categories, indexes and the slot
+/// catalog. Used by setup, menu updates and copying games. Never replaces
+/// existing settings, backups, media or indexes.
 pub fn ensure_support(
     root: &Path,
     tx: &mut library::Journal,
@@ -181,9 +203,15 @@ pub fn ensure_support(
     Ok(())
 }
 
-/// A firmware-visible, one-sector pivot for directory ID collisions. Dotfiles
-/// and FAT hidden files are excluded by the ODE, so the menu hides this name.
-/// Only ancestors of actual discs need pivots; game folders already have discs.
+/// Puts a navigation helper in every folder that needs one.
+///
+/// Why: the FCare ignores a folder change to the same entry number it
+/// changed to last (see `ode_enter_directory` in src/ode.h). The menu gets
+/// around this by first changing to another entry, which needs a file in
+/// the folder. Game folders have their discs, but folders above them (like
+/// Games/USA) may hold only folders, so each gets this small file. It has
+/// to be visible to the ODE (which ignores dot files and hidden files), so
+/// the menu hides it by name instead.
 pub fn ensure_navigation(root: &Path, tx: &mut library::Journal, job: &Job) -> Result<()> {
     let data = navigation_helper_data();
     for relative in navigation_helpers(root, job)? {
@@ -203,7 +231,12 @@ pub fn ensure_navigation(root: &Path, tx: &mut library::Journal, job: &Job) -> R
     Ok(())
 }
 
+/// The navigation helper's file name.
 pub const NAVIGATION_HELPER: &str = "Oh My 3DO - Folder Navigation Helper (Keep).iso";
+
+/// The navigation helper's contents: one 2048-byte block that looks like
+/// the start of a 3DO disc (a volume header for a one-block volume), with
+/// a note saying what it is.
 pub(crate) fn navigation_helper_data() -> [u8; 2048] {
     let mut data = [0u8; 2048];
     data[..7].copy_from_slice(&[1, 90, 90, 90, 90, 90, 1]);
@@ -214,7 +247,8 @@ pub(crate) fn navigation_helper_data() -> [u8; 2048] {
     data
 }
 
-/// Expected helper paths, without creating files or validating disc payloads.
+/// Where navigation helpers belong on the drive at `root`: every folder
+/// between the root and a disc's own folder. Only lists them.
 pub(crate) fn navigation_helpers(root: &Path, job: &Job) -> Result<Vec<String>> {
     let mut folders = std::collections::BTreeSet::new();
     for entry in walkdir::WalkDir::new(root)
@@ -276,7 +310,8 @@ pub(crate) fn navigation_helpers(root: &Path, job: &Job) -> Result<Vec<String>> 
         })
         .collect()
 }
-/// Offline setup/repair from a local menu, with no staging library required.
+/// Sets up or repairs a drive from a menu image file, without the network
+/// or a PC library.
 pub fn install_local(
     root: &Path,
     cache: &Path,
