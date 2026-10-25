@@ -246,7 +246,7 @@ int ui_font_render(unsigned char *out, const char *text, int style, int max_widt
 }
 
 /*
- * Mixes one 5-bit colour channel: `level` fifteenths of the ink, the rest
+ * Mixes one 5-bit color channel: `level` fifteenths of the ink, the rest
  * background, rounded to the nearest value.
  */
 static unsigned int blend_channel(unsigned int ink, unsigned int background, int level)
@@ -259,7 +259,7 @@ void ui_font_palette(unsigned short *out, unsigned int ink, unsigned int backgro
     int level;
 
     memset(out, 0, 32 * sizeof(*out));
-    /* Entry 0 stays 0: on the 3DO, colour 0 in a CEL is transparent. */
+    /* Entry 0 stays 0: on the 3DO, color 0 in a CEL is transparent. */
     for (level = 1; level < 16; ++level) {
         unsigned int red = blend_channel((ink >> 10) & 31U, (background >> 10) & 31U, level);
         unsigned int green = blend_channel((ink >> 5) & 31U, (background >> 5) & 31U, level);

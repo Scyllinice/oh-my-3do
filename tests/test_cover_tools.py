@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise image conversion and catalogue staging in temporary project roots."""
+"""Exercise image conversion and catalog staging in temporary project roots."""
 import importlib.util
 import json
 from pathlib import Path

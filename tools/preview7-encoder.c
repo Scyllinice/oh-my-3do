@@ -309,8 +309,8 @@ static uint32_t vsum(const uint8_t *v, int dim)
     return s;
 }
 
-/* A pixel's error as the eye weighs it: brightness in full, colour at half
- * (Cb/Cr scaled as in YCbCr), so a grey error e counts 3*e*e as in RGB. */
+/* A pixel's error as the eye weighs it: brightness in full, color at half
+ * (Cb/Cr scaled as in YCbCr), so a gray error e counts 3*e*e as in RGB. */
 static uint32_t pixel_error(int er, int eg, int eb)
 {
     int64_t y = 77 * er + 150 * eg + 29 * eb, cb = eb * 256 - y, cr = er * 256 - y;

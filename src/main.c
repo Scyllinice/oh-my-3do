@@ -238,7 +238,7 @@ typedef struct Menu {
     unsigned long stream_shown; /* stream frames decoded when last shown */
     CCB *preview_cel;
     int preview_attempted, media_cancelled, preview_priming;
-    /* Directions that cancelled a media read; the main loop still moves by
+    /* Directions that canceled a media read; the main loop still moves by
      * them, even when the button was let go before the read ended. */
     u32 cancel_directions;
     /* Tap X on a game with a preview: preview_off keeps its cover up until the
@@ -880,7 +880,7 @@ static void cap_shape(Menu *menu, int x, int y, int w, int h, int ends, Color co
 }
 /* A controller prompt shaped like the pad's buttons: round caps for A, B and
  * C, small ovals for P and X, capsules for shoulders and arrows. Each button
- * has its own colour so prompts read at a glance, and sits on a darker lip so
+ * has its own color so prompts read at a glance, and sits on a darker lip so
  * it looks raised. Returns the width used, including the action's label. */
 static int button(Menu *menu, int x, int y, const char *key, const char *action, int lit)
 {
@@ -1159,7 +1159,7 @@ static void crt_cels(Menu *menu)
     menu->osd_ch = ui_cel(menu, 16, 12);
     menu->screen_corner = ui_cel(menu, 9, 9);
     if (menu->screen_corner) {
-        /* Top-left corner of the tube, radius 9, in the recess colour; flipped
+        /* Top-left corner of the tube, radius 9, in the recess color; flipped
          * for the others. The cel engine pads each 9-pixel row to 10 pixels. */
         pixels = (unsigned short *)menu->screen_corner->ccb_SourcePtr;
         for (y = 0; y < 9; ++y)
@@ -1395,7 +1395,7 @@ static void tv_set(Menu *menu)
         rectangle(menu, x + 4, 170, 1, 3, INK);
     }
 }
-/* A cover on the screen: at its own size, centred over a dimmed copy
+/* A cover on the screen: at its own size, centered over a dimmed copy
  * stretched across the screen. A preview between plays fills it exactly. */
 static void tv_picture(Menu *menu, CCB *source)
 {
@@ -2983,7 +2983,7 @@ static int read_large_cover(void *context)
     return usb_large_cover(&read->menu->ode, ode_bus_read_buffer, read->filename, read->pixels,
                            media_cancel, read->menu);
 }
-/* The display hardware's blending of each pixel with its neighbours: off for
+/* The display hardware's blending of each pixel with its neighbors: off for
  * the menu's crisp text, on for full-screen video, where it softens the
  * codec's block edges at no cost. */
 static void set_smoothing(Menu *menu, int on)
@@ -3011,7 +3011,7 @@ static void set_smoothing(Menu *menu, int on)
 #endif
 #define FADE_OUT_MS 100UL
 #define FADE_IN_MS  133UL
-/* Both screens' colour tables scaled to level/256 of full brightness. */
+/* Both screens' color tables scaled to level/256 of full brightness. */
 static void set_brightness(Menu *menu, unsigned long level)
 {
 #if FADES
@@ -5228,7 +5228,7 @@ static void search_library(Menu *menu, int rebuild)
         if (result) {
             menu->tool_message =
                 result == 1
-                    ? "Search cancelled."
+                    ? "Search canceled."
                     : (result == -2 ? "Folder I/O failed. Restart console."
                                     : (result == -3 ? "Not enough search memory."
                                                     : "Run index-media.py on the USB drive."));
@@ -6221,7 +6221,7 @@ static void draw_tools(Menu *menu)
             if (menu->preview_result == -4)
                 tool_line(menu, 9, "Not enough preview memory.", AMBER);
             else if (menu->preview_result == -5)
-                tool_line(menu, 9, "Cancelled by controller input.", MUTED);
+                tool_line(menu, 9, "Canceled by controller input.", MUTED);
             else if (menu->preview_result < 0)
                 tool_line(menu, 9, "Preview file / read failed.", AMBER);
             else
@@ -7558,7 +7558,7 @@ int main(int argc, char **argv)
         return 1;
     }
     {
-        /* The display hardware blends each pixel with its neighbours by default,
+        /* The display hardware blends each pixel with its neighbors by default,
          * which softens text and edges; the menu is drawn for crisp pixels. */
         int screen;
         for (screen = 0; screen < 2; ++screen) {

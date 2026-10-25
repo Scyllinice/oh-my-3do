@@ -16,8 +16,8 @@ def main():
     magick = shutil.which("magick") or shutil.which("convert")
     if not magick:
         raise SystemExit("ImageMagick is required")
-    # A single palette prevents colour flicker between frames. Reserve index 0
-    # for transparency and index 1 for an opaque menu-coloured ground, so every
+    # A single palette prevents color flicker between frames. Reserve index 0
+    # for transparency and index 1 for an opaque menu-colored ground, so every
     # new frame erases the last without another fill or a background snapshot.
     raw = subprocess.check_output(
         [
@@ -72,7 +72,7 @@ def main():
         header.append("    },")
     header.extend(["};", "#endif", ""])
     (ROOT / "src/channel_gecko_data.h").write_text("\n".join(header))
-    # Reconstruct the console's palette/indices for an exact-colour preview.
+    # Reconstruct the console's palette/indices for an exact-color preview.
     preview = bytearray(128 * 128 * 3)
     for frame, pixels in enumerate(frames):
         for y in range(32):

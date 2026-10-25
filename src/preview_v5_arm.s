@@ -5,7 +5,7 @@
 ;
 ; Main loop registers:
 ;   r0 data   r1 end   r2 destination (top-left word of the current block)
-;   r3 block column (0-79)   r4 blocks left   r5 colour cache   r6 next slot
+;   r3 block column (0-79)   r4 blocks left   r5 color cache   r6 next slot
 ;   r8 blocks left in the current run; r7 r9 r11 r12 lr scratch.
 ; r10 (the APCS stack limit) is never touched. Runs of MOTION and SOLID are
 ; drawn a block row at a time as strips, with LDM/STM.
@@ -22,9 +22,9 @@ COLUMNS EQU     WIDTH/4
 BLOCKS  EQU     COLUMNS*HEIGHT/4
 MOTION_RUN EQU  32              ; longest MOTION run (PREVIEW_V5_MOTION_RUN)
 
-; One colour code into $r (an RGB555 value); $t is scratch.
+; One color code into $r (an RGB555 value); $t is scratch.
         MACRO
-        COLOUR  $r, $t
+        COLOR  $r, $t
         LDRB    $r, [r0], #1
         TST     $r, #0x80
         BICNE   $r, $r, #0x80
@@ -130,7 +130,7 @@ skip_wrap
         B       skip_wrap
 
 op_solid
-        COLOUR  r7, lr
+        COLOR  r7, lr
         ORR     r7, r7, r7, LSL #16
         MOV     r9, r7
         MOV     r11, r7
@@ -169,8 +169,8 @@ so_rem
 op_grad
         STR     r4, [sp, #-4]!
 gr_block
-        COLOUR  r7, lr                  ; a
-        COLOUR  r9, lr                  ; b
+        COLOR  r7, lr                  ; a
+        COLOR  r9, lr                  ; b
         AND     r11, r7, #0x1F          ; spread a and b into 10-bit lanes
         AND     lr, r7, #0x3E0
         ORR     r11, r11, lr, LSL #5

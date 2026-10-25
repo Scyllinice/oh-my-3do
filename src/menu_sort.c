@@ -120,7 +120,7 @@ static int compare_entries(const void *left, const void *right)
  * games, enough to notice on every folder change.
  *
  * A Shell sort is an insertion sort run several times, first on elements far
- * apart (`gap` positions) and finally on neighbours, so most elements are
+ * apart (`gap` positions) and finally on neighbors, so most elements are
  * already near their place by the last pass. These gaps are Ciura's
  * sequence, which works well in practice.
  *

@@ -3,9 +3,9 @@
  * console can show.
  *
  * Text is drawn into a 4-bit image: each pixel is a number from 0 (no ink)
- * to 15 (full ink), two pixels per byte. Paired with a 16-colour palette from
+ * to 15 (full ink), two pixels per byte. Paired with a 16-color palette from
  * ui_font_palette, that image becomes a CEL (the 3DO's drawing object) in any
- * ink and background colour.
+ * ink and background color.
  *
  * The glyphs come from ui_font_data.h, which tools/build-ui-font.py
  * generates from the Ark Pixel font. They cover printable ASCII only; any
@@ -94,7 +94,7 @@ size_t ui_font_measure_fit(UiFontMeasure *measure, const char *text, size_t offs
 
 /*
  * Fills a CEL palette (32 entries; the first 16 are used) for drawing in
- * `ink` over `background`, both 15-bit RGB colours (5 bits each of red, green
+ * `ink` over `background`, both 15-bit RGB colors (5 bits each of red, green
  * and blue). Entry N blends N/15 of the ink with the rest background.
  */
 void ui_font_palette(unsigned short *out, unsigned int ink, unsigned int background);

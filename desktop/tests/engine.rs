@@ -1045,9 +1045,9 @@ fn cancellation_mid_import_restores_all_already_copied_files() {
 }
 /// A one-frame OM3DVID5 clip: black, as SOLID runs over all 1200 blocks.
 fn synthetic_preview() -> Vec<u8> {
-    let mut packet = vec![0xbf, 0x00, 0x00]; // 64 blocks, literal colour 0
+    let mut packet = vec![0xbf, 0x00, 0x00]; // 64 blocks, literal color 0
     for _ in 0..17 {
-        packet.extend_from_slice(&[0xbf, 0x80]); // 64 blocks, cached colour 0
+        packet.extend_from_slice(&[0xbf, 0x80]); // 64 blocks, cached color 0
     }
     packet.extend_from_slice(&[0xaf, 0x80]); // the last 48 blocks
     synthetic_clip(b"OM3DVID5", (160, 120, 30), packet, b"END3DV05")

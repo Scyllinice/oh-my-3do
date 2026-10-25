@@ -18,7 +18,7 @@ CLIP_CAP_SECONDS = 15
 WIDTH, HEIGHT, FPS = 160, 120, 30
 V5_BYTES = 1400 * 1024  # video + audio; fits the DRAM + VRAM a console has free
 V5_FRAMES = CLIP_CAP_SECONDS * FPS
-V5_PACKET = 1200 * 12  # worst-case packet: every block GRAD with literal colours
+V5_PACKET = 1200 * 12  # worst-case packet: every block GRAD with literal colors
 
 
 # OM3DVID7 (src/preview_v7.h): the whole clip up to a minute, streamed at

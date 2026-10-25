@@ -143,7 +143,7 @@ int ode_bus_transfer(void *context, const unsigned char *command, unsigned char 
                 AbortIO(bus->request);
                 WaitIO(bus->request);
                 /*
-                 * Cancelling cannot prove the drive and console agree on
+                 * Canceling cannot prove the drive and console agree on
                  * where the command channel is. Send nothing more until the
                  * console restarts.
                  */

@@ -654,7 +654,7 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"original");
         let job = Job::default();
         job.cancel.store(true, Ordering::Relaxed);
-        assert!(write_download(&dir.path().join("cancelled.zip"), b"partial", &job).is_err());
+        assert!(write_download(&dir.path().join("canceled.zip"), b"partial", &job).is_err());
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

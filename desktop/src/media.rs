@@ -69,7 +69,7 @@ fn capture(exe: &Path, args: &[String], max: usize, job: &Job) -> Result<Vec<u8>
             let _ = child.wait();
             let _ = out.join();
             let _ = err.join();
-            bail!("Video conversion cancelled or timed out")
+            bail!("Video conversion canceled or timed out")
         };
         if let Some(s) = child.try_wait()? {
             break s;
@@ -232,7 +232,7 @@ const PREVIEW_HEIGHT: usize = 120;
 const PREVIEW_FPS: usize = 30;
 const PREVIEW_FRAMES: usize = 15 * PREVIEW_FPS;
 const PREVIEW_FRAME: usize = PREVIEW_WIDTH * PREVIEW_HEIGHT * 3;
-/// Worst-case OM3DVID5 packet: every block GRAD with literal colours.
+/// Worst-case OM3DVID5 packet: every block GRAD with literal colors.
 const PREVIEW_PACKET: usize = 1200 * 12;
 extern "C" {
     // tools/preview-encoder.c, compiled in by build.rs

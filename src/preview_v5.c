@@ -6,91 +6,122 @@
 
 #define WIDTH   PREVIEW_V5_WIDTH
 #define HEIGHT  PREVIEW_V5_HEIGHT
-#define COLUMNS (WIDTH / 4)
-#define BLOCKS  (COLUMNS * (HEIGHT / 4))
+#define COLUMNS (WIDTH / 4)              /* 4x4 blocks across */
+#define BLOCKS  (COLUMNS * (HEIGHT / 4)) /* blocks in a frame */
 #define MAX_RUN 64
 enum { SKIP, MOTION, SOLID, GRAD };
 
 #ifdef __CC_NORCROFT
+/* The console build: the decoder is preview_v5_decode in preview_v5_arm.s. */
 int preview_v5_decode(PreviewV5 *state, const unsigned char *data, unsigned long bytes,
                       unsigned char *pixels);
 #else
-static unsigned int get(const unsigned char *pixels, int x, int y)
+/* One big-endian RGB555 pixel of the frame. */
+static unsigned int read_pixel(const unsigned char *pixels, int x, int y)
 {
     const unsigned char *p = pixels + (y * WIDTH + x) * 2;
     return ((unsigned int)p[0] << 8) | p[1];
 }
-static void put(unsigned char *pixels, int x, int y, unsigned int c)
+
+static void write_pixel(unsigned char *pixels, int x, int y, unsigned int color)
 {
     unsigned char *p = pixels + (y * WIDTH + x) * 2;
-    p[0] = (unsigned char)(c >> 8);
-    p[1] = (unsigned char)c;
+    p[0] = (unsigned char)(color >> 8);
+    p[1] = (unsigned char)color;
 }
-static unsigned int colour(PreviewV5 *state, const unsigned char **data)
+
+/*
+ * Reads one color at *data and moves past it: one byte with the top bit set
+ * names a cached color; otherwise two bytes are a new color, which is also
+ * stored in the cache (round robin).
+ */
+static unsigned int read_colour(PreviewV5 *state, const unsigned char **data)
 {
     const unsigned char *p = *data;
-    unsigned int c;
+    unsigned int color;
+
     if (p[0] & 0x80) {
-        c = state->cache[p[0] & (PREVIEW_V5_CACHE - 1)];
+        color = state->cache[p[0] & (PREVIEW_V5_CACHE - 1)];
         *data = p + 1;
     } else {
-        c = ((unsigned int)p[0] << 8) | p[1];
+        color = ((unsigned int)p[0] << 8) | p[1];
         *data = p + 2;
-        state->cache[state->next] = c;
+        state->cache[state->next] = color;
         state->next = (state->next + 1) & (PREVIEW_V5_CACHE - 1);
     }
-    return c;
+    return color;
 }
-/* Like the assembly, a run may read up to PREVIEW_V5_READ_AHEAD bytes past
- * the packet before the check after it rejects the packet. */
+
+/*
+ * Decodes one packet (see preview_v5.h). Like the assembly, a damaged run
+ * may read up to PREVIEW_V5_READ_AHEAD bytes past the packet before the
+ * check after it rejects the packet; writes always stay inside the frame.
+ */
 static int preview_v5_decode(PreviewV5 *state, const unsigned char *data, unsigned long bytes,
                              unsigned char *pixels)
 {
-    static unsigned short source[MAX_RUN][16];
+    /* MOTION copies of a whole run, taken before the run changes anything. */
+    static unsigned short copied[MAX_RUN][16];
     const unsigned char *end = data + bytes;
     int block = 0;
+
     while (block < BLOCKS) {
-        int op = *data++, mode = op >> 6, run = (op & 63) + 1, i, k;
-        unsigned int c = 0;
+        int op = *data++;
+        int mode = op >> 6;
+        int run = (op & 63) + 1;
+        unsigned int color = 0;
+        int i, k;
+
         if (block + run > BLOCKS)
             return -1;
+
         if (mode == MOTION) {
-            int dx = (*data >> 4) - 8, dy = (*data & 15) - 8;
+            int dx = (*data >> 4) - 8;
+            int dy = (*data & 15) - 8;
             if (run > PREVIEW_V5_MOTION_RUN)
                 return -1;
             ++data;
             /* The run copies from the frame as it was before the run. */
             for (i = 0; i < run; ++i) {
-                int sx = ((block + i) % COLUMNS) * 4 + dx, sy = ((block + i) / COLUMNS) * 4 + dy;
-                if (sx < 0 || sy < 0 || sx > WIDTH - 4 || sy > HEIGHT - 4)
+                int source_x = ((block + i) % COLUMNS) * 4 + dx;
+                int source_y = ((block + i) / COLUMNS) * 4 + dy;
+                if (source_x < 0 || source_y < 0 || source_x > WIDTH - 4 || source_y > HEIGHT - 4)
                     return -1;
                 for (k = 0; k < 16; ++k)
-                    source[i][k] = (unsigned short)get(pixels, sx + (k & 3), sy + (k >> 2));
+                    copied[i][k] =
+                        (unsigned short)read_pixel(pixels, source_x + (k & 3), source_y + (k >> 2));
             }
-        } else if (mode == SOLID)
-            c = colour(state, &data);
+        } else if (mode == SOLID) {
+            color = read_colour(state, &data);
+        }
+
+        /* Paint each block of the run; pixel k of a block is at (k % 4, k / 4). */
         for (i = 0; i < run; ++i, ++block) {
-            int x = (block % COLUMNS) * 4, y = (block / COLUMNS) * 4;
+            int x = (block % COLUMNS) * 4;
+            int y = (block / COLUMNS) * 4;
+
             if (mode == SKIP)
                 continue;
-            if (mode == MOTION)
+            if (mode == MOTION) {
                 for (k = 0; k < 16; ++k)
-                    put(pixels, x + (k & 3), y + (k >> 2), source[i][k]);
-            else if (mode == SOLID)
+                    write_pixel(pixels, x + (k & 3), y + (k >> 2), copied[i][k]);
+            } else if (mode == SOLID) {
                 for (k = 0; k < 16; ++k)
-                    put(pixels, x + (k & 3), y + (k >> 2), c);
-            else {
+                    write_pixel(pixels, x + (k & 3), y + (k >> 2), color);
+            } else {
+                /* GRAD: two colors, two mixes, and a 2-bit choice per pixel. */
                 unsigned int palette[4];
-                unsigned long bits;
-                palette[0] = colour(state, &data);
-                palette[1] = colour(state, &data);
+                unsigned long choices;
+                palette[0] = read_colour(state, &data);
+                palette[1] = read_colour(state, &data);
                 palette[2] = PREVIEW_V5_MIX(palette[0], palette[1]);
                 palette[3] = PREVIEW_V5_MIX(palette[1], palette[0]);
-                bits = ((unsigned long)data[0] << 24) | ((unsigned long)data[1] << 16) |
-                       ((unsigned long)data[2] << 8) | data[3];
+                choices = ((unsigned long)data[0] << 24) | ((unsigned long)data[1] << 16) |
+                          ((unsigned long)data[2] << 8) | data[3];
                 data += 4;
                 for (k = 0; k < 16; ++k)
-                    put(pixels, x + (k & 3), y + (k >> 2), palette[(bits >> (30 - 2 * k)) & 3]);
+                    write_pixel(pixels, x + (k & 3), y + (k >> 2),
+                                palette[(choices >> (30 - 2 * k)) & 3]);
             }
         }
         if (data > end)

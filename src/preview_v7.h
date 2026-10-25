@@ -12,8 +12,9 @@
  * 4x4 entries, 2x2 entries (BE16 each), audio rate 0 or 11025 (BE32), largest
  * chunk in bytes (BE32), nominal bytes per second (BE32), check (BE32), the
  * chunk slots the encoder assumed the player has (BE16), zeros to offset 64,
- * then the chunk table. Playback may start once preroll chunks are read. The check is the preview word sum of
- * the whole header block with the check field zero.
+ * then the chunk table. Playback may start once preroll chunks are read.
+ * The check is the preview word sum of the whole header block with the
+ * check field zero.
  *
  * Chunk: check (BE32, the word sum of the rest of the padded chunk), chunk
  * number, frames (BE16 each), first 4x4 entry, 4x4 entry count, first 2x2
@@ -62,14 +63,26 @@
 /* The map value of a block nobody has drawn yet. */
 #define PREVIEW7_BLACK 0x7fffffffUL
 
+/* A checked header block (see the layout above). */
 typedef struct Preview7Header {
-    unsigned int chunk_frames, chunks, preroll, entries4, entries2, slots;
-    unsigned long frames, audio_rate, max_chunk, rate;
+    unsigned int chunk_frames; /* frames per chunk (the last may have fewer) */
+    unsigned int chunks;
+    unsigned int preroll;  /* chunks to read before playing starts */
+    unsigned int entries4; /* 4x4 dictionary entries in the whole clip */
+    unsigned int entries2; /* 2x2 dictionary entries in the whole clip */
+    unsigned int slots;    /* chunk buffers the encoder assumed the player has */
+    unsigned long frames;
+    unsigned long audio_rate;   /* 0 (silent) or 11025 */
+    unsigned long max_chunk;    /* the largest chunk, in bytes */
+    unsigned long rate;         /* nominal bytes per second */
     const unsigned char *table; /* chunk lengths, BE16 in 2 KiB blocks */
 } Preview7Header;
 
+/* A checked chunk: where its parts lie in the chunk's data. */
 typedef struct Preview7Chunk {
-    unsigned int number, frames, first4, count4, first2, count2;
+    unsigned int number, frames;
+    unsigned int first4, count4; /* the 4x4 entries it defines */
+    unsigned int first2, count2; /* the 2x2 entries it defines */
     unsigned long audio_samples, video_bytes;
     const signed char *audio;
     const unsigned char *entries4, *entries2;
@@ -91,8 +104,11 @@ typedef struct Preview7Chunk {
  *   dict2   4096*8 bytes (one line pair of two words),
  *   thumb2  4096 words (average << 16)
  * Every entry number a packet can express has room, so the console's
- * decoder does not check them (the C decoder does).
- * and sets screen to the bitmap PREVIEW7_SCREEN draws into. */
+ * decoder does not check them (the C decoder does). The caller also sets
+ * `screen` to the bitmap PREVIEW7_SCREEN draws into.
+ *
+ * The assembly decoder relies on this structure's field offsets: do not
+ * reorder them. */
 #define PREVIEW7_SCREEN 0
 #define PREVIEW7_TV     1
 typedef struct Preview7 {

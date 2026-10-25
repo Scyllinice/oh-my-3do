@@ -4,7 +4,7 @@ decoder (src/preview_v5.c) on random valid and damaged OM3DVID5 packets.
 
 Run in the development container: armasm/armlink build the real object and
 Unicorn runs it big-endian. Every frame must match the C decoder's pixels,
-colour cache and result; nothing may be written outside the frame, nor read
+color cache and result; nothing may be written outside the frame, nor read
 more than PREVIEW_V5_READ_AHEAD bytes past a packet."""
 import ctypes
 from pathlib import Path
@@ -158,7 +158,7 @@ class C:
         return list(self.state.cache) + [self.state.next]
 
 
-def colour(rng):
+def color(rng):
     if rng.random() < 0.5:
         return bytes([0x80 | rng.randrange(128)])
     value = rng.randrange(0x8000)
@@ -195,10 +195,10 @@ def packet(rng):
         if mode == 1:
             out.append(vector)
         elif mode == 2:
-            out += colour(rng)
+            out += color(rng)
         elif mode == 3:
             for _ in range(run):
-                out += colour(rng) + colour(rng) + bytes(rng.randrange(256) for _ in range(4))
+                out += color(rng) + color(rng) + bytes(rng.randrange(256) for _ in range(4))
         block += run
     return bytes(out)
 
@@ -216,7 +216,7 @@ def main():
                 data, tail = packet(rng), bytes(rng.randrange(256) for _ in range(READ_AHEAD))
                 assert arm.decode(data, tail) == 0 and c.decode(data, tail) == 0, (clip, frame)
                 assert arm.pixels() == c.pixels(), f"clip {clip} frame {frame}: pixels differ"
-                assert arm.cache() == c.cache(), f"clip {clip} frame {frame}: colour cache differs"
+                assert arm.cache() == c.cache(), f"clip {clip} frame {frame}: color cache differs"
                 frames += 1
         rejected = 0
         for trial in range(150):

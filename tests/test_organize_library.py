@@ -1000,7 +1000,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.put("boot.iso", b"menu")
         self.put(".ohmy3do/ohmy3do.ini", b"folder_workaround=1\r\n")
         self.put(
-            ".ohmy3do/favorites.txt", b"\xef\xbb\xbf# Favourites\r\n  Unsorted/random.iso \r\n"
+            ".ohmy3do/favorites.txt", b"\xef\xbb\xbf# Favorites\r\n  Unsorted/random.iso \r\n"
         )
         self.put(".ohmy3do/recent.txt", b"Unsorted/random.iso\n")
         self.put(".ohmy3do/last-position.txt", b"OH3DO_POSITION1\n/Storage/Unsorted\nrandom.iso\n")
@@ -1017,7 +1017,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertTrue(
             (self.root / ".ohmy3do/favorites.txt")
             .read_bytes()
-            .startswith(b"\xef\xbb\xbf# Favourites\r\n  ")
+            .startswith(b"\xef\xbb\xbf# Favorites\r\n  ")
         )
         self.assertIn(
             b"/Storage/Games/USA/Example (USA)\nExample (USA).iso",

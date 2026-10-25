@@ -88,7 +88,7 @@ int save_snapshot_learn(const char *snapshot, size_t length, const SaveArchive *
 
 /*
  * Backup slot labels. Each file saves/slot-labels-N.txt labels the eight
- * slots on page N of the backup list, one "S<TAB>Label" line per labelled
+ * slots on page N of the backup list, one "S<TAB>Label" line per labeled
  * slot, where S is the slot's position on the page from 1 to 8.
  */
 #define SAVE_SLOTS_PER_LABEL_FILE  8

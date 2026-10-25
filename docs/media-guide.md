@@ -49,7 +49,7 @@ Missing originals are skipped; existing media is retained.
 
 A preview loads before playback, so the first loop may take time to start.
 Moving to another game cancels loading. Press **L+R** to cancel and open Tools.
-A cancelled or missing preview leaves the cover available.
+A canceled or missing preview leaves the cover available.
 
 After manually replacing media, [rebuild the drive indexes](media-tools.md#covers-and-indexes)
 and restart the console, or press X at the drive root to refresh. For failed loads,

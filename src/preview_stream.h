@@ -81,7 +81,7 @@ unsigned long preview_stream_bytes(const Preview7Header *header, unsigned int sl
  * every slot holds a chunk, polling cancel, and draws the first
  * frame into the TV picture. reader is used on hosts only (the console's
  * reader thread has its own XBUS requests). 0, -1 error, -4 out of memory,
- * -5 cancelled. On failure the stream is closed. */
+ * -5 canceled. On failure the stream is closed. */
 int preview_stream_open(PreviewStream *stream, const Ode *ode, OdeReadBuffer reader,
                         const char *game_folder, const char *name,
                         const unsigned char *header_block, int sound, PreviewStreamCancel cancel,

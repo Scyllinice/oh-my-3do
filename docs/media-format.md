@@ -106,11 +106,11 @@ coding the 1,200 4×4 blocks in raster order. A packet is a series of op bytes,
 | --- | --- | --- |
 | 0 | SKIP | none: the blocks stay as they are |
 | 1 | MOTION | one byte `(dx + 8) << 4 \| (dy + 8)` for the run of at most 32 blocks; each block copies the 4×4 block at that offset |
-| 2 | SOLID | one colour for the run |
-| 3 | GRAD | per block: colours a and b, then 32 bits of 2-bit indexes (MSB first) into a, b, mix(a, b), mix(b, a) |
+| 2 | SOLID | one color for the run |
+| 3 | GRAD | per block: colors a and b, then 32 bits of 2-bit indexes (MSB first) into a, b, mix(a, b), mix(b, a) |
 
-A colour is either one byte with the top bit set, naming entry `byte & 127` of a
-128-entry cache of recent colours, or a two-byte big-endian RGB555 literal, which
+A color is either one byte with the top bit set, naming entry `byte & 127` of a
+128-entry cache of recent colors, or a two-byte big-endian RGB555 literal, which
 is then stored in the cache at the next round-robin position. The cache carries
 over from frame to frame and resets with the frame when the clip loops.
 `mix(a, b)` is `((2a + b) × 11) >> 5` per 5-bit channel. A MOTION run copies from
@@ -257,7 +257,7 @@ the C decoder, `src/preview_v7.c`.
 `tools/preview7-encoder.c` trains the two dictionaries on the clip, finds
 each block's nearest 4×4 entry and its nearest four 2×2 entries, and chooses
 per block whatever costs least in error plus bytes plus decode time. Error is
-weighed as the eye sees it: brightness counts more than colour, and blocks in
+weighed as the eye sees it: brightness counts more than color, and blocks in
 flat areas (skies, water, skin) count more than busy ones, which hide
 blockiness. It searches for the setting that averages the requested rate,
 keeps every frame within about 230,000 ARM60 clocks of decoding, and keeps

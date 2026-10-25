@@ -142,7 +142,7 @@ pub fn remove(review: &Inventory, selected: &[String], job: &Job) -> Result<Remo
         if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
             result
                 .errors
-                .push("Cleanup cancelled; remaining copies were kept.".into());
+                .push("Cleanup canceled; remaining copies were kept.".into());
             break;
         }
         match fs::remove_file(path) {

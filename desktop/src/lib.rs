@@ -55,7 +55,7 @@ impl Default for Job {
 impl Job {
     pub fn check(&self) -> Result<()> {
         if self.cancel.load(Ordering::Relaxed) {
-            bail!("Operation cancelled")
+            bail!("Operation canceled")
         }
         Ok(())
     }

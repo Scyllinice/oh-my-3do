@@ -52,10 +52,10 @@ void preview_audio_close(PreviewAudio *a) { a->status=0; }
 int preview_audio_start_ring(PreviewAudio *a,unsigned char *p,unsigned long n,unsigned long rate) { (void)p;(void)n;(void)rate;a->status=1;return 0; }
 void preview_audio_pause(PreviewAudio *a,int pause) { (void)a;(void)pause; }
 #define UI_PREVIEW_TEXT(s) printf("L %s\n",s)
-/* Glass: screen*keep/8 + colour*(8-keep)/8, placed exactly as rectangle() places fills. */
-#define UI_PREVIEW_GLASS(menu,x,y,w,h,colour,keep) do { int m_=(menu)->config.screen_margin; \
+/* Glass: screen*keep/8 + color*(8-keep)/8, placed exactly as rectangle() places fills. */
+#define UI_PREVIEW_GLASS(menu,x,y,w,h,color,keep) do { int m_=(menu)->config.screen_margin; \
     printf("G %d %d %d %d %u %d\n",m_+(x)*(320-2*m_)/320,m_+(y)*(240-2*m_)/240, \
-        ((x)+(w))*(320-2*m_)/320-(x)*(320-2*m_)/320,((y)+(h))*(240-2*m_)/240-(y)*(240-2*m_)/240,(colour),(keep)); } while (0)
+        ((x)+(w))*(320-2*m_)/320-(x)*(320-2*m_)/320,((y)+(h))*(240-2*m_)/240-(y)*(240-2*m_)/240,(color),(keep)); } while (0)
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -188,7 +188,7 @@ static void DrawText8(GrafCon *g, Item item, const u8 *s) {
 }
 static int preview_video_enabled, preview_video_loads, preview_video_reclaim;
 /* A two-frame OM3DVID5 clip: solid 0x1111, then solid 0x2222, each as SOLID
- * runs over the 1200 blocks (the second colour is the cache's entry 1). */
+ * runs over the 1200 blocks (the second color is the cache's entry 1). */
 static int preview_video_load(Ode *ode, OdeReadBuffer reader, const char *file, UsbPreview *preview, MediaCancel cancel, void *context) {
     unsigned char *packet;
     int frame, op;
@@ -535,7 +535,7 @@ int main(int argc, char **argv) {
                 menu.selected=selected;
                 if (step==14) { cover.ccb_Width=64;cover.ccb_Height=80;menu.cover=&cover; }
                 if (step==16) menu.cover=NULL;
-                if (step==17) { strcpy(notice,"Loading cancelled");menu.message=notice; }
+                if (step==17) { strcpy(notice,"Loading canceled");menu.message=notice; }
                 if (step==18) strcpy(notice,"Same buffer, different message");
                 if (step==19) menu.message=NULL;
                 if (step==20) { notify(&menu,"Disc added"); }
@@ -787,7 +787,7 @@ int main(int argc, char **argv) {
         menu.tools_requested=1;update_preview(&menu);menu.tools_requested=0;
         menu.alphabet_active=1; update_preview(&menu); menu.alphabet_active=0;
         menu.review=1; update_preview(&menu); menu.review=0;
-        /* A direction queued by a cancelled cover read must move the list
+        /* A direction queued by a canceled cover read must move the list
          * before another media load can start. */
         menu.cancel_directions=ControlDown; update_preview(&menu); menu.cancel_directions=0;
         menu.config.video_previews=0; update_preview(&menu);
@@ -902,7 +902,7 @@ int main(int argc, char **argv) {
         if (menu.preview_result!=-1 || strcmp(menu.notice,"Preview failed. Check diagnostics.")) abort();
         usb_art_index_free(&menu.usb_previews); preview_video_enabled=0;
         menu.config.video_previews=0; menu.demo=1;
-        /* Cancelling with A must not also open/play on the next frame.
+        /* Canceling with A must not also open/play on the next frame.
          * Directional cancellation still advances the browser selection. */
         menu.media_cancelled=0; menu.suppress_buttons=0; preview_buttons=ControlA;
         if (!media_cancel(&menu) || !(menu.suppress_buttons&ControlA)) abort();
@@ -1056,7 +1056,7 @@ int main(int argc, char **argv) {
             if (slots.tools!=TOOL_ARCHIVE || slots.backup.count!=3 || slots.backup_slot!=12 || slots.tool_selected!=1 || slots.copy_original.bytes) abort();
             save_archive_free(&slots.backup);
         }
-        /* Actual tools/controller code: entering/cancelling never writes. */
+        /* Actual tools/controller code: entering/canceling never writes. */
         menu.tools=TOOL_HOME; menu.tool_selected=0;
         tools_input(&menu, ControlA);
         if (menu.tools != TOOL_SAVES || preview_nvram_reads != 1 || preview_nvram_writes) abort();
@@ -1091,7 +1091,7 @@ int main(int argc, char **argv) {
         if (menu.tools != TOOL_ARCHIVE || preview_nvram_writes) abort();
         tools_input(&menu, ControlA); tools_input(&menu, ControlA);
         if (preview_nvram_writes || menu.restore_result != -1) abort(); /* demo USB blocked */
-        /* Hex edits are private; cancelling a byte or discarding preserves source.
+        /* Hex edits are private; canceling a byte or discarding preserves source.
          * Save as rebuilds CRCs and cannot write USB/NVRAM before confirmation. */
         preview_nvram_fixture(&menu.backup); menu.tools=TOOL_ARCHIVE; menu.tool_selected=0;
         {
@@ -1406,7 +1406,7 @@ int main(int argc, char **argv) {
         if (menu.playlist.count || menu.c_pending) abort();
         menu.demo=1;
         /* Only visible favorites participate in selection and reorder; the
-         * complete file, including hidden slots, survives moving/cancelling. */
+         * complete file, including hidden slots, survives moving/canceling. */
         {
             static const char favorites[]="Adult/Japan/Hidden.iso\nGames/A.iso\nAdult/USA/Hidden2.iso\nGames/B.iso\n";
             char out[FAVORITES_BYTES];

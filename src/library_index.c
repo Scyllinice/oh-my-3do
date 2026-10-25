@@ -177,7 +177,7 @@ int library_index_load(Ode *ode, OdeReadBuffer reader, const char *prefix, Libra
 
     read_result = read_payload(ode, reader, payload, (size_t)bytes, cancel, context);
     if (read_result != 0) {
-        result = read_result; /* 1 when cancelled, -1 on failure */
+        result = read_result; /* 1 when canceled, -1 on failure */
         goto done;
     }
 

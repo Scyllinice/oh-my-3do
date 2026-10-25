@@ -78,9 +78,9 @@ def main():
             rows.append((prepare.fold(game).encode(), game, "$boot/covers/demo.cel"))
     rows.sort()
     if sum(len(game.encode()) + len(file.encode()) + 10 for _, game, file in rows) > 128 * 1024:
-        raise ValueError("Cover catalogue exceeds the 128 KiB memory budget")
+        raise ValueError("Cover catalog exceeds the 128 KiB memory budget")
     code = [
-        "/* Offline demo catalogue. Normal artwork is loaded from USB. */",
+        "/* Offline demo catalog. Normal artwork is loaded from USB. */",
         '#include "menu_ui.h"',
         "const MenuCover menu_covers[] = {",
     ]

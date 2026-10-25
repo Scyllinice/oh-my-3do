@@ -192,9 +192,9 @@ fn invalid_files_cancelled_saves_and_later_edits_are_preserved() {
     assert_eq!(before, snapshot(&root));
     put(&root, b"hide_adult=0\n");
     let loaded = config::load(&root).unwrap();
-    let cancelled = Job::default();
-    cancelled.cancel.store(true, Ordering::Relaxed);
-    assert!(config::save(&loaded, &changed(), &cache, &cancelled).is_err());
+    let canceled = Job::default();
+    canceled.cancel.store(true, Ordering::Relaxed);
+    assert!(config::save(&loaded, &changed(), &cache, &canceled).is_err());
     assert_eq!(
         fs::read(root.join(config::PATH)).unwrap(),
         b"hide_adult=0\n"

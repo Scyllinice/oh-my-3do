@@ -406,7 +406,7 @@ static int clear_buffer_with_blank_file(Ode *ode, OdeReadBuffer reader, unsigned
 
 /*
  * Text files have no length header, so the menu must find where the text
- * really ends despite the FCare's end-of-file behaviour (a read at the end
+ * really ends despite the FCare's end-of-file behavior (a read at the end
  * still reports success and leaves the rest of the buffer stale):
  *
  *  1. Over a buffer cleared with blank.bin, one read finds the end of any

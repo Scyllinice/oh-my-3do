@@ -176,6 +176,7 @@ int main(int argc,char **argv){unsigned char db[65536],data[40];FILE *f;size_t n
         "save_cheats.c",
         "save_archive.c",
         "usb_art.c",
+        "usb_file.c",
         "menu_ui.c",
         "menu_categories.c",
         "cover_catalog.c",

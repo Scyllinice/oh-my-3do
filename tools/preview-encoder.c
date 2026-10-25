@@ -194,7 +194,7 @@ static int reference_frame(Reference *r, const u8 *data, long bytes, u8 *frame)
 
 typedef struct Choice {
     int mode, param;
-    u16 colour[2];
+    u16 color[2];
     u8 index[16];
 } Choice;
 typedef struct Cache {
@@ -202,8 +202,8 @@ typedef struct Cache {
     int next;
 } Cache;
 STATE Cache cache;
-/* For the decision cache only: slot+1 of each nonzero colour, 0 if absent.
- * Nonzero colours are never cached twice; zero fills the initial cache. */
+/* For the decision cache only: slot+1 of each nonzero color, 0 if absent.
+ * Nonzero colors are never cached twice; zero fills the initial cache. */
 STATE u8 slot[32768];
 
 static int dist(u16 a, u16 b)
@@ -248,7 +248,7 @@ static int luma(u16 c)
     return (int)((c >> 10) & 31) + (int)((c >> 5) & 31) + (int)(c & 31);
 }
 
-static long kmeans(const u16 *px, int k, u16 *centre, u8 *index)
+static long kmeans(const u16 *px, int k, u16 *center, u8 *index)
 {
     int order[16], i, j, it;
     long d = 0;
@@ -261,14 +261,14 @@ static long kmeans(const u16 *px, int k, u16 *centre, u8 *index)
             order[j - 1] = t;
         }
     for (j = 0; j < k; ++j)
-        centre[j] = px[order[k == 1 ? 0 : j * 15 / (k - 1)]];
+        center[j] = px[order[k == 1 ? 0 : j * 15 / (k - 1)]];
     for (it = 0; it < 10; ++it) {
         long sum[4][3] = {{0}};
         int count[4] = {0}, changed = 0;
         for (i = 0; i < 16; ++i) {
-            int best = 0, bd = dist(px[i], centre[0]);
+            int best = 0, bd = dist(px[i], center[0]);
             for (j = 1; j < k; ++j) {
-                int e = dist(px[i], centre[j]);
+                int e = dist(px[i], center[j]);
                 if (e < bd) {
                     bd = e;
                     best = j;
@@ -285,8 +285,8 @@ static long kmeans(const u16 *px, int k, u16 *centre, u8 *index)
                 u16 c = (u16)((((sum[j][0] * 2 + count[j]) / (2 * count[j])) << 10) |
                               (((sum[j][1] * 2 + count[j]) / (2 * count[j])) << 5) |
                               ((sum[j][2] * 2 + count[j]) / (2 * count[j])));
-                if (c != centre[j]) {
-                    centre[j] = c;
+                if (c != center[j]) {
+                    center[j] = c;
                     changed = 1;
                 }
             }
@@ -294,9 +294,9 @@ static long kmeans(const u16 *px, int k, u16 *centre, u8 *index)
             break;
     }
     for (i = 0; i < 16; ++i) {
-        int best = 0, bd = dist(px[i], centre[0]);
+        int best = 0, bd = dist(px[i], center[0]);
         for (j = 1; j < k; ++j) {
-            int e = dist(px[i], centre[j]);
+            int e = dist(px[i], center[j]);
             if (e < bd) {
                 bd = e;
                 best = j;
@@ -403,18 +403,18 @@ static long grad_search(const u16 *px, int n, u16 (*cand)[2], int count, u16 *en
 
 static long grad_fit(const u16 *px, u16 *ends, u8 *index)
 {
-    u16 centre[4], cand[7][2];
+    u16 center[4], cand[7][2];
     u8 idx[16];
     int n = 0, i, j;
-    kmeans(px, 2, centre, idx);
-    cand[n][0] = centre[0];
-    cand[n][1] = centre[1];
+    kmeans(px, 2, center, idx);
+    cand[n][0] = center[0];
+    cand[n][1] = center[1];
     ++n;
-    kmeans(px, 4, centre, idx);
+    kmeans(px, 4, center, idx);
     for (i = 0; i < 4; ++i)
         for (j = i + 1; j < 4; ++j) {
-            cand[n][0] = centre[i];
-            cand[n][1] = centre[j];
+            cand[n][0] = center[i];
+            cand[n][1] = center[j];
             ++n;
         }
     return grad_search(px, 16, cand, n, ends, index);
@@ -439,7 +439,7 @@ static int cache_find(const Cache *k, u16 c)
     return -1;
 }
 
-/* Emit one colour code (or only model it when out is null). Returns its bits. */
+/* Emit one color code (or only model it when out is null). Returns its bits. */
 static int cache_put(Cache *k, u16 c, u8 **out)
 {
     int i = cache_find(k, c);
@@ -462,7 +462,7 @@ static int cache_put(Cache *k, u16 c, u8 **out)
     return 16;
 }
 
-/* Bits cache_put would spend on these colours in order, without changing k. */
+/* Bits cache_put would spend on these colors in order, without changing k. */
 static int colour_bits(const Cache *k, const u16 *c, int n)
 {
     u16 literal[16];
@@ -487,9 +487,9 @@ static int colour_bits(const Cache *k, const u16 *c, int n)
     return bits;
 }
 
-/* Up to want cached colours nearest to c (excluding c), nearest first; ties
+/* Up to want cached colors nearest to c (excluding c), nearest first; ties
  * keep the lower cache index. A partial sum already past the worst kept
- * match rules a colour out. */
+ * match rules a color out. */
 static int nearest(const Cache *k, u16 c, u16 *out, int want)
 {
     int dd[SNAP], n = 0, i, j, r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
@@ -523,7 +523,7 @@ static int nearest(const Cache *k, u16 c, u16 *out, int want)
     return n;
 }
 
-/* GRAD over n pixels, trying nearby cached colours for each endpoint. */
+/* GRAD over n pixels, trying nearby cached colors for each endpoint. */
 static double grad_rd(const u16 *px, int n, double lambda, u16 *ends, u8 *index, long fitted)
 {
     double best = fitted + lambda * colour_bits(&cache, ends, 2);
@@ -586,10 +586,10 @@ static void reconstruct(const Choice *c, u16 *frame, int x, int y, int b)
             out[i] = (u16)c->param;
         break;
     default:
-        palette[0] = c->colour[0];
-        palette[1] = c->colour[1];
-        palette[2] = MIX(c->colour[0], c->colour[1]);
-        palette[3] = MIX(c->colour[1], c->colour[0]);
+        palette[0] = c->color[0];
+        palette[1] = c->color[1];
+        palette[2] = MIX(c->color[0], c->color[1]);
+        palette[3] = MIX(c->color[1], c->color[0]);
         for (i = 0; i < 16; ++i)
             out[i] = palette[c->index[i]];
         break;
@@ -675,7 +675,7 @@ static long encode_frame(const u16 *src, u16 *frame, double lambda, double mu, u
                     c->param = v;
                 }
             }
-        /* SOLID: the block mean, cached colours near it, or the previous run's colour */
+        /* SOLID: the block mean, cached colors near it, or the previous run's color */
         {
             u16 cand[SNAP + 2];
             int n;
@@ -708,7 +708,7 @@ static long encode_frame(const u16 *src, u16 *frame, double lambda, double mu, u
                 best = cost;
                 c->mode = GRAD;
                 c->param = 0;
-                copy(c->colour, ends, 4);
+                copy(c->color, ends, 4);
                 copy(c->index, index, 16);
             }
         }
@@ -719,7 +719,7 @@ static long encode_frame(const u16 *src, u16 *frame, double lambda, double mu, u
                 cache_put(&cache, (u16)c->param, 0);
         } else
             for (i = 0; i < colour_count(c); ++i)
-                cache_put(&cache, c->colour[i], 0);
+                cache_put(&cache, c->color[i], 0);
         spent += block_cycles(c->mode, CONTINUES(c->mode, c->param), run, c->param);
         if (CONTINUES(c->mode, c->param))
             ++run;
@@ -751,7 +751,7 @@ static long encode_frame(const u16 *src, u16 *frame, double lambda, double mu, u
                 Choice *c = &choice[b + i];
                 unsigned long bits = 0;
                 for (j = 0; j < 2; ++j)
-                    cache_put(&start, c->colour[j], &p);
+                    cache_put(&start, c->color[j], &p);
                 for (j = 0; j < 16; ++j)
                     bits = (bits << 2) | c->index[j];
                 *p++ = (u8)(bits >> 24);

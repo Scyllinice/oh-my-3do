@@ -5,7 +5,7 @@
  * screen and the TV picture, and every frame must match a plain sequential
  * decode of the file (which restarts from black at each loop). Also: the
  * file is reopened per loop and only ever read forwards, slots are reused,
- * sound reaches the ring in order, a cancelled preroll and a damaged chunk
+ * sound reaches the ring in order, a canceled preroll and a damaged chunk
  * fail cleanly. */
 #include "preview_stream.h"
 #include <assert.h>
@@ -226,7 +226,7 @@ int main(int argc, char **argv)
     assert(preview_stream_due(&s, 5600) == (100UL * 30) / 1000);
     preview_stream_close(&s);
 
-    /* Cancelled while buffering. */
+    /* Canceled while buffering. */
     memset(&f, 0, sizeof(f));
     f.data = data;
     f.size = size;

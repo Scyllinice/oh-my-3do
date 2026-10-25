@@ -102,7 +102,7 @@ void library_catalog_free(LibraryCatalog *catalog);
  * to the original folder and checks it. The old list is replaced only on
  * success.
  *
- * Returns 0 on success (possibly truncated), 1 if cancelled, -1 if memory
+ * Returns 0 on success (possibly truncated), 1 if canceled, -1 if memory
  * ran out, or -2 if the original folder could not be restored.
  */
 int library_catalog_build(Ode *ode, const ArtRouteStep *route, unsigned int depth,
