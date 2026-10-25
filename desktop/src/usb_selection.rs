@@ -1,4 +1,9 @@
-//! Runtime indexes for an additive, selected-game USB transfer.
+//! The menu's index files for copying selected games to a drive that
+//! already has games. The new indexes list the games actually on the drive
+//! plus the ones being copied, keeping what the drive's indexes already
+//! said about the games that stay. (The file formats are described in
+//! src/library_index.h.)
+
 use crate::{disc, fsutil as f, library, usb, Job};
 use anyhow::{bail, Result};
 use std::{
@@ -7,6 +12,10 @@ use std::{
     path::Path,
 };
 
+/// An index file: header (`magic`, entry count, payload size, the
+/// payload's CRC-32, a reserved 0), the payload, then the footer `end`.
+/// Fails if the index would not fit the menu: more than 2048 entries, or
+/// more than `limit` bytes counting `overhead` extra bytes per entry.
 fn packed(
     magic: &[u8],
     end: &[u8],
@@ -31,6 +40,8 @@ fn packed(
     out.extend(end);
     Ok(out)
 }
+/// Appends a string as the indexes store it: a 2-byte big-endian length
+/// (counting the terminating zero), the text and a zero byte.
 fn string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     if value.len() > 8192 || value.contains('\0') {
         bail!("Invalid runtime index string");
@@ -40,6 +51,9 @@ fn string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     out.push(0);
     Ok(())
 }
+/// The drive's (or library's) metadata.3di: each disc's genre, publisher
+/// and release date, by its path in case-insensitive form. Empty if there is
+/// none.
 pub(crate) fn metadata(root: &Path) -> Result<BTreeMap<String, [String; 3]>> {
     let path = f::safe(root, ".ohmy3do/metadata.3di")?;
     if !path.exists() {
@@ -67,6 +81,8 @@ pub(crate) fn metadata(root: &Path) -> Result<BTreeMap<String, [String; 3]>> {
     }
     Ok(out)
 }
+/// `path` with its folder renamed if it is inside one of `moves` (old
+/// folder, new folder).
 fn remap(path: &str, moves: &[(String, String)]) -> String {
     moves
         .iter()
@@ -77,8 +93,12 @@ fn remap(path: &str, moves: &[(String, String)]) -> String {
         })
         .unwrap_or_else(|| path.into())
 }
-/// Use actual destination discs, retaining titles absent from the selection or staging library.
-/// Called again before copying so a changed drive/index cannot invalidate the reviewed output.
+/// The index files (by path on the drive) for copying the `selected` games
+/// from the library at `source` to the drive at `target`, whose folders
+/// `moves` renames. Lists the discs actually on the drive (not what its
+/// old index says), so games copied there some other way are kept. Called
+/// again just before copying, so the indexes written match the drive even
+/// if it changed after the person reviewed the transfer.
 pub(crate) fn indexes(
     source: &Path,
     target: &Path,
@@ -86,6 +106,8 @@ pub(crate) fn indexes(
     moves: &[(String, String)],
     job: &Job,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
+    // Every disc: those already on the drive (with their metadata from the
+    // drive), then the selected ones (with the library's).
     let selected: BTreeSet<_> = selected.iter().map(|p| f::fold(p)).collect();
     let source_paths = usb::find(&f::safe(source, ".ohmy3do/library.3di")?)?;
     let destination_paths = disc::collect(&[target.to_owned()], None, job)?
@@ -118,6 +140,8 @@ pub(crate) fn indexes(
     if !selected.iter().all(|p| paths.contains_key(p)) {
         bail!("Selected game disappeared; reload the game list");
     }
+
+    // library.3di: the paths; metadata.3di: each path and its metadata.
     let mut payload = vec![];
     for path in paths.values() {
         string(&mut payload, path)?;
@@ -151,6 +175,9 @@ pub(crate) fn indexes(
             192 * 1024,
         )?,
     );
+
+    // The cover and preview indexes: the drive's entries for discs that
+    // stay, and the library's for the selected discs.
     let retained: BTreeSet<_> = destination_paths
         .iter()
         .map(|p| f::fold(&remap(p, moves)))
