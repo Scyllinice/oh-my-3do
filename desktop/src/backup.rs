@@ -1,4 +1,8 @@
-//! Read-only archive comparisons and slot labels kept outside save payloads.
+//! Backup slots: their labels, and comparing two backups. Labels live in
+//! text files beside the slots (one per page of 8 slots), which the console
+//! reads and writes too; they never touch the saves themselves. Comparing
+//! only reads.
+
 use crate::save_archive::{self, Archive, Entry};
 use anyhow::{ensure, Context, Result};
 use std::{
@@ -6,14 +10,24 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+/// The labels file for the first page of slots (slots 1 to 8); page N's is
+/// "slot-labels-N.txt".
 pub const LABEL_FILE: &str = "slot-labels.txt";
+
+/// The longest label.
 pub const LABEL_BYTES: usize = 24;
+
+/// The labels of one page of 8 slots ("" for a slot without one).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Labels(pub [String; 8]);
+
 impl Labels {
+    /// Reads a labels file: a line per labeled slot, its place on the page
+    /// (1 to 8), a tab and the label (up to 24 printable ASCII characters).
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         ensure!(bytes.len() <= 512, "Slot labels exceed 512 bytes");
-        // Firmware text writes terminate with NUL and cannot truncate old tails.
+        // The console ends what it writes with a zero byte: the ODE cannot
+        // shorten a file, so old bytes may follow it.
         let bytes = bytes.split(|b| *b == 0).next().unwrap_or_default();
         let text = std::str::from_utf8(bytes)?;
         let mut out = Self::default();
@@ -39,6 +53,7 @@ impl Labels {
         }
         Ok(out)
     }
+    /// The labels as a labels file.
     pub fn encode(&self) -> Result<Vec<u8>> {
         for label in &self.0 {
             ensure!(
@@ -57,6 +72,8 @@ impl Labels {
         Self::parse(&bytes)?;
         Ok(bytes)
     }
+    /// Reads a labels file, returning the labels and the file's bytes (None
+    /// if there is no file), for a later `save` to check against.
     pub fn read(path: &Path) -> Result<(Self, Option<Vec<u8>>)> {
         let bytes = match fs::File::open(path) {
             Ok(file) => {
@@ -69,6 +86,8 @@ impl Labels {
         };
         Ok((Self::parse(bytes.as_deref().unwrap_or_default())?, bytes))
     }
+    /// Writes the labels, ending them with a zero byte as the console does,
+    /// if the file still holds `expected`.
     pub fn save(&self, path: &Path, expected: Option<&[u8]>) -> Result<()> {
         let mut bytes = self.encode()?;
         bytes.push(0);
@@ -76,6 +95,8 @@ impl Labels {
         Ok(())
     }
 }
+/// For a backup slot file ("slot01.3ds" up to "slot999999999.3ds"), its
+/// labels file and its place (0 to 7) on that page; None for other files.
 pub fn slot(path: &Path) -> Option<(PathBuf, usize)> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     let number = name
@@ -94,6 +115,7 @@ pub fn slot(path: &Path) -> Option<(PathBuf, usize)> {
     };
     Some((path.parent()?.join(file), (number - 1) % 8))
 }
+/// How a save differs between two backups.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
     Added,
@@ -101,23 +123,32 @@ pub enum State {
     Changed,
     Unchanged,
 }
+/// A save in either of two backups, and how it differs between them.
 #[derive(Clone, Debug)]
 pub struct Difference {
+    /// Its place in the first backup, if it is there.
     pub before: Option<usize>,
+    /// Its place in the second backup, if it is there.
     pub after: Option<usize>,
     pub state: State,
+    /// How many bytes differ (counting bytes only one of them has).
     pub changed_bytes: usize,
     pub type_changed: bool,
+    /// The name differs in case.
     pub name_changed: bool,
 }
+
 impl Difference {
-    pub fn name<'a>(&self, before: &'a Archive, after: &'a Archive) -> &'a Entry {
+    /// The save: as in the second backup, if it is there.
+    pub fn entry<'a>(&self, before: &'a Archive, after: &'a Archive) -> &'a Entry {
         if let Some(i) = self.after {
             &after.entries[i]
         } else {
             &before.entries[self.before.unwrap()]
         }
     }
+    /// Every byte that differs: its offset, and its value before and after
+    /// (None past the end of a save).
     pub fn byte_changes(
         &self,
         before: &Archive,
@@ -140,6 +171,9 @@ impl Difference {
             .collect()
     }
 }
+/// Every save in either backup and how it differs, matching saves by name
+/// (ignoring case): the first backup's saves in order, then those only in
+/// the second.
 pub fn compare(before: &Archive, after: &Archive) -> Vec<Difference> {
     let mut pairs = before
         .entries
@@ -200,9 +234,12 @@ pub fn compare(before: &Archive, after: &Archive) -> Vec<Difference> {
         .collect()
 }
 
+/// One save in a comparison, as the app shows it.
 #[derive(Debug, serde::Serialize)]
 pub struct ComparisonRow {
+    /// The save's file name.
     pub name: String,
+    /// The game it belongs to, if known; otherwise its name.
     pub game: String,
     pub state: String,
     pub changed_bytes: usize,
@@ -211,8 +248,12 @@ pub struct ComparisonRow {
     pub before_size: Option<usize>,
     pub after_size: Option<usize>,
     pub after_index: Option<usize>,
+    /// The first 512 differing bytes (see `Difference::byte_changes`).
     pub changes: Vec<(usize, Option<u8>, Option<u8>)>,
 }
+
+/// A comparison of two backups: how many saves were added, removed,
+/// changed or unchanged, and a row per save.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct Comparison {
     pub added: usize,
@@ -221,7 +262,8 @@ pub struct Comparison {
     pub unchanged: usize,
     pub rows: Vec<ComparisonRow>,
 }
-/// Changes from the selected reference archive to the current editable draft.
+/// Compares a backup (`before`) with another, or with the draft being
+/// edited (`after`), for the app's comparison view.
 pub fn comparison(before: &Archive, after: &Archive) -> Comparison {
     let mut result = Comparison::default();
     for diff in compare(before, after) {
@@ -243,7 +285,7 @@ pub fn comparison(before: &Archive, after: &Archive) -> Comparison {
                 "Unchanged"
             }
         };
-        let name = diff.name(before, after).label();
+        let name = diff.entry(before, after).label();
         result.rows.push(ComparisonRow {
             game: crate::saves::known_title(&name).unwrap_or(&name).to_owned(),
             name,

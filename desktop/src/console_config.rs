@@ -49,7 +49,7 @@ fn trim(mut text: &[u8]) -> &[u8] {
     text
 }
 
-/// The menu's settings (see docs for what each does on the console).
+/// The menu's settings, as the Settings screen on the console shows them.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     /// 0 = automatic (FCare), 1 = always, 2 = off.
