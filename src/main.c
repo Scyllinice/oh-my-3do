@@ -6658,12 +6658,779 @@ static void cheats_input(Menu *menu, u32 pressed)
         menu->hex_dirty = memcmp(entry->data, menu->hex_original.entries[menu->save_selected].data,
                                  entry->size) != 0;
 }
-static void draw_tools(Menu *menu)
+/* ==== Drawing the Tools screens ==== */
+
+/* The heading of the current Tools screen. */
+static const char *tools_title(Menu *menu)
+{
+    switch (menu->tools) {
+    case TOOL_CHEATS:
+        return "Known values & cheats";
+    case TOOL_HEX:
+        return "Hex editor / USB copy";
+    case TOOL_HEX_DISCARD:
+        return "Discard edits?";
+    case TOOL_SAVES:
+        return "Save Manager";
+    case TOOL_SLOTS:
+        return menu->compare_choosing ? "Compare: choose second slot"
+               : menu->backup_mode    ? "Choose backup slot"
+                                      : "Save Manager";
+    case TOOL_SLOT_NAME:
+        return "Name backup slot";
+    case TOOL_SLOT_FIND:
+    case TOOL_SLOT_QUERY:
+        return "Find backup slots";
+    case TOOL_COMPARE:
+    case TOOL_COMPARE_BYTES:
+        return "Compare backups";
+    case TOOL_ARCHIVE:
+        return "Backup contents";
+    case TOOL_HELP:
+        return "Controls & help";
+    case TOOL_DIAG:
+        return "Diagnostics";
+    case TOOL_CONFIRM_BACKUP:
+    case TOOL_CONFIRM_RESTORE:
+        return "Confirm action";
+    case TOOL_FAVORITES:
+        return menu->favorites_move ? "Move favorite" : "Favorites";
+    case TOOL_CATEGORIES:
+        return "Show / hide categories";
+    case TOOL_CONFIG:
+        return config_dirty(menu) ? "Settings / unsaved" : "Settings";
+    case TOOL_RECENT:
+        return "Recent games";
+    case TOOL_FIND:
+        return "Find a game";
+    case TOOL_RESULTS:
+        return "Search results";
+    case TOOL_GAME_DETAILS:
+        return "Game details";
+    case TOOL_BACKUP_DETAILS:
+        return menu->details_new ? "New backup contents" : "Existing slot contents";
+    default:
+        return "Menu";
+    }
+}
+
+/* The Tools menu itself: seven buttons in two columns. */
+static void draw_tools_home(Menu *menu)
+{
+    static const char *items[] = {"Save Manager", "Favorites",    "Settings",   "Help & controls",
+                                  "Diagnostics",  "Recent games", "Find a game"};
+    size_t i;
+    for (i = 0; i < 7; ++i) {
+        int x = 18 + (i / 4) * 144, y = 84 + (i % 4) * 28;
+        int active = i == menu->tool_selected;
+        rectangle(menu, x, y, 138, 24, active ? ACCENT : SELECT);
+        label_on(menu, x + 9, y + 5, i == 2 && config_dirty(menu) ? "Settings *" : items[i],
+                 active ? INK : TEXT, UI_FONT_NORMAL, active ? ACCENT : SELECT);
+    }
+}
+
+/* Whether the screen is one of the Save Manager's two tabs: console saves,
+ * or USB backups (unless choosing where to back up to). */
+static int save_manager_tab(Menu *menu)
+{
+    return menu->tools == TOOL_SAVES || (menu->tools == TOOL_SLOTS && !menu->backup_mode);
+}
+
+/*
+ * The screens that are a paged list: console saves, backup slots, the
+ * saves in a backup (or a new one), favorites and recent games. The Save
+ * Manager's tabs show above the list; a position or summary line below.
+ */
+static void draw_tool_list(Menu *menu)
 {
     char line[80];
-    const char *title = "Menu";
-    size_t i, count = 0, start;
-    int save_views = menu->tools == TOOL_SAVES || (menu->tools == TOOL_SLOTS && !menu->backup_mode);
+    int tabs = save_manager_tab(menu);
+    SaveArchive *archive =
+        menu->tools == TOOL_SAVES
+            ? &menu->nvram
+            : (menu->tools == TOOL_BACKUP_DETAILS && menu->details_new ? &menu->pending
+                                                                       : &menu->backup);
+    size_t rows = menu->tools == TOOL_SLOTS ? 8 : tabs ? 7 : 8, count, start, i;
+    int gap = menu->tools == TOOL_SLOTS ? 11 : 12;
+    int top = tabs ? 100 : 82;
+    count = menu->tools == TOOL_SLOTS
+                ? (slot_count(menu))
+                : (menu->tools == TOOL_FAVORITES
+                       ? menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult)
+                       : (menu->tools == TOOL_RECENT ? menu->recent.count : archive->count));
+    if (tabs) {
+        int usb = menu->tools == TOOL_SLOTS;
+        rectangle(menu, 18, 82, 138, 14, usb ? SELECT : ACCENT);
+        rectangle(menu, 162, 82, 138, 14, usb ? ACCENT : SELECT);
+        label_on(menu, 24, 85, "Console saves", usb ? TEXT : INK, UI_FONT_SMALL,
+                 usb ? SELECT : ACCENT);
+        label_on(menu, 168, 85, "USB backups", usb ? INK : TEXT, UI_FONT_SMALL,
+                 usb ? ACCENT : SELECT);
+    }
+
+    /* The rows on the selected row's page. */
+    start = menu->tool_selected / rows * rows;
+    for (i = start; i < count && i < start + rows; ++i) {
+        int selected = i == menu->tool_selected;
+        Color ink = tool_row(menu, top + (int)(i - start) * gap, selected);
+        if (menu->tools == TOOL_SLOTS) {
+            /* A slot by number and label, if it has one. */
+            if (menu->slot_filtered && menu->slot_results.rows[i].label[0])
+                format(line, "saves/%lu %s", (unsigned long)slot_at(menu, i) + 1,
+                       menu->slot_results.rows[i].label);
+            else if (!menu->slot_filtered && i < 8 && menu->slot_labels_page == menu->slot_page &&
+                     menu->slot_labels.labels[i][0])
+                format(line, "saves/%lu %s", (unsigned long)slot_at(menu, i) + 1,
+                       menu->slot_labels.labels[i]);
+            else
+                slot_path(line, slot_at(menu, i));
+            label_on(menu, 22, top + (int)(i - start) * gap, line + strlen("saves/"),
+                     selected ? INK : TEXT, UI_FONT_SMALL, selected ? ACCENT : PANEL);
+        } else if (menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
+            const char *name = menu->tools == TOOL_RECENT
+                                   ? menu->recent.paths[i]
+                                   : menu->favorites.paths[menu_favorites_visible_index(
+                                         &menu->favorites, menu->config.hide_adult, i)];
+            if (!strncmp(name, "/Storage/", STORAGE_PREFIX))
+                name += STORAGE_PREFIX;
+            game_label(menu, 22, 82 + (int)(i - start) * gap, 276, name, 0, UI_FONT_SMALL,
+                       selected ? INK : TEXT, selected ? ACCENT : PANEL, selected);
+        } else {
+            /* A save: its game's name if known, otherwise its file name,
+             * and its size. */
+            const SaveEntry *e = &archive->entries[i];
+            const char *game = save_names_find(&menu->save_names, e->name);
+            size_t n = strlen(game ? game : e->name);
+            if (n > 36)
+                n = 36;
+            memcpy(line, game ? game : e->name, n);
+            line[n] = 0;
+            label_on(menu, 22, top + (int)(i - start) * gap, line, selected ? INK : TEXT,
+                     UI_FONT_SMALL, selected ? ACCENT : PANEL);
+            format(line, "%5lu", (unsigned long)e->size);
+            text(menu, 260, top + (i - start) * gap, line, ink);
+        }
+    }
+    menu->text_background_set = 0;
+    if (!count)
+        tool_line(menu, tabs ? 3 : 2,
+                  (menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT)
+                      ? "No games listed."
+                      : (menu->tools == TOOL_BACKUP_DETAILS && !menu->backup_slot_valid
+                             ? "Empty or invalid backup slot."
+                             : "No saves to display."),
+                  MUTED);
+
+    /* Below the list: NVRAM use, or where in the list we are. */
+    if (menu->tools == TOOL_SAVES) {
+        format(line, "%lu used %lu free", menu->nvram_info.used_bytes, menu->nvram_info.free_bytes);
+        text(menu, 298 - ui_font_width(line, UI_FONT_SMALL), 66, line, MUTED);
+        if (count)
+            format(line, "%lu files  File: %.31s", (unsigned long)count,
+                   archive->entries[menu->tool_selected].name);
+        else
+            format(line, "0 files");
+        text(menu, 22, 188, line, MUTED);
+        return;
+    }
+    if (menu->tools == TOOL_SLOTS && menu->slot_filtered) {
+        format(line, "%lu matches / %lu-%lu", menu->slot_results.total,
+               menu->slot_results.count ? menu->slot_results.offset + 1 : 0,
+               menu->slot_results.offset + (unsigned long)menu->slot_results.count);
+        if (menu->slot_results.count) {
+            /* Why the selected slot matched. */
+            const char *hint = menu->slot_results.rows[menu->tool_selected].hint;
+            scroll_label(menu, 22, 198, 276, hint, strlen(hint), UI_FONT_SMALL, MUTED, PANEL, 0);
+        }
+    } else if (menu->tools == TOOL_SLOTS)
+        format(line, "Slots %lu-%lu / L R:page", menu->slot_page * 8 + 1,
+               menu->slot_page * 8 + (slot_count(menu) > 8 ? 8 : (unsigned long)slot_count(menu)));
+    else
+        format(line, "%lu / %lu", (unsigned long)(count ? menu->tool_selected + 1 : 0),
+               (unsigned long)count);
+    label(menu, 22, 188, line, OSD_GREEN, UI_FONT_SMALL);
+}
+
+/* Show / hide categories: each category and whether it is shown. */
+static void draw_categories(Menu *menu)
+{
+    size_t count = menu_categories_count(), start = menu->tool_selected / 8 * 8, i;
+    for (i = start; i < count && i < start + 8; ++i) {
+        int y = 82 + (int)(i - start) * 13, selected = i == menu->tool_selected;
+        Color ink = tool_row(menu, y, selected);
+        scroll_label(menu, 24, y, 222, menu_category_name(i), strlen(menu_category_name(i)),
+                     UI_FONT_SMALL, ink, selected ? ACCENT : PANEL, selected);
+        label_on(menu, 256, y, menu_category_hidden(i) ? "HIDE" : "SHOW", ink, UI_FONT_SMALL,
+                 selected ? ACCENT : PANEL);
+    }
+    label(menu, 24, 194, "A toggles and saves immediately.", MUTED, UI_FONT_SMALL);
+}
+
+/* Settings: two pages of rows, each with its value at the right. */
+static void draw_settings(Menu *menu)
+{
+    static const char *names[SETTING_ROWS] = {"Screen margin",
+                                              "Large game titles",
+                                              "Folder workaround",
+                                              "Show covers",
+                                              "Video previews",
+                                              "Remember position",
+                                              "Recent games",
+                                              "Preview sound",
+                                              "Categories...",
+                                              "Restore display defaults",
+                                              "Discard unsaved changes",
+                                              "Save changes to USB"};
+    char line[80];
+    size_t start = menu->tool_selected / 9 * 9, i;
+    for (i = start; i < SETTING_ROWS && i < start + 9; ++i) {
+        const char *value = NULL;
+        int selected = i == menu->tool_selected, y = 82 + (int)(i - start) * 12;
+        int flag = -1; /* for ON/OFF settings, the setting */
+        Color ink;
+        switch (i) {
+        case SETTING_MARGIN:
+            format(line, "%d", menu->config.screen_margin);
+            value = line;
+            break;
+        case SETTING_LARGE_TITLES:
+            flag = menu->config.large_titles;
+            break;
+        case SETTING_FOLDER_WORKAROUND:
+            value = workaround_name(menu->settings_folder_workaround);
+            break;
+        case SETTING_COVERS:
+            flag = menu->settings_usb_covers;
+            break;
+        case SETTING_VIDEO_PREVIEWS:
+            flag = menu->settings_video_previews;
+            break;
+        case SETTING_REMEMBER_POSITION:
+            flag = menu->settings_remember_position;
+            break;
+        case SETTING_RECENT_GAMES:
+            flag = menu->settings_recent_games;
+            break;
+        case SETTING_PREVIEW_SOUND:
+            flag = menu->config.preview_sound;
+            break;
+        }
+        if (flag >= 0)
+            value = flag ? "ON" : "OFF";
+        ink = tool_row(menu, y, selected);
+        label(menu, 24, y, names[i], selected ? INK : TEXT, UI_FONT_SMALL);
+        /* Values: ON lit green, OFF dim, anything else TV orange.
+         * Right-aligned in screen pixels, whatever the margin. */
+        if (value)
+            label(menu,
+                  298 - ui_font_width(value, UI_FONT_SMALL) * 320 /
+                            (320 - 2 * menu->config.screen_margin),
+                  y, value, selected ? ink : (flag > 0 ? ACCENT : (flag == 0 ? DIM : TV_ORANGE)),
+                  UI_FONT_SMALL);
+    }
+    menu->text_background_set = 0;
+    label(menu, 24, 194, "Sound, display, hiding apply now. C saves.", MUTED, UI_FONT_SMALL);
+    label(menu, 280, 64, start ? "2/2" : "1/2", OSD_GREEN, UI_FONT_SMALL);
+}
+
+/* Search results: six names a page, and the selected one's folder below. */
+static void draw_search_results(Menu *menu)
+{
+    char line[80];
+    size_t count = menu->search_count, start = menu->tool_selected / 6 * 6, i;
+    format(line, "%lu matches for: %.24s", (unsigned long)count,
+           *menu->find_query ? menu->find_query : "All games");
+    label(menu, 22, 82, line, MUTED, UI_FONT_SMALL);
+    for (i = start; i < count && i < start + 6; ++i) {
+        const char *path = menu->catalog.paths[menu->search_matches[i]];
+        const char *name = strrchr(path, '/') + 1;
+        int y = 99 + (int)(i - start) * 13, selected = i == menu->tool_selected;
+        tool_row(menu, y, selected);
+        game_label(menu, 22, y, 276, name, 0, UI_FONT_SMALL, selected ? INK : TEXT,
+                   selected ? ACCENT : PANEL, selected);
+    }
+    menu->text_background_set = 0;
+    if (!count)
+        label(menu, 22, 112, "No games matched. P to edit.", TEXT, UI_FONT_SMALL);
+    else {
+        /* The folder, cut from the left so its end (nearest the game)
+         * shows. */
+        const char *path = menu->catalog.paths[menu->search_matches[menu->tool_selected]];
+        size_t length = (size_t)(strrchr(path, '/') - path), skip = 0;
+        int room = 280 * (320 - 2 * menu->config.screen_margin) / 320;
+        while (skip < length &&
+               ui_font_fit(path + skip, length - skip, room, UI_FONT_SMALL) < length - skip)
+            ++skip;
+        length -= skip;
+        if (length > 70)
+            length = 70;
+        memcpy(line, path + skip, length);
+        line[length] = 0;
+        label(menu, 22, 185, line, MUTED, UI_FONT_SMALL);
+    }
+}
+
+/* Find backup slots: the ways to look. */
+static void draw_slot_find(Menu *menu)
+{
+    static const char *options[4] = {"Show occupied slots", "Search games / slot names",
+                                     "Go to slot number", "Show all slot numbers"};
+    size_t i;
+    for (i = 0; i < 4; ++i) {
+        int y = 90 + (int)i * 19, selected = (int)i == menu->slot_find_option;
+        tool_row(menu, y, selected);
+        label_on(menu, 22, y, options[i], selected ? INK : TEXT, UI_FONT_SMALL,
+                 selected ? ACCENT : PANEL);
+    }
+    tool_line(menu, 8, "Older copies: refresh in desktop app.", MUTED);
+}
+
+/* Go to slot: the number typed so far, and a row of digit keys. */
+static void draw_slot_jump(Menu *menu)
+{
+    char line[80];
+    size_t i;
+    format(line, "Go to slot: %s_", menu->slot_jump);
+    tool_line(menu, 0, line, TEXT);
+    tool_line(menu, 1, "1-999999999 / allocated when used", MUTED);
+    for (i = 0; i < 10; ++i) {
+        char key[2];
+        key[0] = (char)('0' + i);
+        key[1] = 0;
+        if (i == (size_t)menu->find_key)
+            rectangle(menu, 22 + i * 27, 111, 19, 13, ACCENT);
+        label_on(menu, 27 + i * 27, 113, key, i == (size_t)menu->find_key ? INK : TEXT,
+                 UI_FONT_SMALL, i == (size_t)menu->find_key ? ACCENT : PANEL);
+    }
+    tool_line(menu, 7, "P:Go X:Erase C:Clear B:Cancel", MUTED);
+}
+
+/* The screens with the on-screen keyboard: Find, a slot search and naming
+ * a slot. */
+static void draw_keyboard(Menu *menu)
+{
+    char line[80];
+    size_t i;
+    if (menu->tools == TOOL_SLOT_NAME)
+        format(line, "Name: %s_", menu->slot_label_edit);
+    else
+        format(line, "Find: %s_",
+               menu->tools == TOOL_SLOT_QUERY ? menu->slot_query : menu->find_query);
+    tool_line(menu, 0, line, TEXT);
+    tool_line(menu, 1,
+              menu->tools == TOOL_SLOT_NAME    ? "Blank name restores slot filename."
+              : menu->tools == TOOL_SLOT_QUERY ? "Game, save filename or slot label."
+                                               : "Drive-wide search / PC index.",
+              MUTED);
+    for (i = 0; i < FIND_KEYS; ++i) {
+        int x = 27 + (int)(i % FIND_KEY_COLUMNS) * 27, y = 113 + (int)(i / FIND_KEY_COLUMNS) * 17;
+        char key[3];
+        key[0] = find_keys[i];
+        key[1] = 0;
+        if (key[0] == ' ')
+            strcpy(key, "SP");
+        if (i == (size_t)menu->find_key) {
+            rectangle(menu, x - 5, y - 2, 19, 13, ACCENT);
+            label_on(menu, x, y, key, INK, UI_FONT_SMALL, ACCENT);
+        } else
+            text(menu, x, y, key, TEXT);
+    }
+    text(menu, 24, 189,
+         menu->tools == TOOL_SLOT_NAME ? "P:Save X:Erase C:Clear" : "P:Search X:Erase C:Clear",
+         MUTED);
+}
+
+/* Help & controls: two pages. */
+static void draw_help(Menu *menu)
+{
+    static const char *help[] = {"A: Open folder / launch game",     "B: Parent folder / cancel",
+                                 "Up/Down: Select (hold to repeat)", "Left/Right or L/R: Page",
+                                 "C: Add selected disc to queue",    "Tap P:Queue / Hold P:Help",
+                                 "X: Cover/video or refresh",        "L+R together: Open tools",
+                                 "Hold X at boot: Skip USB extras",  "C+Up or list ends: Alphabet"};
+    static const char *more[] = {
+        "Queue: X removes one disc",      "Queue: C toggles move mode",
+        "Move mode: Up/Down reorders",    "Hold C, press X: Clear queue",
+        "Hold C + Left/Right: Letter",    "Hold C + A: Folder / one disc",
+        "Favorites: A opens game folder", "Favorites: C adds, X removes",
+        "Config: C saves, X discards",    "ABC: Left/Right A:Jump B:Cancel"};
+    size_t i;
+    for (i = 0; i < 10; ++i)
+        tool_line(menu, (int)i, menu->tool_selected ? more[i] : help[i], i < 8 ? TEXT : MUTED);
+}
+
+/* Diagnostics page 1: the ODE's identity. */
+static void draw_diagnostics_ode(Menu *menu)
+{
+    char line[80];
+    const unsigned char *reply = menu->ode.identity_reply;
+    format(line, "Menu %s / XBUS unit 0", MENU_VERSION);
+    tool_line(menu, 0, line, TEXT);
+    format(line, "ODE ID: %.6s", menu->ode.identity[0] ? menu->ode.identity : "------");
+    tool_line(menu, 1, line, TEXT);
+    format(line, "Reported revision: %u.%u.%u", menu->ode.revision[0], menu->ode.revision[1],
+           menu->ode.revision[2]);
+    tool_line(menu, 2, line, TEXT);
+    format(line, "Boot flags: %02x Status: %02x", reply[1], reply[11]);
+    tool_line(menu, 3, line, MUTED);
+    tool_line(menu, 4, "Identity bytes (93 reply):", MUTED);
+    format(line, "%02x %02x %02x %02x %02x %02x", reply[0], reply[1], reply[2], reply[3], reply[4],
+           reply[5]);
+    tool_line(menu, 5, line, TEXT);
+    format(line, "%02x %02x %02x %02x %02x %02x", reply[6], reply[7], reply[8], reply[9], reply[10],
+           reply[11]);
+    tool_line(menu, 6, line, TEXT);
+    tool_line(menu, 8, "ID/revision can be hard-coded.", AMBER);
+    tool_line(menu, 9, "Exact firmware build is unknown.", AMBER);
+}
+
+/* Diagnostics page 2: settings in use and this session's results. */
+static void draw_diagnostics_session(Menu *menu)
+{
+    char line[80];
+    int row = 4;
+    format(line, "Folder workaround: %s (%s)", workaround_name(menu->config.folder_workaround),
+           folder_workaround(menu) ? "in use" : "not used");
+    tool_line(menu, 0, line, TEXT);
+    format(line, "Config result: %d (0 = loaded)", menu->config_result);
+    tool_line(menu, 1, line, TEXT);
+    format(line, "USB covers: %s", menu->skip_usb_art ? "disabled" : "enabled");
+    tool_line(menu, 2, line, TEXT);
+    format(line, "Cover index: %lu entries", (unsigned long)menu->usb_art.count);
+    tool_line(menu, 3, line, MUTED);
+    if (menu->usb_tested) {
+        format(line, "USB write check: %s", menu->usb_tested > 0 ? "PASS" : "FAIL");
+        tool_line(menu, row++, line, TEXT);
+    }
+    format(line, "Backup: %s",
+           menu->backup_result > 0 ? "verified" : (menu->backup_result < 0 ? "failed" : "not run"));
+    tool_line(menu, row++, line, TEXT);
+    format(line, "Restore: %s",
+           menu->restore_result > 0 ? "verified"
+                                    : (menu->restore_result < 0 ? "failed" : "not run"));
+    tool_line(menu, row++, line, TEXT);
+    format(line, "Queued discs: %lu / 16", (unsigned long)menu->playlist.count);
+    tool_line(menu, row++, line, MUTED);
+    format(line, "NVRAM error: %08lx", (unsigned long)menu->nvram_info.last_error & 0xffffffffUL);
+    tool_line(menu, row++, line, MUTED);
+    tool_line(menu, row, "Results apply to this session.", MUTED);
+}
+
+/* Diagnostics page 3: the last ODE command and any fault. */
+static void draw_diagnostics_transport(Menu *menu)
+{
+    char line[80];
+    format(line, "Commands sent: %lu", menu->bus.commands);
+    tool_line(menu, 0, line, TEXT);
+    format(line, "Last command: %02x (%lu bytes)", menu->bus.last_command,
+           (unsigned long)menu->bus.last_length);
+    tool_line(menu, 1, line, TEXT);
+    format(line, "Reply: %02x %02x %02x %02x", menu->bus.last_reply[0], menu->bus.last_reply[1],
+           menu->bus.last_reply[2], menu->bus.last_reply[3]);
+    tool_line(menu, 2, line, TEXT);
+    format(line, "XBUS error: %08lx", (unsigned long)menu->bus.last_error & 0xffffffffUL);
+    tool_line(menu, 3, line, MUTED);
+    format(line, "Transport timed out: %s", menu->bus.timed_out ? "YES" : "no");
+    tool_line(menu, 4, line, MUTED);
+    format(line, "Navigation blocked: %s", menu->ode.navigation_failed ? "YES" : "no");
+    tool_line(menu, 5, line, MUTED);
+    format(line, "Last fault: cmd %02x status %02x", menu->bus.failed_command,
+           menu->bus.failed_status);
+    tool_line(menu, 6, line, MUTED);
+    format(line, "Fault error: %08lx", (unsigned long)menu->bus.failure_error & 0xffffffffUL);
+    tool_line(menu, 7, line, MUTED);
+    format(line, "Cover: %lums / %lu cmds%s", menu->cover_load_ms, menu->cover_commands,
+           menu->cover_cached ? " RAM" : "");
+    tool_line(menu, 8, line, MUTED);
+    format(line, "Diagnostic export: %d", menu->diagnostics_result);
+    tool_line(menu, 9, line, MUTED);
+}
+
+/* Diagnostics page 4: how the last preview load went. */
+static void draw_diagnostics_preview(Menu *menu)
+{
+    char line[80];
+    tool_line(menu, 0, "Last preview load", TEXT);
+    format(line, "Result: %d  Total: %lums", menu->preview_result, menu->preview_load_ms);
+    tool_line(menu, 1, line, TEXT);
+    format(line, "Read + CRC: %lums", menu->preview_read_ms);
+    tool_line(menu, 2, line, MUTED);
+    format(line, "Checks / first frame: %lums", menu->preview_check_ms);
+    tool_line(menu, 3, line, MUTED);
+    format(line, "Folder navigation: %lums", menu->preview_navigation_ms);
+    tool_line(menu, 4, line, MUTED);
+    format(line, "Audio / display setup: %lums", menu->preview_setup_ms);
+    tool_line(menu, 5, line, MUTED);
+    format(line, "Payload: %lu KiB", (menu->preview_bytes + 1023) / 1024);
+    tool_line(menu, 6, line, MUTED);
+    format(line, "Frames: %u at %u fps", menu->preview_frames, menu->preview_fps);
+    tool_line(menu, 7, line, MUTED);
+    format(line, "Commands: %lu", menu->preview_commands);
+    tool_line(menu, 8, line, MUTED);
+    if (menu->preview_result == -4)
+        tool_line(menu, 9, "Not enough preview memory.", AMBER);
+    else if (menu->preview_result == -5)
+        tool_line(menu, 9, "Canceled by controller input.", MUTED);
+    else if (menu->preview_result < 0)
+        tool_line(menu, 9, "Preview file / read failed.", AMBER);
+    else
+        tool_line(menu, 9, "Playback checks frames as shown.", MUTED);
+}
+
+/* Diagnostics page 5: the last file asked for and the media indexes. */
+static void draw_diagnostics_files(Menu *menu)
+{
+    char line[80];
+    size_t i;
+    tool_line(menu, 0, "Last requested USB file:", TEXT);
+    for (i = 0; i < 4; ++i) {
+        format(line, "%.32s",
+               strlen(menu->ode.file_path) > i * 32 ? menu->ode.file_path + i * 32 : "");
+        tool_line(menu, (int)i + 1, line, TEXT);
+    }
+    tool_line(menu, 5, "Browser folder:", MUTED);
+    format(line, "%.40s", menu->breadcrumb);
+    tool_line(menu, 6, line, TEXT);
+    format(line, "Indexes: %lu covers / %lu clips", (unsigned long)menu->usb_art.count,
+           (unsigned long)menu->usb_previews.count);
+    tool_line(menu, 7, line, MUTED);
+    format(line, "Game metadata: %lu entries", (unsigned long)menu->metadata.count);
+    tool_line(menu, 8, line, MUTED);
+    tool_line(menu, 9, "Retained after a USB timeout.", MUTED);
+}
+
+/* Diagnostics: the page chosen with Left/Right (menu->tool_selected). */
+static void draw_diagnostics(Menu *menu)
+{
+    switch (menu->tool_selected) {
+    case 0:
+        draw_diagnostics_ode(menu);
+        break;
+    case 1:
+        draw_diagnostics_session(menu);
+        break;
+    case 2:
+        draw_diagnostics_transport(menu);
+        break;
+    case 3:
+        draw_diagnostics_preview(menu);
+        break;
+    default:
+        draw_diagnostics_files(menu);
+        break;
+    }
+}
+
+/*
+ * Comparing two backups: the list of saves and how each differs, or with
+ * TOOL_COMPARE_BYTES, the bytes that differ in the selected save, a page at
+ * a time from menu->compare_offset.
+ */
+static void draw_compare(Menu *menu)
+{
+    char line[80];
+    SaveDifference diff;
+    size_t total = save_archive_diff_count(&menu->compare_archive, &menu->backup), i;
+    {
+        /* "slot01 > slot02": the slot names without "saves/" or ".3ds". */
+        char a[40], b[40];
+        slot_path(a, menu->compare_slot);
+        slot_path(b, menu->backup_slot);
+        a[strlen(a) - 4] = 0;
+        b[strlen(b) - 4] = 0;
+        format(line, "%.13s > %.13s", a + 6, b + 6);
+        tool_line(menu, 0, line, MUTED);
+    }
+    if (menu->tools == TOOL_COMPARE) {
+        static const char *states[] = {"SAME", "CHANGED", "ADDED", "REMOVED"};
+        size_t start = menu->tool_selected / 8 * 8;
+        for (i = start; i < total && i < start + 8; ++i)
+            if (!save_archive_diff(&menu->compare_archive, &menu->backup, i, &diff)) {
+                const SaveEntry *e = diff.after < menu->backup.count
+                                         ? &menu->backup.entries[diff.after]
+                                         : &menu->compare_archive.entries[diff.before];
+                Color ink = tool_row(menu, 100 + (int)(i - start) * 11, i == menu->tool_selected);
+                format(line, "%-7s %.25s", states[diff.state], e->name);
+                text(menu, 22, 100 + (i - start) * 11, line, ink);
+            }
+        if (!total)
+            tool_line(menu, 3, "Both slots are empty.", MUTED);
+        else if (!save_archive_diff(&menu->compare_archive, &menu->backup, menu->tool_selected,
+                                    &diff)) {
+            format(line, "%lu byte(s) differ%s", (unsigned long)diff.changed_bytes,
+                   diff.metadata_changed ? " / metadata" : "");
+            tool_line(menu, 9, line, MUTED);
+        }
+    } else if (!save_archive_diff(&menu->compare_archive, &menu->backup, menu->tool_selected,
+                                  &diff)) {
+        /* Each differing byte; a save missing on one side shows "--". */
+        const SaveEntry *a = diff.before < menu->compare_archive.count
+                                 ? &menu->compare_archive.entries[diff.before]
+                                 : NULL;
+        const SaveEntry *b =
+            diff.after < menu->backup.count ? &menu->backup.entries[diff.after] : NULL;
+        size_t at, n = 0, row = 0;
+        tool_line(menu, 1, a ? a->name : b->name, TEXT);
+        tool_line(menu, 2, "Offset     Before  After", MUTED);
+        for (at = 0; at < diff.length && row < 7; ++at)
+            if (!a || !b || at >= a->size || at >= b->size || a->data[at] != b->data[at]) {
+                char old[3], next[3];
+                if (n++ < menu->compare_offset)
+                    continue;
+                if (a && at < a->size)
+                    format(old, "%02x", a->data[at]);
+                else
+                    strcpy(old, "--");
+                if (b && at < b->size)
+                    format(next, "%02x", b->data[at]);
+                else
+                    strcpy(next, "--");
+                format(line, "%04lx       %s      %s", (unsigned long)at, old, next);
+                tool_line(menu, 3 + (int)row++, line, TEXT);
+            }
+        if (!diff.changed_bytes)
+            tool_line(menu, 4,
+                      diff.metadata_changed ? "Only filename/type differs."
+                                            : "Save bytes are identical.",
+                      MUTED);
+    }
+}
+
+/* Confirming a backup: of all of NVRAM, or of one save (backing it up,
+ * copying it, or saving it after hex edits) merged into the slot. */
+static void draw_confirm_backup(Menu *menu)
+{
+    char line[80];
+    slot_path(line, menu->backup_slot);
+    tool_line(menu, 0, line, TEXT);
+    if (menu->backup_merge) {
+        const SaveEntry *entry = backup_entry(menu);
+        tool_line(menu, 2,
+                  menu->hex_archive.bytes     ? "Save edited file:"
+                  : menu->copy_original.bytes ? "Copy this save:"
+                                              : "Back up this save:",
+                  TEXT);
+        tool_line(menu, 3, entry->name, TEXT);
+        tool_line(menu, 5, "Other slot entries stay unchanged.", ACCENT);
+        format(line, "Slot will contain %lu save(s).", (unsigned long)menu->pending.count);
+        tool_line(menu, 7, line, MUTED);
+    } else {
+        format(line, "Back up %lu save file(s)?", (unsigned long)menu->pending.count);
+        tool_line(menu, 2, line, TEXT);
+        if (menu->backup_slot_valid)
+            format(line, "Replaces %lu existing save(s).", (unsigned long)menu->backup.count);
+        else
+            strcpy(line, "Replaces this USB backup slot.");
+        tool_line(menu, 4, line, AMBER);
+        tool_line(menu, 6, "Internal saves stay unchanged.", ACCENT);
+    }
+}
+
+/* Confirming a restore of one save to NVRAM. */
+static void draw_confirm_restore(Menu *menu)
+{
+    char line[80];
+    const SaveEntry *e = &menu->backup.entries[menu->save_selected];
+    tool_line(menu, 0, e->name, TEXT);
+    format(line, "%lu bytes / type %08lx", (unsigned long)e->size, e->type);
+    tool_line(menu, 1, line, MUTED);
+    tool_line(menu, 3, "Restore this save to NVRAM?", AMBER);
+    tool_line(menu, 4, "Replaces the matching save.", AMBER);
+    tool_line(menu, 6, "First: verified recovery backup.", TEXT);
+    tool_line(menu, 7,
+              menu->backup_slot == SAVE_RECOVERY_SLOT ? "Replaces USB recovery2.3ds."
+                                                      : "Replaces USB recovery.3ds.",
+              MUTED);
+    tool_line(menu, 9, "Keep power on until finished.", AMBER);
+}
+
+/* The current screen's controls, shown under the panel unless there is a
+ * message to show instead. */
+static const char *tools_controls(Menu *menu)
+{
+    switch (menu->tools) {
+    case TOOL_GAME_DETAILS:
+        return "Left/Right:Page B:Back";
+    case TOOL_FAVORITES:
+        return menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel"
+                                    : "A:Open C:Add X:Remove B:Back";
+    case TOOL_RESULTS:
+        return "A:Open P:Edit X:Reload B:Back";
+    case TOOL_SLOT_JUMP:
+        return "Left/Right:Digit A:Add P:Go";
+    case TOOL_SLOT_NAME:
+    case TOOL_SLOT_QUERY:
+    case TOOL_FIND:
+        return "Arrows:Choose A:Key B:Cancel";
+    case TOOL_COMPARE:
+        return "A:Byte differences B:Back";
+    case TOOL_COMPARE_BYTES:
+        return "Left/Right:Page B:Back";
+    case TOOL_SLOTS:
+        if (menu->backup_mode)
+            break;
+        return menu->compare_choosing ? "A:Compare with this slot B:Cancel"
+                                      : "A:Open C:Name X:Compare";
+    case TOOL_CATEGORIES:
+        return "A:Show/Hide B:Settings";
+    case TOOL_CONFIG:
+        return "Left/Right:Change C:Save B:Back";
+    case TOOL_BACKUP_DETAILS:
+        return "A:Continue C:Old/New B:Back";
+    case TOOL_SAVES:
+        return "A:Back up one C:All X:Refresh";
+    case TOOL_ARCHIVE:
+        return "A:Restore C:Hex X:Cheats B:Back";
+    case TOOL_CHEATS: {
+        const SaveCheatProfile *cheats =
+            save_cheats_find(&menu->hex_archive.entries[menu->save_selected]);
+        return cheats && menu->cheat_selected < cheats->preset_count ? "A:Apply preset"
+                                                                     : "Left/Right:Change value";
+    }
+    case TOOL_HEX:
+        return menu->hex_editing ? "Arrows:Value A:Apply B:Cancel" : "Arrows:Move A:Edit C:Save as";
+    case TOOL_HEX_DISCARD:
+        return "A:Discard B:Keep editing";
+    case TOOL_CONFIRM_BACKUP:
+    case TOOL_CONFIRM_RESTORE:
+        return "A:Confirm B:Cancel";
+    case TOOL_DIAG:
+        return "C:Export X:Test return B:Back";
+    case TOOL_HELP:
+        return "B:Back";
+    case TOOL_RECENT:
+        return "A:Open folder P:Reload B:Back";
+    }
+    return "A:Select B:Back";
+}
+
+/* The second row of controls: the screen's extra buttons. */
+static const char *tools_more_controls(Menu *menu)
+{
+    switch (menu->tools) {
+    case TOOL_SLOTS:
+        return "L/R:Slot page P:Find slots";
+    case TOOL_ARCHIVE:
+        return "P:Copy to slot L+R:Library";
+    case TOOL_CHEATS:
+        return "C:Save as X:Hex B:Back";
+    case TOOL_HEX:
+        return "L/R:Page X:Cheats B:Back";
+    case TOOL_FAVORITES:
+        return "R:Move order P:Reload";
+    case TOOL_DIAG:
+    case TOOL_HELP:
+        return "Left/Right:More pages";
+    }
+    return save_manager_tab(menu) ? "Left/Right:View B:Back" : "Hold P:Help L+R:Library";
+}
+
+/*
+ * Draws the Tools screen menu->tools: the TV's on-screen menu, with the
+ * screen's title and content in a panel and its controls below.
+ */
+static void draw_tools(Menu *menu)
+{
     /* The home screen has no scrolling or live diagnostics. Retain its two
      * buffers until a selection, settings marker, message or layout changes. */
     if (menu->tools == TOOL_HOME) {
@@ -6684,50 +7451,8 @@ static void draw_tools(Menu *menu)
             return;
         ++menu->tools_home_drawn;
     }
-    if (menu->tools == TOOL_CHEATS)
-        title = "Known values & cheats";
-    if (menu->tools == TOOL_HEX)
-        title = "Hex editor / USB copy";
-    if (menu->tools == TOOL_HEX_DISCARD)
-        title = "Discard edits?";
-    if (menu->tools == TOOL_SAVES)
-        title = "Save Manager";
-    if (menu->tools == TOOL_SLOTS)
-        title = menu->compare_choosing ? "Compare: choose second slot"
-                : menu->backup_mode    ? "Choose backup slot"
-                                       : "Save Manager";
-    if (menu->tools == TOOL_SLOT_NAME)
-        title = "Name backup slot";
-    if (menu->tools == TOOL_SLOT_FIND || menu->tools == TOOL_SLOT_QUERY)
-        title = "Find backup slots";
-    if (menu->tools == TOOL_COMPARE || menu->tools == TOOL_COMPARE_BYTES)
-        title = "Compare backups";
-    if (menu->tools == TOOL_ARCHIVE)
-        title = "Backup contents";
-    if (menu->tools == TOOL_HELP)
-        title = "Controls & help";
-    if (menu->tools == TOOL_DIAG)
-        title = "Diagnostics";
-    if (menu->tools == TOOL_CONFIRM_BACKUP || menu->tools == TOOL_CONFIRM_RESTORE)
-        title = "Confirm action";
-    if (menu->tools == TOOL_FAVORITES)
-        title = "Favorites";
-    if (menu->tools == TOOL_CATEGORIES)
-        title = "Show / hide categories";
-    if (menu->tools == TOOL_CONFIG)
-        title = config_dirty(menu) ? "Settings / unsaved" : "Settings";
-    if (menu->tools == TOOL_RECENT)
-        title = "Recent games";
-    if (menu->tools == TOOL_FIND)
-        title = "Find a game";
-    if (menu->tools == TOOL_RESULTS)
-        title = "Search results";
-    if (menu->tools == TOOL_GAME_DETAILS)
-        title = "Game details";
-    if (menu->tools == TOOL_FAVORITES && menu->favorites_move)
-        title = "Move favorite";
-    if (menu->tools == TOOL_BACKUP_DETAILS)
-        title = menu->details_new ? "New backup contents" : "Existing slot contents";
+
+    /* The frame: heading, panel and title. */
     menu->text_cursor = 0;
     menu->text_style = UI_FONT_SMALL;
     menu->screen.sc_curScreen ^= 1;
@@ -6740,593 +7465,80 @@ static void draw_tools(Menu *menu)
                     (320 - 2 * menu->config.screen_margin),
           9, "MENU", OSD_GREEN, UI_FONT_HEADING);
     rectangle(menu, 12, 58, 296, 148, PANEL);
-    label(menu, 22, 62, title, TEXT, UI_FONT_NORMAL);
+    label(menu, 22, 62, tools_title(menu), TEXT, UI_FONT_NORMAL);
     rectangle(menu, 22, 77, 39, 2, TV_ORANGE);
     rectangle(menu, 63, 77, 17, 2, ACCENT);
-    if (menu->tools == TOOL_HOME) {
-        static const char *items[] = {"Save Manager",    "Favorites",   "Settings",
-                                      "Help & controls", "Diagnostics", "Recent games",
-                                      "Find a game"};
-        for (i = 0; i < 7; ++i) {
-            int x = 18 + (i / 4) * 144, y = 84 + (i % 4) * 28;
-            int active = i == menu->tool_selected;
-            rectangle(menu, x, y, 138, 24, active ? ACCENT : SELECT);
-            label_on(menu, x + 9, y + 5, i == 2 && config_dirty(menu) ? "Settings *" : items[i],
-                     active ? INK : TEXT, UI_FONT_NORMAL, active ? ACCENT : SELECT);
-        }
-    } else if (menu->tools == TOOL_CHEATS) {
+
+    /* The screen's content. */
+    switch (menu->tools) {
+    case TOOL_HOME:
+        draw_tools_home(menu);
+        break;
+    case TOOL_CHEATS:
         draw_cheats(menu);
-    } else if (menu->tools == TOOL_HEX) {
+        break;
+    case TOOL_HEX:
         draw_hex(menu);
-    } else if (menu->tools == TOOL_HEX_DISCARD) {
+        break;
+    case TOOL_HEX_DISCARD:
         tool_line(menu, 2, "Discard unsaved hex edits?", AMBER);
         tool_line(menu, 4, "The USB backup is unchanged.", TEXT);
-    } else if (menu->tools == TOOL_GAME_DETAILS) {
+        break;
+    case TOOL_GAME_DETAILS:
         draw_game_details(menu);
-    } else if (menu->tools == TOOL_SAVES || menu->tools == TOOL_ARCHIVE ||
-               menu->tools == TOOL_SLOTS || menu->tools == TOOL_BACKUP_DETAILS ||
-               menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
-        SaveArchive *archive =
-            menu->tools == TOOL_SAVES
-                ? &menu->nvram
-                : (menu->tools == TOOL_BACKUP_DETAILS && menu->details_new ? &menu->pending
-                                                                           : &menu->backup);
-        size_t rows = menu->tools == TOOL_SLOTS ? 8 : save_views ? 7 : 8;
-        int gap = menu->tools == TOOL_SLOTS ? 11 : 12;
-        int top = save_views ? 100 : 82;
-        count = menu->tools == TOOL_SLOTS
-                    ? (slot_count(menu))
-                    : (menu->tools == TOOL_FAVORITES
-                           ? menu_favorites_visible_count(&menu->favorites, menu->config.hide_adult)
-                           : (menu->tools == TOOL_RECENT ? menu->recent.count : archive->count));
-        if (save_views) {
-            int usb = menu->tools == TOOL_SLOTS;
-            rectangle(menu, 18, 82, 138, 14, usb ? SELECT : ACCENT);
-            rectangle(menu, 162, 82, 138, 14, usb ? ACCENT : SELECT);
-            label_on(menu, 24, 85, "Console saves", usb ? TEXT : INK, UI_FONT_SMALL,
-                     usb ? SELECT : ACCENT);
-            label_on(menu, 168, 85, "USB backups", usb ? INK : TEXT, UI_FONT_SMALL,
-                     usb ? ACCENT : SELECT);
-        }
-        start = menu->tool_selected / rows * rows;
-        for (i = start; i < count && i < start + rows; ++i) {
-            int selected = i == menu->tool_selected;
-            Color ink = tool_row(menu, top + (int)(i - start) * gap, selected);
-            if (menu->tools == TOOL_SLOTS) {
-                if (menu->slot_filtered && menu->slot_results.rows[i].label[0])
-                    format(line, "saves/%lu %s", (unsigned long)slot_at(menu, i) + 1,
-                           menu->slot_results.rows[i].label);
-                else if (!menu->slot_filtered && i < 8 &&
-                         menu->slot_labels_page == menu->slot_page &&
-                         menu->slot_labels.labels[i][0])
-                    format(line, "saves/%lu %s", (unsigned long)slot_at(menu, i) + 1,
-                           menu->slot_labels.labels[i]);
-                else
-                    slot_path(line, slot_at(menu, i));
-                label_on(menu, 22, top + (int)(i - start) * gap, line + 6, selected ? INK : TEXT,
-                         UI_FONT_SMALL, selected ? ACCENT : PANEL);
-            } else if (menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT) {
-                const char *name = menu->tools == TOOL_RECENT
-                                       ? menu->recent.paths[i]
-                                       : menu->favorites.paths[menu_favorites_visible_index(
-                                             &menu->favorites, menu->config.hide_adult, i)];
-                if (!strncmp(name, "/Storage/", 9))
-                    name += 9;
-                game_label(menu, 22, 82 + (int)(i - start) * gap, 276, name, 0, UI_FONT_SMALL,
-                           selected ? INK : TEXT, selected ? ACCENT : PANEL, selected);
-            } else {
-                const SaveEntry *e = &archive->entries[i];
-                const char *game = save_names_find(&menu->save_names, e->name);
-                size_t n = strlen(game ? game : e->name);
-                if (n > 36)
-                    n = 36;
-                memcpy(line, game ? game : e->name, n);
-                line[n] = 0;
-                label_on(menu, 22, top + (int)(i - start) * gap, line, selected ? INK : TEXT,
-                         UI_FONT_SMALL, selected ? ACCENT : PANEL);
-                format(line, "%5lu", (unsigned long)e->size);
-                text(menu, 260, top + (i - start) * gap, line, ink);
-            }
-        }
-        menu->text_background_set = 0;
-        if (!count)
-            tool_line(menu, save_views ? 3 : 2,
-                      (menu->tools == TOOL_FAVORITES || menu->tools == TOOL_RECENT)
-                          ? "No games listed."
-                          : (menu->tools == TOOL_BACKUP_DETAILS && !menu->backup_slot_valid
-                                 ? "Empty or invalid backup slot."
-                                 : "No saves to display."),
-                      MUTED);
-        if (menu->tools == TOOL_SAVES) {
-            format(line, "%lu used %lu free", menu->nvram_info.used_bytes,
-                   menu->nvram_info.free_bytes);
-            text(menu, 298 - ui_font_width(line, UI_FONT_SMALL), 66, line, MUTED);
-            if (count)
-                format(line, "%lu files  File: %.31s", (unsigned long)count,
-                       archive->entries[menu->tool_selected].name);
-            else
-                format(line, "0 files");
-            text(menu, 22, 188, line, MUTED);
-        } else {
-            if (menu->tools == TOOL_SLOTS && menu->slot_filtered) {
-                format(line, "%lu matches / %lu-%lu", menu->slot_results.total,
-                       menu->slot_results.count ? menu->slot_results.offset + 1 : 0,
-                       menu->slot_results.offset + (unsigned long)menu->slot_results.count);
-                if (menu->slot_results.count) {
-                    const char *hint = menu->slot_results.rows[menu->tool_selected].hint;
-                    scroll_label(menu, 22, 198, 276, hint, strlen(hint), UI_FONT_SMALL, MUTED,
-                                 PANEL, 0);
-                }
-            } else if (menu->tools == TOOL_SLOTS)
-                format(line, "Slots %lu-%lu / L R:page", menu->slot_page * 8 + 1,
-                       menu->slot_page * 8 +
-                           (slot_count(menu) > 8 ? 8 : (unsigned long)slot_count(menu)));
-            else
-                format(line, "%lu / %lu", (unsigned long)(count ? menu->tool_selected + 1 : 0),
-                       (unsigned long)count);
-            label(menu, 22, 188, line, OSD_GREEN, UI_FONT_SMALL);
-        }
-    } else if (menu->tools == TOOL_CATEGORIES) {
-        count = menu_categories_count();
-        start = menu->tool_selected / 8 * 8;
-        for (i = start; i < count && i < start + 8; ++i) {
-            int y = 82 + (int)(i - start) * 13, selected = i == menu->tool_selected;
-            Color ink = tool_row(menu, y, selected);
-            scroll_label(menu, 24, y, 222, menu_category_name(i), strlen(menu_category_name(i)),
-                         UI_FONT_SMALL, ink, selected ? ACCENT : PANEL, selected);
-            label_on(menu, 256, y, menu_category_hidden(i) ? "HIDE" : "SHOW", ink, UI_FONT_SMALL,
-                     selected ? ACCENT : PANEL);
-        }
-        label(menu, 24, 194, "A toggles and saves immediately.", MUTED, UI_FONT_SMALL);
-    } else if (menu->tools == TOOL_CONFIG) {
-        start = menu->tool_selected / 9 * 9;
-        for (i = start; i < 12 && i < start + 9; ++i) {
-            static const char *names[12] = {"Screen margin",
-                                            "Large game titles",
-                                            "Folder workaround",
-                                            "Show covers",
-                                            "Video previews",
-                                            "Remember position",
-                                            "Recent games",
-                                            "Preview sound",
-                                            "Categories...",
-                                            "Restore display defaults",
-                                            "Discard unsaved changes",
-                                            "Save changes to USB"};
-            const char *value = NULL;
-            int selected = i == menu->tool_selected, y = 82 + (int)(i - start) * 12, flag = -1;
-            Color ink;
-            if (!i) {
-                format(line, "%d", menu->config.screen_margin);
-                value = line;
-            } else if (i == 1)
-                flag = menu->config.large_titles;
-            else if (i == 2)
-                value = workaround_name(menu->settings_folder_workaround);
-            else if (i == 3)
-                flag = menu->settings_usb_covers;
-            else if (i == 4)
-                flag = menu->settings_video_previews;
-            else if (i == 5)
-                flag = menu->settings_remember_position;
-            else if (i == 6)
-                flag = menu->settings_recent_games;
-            else if (i == 7)
-                flag = menu->config.preview_sound;
+        break;
+    case TOOL_SAVES:
+    case TOOL_ARCHIVE:
+    case TOOL_SLOTS:
+    case TOOL_BACKUP_DETAILS:
+    case TOOL_FAVORITES:
+    case TOOL_RECENT:
+        draw_tool_list(menu);
+        break;
+    case TOOL_CATEGORIES:
+        draw_categories(menu);
+        break;
+    case TOOL_CONFIG:
+        draw_settings(menu);
+        break;
+    case TOOL_RESULTS:
+        draw_search_results(menu);
+        break;
+    case TOOL_SLOT_FIND:
+        draw_slot_find(menu);
+        break;
+    case TOOL_SLOT_JUMP:
+        draw_slot_jump(menu);
+        break;
+    case TOOL_FIND:
+    case TOOL_SLOT_NAME:
+    case TOOL_SLOT_QUERY:
+        draw_keyboard(menu);
+        break;
+    case TOOL_HELP:
+        draw_help(menu);
+        break;
+    case TOOL_DIAG:
+        draw_diagnostics(menu);
+        break;
+    case TOOL_COMPARE:
+    case TOOL_COMPARE_BYTES:
+        draw_compare(menu);
+        break;
+    case TOOL_CONFIRM_BACKUP:
+        draw_confirm_backup(menu);
+        break;
+    case TOOL_CONFIRM_RESTORE:
+        draw_confirm_restore(menu);
+        break;
+    }
 
-            if (flag >= 0)
-                value = flag ? "ON" : "OFF";
-            ink = tool_row(menu, y, selected);
-            label(menu, 24, y, names[i], selected ? INK : TEXT, UI_FONT_SMALL);
-            /* Values: ON lit green, OFF dim, anything else TV orange. */
-            if (value)
-                label(menu,
-                      298 - ui_font_width(value, UI_FONT_SMALL) * 320 /
-                                (320 - 2 * menu->config.screen_margin),
-                      y, value,
-                      selected ? ink : (flag > 0 ? ACCENT : (flag == 0 ? DIM : TV_ORANGE)),
-                      UI_FONT_SMALL);
-        }
-        menu->text_background_set = 0;
-        label(menu, 24, 194, "Sound, display, hiding apply now. C saves.", MUTED, UI_FONT_SMALL);
-        label(menu, 280, 64, start ? "2/2" : "1/2", OSD_GREEN, UI_FONT_SMALL);
-    } else if (menu->tools == TOOL_RESULTS) {
-        count = menu->search_count;
-        start = menu->tool_selected / 6 * 6;
-        format(line, "%lu matches for: %.24s", (unsigned long)count,
-               *menu->find_query ? menu->find_query : "All games");
-        label(menu, 22, 82, line, MUTED, UI_FONT_SMALL);
-        for (i = start; i < count && i < start + 6; ++i) {
-            const char *path = menu->catalog.paths[menu->search_matches[i]];
-            const char *name = strrchr(path, '/') + 1;
-            int y = 99 + (int)(i - start) * 13, selected = i == menu->tool_selected;
-            tool_row(menu, y, selected);
-            game_label(menu, 22, y, 276, name, 0, UI_FONT_SMALL, selected ? INK : TEXT,
-                       selected ? ACCENT : PANEL, selected);
-        }
-        menu->text_background_set = 0;
-        if (!count)
-            label(menu, 22, 112, "No games matched. P to edit.", TEXT, UI_FONT_SMALL);
-        else {
-            const char *path = menu->catalog.paths[menu->search_matches[menu->tool_selected]];
-            size_t length = (size_t)(strrchr(path, '/') - path);
-            int room = 280 * (320 - 2 * menu->config.screen_margin) / 320;
-            size_t start = 0;
-            while (start < length &&
-                   ui_font_fit(path + start, length - start, room, UI_FONT_SMALL) < length - start)
-                ++start;
-            length -= start;
-            if (length > 70)
-                length = 70;
-            memcpy(line, path + start, length);
-            line[length] = 0;
-            label(menu, 22, 185, line, MUTED, UI_FONT_SMALL);
-        }
-    } else if (menu->tools == TOOL_SLOT_FIND) {
-        static const char *options[4] = {"Show occupied slots", "Search games / slot names",
-                                         "Go to slot number", "Show all slot numbers"};
-        for (i = 0; i < 4; ++i) {
-            int y = 90 + (int)i * 19, selected = (int)i == menu->slot_find_option;
-            tool_row(menu, y, selected);
-            label_on(menu, 22, y, options[i], selected ? INK : TEXT, UI_FONT_SMALL,
-                     selected ? ACCENT : PANEL);
-        }
-        tool_line(menu, 8, "Older copies: refresh in desktop app.", MUTED);
-    } else if (menu->tools == TOOL_SLOT_JUMP) {
-        format(line, "Go to slot: %s_", menu->slot_jump);
-        tool_line(menu, 0, line, TEXT);
-        tool_line(menu, 1, "1-999999999 / allocated when used", MUTED);
-        for (i = 0; i < 10; ++i) {
-            char key[2];
-            key[0] = (char)('0' + i);
-            key[1] = 0;
-            if (i == (size_t)menu->find_key)
-                rectangle(menu, 22 + i * 27, 111, 19, 13, ACCENT);
-            label_on(menu, 27 + i * 27, 113, key, i == (size_t)menu->find_key ? INK : TEXT,
-                     UI_FONT_SMALL, i == (size_t)menu->find_key ? ACCENT : PANEL);
-        }
-        tool_line(menu, 7, "P:Go X:Erase C:Clear B:Cancel", MUTED);
-    } else if (menu->tools == TOOL_FIND || menu->tools == TOOL_SLOT_NAME ||
-               menu->tools == TOOL_SLOT_QUERY) {
-        if (menu->tools == TOOL_SLOT_NAME)
-            format(line, "Name: %s_", menu->slot_label_edit);
-        else
-            format(line, "Find: %s_",
-                   menu->tools == TOOL_SLOT_QUERY ? menu->slot_query : menu->find_query);
-        tool_line(menu, 0, line, TEXT);
-        tool_line(menu, 1,
-                  menu->tools == TOOL_SLOT_NAME    ? "Blank name restores slot filename."
-                  : menu->tools == TOOL_SLOT_QUERY ? "Game, save filename or slot label."
-                                                   : "Drive-wide search / PC index.",
-                  MUTED);
-        for (i = 0; i < 40; ++i) {
-            char key[3];
-            key[0] = find_keys[i];
-            key[1] = 0;
-            if (key[0] == ' ')
-                strcpy(key, "SP");
-            if (i == (size_t)menu->find_key) {
-                rectangle(menu, 22 + (i % 10) * 27, 111 + (i / 10) * 17, 19, 13, ACCENT);
-                label_on(menu, 27 + (i % 10) * 27, 113 + (i / 10) * 17, key, INK, UI_FONT_SMALL,
-                         ACCENT);
-            } else
-                text(menu, 27 + (i % 10) * 27, 113 + (i / 10) * 17, key, TEXT);
-        }
-        text(menu, 24, 189,
-             menu->tools == TOOL_SLOT_NAME ? "P:Save X:Erase C:Clear" : "P:Search X:Erase C:Clear",
-             MUTED);
-    } else if (menu->tools == TOOL_HELP) {
-        static const char *help[] = {
-            "A: Open folder / launch game",     "B: Parent folder / cancel",
-            "Up/Down: Select (hold to repeat)", "Left/Right or L/R: Page",
-            "C: Add selected disc to queue",    "Tap P:Queue / Hold P:Help",
-            "X: Cover/video or refresh",        "L+R together: Open tools",
-            "Hold X at boot: Skip USB extras",  "C+Up or list ends: Alphabet"};
-        static const char *more[] = {
-            "Queue: X removes one disc",      "Queue: C toggles move mode",
-            "Move mode: Up/Down reorders",    "Hold C, press X: Clear queue",
-            "Hold C + Left/Right: Letter",    "Hold C + A: Folder / one disc",
-            "Favorites: A opens game folder", "Favorites: C adds, X removes",
-            "Config: C saves, X discards",    "ABC: Left/Right A:Jump B:Cancel"};
-        for (i = 0; i < 10; ++i)
-            tool_line(menu, (int)i, menu->tool_selected ? more[i] : help[i], i < 8 ? TEXT : MUTED);
-    } else if (menu->tools == TOOL_DIAG) {
-        if (!menu->tool_selected) {
-            format(line, "Menu %s / XBUS unit 0", MENU_VERSION);
-            tool_line(menu, 0, line, TEXT);
-            format(line, "ODE ID: %.6s", menu->ode.identity[0] ? menu->ode.identity : "------");
-            tool_line(menu, 1, line, TEXT);
-            format(line, "Reported revision: %u.%u.%u", menu->ode.revision[0],
-                   menu->ode.revision[1], menu->ode.revision[2]);
-            tool_line(menu, 2, line, TEXT);
-            format(line, "Boot flags: %02x Status: %02x", menu->ode.identity_reply[1],
-                   menu->ode.identity_reply[11]);
-            tool_line(menu, 3, line, MUTED);
-            tool_line(menu, 4, "Identity bytes (93 reply):", MUTED);
-            format(line, "%02x %02x %02x %02x %02x %02x", menu->ode.identity_reply[0],
-                   menu->ode.identity_reply[1], menu->ode.identity_reply[2],
-                   menu->ode.identity_reply[3], menu->ode.identity_reply[4],
-                   menu->ode.identity_reply[5]);
-            tool_line(menu, 5, line, TEXT);
-            format(line, "%02x %02x %02x %02x %02x %02x", menu->ode.identity_reply[6],
-                   menu->ode.identity_reply[7], menu->ode.identity_reply[8],
-                   menu->ode.identity_reply[9], menu->ode.identity_reply[10],
-                   menu->ode.identity_reply[11]);
-            tool_line(menu, 6, line, TEXT);
-            tool_line(menu, 8, "ID/revision can be hard-coded.", AMBER);
-            tool_line(menu, 9, "Exact firmware build is unknown.", AMBER);
-        } else if (menu->tool_selected == 1) {
-            int row = 4;
-            format(line, "Folder workaround: %s (%s)",
-                   workaround_name(menu->config.folder_workaround),
-                   folder_workaround(menu) ? "in use" : "not used");
-            tool_line(menu, 0, line, TEXT);
-            format(line, "Config result: %d (0 = loaded)", menu->config_result);
-            tool_line(menu, 1, line, TEXT);
-            format(line, "USB covers: %s", menu->skip_usb_art ? "disabled" : "enabled");
-            tool_line(menu, 2, line, TEXT);
-            format(line, "Cover index: %lu entries", (unsigned long)menu->usb_art.count);
-            tool_line(menu, 3, line, MUTED);
-            if (menu->usb_tested) {
-                format(line, "USB write check: %s", menu->usb_tested > 0 ? "PASS" : "FAIL");
-                tool_line(menu, row++, line, TEXT);
-            }
-            format(line, "Backup: %s",
-                   menu->backup_result > 0 ? "verified"
-                                           : (menu->backup_result < 0 ? "failed" : "not run"));
-            tool_line(menu, row++, line, TEXT);
-            format(line, "Restore: %s",
-                   menu->restore_result > 0 ? "verified"
-                                            : (menu->restore_result < 0 ? "failed" : "not run"));
-            tool_line(menu, row++, line, TEXT);
-            format(line, "Queued discs: %lu / 16", (unsigned long)menu->playlist.count);
-            tool_line(menu, row++, line, MUTED);
-            format(line, "NVRAM error: %08lx",
-                   (unsigned long)menu->nvram_info.last_error & 0xffffffffUL);
-            tool_line(menu, row++, line, MUTED);
-            tool_line(menu, row, "Results apply to this session.", MUTED);
-        } else if (menu->tool_selected == 2) {
-            format(line, "Commands sent: %lu", menu->bus.commands);
-            tool_line(menu, 0, line, TEXT);
-            format(line, "Last command: %02x (%lu bytes)", menu->bus.last_command,
-                   (unsigned long)menu->bus.last_length);
-            tool_line(menu, 1, line, TEXT);
-            format(line, "Reply: %02x %02x %02x %02x", menu->bus.last_reply[0],
-                   menu->bus.last_reply[1], menu->bus.last_reply[2], menu->bus.last_reply[3]);
-            tool_line(menu, 2, line, TEXT);
-            format(line, "XBUS error: %08lx", (unsigned long)menu->bus.last_error & 0xffffffffUL);
-            tool_line(menu, 3, line, MUTED);
-            format(line, "Transport timed out: %s", menu->bus.timed_out ? "YES" : "no");
-            tool_line(menu, 4, line, MUTED);
-            format(line, "Navigation blocked: %s", menu->ode.navigation_failed ? "YES" : "no");
-            tool_line(menu, 5, line, MUTED);
-            format(line, "Last fault: cmd %02x status %02x", menu->bus.failed_command,
-                   menu->bus.failed_status);
-            tool_line(menu, 6, line, MUTED);
-            format(line, "Fault error: %08lx",
-                   (unsigned long)menu->bus.failure_error & 0xffffffffUL);
-            tool_line(menu, 7, line, MUTED);
-            format(line, "Cover: %lums / %lu cmds%s", menu->cover_load_ms, menu->cover_commands,
-                   menu->cover_cached ? " RAM" : "");
-            tool_line(menu, 8, line, MUTED);
-            format(line, "Diagnostic export: %d", menu->diagnostics_result);
-            tool_line(menu, 9, line, MUTED);
-        } else if (menu->tool_selected == 3) {
-            tool_line(menu, 0, "Last preview load", TEXT);
-            format(line, "Result: %d  Total: %lums", menu->preview_result, menu->preview_load_ms);
-            tool_line(menu, 1, line, TEXT);
-            format(line, "Read + CRC: %lums", menu->preview_read_ms);
-            tool_line(menu, 2, line, MUTED);
-            format(line, "Checks / first frame: %lums", menu->preview_check_ms);
-            tool_line(menu, 3, line, MUTED);
-            format(line, "Folder navigation: %lums", menu->preview_navigation_ms);
-            tool_line(menu, 4, line, MUTED);
-            format(line, "Audio / display setup: %lums", menu->preview_setup_ms);
-            tool_line(menu, 5, line, MUTED);
-            format(line, "Payload: %lu KiB", (menu->preview_bytes + 1023) / 1024);
-            tool_line(menu, 6, line, MUTED);
-            format(line, "Frames: %u at %u fps", menu->preview_frames, menu->preview_fps);
-            tool_line(menu, 7, line, MUTED);
-            format(line, "Commands: %lu", menu->preview_commands);
-            tool_line(menu, 8, line, MUTED);
-            if (menu->preview_result == -4)
-                tool_line(menu, 9, "Not enough preview memory.", AMBER);
-            else if (menu->preview_result == -5)
-                tool_line(menu, 9, "Canceled by controller input.", MUTED);
-            else if (menu->preview_result < 0)
-                tool_line(menu, 9, "Preview file / read failed.", AMBER);
-            else
-                tool_line(menu, 9, "Playback checks frames as shown.", MUTED);
-        } else {
-            tool_line(menu, 0, "Last requested USB file:", TEXT);
-            for (i = 0; i < 4; ++i) {
-                format(line, "%.32s",
-                       strlen(menu->ode.file_path) > i * 32 ? menu->ode.file_path + i * 32 : "");
-                tool_line(menu, (int)i + 1, line, TEXT);
-            }
-            tool_line(menu, 5, "Browser folder:", MUTED);
-            format(line, "%.40s", menu->breadcrumb);
-            tool_line(menu, 6, line, TEXT);
-            format(line, "Indexes: %lu covers / %lu clips", (unsigned long)menu->usb_art.count,
-                   (unsigned long)menu->usb_previews.count);
-            tool_line(menu, 7, line, MUTED);
-            format(line, "Game metadata: %lu entries", (unsigned long)menu->metadata.count);
-            tool_line(menu, 8, line, MUTED);
-            tool_line(menu, 9, "Retained after a USB timeout.", MUTED);
-        }
-    } else if (menu->tools == TOOL_COMPARE || menu->tools == TOOL_COMPARE_BYTES) {
-        SaveDifference diff;
-        size_t total = save_archive_diff_count(&menu->compare_archive, &menu->backup);
-        {
-            char a[40], b[40];
-            slot_path(a, menu->compare_slot);
-            slot_path(b, menu->backup_slot);
-            a[strlen(a) - 4] = 0;
-            b[strlen(b) - 4] = 0;
-            format(line, "%.13s > %.13s", a + 6, b + 6);
-            tool_line(menu, 0, line, MUTED);
-        }
-        if (menu->tools == TOOL_COMPARE) {
-            static const char *states[] = {"SAME", "CHANGED", "ADDED", "REMOVED"};
-            size_t start = menu->tool_selected / 8 * 8;
-            for (i = start; i < total && i < start + 8; ++i)
-                if (!save_archive_diff(&menu->compare_archive, &menu->backup, i, &diff)) {
-                    const SaveEntry *e = diff.after < menu->backup.count
-                                             ? &menu->backup.entries[diff.after]
-                                             : &menu->compare_archive.entries[diff.before];
-                    Color ink =
-                        tool_row(menu, 100 + (int)(i - start) * 11, i == menu->tool_selected);
-                    format(line, "%-7s %.25s", states[diff.state], e->name);
-                    text(menu, 22, 100 + (i - start) * 11, line, ink);
-                }
-            if (!total)
-                tool_line(menu, 3, "Both slots are empty.", MUTED);
-            else if (!save_archive_diff(&menu->compare_archive, &menu->backup, menu->tool_selected,
-                                        &diff)) {
-                format(line, "%lu byte(s) differ%s", (unsigned long)diff.changed_bytes,
-                       diff.metadata_changed ? " / metadata" : "");
-                tool_line(menu, 9, line, MUTED);
-            }
-        } else if (!save_archive_diff(&menu->compare_archive, &menu->backup, menu->tool_selected,
-                                      &diff)) {
-            const SaveEntry *a = diff.before < menu->compare_archive.count
-                                     ? &menu->compare_archive.entries[diff.before]
-                                     : NULL;
-            const SaveEntry *b =
-                diff.after < menu->backup.count ? &menu->backup.entries[diff.after] : NULL;
-            size_t at, n = 0, row = 0;
-            tool_line(menu, 1, a ? a->name : b->name, TEXT);
-            tool_line(menu, 2, "Offset     Before  After", MUTED);
-            for (at = 0; at < diff.length && row < 7; ++at)
-                if (!a || !b || at >= a->size || at >= b->size || a->data[at] != b->data[at]) {
-                    char old[3], next[3];
-                    if (n++ < menu->compare_offset)
-                        continue;
-                    if (a && at < a->size)
-                        format(old, "%02x", a->data[at]);
-                    else
-                        strcpy(old, "--");
-                    if (b && at < b->size)
-                        format(next, "%02x", b->data[at]);
-                    else
-                        strcpy(next, "--");
-                    format(line, "%04lx       %s      %s", (unsigned long)at, old, next);
-                    tool_line(menu, 3 + (int)row++, line, TEXT);
-                }
-            if (!diff.changed_bytes)
-                tool_line(menu, 4,
-                          diff.metadata_changed ? "Only filename/type differs."
-                                                : "Save bytes are identical.",
-                          MUTED);
-        }
-    } else if (menu->tools == TOOL_CONFIRM_BACKUP) {
-        slot_path(line, menu->backup_slot);
-        tool_line(menu, 0, line, TEXT);
-        if (menu->backup_merge) {
-            const SaveEntry *entry = backup_entry(menu);
-            tool_line(menu, 2,
-                      menu->hex_archive.bytes     ? "Save edited file:"
-                      : menu->copy_original.bytes ? "Copy this save:"
-                                                  : "Back up this save:",
-                      TEXT);
-            tool_line(menu, 3, entry->name, TEXT);
-            tool_line(menu, 5, "Other slot entries stay unchanged.", ACCENT);
-            format(line, "Slot will contain %lu save(s).", (unsigned long)menu->pending.count);
-            tool_line(menu, 7, line, MUTED);
-        } else {
-            format(line, "Back up %lu save file(s)?", (unsigned long)menu->pending.count);
-            tool_line(menu, 2, line, TEXT);
-            if (menu->backup_slot_valid)
-                format(line, "Replaces %lu existing save(s).", (unsigned long)menu->backup.count);
-            else
-                strcpy(line, "Replaces this USB backup slot.");
-            tool_line(menu, 4, line, AMBER);
-            tool_line(menu, 6, "Internal saves stay unchanged.", ACCENT);
-        }
-    } else if (menu->tools == TOOL_CONFIRM_RESTORE) {
-        const SaveEntry *e = &menu->backup.entries[menu->save_selected];
-        tool_line(menu, 0, e->name, TEXT);
-        format(line, "%lu bytes / type %08lx", (unsigned long)e->size, e->type);
-        tool_line(menu, 1, line, MUTED);
-        tool_line(menu, 3, "Restore this save to NVRAM?", AMBER);
-        tool_line(menu, 4, "Replaces the matching save.", AMBER);
-        tool_line(menu, 6, "First: verified recovery backup.", TEXT);
-        tool_line(menu, 7,
-                  menu->backup_slot == SAVE_RECOVERY_SLOT ? "Replaces USB recovery2.3ds."
-                                                          : "Replaces USB recovery.3ds.",
-                  MUTED);
-        tool_line(menu, 9, "Keep power on until finished.", AMBER);
-    }
-    {
-        const SaveCheatProfile *cheats =
-            menu->tools == TOOL_CHEATS
-                ? save_cheats_find(&menu->hex_archive.entries[menu->save_selected])
-                : NULL;
-        const char *controls = menu->tools == TOOL_HOME ? "A:Select B:Back" : "A:Select B:Back";
-        if (menu->tools == TOOL_GAME_DETAILS)
-            controls = "Left/Right:Page B:Back";
-        if (menu->tools == TOOL_FAVORITES)
-            controls = menu->favorites_move ? "Up/Down:Move A/R:Save B:Cancel"
-                                            : "A:Open C:Add X:Remove B:Back";
-        else if (menu->tools == TOOL_RESULTS)
-            controls = "A:Open P:Edit X:Reload B:Back";
-        else if (menu->tools == TOOL_SLOT_JUMP)
-            controls = "Left/Right:Digit A:Add P:Go";
-        else if (menu->tools == TOOL_SLOT_NAME || menu->tools == TOOL_SLOT_QUERY)
-            controls = "Arrows:Choose A:Key B:Cancel";
-        else if (menu->tools == TOOL_COMPARE)
-            controls = "A:Byte differences B:Back";
-        else if (menu->tools == TOOL_COMPARE_BYTES)
-            controls = "Left/Right:Page B:Back";
-        else if (menu->tools == TOOL_SLOTS && !menu->backup_mode)
-            controls = menu->compare_choosing ? "A:Compare with this slot B:Cancel"
-                                              : "A:Open C:Name X:Compare";
-        else if (menu->tools == TOOL_FIND)
-            controls = "Arrows:Choose A:Key B:Cancel";
-        else if (menu->tools == TOOL_CATEGORIES)
-            controls = "A:Show/Hide B:Settings";
-        else if (menu->tools == TOOL_CONFIG)
-            controls = "Left/Right:Change C:Save B:Back";
-        else if (menu->tools == TOOL_BACKUP_DETAILS)
-            controls = "A:Continue C:Old/New B:Back";
-        else if (menu->tools == TOOL_SAVES)
-            controls = "A:Back up one C:All X:Refresh";
-        else if (menu->tools == TOOL_ARCHIVE)
-            controls = "A:Restore C:Hex X:Cheats B:Back";
-        else if (menu->tools == TOOL_CHEATS)
-            controls = cheats && menu->cheat_selected < cheats->preset_count
-                           ? "A:Apply preset"
-                           : "Left/Right:Change value";
-        else if (menu->tools == TOOL_HEX)
-            controls = menu->hex_editing ? "Arrows:Value A:Apply B:Cancel"
-                                         : "Arrows:Move A:Edit C:Save as";
-        else if (menu->tools == TOOL_HEX_DISCARD)
-            controls = "A:Discard B:Keep editing";
-        else if (menu->tools == TOOL_CONFIRM_BACKUP || menu->tools == TOOL_CONFIRM_RESTORE)
-            controls = "A:Confirm B:Cancel";
-        else if (menu->tools == TOOL_DIAG)
-            controls = "C:Export X:Test return B:Back";
-        else if (menu->tools == TOOL_HELP)
-            controls = "B:Back";
-        else if (menu->tools == TOOL_RECENT)
-            controls = "A:Open folder P:Reload B:Back";
-        if (menu->tool_message)
-            label(menu, 16, 211, menu->tool_message, AMBER, UI_FONT_SMALL);
-        else
-            control_badges(menu, 16, 210, controls, 1);
-    }
-    control_badges(menu, 16, 225,
-                   menu->tools == TOOL_SLOTS     ? "L/R:Slot page P:Find slots"
-                   : menu->tools == TOOL_ARCHIVE ? "P:Copy to slot L+R:Library"
-                   : menu->tools == TOOL_CHEATS  ? "C:Save as X:Hex B:Back"
-                   : menu->tools == TOOL_HEX     ? "L/R:Page X:Cheats B:Back"
-                   : save_views                  ? "Left/Right:View B:Back"
-                   : menu->tools == TOOL_FAVORITES
-                       ? "R:Move order P:Reload"
-                       : ((menu->tools == TOOL_DIAG || menu->tools == TOOL_HELP)
-                              ? "Left/Right:More pages"
-                              : "Hold P:Help L+R:Library"),
-                   0);
+    /* The controls, or a message in their place. */
+    if (menu->tool_message)
+        label(menu, 16, 211, menu->tool_message, AMBER, UI_FONT_SMALL);
+    else
+        control_badges(menu, 16, 210, tools_controls(menu), 1);
+    control_badges(menu, 16, 225, tools_more_controls(menu), 0);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
