@@ -746,6 +746,22 @@ impl Journal {
         self.save()?;
         f::atomic(&p, data)
     }
+    /// Deletes a small file; undo writes it back.
+    pub fn remove(&mut self, name: &str) -> Result<()> {
+        let p = f::safe(&self.root, name)?;
+        if !p.is_file() { bail!("Expected a regular file: {name}") }
+        if fs::metadata(&p)?.len() > 16 * 1024 * 1024 {
+            bail!("Oversized support file")
+        };
+        self.writes.push(Written {
+            path: name.into(),
+            before: Some(fs::read(&p)?),
+            after: String::new(),
+        });
+        self.save()?;
+        fs::remove_file(p)?;
+        Ok(())
+    }
     pub fn copy(
         &mut self,
         source: &Path,
@@ -818,9 +834,10 @@ impl Journal {
                 } else {
                     None
                 });
+            // An empty `after` marks a removed file.
+            let after = (!entry.after.is_empty()).then(|| entry.after.clone());
             if *current != entry.before
-                && current.as_ref().map(|b| format!("{:x}", Sha256::digest(b)))
-                    != Some(entry.after.clone())
+                && current.as_ref().map(|b| format!("{:x}", Sha256::digest(b))) != after
             {
                 bail!("Undo refused: file changed after import: {}", entry.path)
             }

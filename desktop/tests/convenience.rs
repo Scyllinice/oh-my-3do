@@ -52,8 +52,8 @@ fn put(root:&Path,name:&str,bytes:&[u8]){let p=root.join(name);fs::create_dir_al
  let prefs=Preferences{offline:true,..Default::default()};let mut tx=library::Journal::new(&root,&cache).unwrap();library::build_indexes(&root,&mut tx,&Job::default()).unwrap();tx.finish().unwrap();library::update_selected_media(&root,&prefs,&cache,&[path.into()],&Job::default()).unwrap();
  let db=library::database(&root).unwrap();assert_eq!(db["games"][0]["metadata"]["description"],"Explore & discover.");
  let mut remembered=Preferences::default();drive::remember(&dest,"Console SD",&mut remembered,"unnamed").unwrap();let marker=fs::read(dest.join(drive::MARKER)).unwrap();
- let plan=usb::plan_selected(&root,&dest,&cache,false,&[path.into()],&Job::default()).unwrap();assert!(plan.files.iter().any(|f|f.path==game_info::filename(path)));assert!(!plan.files.iter().any(|f|f.path==game_info::filename("Games/USA/Other/disc.iso")));
- usb::apply(&plan,&cache,&Job::default()).unwrap();assert_eq!(fs::read(dest.join(game_info::filename(path))).unwrap(),game_info::encode(path,"Explore & discover.").unwrap());assert_eq!(fs::read(dest.join(drive::MARKER)).unwrap(),marker);
+ let plan=usb::plan_selected(&root,&dest,&cache,false,&[path.into()],&Job::default()).unwrap();assert!(plan.files.iter().any(|f|f.path==game_info::drive_filename(path)));assert!(!plan.files.iter().any(|f|f.path==game_info::drive_filename("Games/USA/Other/disc.iso")));
+ usb::apply(&plan,&cache,&Job::default()).unwrap();assert_eq!(fs::read(dest.join(game_info::drive_filename(path))).unwrap(),game_info::encode(path,"Explore & discover.").unwrap());assert_eq!(fs::read(dest.join(drive::MARKER)).unwrap(),marker);
 }
 #[test]fn missing_media_repairs_existing_descriptions_without_downloads_or_changing_other_games(){
  let t=tempfile::tempdir().unwrap();let root=t.path().join("library");let cache=t.path().join("cache");

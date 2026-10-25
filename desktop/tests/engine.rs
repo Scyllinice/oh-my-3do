@@ -820,6 +820,52 @@ fn usb_copy_places_media_beside_each_disc() {
     assert_eq!(snapshot(&dest), before);
 }
 #[test]
+fn usb_copy_moves_descriptions_beside_each_disc_and_removes_old_root_ones() {
+    use oh_my_3do_library::game_info;
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("library");
+    let dest = t.path().join("USB");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&dest).unwrap();
+    put(&root, "boot.iso", &boot());
+    put(&root, ".ohmy3do/ohmy3do.ini", include_bytes!("../../ohmy3do.ini"));
+    let (rr, top) = ("Games/USA/Road Rash/Road Rash.iso", "Top.iso");
+    put(&root, rr, b"fictional");
+    put(&root, top, b"top level");
+    let cache = t.path().join("cache");
+    let mut tx = library::Journal::new(&root, &cache).unwrap();
+    library::build_indexes(&root, &mut tx, &Job::default()).unwrap();
+    tx.finish().unwrap();
+    for path in [rr, top] {
+        put(&root, &game_info::filename(path), &game_info::encode(path, "A fictional game.").unwrap());
+    }
+    // An older desktop left this drive's descriptions at its root, the menu
+    // left an empty one, and the owner keeps a note of their own there.
+    let old = put(&dest, &game_info::filename(rr), &game_info::encode(rr, "Old text.").unwrap());
+    let empty = put(&dest, ".ohmy3do/info/0badf00d.txt", b"");
+    let note = put(&dest, ".ohmy3do/info/notes.txt", b"mine");
+    let before = snapshot(&dest);
+    let plan = usb::plan(&root, &dest, &cache, false, &Job::default()).unwrap();
+    let removals: Vec<_> = plan.files.iter().filter(|f| f.status == "remove").map(|f| f.path.as_str()).collect();
+    assert_eq!(removals, [".ohmy3do/info/0badf00d.txt", game_info::filename(rr).as_str()]);
+    let journal = usb::apply(&plan, &cache, &Job::default()).unwrap();
+    assert_eq!(game_info::drive_filename(rr), format!("Games/USA/Road Rash/.ohmy3do/{}", &game_info::filename(rr)[".ohmy3do/info/".len()..]));
+    for path in [rr, top] {
+        assert_eq!(fs::read(dest.join(game_info::drive_filename(path))).unwrap(), game_info::encode(path, "A fictional game.").unwrap());
+    }
+    assert!(dest.join(game_info::drive_filename(top)).parent().unwrap().ends_with(".ohmy3do"));
+    assert!(!old.exists() && !empty.exists());
+    assert_eq!(fs::read(&note).unwrap(), b"mine");
+    library::undo(&journal).unwrap();
+    assert_eq!(snapshot(&dest), before);
+    // With only old descriptions there, their folder goes too.
+    fs::remove_file(&note).unwrap();
+    let plan = usb::plan(&root, &dest, &cache, false, &Job::default()).unwrap();
+    usb::apply(&plan, &cache, &Job::default()).unwrap();
+    assert!(!dest.join(".ohmy3do/info").exists());
+    assert!(usb::plan(&root, &dest, &cache, false, &Job::default()).unwrap().files.iter().all(|f| f.status != "remove"));
+}
+#[test]
 fn cue_utf8_bom_and_windows_1252_are_supported() {
     let t = tempfile::tempdir().unwrap();
     put(t.path(), "café.bin", b"audio");

@@ -13,8 +13,12 @@ fn media_index(root: &Path, folder: &str, warnings: &mut Vec<String>) -> (BTreeM
         }
     }
 }
+/// Beside the disc, or at the root where desktop 1.0.4 and older put it.
 fn description(paths: &mut f::ReadPaths, path: &str) -> Option<String> {
-    let file = paths.path(&game_info::filename(path)).ok()?;
+    [game_info::drive_filename(path), game_info::filename(path)].iter().find_map(|name| read_description(paths, name, path))
+}
+fn read_description(paths: &mut f::ReadPaths, name: &str, path: &str) -> Option<String> {
+    let file = paths.path(name).ok()?;
     if fs::metadata(&file).ok()?.len() > 16384 { return None; }
     let text = fs::read_to_string(file).ok()?;
     let lines: Vec<_> = text.lines().collect();

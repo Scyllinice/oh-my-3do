@@ -30,6 +30,20 @@ pub fn console_text(text:&str)->String{
  let mut text=text.split_whitespace().collect::<Vec<_>>().join(" ");if text.len()>MAX{let end=text[..MAX-3].rfind(' ').unwrap_or(MAX-3);text.truncate(end);text.push_str("...");}text
 }
 pub fn filename(path:&str)->String{format!(".ohmy3do/info/{:08x}.txt",crc32fast::hash(f::fold(path).as_bytes()))}
+/// A drive keeps each description in the .ohmy3do folder beside its disc, like
+/// covers and previews, so the menu reads it without a trip to the drive root.
+pub fn drive_filename(path:&str)->String{
+ let name=format!("{:08x}.txt",crc32fast::hash(f::fold(path).as_bytes()));
+ match path.rsplit_once('/'){Some((home,_))=>format!("{home}/.ohmy3do/{name}"),None=>format!(".ohmy3do/{name}")}
+}
+/// A description left in a drive's root `.ohmy3do/info/` by an older desktop,
+/// or the empty file firmware creates when the menu looked for a missing one.
+pub fn old_drive_file(name:&str,file:&std::path::Path)->Result<bool>{
+ let Some(stem)=name.strip_suffix(".txt") else {return Ok(false)};
+ if stem.len()!=8||!stem.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))||!file.is_file(){return Ok(false);}
+ let size=std::fs::metadata(file)?.len();
+ Ok(size==0||(size<=16384&&std::fs::read(file)?.starts_with(b"OM3DINFO1\n")))
+}
 pub fn encode(path:&str,description:&str)->Result<Vec<u8>>{
  ensure!(!path.is_empty()&&path.len()<=8192&&!path.contains(['\n','\r','\0']),"Invalid game information path");
  let body=format!("{path}\n{}\n",console_text(description));

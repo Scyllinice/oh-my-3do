@@ -3389,6 +3389,28 @@ static int text_at_root(Menu *menu, const char *name, const char *write, char *r
     if (length) *length = op.length;
     return result;
 }
+/* Read from the .ohmy3do folder beside the entry's disc (inside the entry
+ * when it is a folder acting as its game), without a trip to the root. */
+static int text_beside(Menu *menu, const MenuEntry *entry, const char *name, char *read, size_t capacity, size_t *length)
+{
+    TextOperation op;
+    ArtRouteStep route[MAX_DEPTH];
+    int result;
+    if (menu->demo || !menu->ready || menu->bus.timed_out || menu->ode.navigation_failed ||
+        menu->config_result == 2 || strcmp(menu->ode.identity,"LOCODE")) return -1;
+    current_route(menu,route);
+    op.menu = menu; op.name = name; op.write = NULL; op.read = read; op.capacity = capacity; op.length = 0;
+    menu->ode.media_folder = entry->is_directory ? entry->name : NULL;
+    result = media_read(menu,route,1,text_at_root_callback,&op);
+    menu->ode.media_folder = NULL;
+    if (result == -2 || menu->bus.timed_out || menu->ode.navigation_failed) {
+        menu->ready = menu->view_valid = 0;
+        menu->message = "USB I/O failed. Restart console.";
+        result = -1;
+    }
+    if (length) *length = op.length;
+    return result;
+}
 static void adopt_location(Menu *menu, LibraryLocation *location)
 {
     size_t i;
@@ -4147,8 +4169,14 @@ static void open_game_details(Menu *menu)
     if(info&&!menu->demo){
         bytes=(char *)malloc(12288);
         if(bytes){
+            int result;
             game_info_filename(info->path,name);
-            if(!text_at_root(menu,name,NULL,bytes,12288,&length))
+            /* Beside the disc, as the desktop prepares drives, unless the
+             * media indexes say this drive keeps its media at the root. */
+            if((menu->usb_art.count&&!menu->usb_art.beside)||(menu->usb_previews.count&&!menu->usb_previews.beside))
+                result=text_at_root(menu,name,NULL,bytes,12288,&length);
+            else result=text_beside(menu,entry,name+strlen("info/"),bytes,12288,&length);
+            if(!result)
                 game_info_parse(bytes,length,info->path,menu->game_description,sizeof(menu->game_description));
             free(bytes);
         }

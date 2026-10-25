@@ -5,7 +5,7 @@
 #   make-usb.sh [BOOT.iso]     default: iso/boot.iso
 # LIBRARY=/mnt/d/3DO is the library; CLIPS=dir adds .3dv files that replace the
 # library's clips of the same name (default build/console-test/previews).
-# BESIDE=1 lays media out the new way: each disc's cover and preview in a
+# BESIDE=1 lays media out the new way: each disc's cover, preview and description in a
 # .ohmy3do folder beside it, with the indexes flagged accordingly.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,6 +37,7 @@ for file in ohmy3do.ini library.3di metadata.3di; do
 done
 if [[ -f "$library/.ohmy3do/categories.json" ]]; then cp "$library/.ohmy3do/categories.json" "$usb/.ohmy3do/categories.json"; fi
 cp -r "$library/.ohmy3do/covers" "$usb/.ohmy3do/covers"
+if [[ -d "$library/.ohmy3do/info" ]]; then cp -r "$library/.ohmy3do/info" "$usb/.ohmy3do/info"; fi
 for clip in "$library/.ohmy3do/previews"/*; do
     # Link clips read-only; copy the index, which BESIDE=1 rewrites.
     if [[ $(basename "$clip") == index.3di ]]; then cp "$clip" "$usb/.ohmy3do/previews/"
@@ -78,6 +79,15 @@ for folder in ('covers', 'previews'):
     struct.pack_into('>I', data, 20, 1)  # media beside each disc
     index.write_bytes(bytes(data))
     print(folder, 'placed beside', moved, 'discs')
+info = usb / '.ohmy3do' / 'info'
+if info.is_dir():
+    for file in sorted(info.iterdir()):
+        game = file.read_text(encoding='ascii').split('\n')[1]
+        home = folded[str(Path(game).parent.as_posix()).casefold()]
+        (usb / home / '.ohmy3do').mkdir(exist_ok=True)
+        file.rename(usb / home / '.ohmy3do' / file.name)
+    info.rmdir()
+    print('descriptions placed beside their discs')
 PY
 fi
 echo "USB drive: $usb"

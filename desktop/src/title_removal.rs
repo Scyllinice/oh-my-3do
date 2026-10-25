@@ -84,8 +84,10 @@ pub fn review(root: &Path, selected: &[String], job: &Job) -> Result<Plan> {
         }
         for path in owned.difference(&kept) {if f::safe(&root,path)?.is_file() {files.insert(path.clone());}}
     }
-    let remaining: BTreeSet<_>=record_paths(&db).iter().chain(actual_names.keys()).filter(|p|!keys.contains(*p)).map(|p|game_info::filename(p)).collect();
-    for path in &discs {let info=game_info::filename(path);if !remaining.contains(&info)&&f::safe(&root,&info)?.is_file(){files.insert(info);}}
+    // A library keeps descriptions at its root; a drive keeps them beside the disc.
+    let info_names=|p:&str|[game_info::filename(p),game_info::drive_filename(p)];
+    let remaining: BTreeSet<_>=record_paths(&db).iter().chain(actual_names.keys()).filter(|p|!keys.contains(*p)).flat_map(|p|info_names(p)).map(|n|f::fold(&n)).collect();
+    for path in &discs {for info in info_names(path) {if !remaining.contains(&f::fold(&info))&&f::safe(&root,&info)?.is_file(){files.insert(info);}}}
     // Remove only recognized navigation placeholders from now-game-free
     // ancestors; never remove a helper needed by an unselected sibling title.
     for disc in &discs {

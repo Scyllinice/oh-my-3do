@@ -309,8 +309,15 @@ before applying the same 63-byte cap.
 
 ## Optional game descriptions
 
-The desktop writes `.ohmy3do/info/xxxxxxxx.txt` for titles with descriptions.
-`xxxxxxxx` is the CRC32 of the ASCII-case-folded UTF-8 relative disc path.
+The desktop writes `.ohmy3do/info/xxxxxxxx.txt` in a library for titles with
+descriptions. `xxxxxxxx` is the CRC32 of the ASCII-case-folded UTF-8 relative
+disc path. On a drive it prepares, the file is `xxxxxxxx.txt` in the `.ohmy3do`
+folder beside the disc, with its cover and preview, so the menu reads it
+without returning to the drive root. The menu reads the root `info/` folder
+only when a media index says the drive keeps its media at the root. Drive
+preparation removes descriptions an older desktop left in the drive's root
+`info/` folder, and empty files there that firmware created for a missing one;
+it leaves any other file alone.
 Each file contains `OM3DINFO1`, the complete relative path, a printable ASCII
 description of at most 2048 bytes, and an eight-digit hexadecimal CRC32 of
 `path + newline + description + newline`, each on its own newline-terminated line.

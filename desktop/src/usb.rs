@@ -17,8 +17,8 @@ use std::{
 pub struct CopyItem {
     /// Destination path; also the source path unless `source_path` is set.
     pub path: String,
-    /// Media copied from the staging root's .ohmy3do/covers or previews to
-    /// the .ohmy3do folder beside its disc on the drive.
+    /// Media and descriptions copied from the staging root's .ohmy3do
+    /// folders to the .ohmy3do folder beside their disc on the drive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
     pub status: String,
@@ -163,7 +163,7 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
         }
         files.insert(".ohmy3do/metadata.3di".into());
     }
-    for path in &games {if chosen(path) {let name=crate::game_info::filename(path);if f::safe(root,&name)?.is_file(){files.insert(name);}}}
+    for path in &games {if chosen(path) {let name=crate::game_info::filename(path);if f::safe(root,&name)?.is_file(){beside.insert(crate::game_info::drive_filename(path),name);}}}
     let cheats=f::safe(root,crate::save_cheats::JSON_PATH)?;
     if cheats.is_file(){
         let db=crate::save_cheats::Database::read(&cheats)?;
@@ -261,7 +261,7 @@ fn inventory_selected(root: &Path, selected: Option<&BTreeSet<String>>, job: &Jo
         .collect::<Vec<_>>();
     for (dest, source) in beside {
         if pairs.iter().any(|(d, _)| f::fold(d) == f::fold(&dest)) {
-            bail!("Media path collides with another file: {dest}")
+            bail!("Media or description path collides with another file: {dest}")
         }
         pairs.push((dest, source));
     }
@@ -528,6 +528,19 @@ fn plan_impl(source: &Path, target: &Path, cache: &Path, verify: bool, selected:
         items.push(CopyItem { path: name.clone(), source_path: None, status: status.into(), size: content.len() as u64, source_stamp: 0, destination_stamp, verified: status == "unchanged" });
         job.report(review_total-(generated.len() as u64-generated_index as u64-1)*REVIEW_UNITS,review_total,"Reviewing files");
     }
+    // Descriptions now sit beside their discs; the menu no longer reads these.
+    let old_info = f::safe(&target, ".ohmy3do/info")?;
+    if old_info.is_dir() {
+        let mut names = fs::read_dir(&old_info)?.map(|entry| Ok(entry?.file_name())).collect::<Result<Vec<_>>>()?;
+        names.sort();
+        for file_name in names {
+            let Some(file_name) = file_name.to_str() else { continue };
+            if !crate::game_info::old_drive_file(file_name, &old_info.join(file_name))? { continue; }
+            let name = format!(".ohmy3do/info/{file_name}");
+            let (size, stamp) = f::stamp(&f::safe(&target, &name)?)?;
+            items.push(CopyItem { path: name, source_path: None, status: "remove".into(), size, source_stamp: 0, destination_stamp: Some(stamp), verified: false });
+        }
+    }
     // Menu-written lists on the drive follow moved folders even when staging has none.
     let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
     for name in [".ohmy3do/favorites.txt", ".ohmy3do/recent.txt", ".ohmy3do/last-position.txt"] {
@@ -694,6 +707,21 @@ pub fn apply(plan: &CopyPlan, cache: &Path, job: &Job) -> Result<PathBuf> {
             receipt.files[i].destination_stamp = Some(f::stamp(&dest)?.1);
             completed_bytes += file.size;job.report(completed_bytes,total_bytes,"Copying and verifying files");
         }
+        for (i, file) in plan.files.iter().enumerate().filter(|(_, file)| file.status == "remove") {
+            job.check()?;
+            let dest = f::safe(&plan.destination, &file.path)?;
+            if !dest.exists() { continue; }
+            if f::stamp(&dest)? != (file.size, file.destination_stamp.context("Missing destination stamp")?) {
+                bail!("Destination changed since preview: {}", file.path)
+            }
+            job.say(format!("Removing old {}", file.path));
+            tx.remove(&file.path)?;
+            receipt.files[i].status = "removed".into();
+        }
+        let old_info = f::safe(&plan.destination, ".ohmy3do/info")?;
+        if old_info.is_dir() && fs::read_dir(&old_info)?.next().is_none() {
+            fs::remove_dir(&old_info)?;
+        }
         job.phase("Finalizing drive support");
         for file in &mut receipt.files {
             if file.status == "unchanged" && file.verified {
@@ -793,7 +821,7 @@ pub fn storage_estimate(plan: &CopyPlan) -> Result<StorageEstimate> {
 /// Separate space arithmetic from filesystem queries for deterministic checks.
 pub fn estimate_with_space(plan: &CopyPlan, available: u64) -> StorageEstimate {
     let mut estimate = StorageEstimate {games:0,covers:0,previews:0,support:0,total:0,to_copy:0,reserve:0,required:0,available,remaining:0,shortfall:0,fits:false};
-    for file in &plan.files {
+    for file in plan.files.iter().filter(|file| file.status != "remove") {
         let name = file.path.to_ascii_lowercase();
         let support = name.starts_with(".ohmy3do/") || name.contains("/.ohmy3do/") || name == "boot.iso";
         let bucket = if support && (name.ends_with(".3dc") || name.ends_with(".png")) { &mut estimate.covers }
