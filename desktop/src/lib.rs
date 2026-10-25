@@ -18,6 +18,7 @@ pub mod recovery;
 pub mod support_report;
 pub mod eject;
 pub mod title_removal;
+pub mod drive_cleanup;
 pub mod usb;
 mod usb_selection;
 pub mod updates;

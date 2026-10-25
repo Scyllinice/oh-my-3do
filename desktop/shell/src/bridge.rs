@@ -43,6 +43,8 @@ struct Inner {
     config: Option<console_config::Loaded>,
     backup: Option<Backup>,
     cleanup: Option<core::recovery::Inventory>,
+    /// A reviewed removal of the menu's files from a drive.
+    drive_cleanup: Option<core::drive_cleanup::Plan>,
     release: Option<updates::Offers>,
     pending_update: Option<(self_update::Install, PathBuf, String)>,
     cheats: save_cheats::Database,
@@ -69,6 +71,7 @@ impl Backend {
                 config: None,
                 backup: None,
                 cleanup: None,
+                drive_cleanup: None,
                 release: None,
                 pending_update: None,
                 cheats: save_cheats::Database::bundled(),
@@ -505,6 +508,26 @@ fn dispatch(
             if backup_closed{s.backup=None;}
             s.copy=None;s.cleanup=None;
             Ok(json!({"root":result.root,"message":result.message,"backup_closed":backup_closed,"library_closed":library_closed}))
+        }
+        "drive_cleanup_review" => {
+            s.drive_cleanup=None;
+            let plan=core::drive_cleanup::review(&path(a,"root")?,job)?;
+            let response=json!(plan);
+            s.drive_cleanup=Some(plan);
+            Ok(response)
+        }
+        "drive_cleanup" => {
+            let plan=s.drive_cleanup.take().context("Review drive cleanup first")?;
+            // Save backups go to the chosen PC folder, or are deleted only when
+            // the person explicitly chose not to keep them.
+            let saves_to=a["saves_to"].as_str().filter(|p|!p.is_empty()).map(PathBuf::from);
+            ensure!(plan.saves.is_empty()||saves_to.is_some()||a["skip_saves"].as_bool()==Some(true),"Choose where to keep the save backups");
+            let open_backup_on_drive=s.backup.as_ref().and_then(|b|b.path.as_ref()).is_some_and(|p|p.canonicalize().is_ok_and(|p|p.starts_with(&plan.root)));
+            ensure!(!(open_backup_on_drive&&s.backup.as_ref().is_some_and(|b|b.dirty)),"Save or close the open save backup from this drive first");
+            let cleaned=core::drive_cleanup::apply(&plan,saves_to.as_deref(),job)?;
+            if open_backup_on_drive{s.backup=None;}
+            s.copy=None;s.cleanup=None;
+            Ok(json!({"cleaned":cleaned,"backup_closed":open_backup_on_drive}))
         }
         "drive_status" => Ok(json!(strings(a,"roots")?.iter().map(|root|core::eject::status(Path::new(root))).collect::<Vec<_>>())),
         "drive_check" => Ok(json!(core::readiness::check(&path(a,"root")?,job)?)),

@@ -64,6 +64,22 @@ updates; developer mode can use a local build folder instead. See
 To update manually, back up the existing `boot.iso` and replace it with the
 new download. Keep the existing `.ohmy3do/` folder and settings.
 
+## Stop using Oh My 3DO on a drive
+
+**Drive setup → Review cleanup…** lists everything Oh My 3DO added to a drive
+and removes it after you confirm:
+
+- `boot.iso`, `menu-demo.iso` and their `.sha256` files, when they are Oh My 3DO
+  images. Another menu's `boot.iso` is kept.
+- Every `.ohmy3do` folder: settings, indexes, covers, previews, descriptions and
+  save backups.
+- The folder navigation helper ISOs, when their contents match exactly.
+
+Games and all other files stay where they are. If the drive holds save backups,
+you can copy them to a new `Oh My 3DO saves` folder on the PC first, or remove
+them with everything else. Cleanup cannot be undone; to use the menu again, set
+up the drive again.
+
 ## Manual drive layout
 
 For a basic manual installation, create `.ohmy3do/` and copy the supplied
