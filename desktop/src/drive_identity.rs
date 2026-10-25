@@ -1,22 +1,41 @@
-//! A persistent identity belongs to a prepared drive, never to its mount letter.
+//! Telling drives apart. A drive prepared for the menu gets an identity (a
+//! random ID and a name the person chose) stored on the drive itself, so it
+//! is recognized whatever letter or mount point it gets, and a different
+//! drive mounted in the same place is noticed before anything is written.
+
 use crate::{fsutil as f, model::Preferences};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
+/// Where a drive's identity is stored on it.
 pub const MARKER: &str = ".ohmy3do/drive.json";
+
+/// A drive's identity, as stored in [`MARKER`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Identity {
+    /// A UUID.
     pub id: String,
+    /// The person's name for the drive (1 to 64 characters).
     pub name: String,
 }
+
+/// What is known about the drive mounted at a path.
 #[derive(Serialize)]
 pub struct Inspection {
     pub root: String,
+    /// The identity stored on the drive, if it has one.
     pub identity: Option<Identity>,
+    /// The identity last remembered for this path.
     pub expected: Option<Identity>,
+    /// A remembered drive was expected here, but this is another one.
     pub mismatch: bool,
+    /// The drive's ID, or "unnamed": passed back with a later write to make
+    /// sure the drive was not swapped meanwhile.
     pub token: String,
 }
+
+/// Reads the identity of the drive at `root`, and compares it with the one
+/// remembered for that path.
 pub fn inspect(root: &Path, prefs: &Preferences) -> Result<Inspection> {
     let root = f::root(root)?;
     let key = root.to_string_lossy().into_owned();
@@ -48,6 +67,7 @@ pub fn inspect(root: &Path, prefs: &Preferences) -> Result<Inspection> {
         token,
     })
 }
+/// Checks an identity read from a drive or about to be written.
 fn validate(value: &Identity) -> Result<()> {
     ensure!(uuid::Uuid::parse_str(&value.id).is_ok(), "Invalid drive ID");
     ensure!(
@@ -58,6 +78,9 @@ fn validate(value: &Identity) -> Result<()> {
     );
     Ok(())
 }
+/// Names the drive at `root` (giving it an ID if it has none), writes its
+/// identity to it and remembers it for that path. `expected` is the token
+/// from the inspection the person saw.
 pub fn remember(
     root: &Path,
     name: &str,
@@ -80,6 +103,8 @@ pub fn remember(
     prefs.drives.insert(view.root, value.clone());
     Ok(value)
 }
+/// Before writing to a drive: fails if it is not the drive that was
+/// reviewed (`token`), or not the drive remembered for that path.
 pub fn check(root: &Path, prefs: &Preferences, token: &str) -> Result<()> {
     let view = inspect(root, prefs)?;
     ensure!(

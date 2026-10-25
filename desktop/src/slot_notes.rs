@@ -1,11 +1,17 @@
-//! Notes are separate from NVRAM data and archive checksums.
+//! Notes about a backup slot, written by the person in the desktop app. They
+//! live in a text file beside the slot ("slot01.notes.txt" for
+//! "slot01.3ds"), so they never touch the saves or the backup's checksums.
+
 use crate::{backup, save_archive};
 use anyhow::{ensure, Context, Result};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+/// The most bytes a note may have.
 pub const MAX: usize = 4096;
+
+/// The notes file for a backup slot.
 pub fn path(archive: &Path) -> Result<PathBuf> {
     ensure!(
         backup::slot(archive).is_some(),
@@ -13,6 +19,7 @@ pub fn path(archive: &Path) -> Result<PathBuf> {
     );
     Ok(archive.with_extension("notes.txt"))
 }
+/// The slot's notes, or None if it has none.
 pub fn read(archive: &Path) -> Result<Option<String>> {
     let file = path(archive)?;
     if !file.exists() {
@@ -26,6 +33,7 @@ pub fn read(archive: &Path) -> Result<Option<String>> {
     validate(&text)?;
     Ok(Some(text))
 }
+/// Checks a note is text (tabs and line breaks allowed) within [`MAX`].
 fn validate(note: &str) -> Result<()> {
     ensure!(
         note.len() <= MAX
@@ -36,6 +44,8 @@ fn validate(note: &str) -> Result<()> {
     );
     Ok(())
 }
+/// Saves the slot's notes, if the file still holds `expected` (what the
+/// editor opened with), so two edits never overwrite each other.
 pub fn save(archive: &Path, note: &str, expected: Option<&str>) -> Result<()> {
     ensure!(archive.is_file(), "Save the archive before adding notes");
     validate(note)?;

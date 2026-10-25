@@ -1,3 +1,8 @@
+//! File helpers shared by the whole engine, written for the drives the
+//! console reads: FAT-formatted, case-insensitive, and often removable.
+//! Library paths are checked before use, files are replaced atomically, and
+//! copies are verified by reading them back from the drive itself.
+
 use crate::Job;
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
@@ -9,9 +14,14 @@ use std::{
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
+
+/// A name's case-insensitive form, for comparing names as FAT does.
 pub fn fold(s: &str) -> String {
     s.to_ascii_lowercase()
 }
+
+/// A file's size and modification time (in nanoseconds since 1970), to
+/// tell later whether it changed.
 pub fn stamp(p: &Path) -> Result<(u64, u128)> {
     let m = fs::metadata(p)?;
     Ok((
@@ -19,6 +29,9 @@ pub fn stamp(p: &Path) -> Result<(u64, u128)> {
         m.modified()?.duration_since(UNIX_EPOCH)?.as_nanos(),
     ))
 }
+
+/// Whether `p` is a symbolic link, or on Windows any reparse point
+/// (junctions included). The engine never follows them.
 pub fn is_link(p: &Path) -> bool {
     let Ok(m) = fs::symlink_metadata(p) else {
         return false;
@@ -26,19 +39,31 @@ pub fn is_link(p: &Path) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        m.file_attributes() & 0x400 != 0
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
     {
         m.file_type().is_symlink()
     }
 }
+
+/// Checks that `p` is an existing folder (not a link) and returns its full
+/// path, for use as the root of a library or drive.
 pub fn root(p: &Path) -> Result<PathBuf> {
     if is_link(p) || !p.is_dir() {
         bail!("Choose a real, existing directory: {}", p.display())
     }
     Ok(p.canonicalize()?)
 }
+
+/// Joins `name`, a relative path with '/' separators, onto `root`, refusing
+/// anything that could escape the root or that a FAT drive (or Windows)
+/// cannot store: "..", absolute paths, backslashes, control characters,
+/// reserved device names like CON, and names ending in a space or dot. Each
+/// existing folder along the way is passed to `check` with the next name, so
+/// the caller can refuse names differing only in case from one already
+/// there. Links along the way are refused.
 fn safe_with(
     root: &Path,
     name: &str,
@@ -78,7 +103,10 @@ fn safe_with(
     }
     Ok(p)
 }
-/// Fresh validation for writes and standalone lookups.
+
+/// The full path of library path `name` below `root`, checked as
+/// `safe_with` describes, reading each folder afresh to refuse names that
+/// differ only in case. Use this for every write.
 pub fn safe(root: &Path, name: &str) -> Result<PathBuf> {
     safe_with(root, name, |directory, text, raw| {
         for entry in fs::read_dir(directory)? {
@@ -90,13 +118,18 @@ pub fn safe(root: &Path, name: &str) -> Result<PathBuf> {
         Ok(())
     })
 }
-/// A directory-name snapshot for one read-only inventory operation. Construct
-/// a fresh instance for every refresh; never use cached names to authorize writes.
-/// Link/junction checks still run on every component of every lookup.
+
+/// Checked lookups for one read-only pass over a library or drive, which
+/// remembers each folder's names instead of reading it again for every
+/// path. Make a new one for every pass, and never use one to approve a
+/// write: names it remembers may be out of date. Links are still checked on
+/// every lookup.
 pub struct ReadPaths {
     root: PathBuf,
+    /// Each folder read so far: its names by their case-insensitive form.
     directories: HashMap<PathBuf, HashMap<String, Vec<OsString>>>,
 }
+
 impl ReadPaths {
     pub fn new(directory: &Path) -> Result<Self> {
         Ok(Self {
@@ -104,9 +137,12 @@ impl ReadPaths {
             directories: HashMap::new(),
         })
     }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
+
+    /// As [`safe`], but using the remembered folder listings.
     pub fn path(&mut self, name: &str) -> Result<PathBuf> {
         let directories = &mut self.directories;
         safe_with(&self.root, name, |directory, text, raw| {
@@ -134,19 +170,27 @@ impl ReadPaths {
         })
     }
 }
-/// Modification times within the coarsest drive resolution (FAT's two seconds).
+
+/// Whether two modification times (in nanoseconds) are the same to within
+/// the coarsest drive's resolution (FAT's two seconds).
 pub fn same_time(a: u128, b: u128) -> bool {
     a.abs_diff(b) <= 2_000_000_000
 }
+
+/// The SHA-256 of a file, as lowercase hex, reporting progress.
 pub fn sha256(p: &Path, job: &Job) -> Result<String> {
     hash_file(File::open(p)?, job)
 }
+
 /// Like `sha256`, but read from the drive itself rather than the system's
 /// cache, so a readback after writing checks what actually reached the card.
 /// The file must already be flushed.
 pub fn sha256_from_disk(p: &Path, job: &Job) -> Result<String> {
     hash_file(open_from_disk(p)?, job)
 }
+
+/// Reads a whole file from the drive itself, bypassing the system's cache
+/// (see `sha256_from_disk`).
 pub fn read_from_disk(p: &Path) -> Result<Vec<u8>> {
     let mut f = open_from_disk(p)?;
     let (mut b, start) = aligned_buffer();
@@ -159,13 +203,21 @@ pub fn read_from_disk(p: &Path) -> Result<Vec<u8>> {
         out.extend_from_slice(&b[start..start + n]);
     }
 }
+
+/// How much is read at a time when hashing or reading from the drive.
 const BLOCK: usize = 1024 * 1024;
-/// Unbuffered Windows reads need sector-aligned memory.
+
+/// A buffer of BLOCK bytes starting at a 4096-byte boundary (returned as the
+/// vector and the offset of the boundary in it): unbuffered Windows reads
+/// need sector-aligned memory.
 fn aligned_buffer() -> (Vec<u8>, usize) {
     let b = vec![0; BLOCK + 4096];
     let start = b.as_ptr().align_offset(4096);
     (b, start)
 }
+
+/// The SHA-256 of everything read from `f`, reporting progress and
+/// stopping if the job is canceled.
 fn hash_file(mut f: File, job: &Job) -> Result<String> {
     let total = f.metadata()?.len();
     let mut completed = 0;
@@ -184,6 +236,8 @@ fn hash_file(mut f: File, job: &Job) -> Result<String> {
     }
     Ok(format!("{:x}", h.finalize()))
 }
+
+/// Opens a file for reading without the system's cache (Windows).
 #[cfg(windows)]
 fn open_from_disk(p: &Path) -> Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -193,6 +247,9 @@ fn open_from_disk(p: &Path) -> Result<File> {
         .custom_flags(FILE_FLAG_NO_BUFFERING)
         .open(p)?)
 }
+
+/// Opens a file for reading after dropping it from the system's cache
+/// (Linux), so the reads go to the drive.
 #[cfg(target_os = "linux")]
 fn open_from_disk(p: &Path) -> Result<File> {
     use std::os::fd::AsRawFd;
@@ -209,6 +266,8 @@ fn open_from_disk(p: &Path) -> Result<File> {
     );
     Ok(f)
 }
+
+/// Opens a file for reading with caching turned off (macOS).
 #[cfg(target_os = "macos")]
 fn open_from_disk(p: &Path) -> Result<File> {
     use std::os::fd::AsRawFd;
@@ -224,10 +283,16 @@ fn open_from_disk(p: &Path) -> Result<File> {
     );
     Ok(f)
 }
+
+/// Elsewhere, an ordinary open: the cache cannot be bypassed.
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn open_from_disk(p: &Path) -> Result<File> {
     Ok(File::open(p)?)
 }
+
+/// Replaces (or creates) the file `p` with `data` all at once: written to a
+/// temporary file beside it, flushed to the drive, then renamed over it, so
+/// the file is never left half-written.
 pub fn atomic(p: &Path, data: &[u8]) -> Result<()> {
     let parent = p.parent().context("Missing parent")?;
     fs::create_dir_all(parent)?;
@@ -237,6 +302,13 @@ pub fn atomic(p: &Path, data: &[u8]) -> Result<()> {
     t.persist(p).map_err(|e| e.error)?;
     Ok(())
 }
+
+/// Copies `source` to `target`, which must not exist yet, and returns the
+/// copy's SHA-256. The copy is written under a temporary name, flushed, read
+/// back from the drive and compared, and only then given its name, with the
+/// source's modification time. Fails if the source changes during the copy,
+/// or if `expected` is given and the source's SHA-256 differs from it.
+/// Progress counts the copy and the check (twice the file's size).
 pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>) -> Result<String> {
     if target.exists() {
         bail!("Refusing to replace {}", target.display())
@@ -251,6 +323,8 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     let mut src = File::open(source)?;
     let total = before.0.saturating_mul(2).max(1);
     let mut completed = 0;
+
+    // Copy, hashing what was read.
     job.report(0, total, "Copying and verifying file");
     let mut hash = Sha256::new();
     let mut b = vec![0; 1024 * 1024];
@@ -270,6 +344,8 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     if expected.is_some_and(|h| h != actual_hash) {
         bail!("Source contents changed since scan: {}", source.display())
     }
+
+    // Read the copy back from the drive and compare.
     let verify_job = job.progress_range(before.0, before.0, total, "Copying and verifying file");
     if stamp(source)? != before || sha256_from_disk(t.path(), &verify_job)? != actual_hash {
         bail!(
@@ -292,6 +368,9 @@ pub fn copy_new(source: &Path, target: &Path, job: &Job, expected: Option<&str>)
     job.report(total, total, "Copying and verifying file");
     Ok(actual_hash)
 }
+
+/// Fails if `p` (which need not exist yet) is inside `root`, so reports and
+/// backups are never written into the library they describe.
 pub fn outside(p: &Path, root: &Path) -> Result<()> {
     let absolute = if p.exists() {
         p.canonicalize()?
