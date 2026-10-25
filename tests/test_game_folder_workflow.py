@@ -117,7 +117,7 @@ controller = "".join(
         section("static void activate(Menu *menu)\n{", "static void review_queue(Menu *menu)\n{"),
         section(
             "static void start_queue(Menu *menu)\n{",
-            "/* Tools stay available after a transport failure",
+            "/* ==== Applying the disc queue",
         ),
         section(
             "static void remember_position(Menu *menu, int force)\n{", "typedef struct RecentLaunch"

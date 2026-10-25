@@ -1704,10 +1704,12 @@ def main():
     ]
     queue = source[
         source.index("static void queue_selected_disc(Menu *menu)\n{") : source.index(
-            "/* Tools stay available"
+            "/* ==== Applying the disc queue"
         )
     ]
-    tools = source[source.index("/* Tools stay available") : source.index("int main(int argc")]
+    tools = source[
+        source.index("/* ==== Applying the disc queue") : source.index("int main(int argc")
+    ]
     font = (ROOT / "third_party/portfolio_os/src/graphics/text_deffont.c").read_text()
     images = {}
     for name, body in re.findall(r"CelData (Image_\w+)\[\]\s*=\s*\{(.*?)\};", font, re.S):

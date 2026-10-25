@@ -4335,6 +4335,13 @@ static void update_preview(Menu *menu)
     resume_scroll(menu);
 }
 
+/* ==== Starting up, the demo and moving between folders ==== */
+
+/*
+ * Shows a made-up folder of games with covers from the menu's own disc, for
+ * trying the menu without an ODE (C when the ODE is not found). Drops the
+ * USB indexes; a queued disc must be cleared first.
+ */
 static void show_demo(Menu *menu)
 {
     static const MenuEntry examples[] = {{5, 0, "Road Rash.iso"},
@@ -4386,10 +4393,20 @@ static void show_demo(Menu *menu)
     selection_changed(menu);
 }
 
+/*
+ * Starts (or restarts) the menu's connection to the ODE: forgets everything
+ * known about the drive, identifies the ODE, reads the settings (skipped
+ * while X is held, for a drive whose files trouble the menu), learns the
+ * saves, clears the ODE's disc queue, opens the drive's root (loading the
+ * media indexes) and returns to the remembered position. Each step draws
+ * its progress on the splash screen (boot_step). On failure the browser
+ * shows why and offers the demo.
+ */
 static void connect_ode(Menu *menu)
 {
     int config_result;
     ControlPadEventData pad;
+    /* Forget the last connection. */
     menu->booting = 1;
     menu->boot_stage = 1;
     startup_menu = menu;
@@ -4423,6 +4440,7 @@ static void connect_ode(Menu *menu)
     menu->ode.navigation_failed = 0;
     menu->ode.file_path[0] = 0;
     free_listing(menu);
+
     menu->message = "Connecting to ODE...";
     draw(menu);
     if (menu->bus.request < 0 && ode_bus_open(&menu->bus) < 0) {
@@ -4435,6 +4453,8 @@ static void connect_ode(Menu *menu)
         goto done;
     }
     boot_step(menu, BOOT_IDENTIFY);
+
+    /* The settings, and the copies the Settings screen edits. */
     menu->message = "Reading USB config...";
     menu->boot_stage = 2;
     draw(menu);
@@ -4456,6 +4476,10 @@ static void connect_ode(Menu *menu)
         menu->message = "Config I/O failed. Restart console.";
         goto done;
     }
+
+    /* The saves (and below, the remembered position) are read only if the
+     * settings were, so a drive the menu has trouble with gets fewer file
+     * commands. */
     if (config_result == 0)
         learn_saves(menu);
     boot_step(menu, BOOT_SAVES);
@@ -4487,6 +4511,8 @@ done:
     boot_step(menu, BOOT_READY);
 }
 
+/* Goes up to the parent folder (B, or the ".." row), reselecting the
+ * folder we came out of. */
 static void go_back(Menu *menu)
 {
     unsigned long parent_id;
@@ -4504,6 +4530,14 @@ static void go_back(Menu *menu)
     load_directory(menu, selected);
 }
 
+/*
+ * A on the selected row: goes up for "..", plays a folder acting as a game
+ * (queuing its whole disc set), enters any other folder, or plays a disc
+ * (with the rest of its set, if it is one). Starting a game records it in
+ * the recent list; the ODE then mounts it and the console reboots into it.
+ * menu->single_disc (hold C) plays just the selected disc, or enters a
+ * game's folder.
+ */
 static void activate(Menu *menu)
 {
     const MenuEntry *entry;
@@ -4536,6 +4570,9 @@ static void activate(Menu *menu)
             }
             return;
         }
+
+        /* An ordinary folder: enter it, remembering where its row was so
+         * going back reselects it. */
         if (menu->depth == MAX_DEPTH) {
             menu->message = "Maximum folder depth reached";
             return;
@@ -4560,6 +4597,7 @@ static void activate(Menu *menu)
         ++menu->depth;
         load_directory(menu, 0);
     } else {
+        /* A disc: one of a set queues the set from here on (queue_set). */
         if (!menu->single_disc && !menu->playlist.count && menu->playlist.synchronized &&
             queue_set(menu, entry)) {
             start_queue(menu);
@@ -4586,6 +4624,9 @@ static void activate(Menu *menu)
             if (!menu->ready || menu->ode.navigation_failed || menu->bus.timed_out)
                 return;
         }
+
+        /* Launch: past this point the ODE's queue is no longer what the
+         * menu believes it is. */
         menu->message = "Starting game...";
         draw(menu);
         menu->playlist.synchronized = 0;
@@ -4601,6 +4642,8 @@ static void activate(Menu *menu)
     }
 }
 
+/* Adds the selected disc to the menu's queue (Y), or for a folder acting
+ * as its game, all of its discs. P reviews the queue. */
 static void queue_selected_disc(Menu *menu)
 {
     char directory[FOLDER_PATH_BYTES], full[ENTRY_PATH_BYTES];
@@ -4646,6 +4689,7 @@ static void queue_selected_disc(Menu *menu)
     notify(menu, menu->status);
 }
 
+/* Opens the queue review (P), where discs are reordered or removed. */
 static void review_queue(Menu *menu)
 {
     menu->review = 1;
@@ -4655,6 +4699,8 @@ static void review_queue(Menu *menu)
     selection_changed(menu);
 }
 
+/* Plays the queue: sends it to the ODE if it changed, records the first
+ * disc in the recent list, and starts the first disc. */
 static void start_queue(Menu *menu)
 {
     if (menu->playlist.dirty && apply_queue(menu) < 0) {
@@ -4679,8 +4725,10 @@ static void start_queue(Menu *menu)
     free_listing(menu);
 }
 
-/* Tools stay available after a transport failure. Recovery is explicit and
- * refuses timed-out or unframed exchanges; merely opening diagnostics sends no commands. */
+/* ==== Applying the disc queue ==== */
+
+/* The current folder as a route of ids and names, for library_visit to
+ * walk back to. */
 static void current_route(Menu *menu, ArtRouteStep *route)
 {
     unsigned int i;
@@ -4689,11 +4737,21 @@ static void current_route(Menu *menu, ArtRouteStep *route)
         route[i].name = menu->path[i];
     }
 }
+/* library_visit's action for a queued disc: adds it to the ODE's queue. */
 static int queue_file_action(void *context, const MenuEntry *entry, const char *directory)
 {
     Menu *menu = (Menu *)context;
     return ode_playlist_add(&menu->ode, &menu->group, entry, directory);
 }
+/*
+ * Sends the menu's queue to the ODE, replacing the ODE's own. The ODE
+ * queues by directory entry, so each queued path is found first: from the
+ * current folder's listing when every disc is in it (the usual case: one
+ * re-read, no trips to the root), otherwise by walking to each one
+ * (library_visit). Nothing is sent until every path is found. Returns 0, or
+ * -1 with menu->ode.error saying why; if it failed partway through sending,
+ * the queue is marked unsynchronized, as the ODE's queue is then unknown.
+ */
 static int apply_queue(Menu *menu)
 {
     ArtRouteStep route[MAX_DEPTH];
@@ -4711,6 +4769,8 @@ static int apply_queue(Menu *menu)
         menu->ode.error = "Not enough queue memory";
         return -1;
     }
+
+    /* Check every queued disc is still there. */
     menu->message = "Checking queued game paths...";
     draw(menu);
     if (!directory_path(menu, directory, FOLDER_PATH_BYTES))
@@ -4735,6 +4795,8 @@ static int apply_queue(Menu *menu)
                               folder_workaround(menu), menu->playlist.paths[i], NULL, NULL) < 0)
                 goto checked;
     }
+
+    /* Replace the ODE's queue. */
     ode_playlist_dispose(&menu->group);
     menu->message = "Applying disc queue...";
     draw(menu);
@@ -4784,6 +4846,10 @@ static int queue_set(Menu *menu, const MenuEntry *entry)
     }
     return 1;
 }
+/* ==== Letter jumps and the C button ==== */
+
+/* Selects the first row starting with `letter` (0 for digits and symbols,
+ * 1-26 for A-Z, as menu_initial counts). */
 static void jump_letter(Menu *menu, int letter)
 {
     size_t i, count = row_count(menu), parent = menu->listing.has_parent ? 1 : 0;
@@ -4800,6 +4866,8 @@ static void jump_letter(Menu *menu, int letter)
     }
     menu->message = "No entries for that letter.";
 }
+/* Moves the focus to the alphabet strip, starting at the selected row's
+ * letter. */
 static void focus_alphabet(Menu *menu)
 {
     const MenuEntry *entry = NULL;
@@ -4813,7 +4881,11 @@ static void focus_alphabet(Menu *menu)
     menu->message = NULL;
 }
 
-/* The alphabet is a browser focus target, never a tool or a queued disc. */
+/*
+ * The alphabet strip under the list. Up from the top row or down from the
+ * bottom row focuses it; there, left and right pick a letter, A jumps to
+ * it, and B or down returns to the list. Returns 1 if it used the press.
+ */
 static int alphabet_input(Menu *menu, u32 pressed)
 {
     size_t count;
@@ -4856,8 +4928,13 @@ static int alphabet_input(Menu *menu, u32 pressed)
     return 1;
 }
 
-/* Defer a plain C press until release. Holding C for letter navigation must
- * never also add the selected game to the queue. */
+/*
+ * The browser's C chords: C+Start shows the game's details, C+Up focuses
+ * the alphabet, C+Left/Right jump to the previous or next letter that has
+ * entries. A plain C tap queues the selected disc, so a C press is held
+ * back until it is released; using it in a chord drops it. Returns
+ * `pressed` less the buttons used here.
+ */
 static u32 browser_shortcuts(Menu *menu, u32 buttons, u32 pressed, u32 released)
 {
     if (menu->alphabet_active) {
@@ -4907,6 +4984,11 @@ static u32 browser_shortcuts(Menu *menu, u32 buttons, u32 pressed, u32 released)
     }
     return pressed;
 }
+/* ==== Text files: at the drive's root, beside a disc ==== */
+
+/* A text file read or write, passed through art_at_root or media_read to
+ * text_at_root_callback. `write` set: write it; otherwise read up to
+ * `capacity` bytes into `read`, setting `length`. */
 typedef struct TextOperation {
     Menu *menu;
     const char *name;
@@ -4915,6 +4997,7 @@ typedef struct TextOperation {
     size_t capacity;
     size_t length;
 } TextOperation;
+/* Does the TextOperation, in whatever folder the caller moved to. */
 static int text_at_root_callback(void *context)
 {
     TextOperation *op = (TextOperation *)context;
@@ -4923,6 +5006,15 @@ static int text_at_root_callback(void *context)
     return usb_file_text(&op->menu->ode, ode_bus_read_buffer, op->name, op->read, op->capacity,
                          &op->length);
 }
+/*
+ * Reads or writes the text file `name` in .ohmy3do at the drive's root (the
+ * settings, position, recent and favorites files), going there and back
+ * from the current folder. To write, pass the text as `write`; to read,
+ * pass a buffer as `read` and `capacity`, and the length read comes back in
+ * `length`. Returns 0, or -1 if it failed or the ODE can't do it (the demo,
+ * the X-held recovery start, a different ODE, or the device list, where
+ * there is no single root). A transport failure stops the browser.
+ */
 static int text_at_root(Menu *menu, const char *name, const char *write, char *read,
                         size_t capacity, size_t *length)
 {
@@ -4955,8 +5047,9 @@ static int text_at_root(Menu *menu, const char *name, const char *write, char *r
         *length = op.length;
     return result;
 }
-/* Read from the .ohmy3do folder beside the entry's disc (inside the entry
- * when it is a folder acting as its game), without a trip to the root. */
+/* Reads the text file `name` from the .ohmy3do folder beside the entry's
+ * disc (inside the entry when it is a folder acting as its game), without a
+ * trip to the root. Otherwise as text_at_root. */
 static int text_beside(Menu *menu, const MenuEntry *entry, const char *name, char *read,
                        size_t capacity, size_t *length)
 {
@@ -4985,6 +5078,10 @@ static int text_beside(Menu *menu, const MenuEntry *entry, const char *name, cha
         *length = op.length;
     return result;
 }
+/* ==== The remembered position ==== */
+
+/* Makes `location` (found by library_locate) the browser's folder and
+ * selection, taking over its listing. */
 static void adopt_location(Menu *menu, LibraryLocation *location)
 {
     size_t i;
@@ -5004,6 +5101,11 @@ static void adopt_location(Menu *menu, LibraryLocation *location)
     update_breadcrumb(menu);
     selection_changed(menu);
 }
+/*
+ * At startup, returns to the folder and game the menu was last left on
+ * (last-position.txt), if that folder still exists and is not hidden.
+ * Called at the drive's root, before anything else moves away from it.
+ */
 static void load_position(Menu *menu)
 {
     char *data = (char *)malloc(POSITION_BYTES);
