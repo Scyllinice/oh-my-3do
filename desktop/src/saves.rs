@@ -1,5 +1,9 @@
-//! Save names for the console's Save manager, read from the discs' programs.
-//! Same output and cache as tools/index-media.py.
+//! Naming saves. The console's NVRAM lists saves only by file name, so the
+//! Save Manager shows the game each belongs to from save-names.txt, which
+//! this module writes: it looks through each disc's programs for the NVRAM
+//! file names they use ("/NVRAM/..."). The output and cache match
+//! tools/index-media.py.
+
 use crate::{fsutil as f, Job};
 use anyhow::Result;
 use regex::bytes::Regex;
@@ -11,9 +15,13 @@ use std::{
     path::Path,
 };
 
+/// A disc block.
 const BLOCK: u64 = 2048;
+
+/// The largest save-names.txt (the size of the console's buffer for it).
 pub const SAVE_NAMES_BYTES: usize = 32768;
 
+/// The big-endian 32-bit number at `at`.
 fn word(data: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(data[at..at + 4].try_into().unwrap())
 }
@@ -22,6 +30,9 @@ fn word(data: &[u8], at: usize) -> u32 {
 pub fn opera_files(file: &mut fs::File) -> Result<Vec<(u64, u64)>> {
     opera_files_with_job(file, &Job::default())
 }
+/// `opera_files`, stopping if the job is canceled. A disc that is not an
+/// Opera image has no files. Damaged directories are read as far as they
+/// make sense, with limits so a bad image cannot loop forever.
 fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)>> {
     job.check()?;
     let mut header = [0u8; BLOCK as usize];
@@ -29,6 +40,9 @@ fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)
     if file.read_exact(&mut header).is_err() || &header[..7] != b"\x01ZZZZZ\x01" {
         return Ok(out);
     }
+    // The volume header (record type 1, five 'Z's, version 1) gives the
+    // root directory's first block and length in blocks. Directories are
+    // visited as found, each once.
     let mut pending = vec![(word(&header, 100) as u64, word(&header, 88) as u64)];
     let mut seen = BTreeSet::new();
     while let Some((start, count)) = pending.pop() {
@@ -43,6 +57,11 @@ fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)
             if file.read_exact(&mut data).is_err() {
                 break;
             }
+            // A directory block: offset 12 is where its entries end, 16
+            // where they start. Each entry is 72 bytes plus 4 per extra
+            // copy ("avatar") of the file: flags, ID, type, block size,
+            // byte size, block count, ..., the index of the last avatar
+            // (64) and the first avatar's block (68).
             let end = (word(&data, 12) as usize).min(BLOCK as usize);
             let mut pos = word(&data, 16) as usize;
             while pos >= 20 && pos + 72 <= end {
@@ -56,6 +75,7 @@ fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)
                 if last > 15 {
                     break;
                 }
+                // Low byte 7: a directory, read later.
                 if flags & 0xff == 7 {
                     pending.push((avatar, blocks as u64));
                 } else {
@@ -67,6 +87,7 @@ fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)
                     out.push((avatar * unit, size as u64));
                 }
                 pos += 72 + 4 * last as usize;
+                // The top flag bits mark the directory's (or block's) last entry.
                 if flags & 0xc000_0000 != 0 {
                     break;
                 }
@@ -76,10 +97,13 @@ fn opera_files_with_job(file: &mut fs::File, job: &Job) -> Result<Vec<(u64, u64)
     Ok(out)
 }
 
-/// NVRAM files a disc's programs name: "=FILE" exact, "*PREFIX" from FILE%d-style patterns.
+/// The NVRAM files a disc's programs name: "=FILE" for an exact name,
+/// "*PREFIX" for a pattern like "FILE%d" (several numbered saves).
 pub fn disc_save_names(path: &Path) -> Result<Vec<String>> {
     disc_save_names_with_job(path, &Job::default())
 }
+/// `disc_save_names`, stopping if the job is canceled. Only files of 64
+/// bytes to 3 MiB (programs and data, not video) are searched.
 fn disc_save_names_with_job(path: &Path, job: &Job) -> Result<Vec<String>> {
     job.check()?;
     let saves = Regex::new(r"(?i)/nvram/([\x21-\x7e][\x20-\x7e]{0,30})").unwrap();
@@ -153,15 +177,22 @@ pub fn short_title(title: &str) -> String {
         .collect()
 }
 
+/// What `save_names_text` made.
 pub struct SaveNamesOutput {
+    /// save-names.txt.
     pub text: String,
+    /// How many save names it found.
     pub count: usize,
     /// The new per-disc cache, for `.ohmy3do/save-names-cache.json`.
     pub cache: Vec<u8>,
 }
 
-/// save-names.txt text and its number of names. `discs` are USB-relative
-/// paths; `titles` maps folded paths to library titles.
+/// Makes save-names.txt for the drive at `root`: a line per save name ("=" or
+/// "*" form, a tab, and the games using it, joined with " / "). `discs` are
+/// the drive's disc paths and `titles` their titles by case-insensitive
+/// path. Discs already read (same name, size and date) come from the cache
+/// in .ohmy3do/save-names-cache.json instead of being read again. Names that
+/// do not fit the console's buffer are left out.
 pub fn save_names_text(
     root: &Path,
     discs: &[String],
@@ -225,6 +256,8 @@ pub fn save_names_text(
         completed += 1;
         job.report(completed, total, "Reading save-name information");
     }
+
+    // Sorted by name, ignoring case and the "=" or "*".
     let mut keys: Vec<&String> = rows.keys().collect();
     keys.sort_by_key(|n| (n[1..].to_ascii_lowercase(), n.to_string()));
     let mut text = String::from("# Save names read from the discs by index-media.py\n");
@@ -252,7 +285,9 @@ pub fn save_names_text(
     })
 }
 
-/// Verified fallback names shared with the console. Exact names beat prefixes.
+/// The game a save file belongs to, from the list of known saves shipped
+/// with the app (data/save-names.txt, also built into the menu). An exact
+/// name wins over a prefix; of prefixes, the longest wins.
 pub fn known_title(file: &str) -> Option<&'static str> {
     let mut best = None;
     let mut longest = 0;
