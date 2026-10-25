@@ -105,7 +105,7 @@ def disc_data_issue(path):
 
 
 OPERA_BLOCK = 2048
-SAVE_NAMES_BYTES = 16384
+SAVE_NAMES_BYTES = 32768
 SAVE_PATH = re.compile(rb'/nvram/([\x21-\x7e][\x20-\x7e]{0,30})', re.I)
 SAVE_NAME = re.compile(r"[A-Za-z0-9_.\- \[\]'&+!()]+")
 

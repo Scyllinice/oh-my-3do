@@ -3,7 +3,7 @@
 #include "save_archive.h"
 /* save-names.txt is written by the PC tools from the discs; saves-learned.txt
  * by the menu. Lines are "=FILE<TAB>Title" (exact) or "*PREFIX<TAB>Title". */
-#define SAVE_NAMES_BYTES 16384
+#define SAVE_NAMES_BYTES 32768
 #define SAVE_SNAPSHOT_BYTES 8192
 #define SAVE_TITLE_BYTES 64
 typedef struct SaveNameEntry {

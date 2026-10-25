@@ -485,7 +485,7 @@ def usb_inventory(root):
         files.add('.ohmy3do/metadata.3di')
     names=checked_path(root,'.ohmy3do/save-names.txt')
     if names.is_file():
-        if names.stat().st_size>=16384:
+        if names.stat().st_size>=32768:
             raise ValueError('Oversized save names; rebuild indexes')
         files.add('.ohmy3do/save-names.txt')
     maps=associations(root)

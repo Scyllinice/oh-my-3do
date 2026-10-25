@@ -344,6 +344,12 @@ int main(int argc,char **argv)
         assert(!library_metadata_load(&ode,reader,&metadata));
         printf("Console metadata: %lu entries validated\n",(unsigned long)metadata.count);
         library_metadata_free(&metadata);
+    } else if (!strcmp(argv[1],"unsafemetadata")) {
+        /* Checked on use: the entry loads, and its path is refused there. */
+        LibraryMetadata metadata; memset(&metadata,0,sizeof(metadata));
+        assert(!library_metadata_parse(f.data,f.size,&metadata) && metadata.count==1);
+        assert(!library_path_safe(metadata.entries[0].path) && library_path_safe("Games/USA/Alpha/Disc 1.iso"));
+        library_metadata_free(&metadata);
     } else if (!strcmp(argv[1],"badmetadata")) {
         LibraryMetadata metadata; memset(&metadata,0,sizeof(metadata));
         assert(library_metadata_parse(f.data,f.size,&metadata)<0 && !metadata.count);

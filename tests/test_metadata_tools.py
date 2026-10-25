@@ -50,9 +50,9 @@ class MetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'metadata.3di'; path.write_bytes(self.fixture())
             subprocess.run([str(ROOT/'build/test_usb_media'),'metadata',str(path)],check=True)
-            for payload in (b'\0\1\0'*4, b'\0\3..\0'+b'\0\1\0'*3):
+            for mode, payload in (('badmetadata', b'\0\1\0'*4), ('unsafemetadata', b'\0\3..\0'+b'\0\1\0'*3)):
                 path.write_bytes(b'OM3DMET1'+struct.pack('>IIII',1,len(payload),binascii.crc32(payload),0)+payload+b'END3DM01')
-                subprocess.run([str(ROOT/'build/test_usb_media'),'badmetadata',str(path)],check=True)
+                subprocess.run([str(ROOT/'build/test_usb_media'),mode,str(path)],check=True)
 
     def test_index_export(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -42,6 +42,7 @@ static size_t row_count(Menu *m) { return m->listing.count+(m->listing.has_paren
 static const MenuEntry *browser_entry(Menu *m,size_t n) { return m->listing.entries[n]; }
 static int hidden_entry(Menu *m,const MenuEntry *e) { (void)m;(void)e;return 0; }
 static int folder_workaround(Menu *m) { (void)m;return 1; }
+int library_path_safe(const char *p) { return !strstr(p,".."); }
 /* The harness borrows its listing, so launching drops it rather than freeing it. */
 static void free_listing(Menu *m) { m->listing.entries=NULL;m->listing.count=0; }
 static void go_back(Menu *m) { (void)m;assert(0); }

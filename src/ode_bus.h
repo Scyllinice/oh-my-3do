@@ -21,7 +21,10 @@ typedef struct OdeBus {
     /* Wait for each request's completion signal instead of polling it.
      * Only the stream bench's reader thread sets this. */
     int blocking;
+    /* Time per command kind for diagnostics: E0-E7, then C0-C7, then others. */
+    unsigned long kind_count[17], kind_ms[17];
 } OdeBus;
+int ode_bus_kind(unsigned char command);
 
 int ode_bus_open(OdeBus *bus);
 void ode_bus_close(OdeBus *bus);

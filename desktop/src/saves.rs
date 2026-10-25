@@ -12,7 +12,7 @@ use std::{
 };
 
 const BLOCK: u64 = 2048;
-pub const SAVE_NAMES_BYTES: usize = 16384;
+pub const SAVE_NAMES_BYTES: usize = 32768;
 
 fn word(data: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(data[at..at + 4].try_into().unwrap())

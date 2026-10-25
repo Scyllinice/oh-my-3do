@@ -277,7 +277,7 @@ that first picture's entries a chunk to arrive in.
 
 ## Save names
 
-`.ohmy3do/save-names.txt` is ASCII text below 16384 bytes, written by the PC
+`.ohmy3do/save-names.txt` is ASCII text below 32768 bytes, written by the PC
 tools. After an optional `#` comment, each line is `=FILE<TAB>Title` for an exact
 NVRAM filename or `*PREFIX<TAB>Title` for files whose names start with PREFIX
 (from patterns such as `SLOT%d` in a game's program). Names are matched without

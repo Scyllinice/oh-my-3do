@@ -50,6 +50,13 @@ static int bus_failure(OdeBus *bus, Err error)
     return -1;
 }
 
+int ode_bus_kind(unsigned char command)
+{
+    if ((command & 0xf8) == 0xe0) return command & 7;
+    if ((command & 0xf8) == 0xc0) return 8 + (command & 7);
+    return 16;
+}
+
 int ode_bus_transfer(void *context, const unsigned char *command,
                      unsigned char *reply, size_t capacity, size_t *length)
 {
@@ -103,6 +110,8 @@ int ode_bus_transfer(void *context, const unsigned char *command,
     if (request->io_Actual < 0 || (size_t)request->io_Actual > capacity || request->io_Actual > 32)
         return bus_failure(bus, -1);
     *length = (size_t)request->io_Actual;
+    ++bus->kind_count[ode_bus_kind(command[0])];
+    bus->kind_ms[ode_bus_kind(command[0])] += (unsigned long)GetMSecTime(bus->timer) - started;
     bus->last_length = *length;
     memcpy(bus->last_reply, reply, *length);
     if (*length && command[0] != 0xc5 && (reply[*length - 1] & 0x10)) {

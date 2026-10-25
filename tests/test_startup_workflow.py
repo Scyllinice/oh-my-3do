@@ -44,6 +44,8 @@ static void free_listing(Menu *m) { ode_listing_free(&m->listing); }
 void cover_cache_clear(CoverCache *p) { (void)p; }
 static void selection_changed(Menu *m) { (void)m; }
 static void update_breadcrumb(Menu *m) { (void)m; }
+enum { BOOT_IDENTIFY, BOOT_CONFIG, BOOT_SAVES, BOOT_QUEUE, BOOT_POSITION, BOOT_READY };
+static void boot_step(Menu *m,int step) { (void)m; (void)step; }
 static void draw(Menu *m) {
     if (m->booting) { ++splash_draws; assert(!shown); }
     else {

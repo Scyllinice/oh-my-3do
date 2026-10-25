@@ -150,8 +150,8 @@ fn mapping(directory: &Path) -> Vec<(String, String, bool)> {
                 .ok()
                 .and_then(|file| {
                     let mut b = Vec::new();
-                    file.take(16385).read_to_end(&mut b).ok()?;
-                    (b.len() <= 16384).then_some(b)
+                    file.take(crate::saves::SAVE_NAMES_BYTES as u64).read_to_end(&mut b).ok()?;
+                    (b.len() < crate::saves::SAVE_NAMES_BYTES).then_some(b)
                 })
                 .unwrap_or_default();
             String::from_utf8_lossy(&text)

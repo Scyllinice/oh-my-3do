@@ -76,7 +76,7 @@ static void SetCurrentFontCCB(CCB *font) { preview_font=*font; }
 #define CCB_BGND 0x20UL
 #define CREATECEL_UNCODED 0
 typedef struct { int sc_curScreen; Item sc_BitmapItems[2], sc_Screens[2]; } ScreenContext;
-typedef struct { int last_error, timed_out; unsigned long commands; unsigned char last_command, last_reply[32], failed_command, failed_status; int failure_error; size_t last_length; } OdeBus;
+typedef struct { int last_error, timed_out; unsigned long commands; unsigned char last_command, last_reply[32], failed_command, failed_status; int failure_error; size_t last_length; unsigned long kind_count[17], kind_ms[17]; } OdeBus;
 static int preview_text_enabled, preview_reads, preview_writes, preview_read_fail, preview_write_fail;
 static char preview_position[9216], preview_recent[8192], preview_favorites[8192], preview_diagnostics[4096];
 static char *preview_text_slot(const char *name)

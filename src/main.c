@@ -101,6 +101,9 @@ typedef struct ScrollMeasure {
 } ScrollMeasure;
 
 #define UI_TEXT_CACHE 64
+/* Startup steps timed for diagnostics, in order. */
+enum { BOOT_SPLASH, BOOT_ART, BOOT_IDENTIFY, BOOT_CONFIG, BOOT_SAVES, BOOT_QUEUE, BOOT_FOLDER, BOOT_CATEGORIES, BOOT_COVERS, BOOT_PREVIEWS, BOOT_METADATA, BOOT_POSITION, BOOT_READY, BOOT_STEPS };
+static const char *const boot_step_names[BOOT_STEPS]={"splash","art","identify","config","saves","queue","folder","categories","covers","previews","metadata","position","ready"};
 typedef struct UiText {
     CCB *cel;
     int style, width, palette_valid, capacity_width, glyph_width;
@@ -125,6 +128,12 @@ typedef struct Menu {
     PreviewAudio preview_audio;
     CCB *splash;
     int booting, boot_stage;
+    int splash_frames; /* full splash draws so far: both buffers need one */
+    /* Startup timing for diagnostics: the clock when main began (time since
+     * power-on), then each step's end, in ms after that. */
+    unsigned long boot_at, boot_ms[BOOT_STEPS], boot_commands[BOOT_STEPS];
+    unsigned long boot_draws, boot_draw_ms; /* splash redraws while starting */
+    unsigned long boot_kind_count[17], boot_kind_ms[17]; /* the bus's command times when ready */
     LibraryCatalog catalog;
     unsigned long catalog_volume;
     size_t search_matches[LIBRARY_CATALOG_MAX], search_count;
@@ -218,6 +227,10 @@ typedef struct Menu {
     /* Hold X: the current video or box art full-screen until any button. full_cover is
      * the 192x240 file when the library has one; else the cover is doubled. */
     int full_view; /* 1 = cover, 2 = playing preview */
+    /* Leaving full-screen video fades out, redraws the browser in the dark
+     * and fades back in (see fade_step): 1 out, 2 in, since fade_since. */
+    int fade;
+    unsigned long fade_since;
     int full_cleared; /* screen buffers cleared since the view opened */
     unsigned long full_drawn_decode;
     int x_pending;
@@ -407,6 +420,15 @@ static void format(char *buffer, const char *pattern, ...)
 static unsigned long now_ms(Menu *menu)
 {
     return (unsigned long)GetMSecTime(menu->clock);
+}
+static void boot_step(Menu *menu,int step)
+{
+    menu->boot_ms[step]=now_ms(menu)-menu->boot_at;
+    menu->boot_commands[step]=menu->bus.commands;
+    if (step==BOOT_READY) {
+        memcpy(menu->boot_kind_count,menu->bus.kind_count,sizeof(menu->boot_kind_count));
+        memcpy(menu->boot_kind_ms,menu->bus.kind_ms,sizeof(menu->boot_kind_ms));
+    }
 }
 
 static void pause_scroll(Menu *menu)
@@ -1047,6 +1069,42 @@ static void draw_channel_gecko(Menu *menu)
     draw_ui_cel(menu,menu->channel_gecko,148,1,1,0);
 }
 /* A 172x240 strip of TV static at x; a new seed picks a new frame. */
+/* The static shows through the splash's screen opening (x 10-309, y 10-229)
+ * around its solid logo panel (x 52-267, y 62-173); assets/startup.cel. Once
+ * both buffers hold the panel, a frame repaints only these strips, in pieces
+ * no wider than the static's source at double size. */
+static const short splash_static[6][4]={
+    {10,10,150,52},{160,10,150,52},{10,174,150,56},{160,174,150,56},{10,62,42,112},{268,62,42,112}};
+/* An uncoded 16-bit cel cut down to w x h pixels starting at source. */
+static void cel_part(CCB *cel,const unsigned short *source,int w,int h)
+{
+    cel->ccb_SourcePtr=(CelData *)(void *)source;
+    cel->ccb_PRE0=(cel->ccb_PRE0&~0x0000ffc0UL)|((unsigned long)(h-1)<<6);
+    cel->ccb_PRE1=(cel->ccb_PRE1&~0x000007ffUL)|(unsigned long)(w-1);
+    cel->ccb_Width=w; cel->ccb_Height=h;
+}
+/* Static over one strip, from a random place in its source. */
+static void noise_part(Menu *menu,const short *strip,unsigned long seed)
+{
+    CCB copy;
+    unsigned long rows=(unsigned long)strip[3]/2, cols=(unsigned long)strip[2]/2, row, col;
+    seed^=seed>>15; seed*=2246822519UL; seed^=seed>>13;
+    row=seed%(NOISE_ROWS-rows+1);
+    /* Even columns keep the source word-aligned for the cel engine. */
+    col=((seed>>16)%((NOISE_W-cols)/2+1))*2;
+    memcpy(&copy,menu->noise,sizeof(copy));
+    cel_part(&copy,menu->noise_pixels+row*NOISE_W+col,(int)cols,(int)rows);
+    draw_ui_cel(menu,&copy,strip[0],strip[1],2,0);
+}
+/* The splash's own pixels over one strip: its corners and channel number. */
+static void splash_part(Menu *menu,const short *strip)
+{
+    CCB copy;
+    memcpy(&copy,menu->splash,sizeof(copy));
+    cel_part(&copy,(const unsigned short *)menu->splash->ccb_SourcePtr+strip[1]*320+strip[0],strip[2],strip[3]);
+    copy.ccb_XPos=(long)strip[0]<<16; copy.ccb_YPos=(long)strip[1]<<16;
+    DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],&copy);
+}
 static void noise_at(Menu *menu,int x,unsigned long seed)
 {
     CCB copy;
@@ -1097,7 +1155,14 @@ static void rounded_box(Menu *menu,int x,int y,int w,int h,int r,Color color,Col
     int row;
     for (row=0;row<h;++row) {
         long dy=row<r ? 2L*(long)(r-row)-1 : (row>=h-r ? 2L*(long)(row-(h-r))+1 : 0), root=0, inset, first, last;
-        if (!dy) { rectangle(menu,x,y+row,w,1,color); continue; }
+        if (!dy) {
+            /* The straight rows in one fill (each costs a graphics call),
+             * and the last alone, which then still covers the screen line
+             * where overscan scaling makes it share the next row's. */
+            if (h-r-row>1) rectangle(menu,x,y+row,w,h-r-row-1,color);
+            rectangle(menu,x,y+h-r-1,w,1,color);
+            row=h-r-1; continue;
+        }
         while ((root+1)*(root+1)<=64L*(4L*r*r-dy*dy)) ++root;
         /* Edges in sixteenths of a pixel. */
         inset=16L*r-root;
@@ -1368,6 +1433,8 @@ static size_t resolve_folder_game(Menu *menu,const MenuEntry *entry,const char *
         if (strlen(path)<=used) break;
         memcpy(probe,path,used); probe[used]=0;
         if (menu_path_compare(probe,prefix)) break;
+        /* The disc's name becomes part of the path the menu launches. */
+        if (!library_path_safe(path)) continue;
         if (strchr(path+used,'/') || count==ODE_MAX_DISCS) return 0;
         candidates[count].toc_id=0; candidates[count].is_directory=0; candidates[count].name=path+used;
         pointers[count]=candidates+count; ++count;
@@ -1758,19 +1825,44 @@ static void browser_save(Menu *menu,BrowserFrame *frame,unsigned long shell,unsi
 static void boot_screen(Menu *menu,unsigned long now)
 {
     int margin=menu->config.screen_margin, i;
+    unsigned long started=now_ms(menu);
     menu->config.screen_margin=0;
     menu->screen.sc_curScreen^=1;
     if (menu->splash) {
         crt_cels(menu);
-        if (menu->noise) {
-            noise_at(menu,0,(now/67UL+1UL)*2654435761UL);
-            noise_at(menu,160,(now/67UL+1UL)*40503UL);
-        } else rectangle(menu,0,0,320,240,DIM);
-        DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],menu->splash);
+        if (menu->noise && menu->splash_frames>=2) {
+            for (i=0;i<6;++i) noise_part(menu,splash_static[i],(now/67UL+1UL)*2654435761UL+(unsigned long)i*40503UL);
+            for (i=0;i<6;++i) splash_part(menu,splash_static[i]);
+        } else {
+            if (menu->noise) {
+                noise_at(menu,0,(now/67UL+1UL)*2654435761UL);
+                noise_at(menu,160,(now/67UL+1UL)*40503UL);
+            } else rectangle(menu,0,0,320,240,DIM);
+            DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],menu->splash);
+            ++menu->splash_frames;
+        }
         for (i=0;i<16;++i) rectangle(menu,120+i*5,206,3,7,i<menu->boot_stage*4 ? OSD_GREEN : MakeRGB15(3,8,3));
     } else rectangle(menu,0,0,320,240,BG);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen],0);
     menu->config.screen_margin=margin;
+    ++menu->boot_draws; menu->boot_draw_ms+=now_ms(menu)-started;
+}
+static unsigned char *screen_pixels(Menu *menu,int screen);
+/* Copy the screen just drawn into the other buffer; 0 when it cannot. A
+ * full browser draw takes several video frames (hundreds of fills), so
+ * playback after one draws only its picture and captions over the copy. */
+static int copy_screen(Menu *menu)
+{
+#ifdef OH3DO_SDK
+    int shown=menu->screen.sc_curScreen;
+    if (menu->sport<0) return 0;
+    sport_wait(menu);
+    return CopyVRAMPages(menu->sport,screen_pixels(menu,shown^1),screen_pixels(menu,shown),
+                         PREVIEW7_FRAME_BYTES/GetPageSize(MEMTYPE_VRAM),0xffffffffUL)>=0;
+#else
+    (void)menu;
+    return 0;
+#endif
 }
 static void draw(Menu *menu)
 {
@@ -1897,6 +1989,9 @@ static void draw(Menu *menu)
          * every frame would take most of a 30 fps frame. */
         unsigned long key=overlay_key(menu,message);
         unsigned long fixed=playback_overlay_key(menu,message,0);
+        /* Text cels are cached by drawing order: keep these few apart, so
+         * the next full draw finds the list's labels still rendered. */
+        menu->text_cursor=UI_TEXT_CACHE-16;
         if (fixed!=menu->playback_static_key) {
             menu->playback_static_key=fixed;menu->playback_static_frames=0;
         }
@@ -1991,6 +2086,7 @@ static void draw(Menu *menu)
     if (playing) { ++menu->preview_full_draws; menu->preview_draw_ms+=now_ms(menu)-now; }
     menu->overlay_frames=0;
     if (!playing) menu->panel_frames=0;
+    else if (copy_screen(menu)) { menu->panel_hash=hash; menu->panel_frames=2; menu->clear_frames=0; }
     else if (hash==menu->panel_hash) ++menu->panel_frames;
     else { menu->panel_hash=hash; menu->panel_frames=1; }
 }
@@ -2056,6 +2152,7 @@ static void load_directory(Menu *menu, size_t selected)
     menu->loading = 0;
     update_breadcrumb(menu);
     selection_changed(menu);
+    if (menu->booting) boot_step(menu,BOOT_FOLDER);
     if (menu->ready) refresh_usb_art(menu);
 }
 static int can_recover_library(const Menu *menu)
@@ -2133,16 +2230,20 @@ static void refresh_usb_art(Menu *menu)
             free(text);
         }
         menu->ode.media_beside=beside;menu->ode.media_folder=folder;
+        if (menu->booting) boot_step(menu,BOOT_CATEGORIES);
         if(menu->categories_valid) {menu->config.hide_adult=menu->saved_config.hide_adult=0;menu_set_hide_adult(0);}
     }
     message = menu->message;
     menu->message = "Reading media indexes...";
     draw(menu);
     if (menu->config.usb_covers) usb_art_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_art);
+    if (menu->booting) boot_step(menu,BOOT_COVERS);
     if (menu->config.video_previews && !menu->bus.timed_out && !menu->ode.navigation_failed)
         usb_media_index_load(&menu->ode,ode_bus_read_buffer,&menu->usb_previews,"previews");
+    if (menu->booting) boot_step(menu,BOOT_PREVIEWS);
     if (!menu->bus.timed_out && !menu->ode.navigation_failed)
         library_metadata_load(&menu->ode,ode_bus_read_buffer,&menu->metadata);
+    if (menu->booting) boot_step(menu,BOOT_METADATA);
     menu->game_lookups_valid=0;
     menu->message = message;
     menu->covers_enabled = menu->usb_art.count != 0;
@@ -2252,9 +2353,68 @@ static int read_large_cover(void *context)
     UsbCoverRead *read = (UsbCoverRead *)context;
     return usb_large_cover(&read->menu->ode,ode_bus_read_buffer,read->filename,read->pixels,media_cancel,read->menu);
 }
+/* The display hardware's blending of each pixel with its neighbours: off for
+ * the menu's crisp text, on for full-screen video, where it softens the
+ * codec's block edges at no cost. */
+static void set_smoothing(Menu *menu,int on)
+{
+#ifndef UI_PREVIEW_GLASS
+    int screen;
+    for (screen=0;screen<2;++screen) {
+        if (on) { EnableHAVG(menu->screen.sc_Screens[screen]); EnableVAVG(menu->screen.sc_Screens[screen]); }
+        else { DisableHAVG(menu->screen.sc_Screens[screen]); DisableVAVG(menu->screen.sc_Screens[screen]); }
+    }
+#else
+    (void)menu; (void)on;
+#endif
+}
+#ifndef UI_PREVIEW_GLASS
+#define FADES 1
+#else
+#define FADES 0
+#endif
+#define FADE_OUT_MS 100UL
+#define FADE_IN_MS 133UL
+/* Both screens' colour tables scaled to level/256 of full brightness. */
+static void set_brightness(Menu *menu,unsigned long level)
+{
+#if FADES
+    u32 entries[32];
+    int i,screen;
+    for (i=0;i<32;++i) {
+        u32 value=(u32)((((unsigned long)i<<3)|((unsigned long)i>>2))*level/256UL);
+        entries[i]=MakeCLUTColorEntry(i,value,value,value);
+    }
+    for (screen=0;screen<2;++screen) {
+        if (level>=256UL) ResetScreenColors(menu->screen.sc_Screens[screen]);
+        else SetScreenColors(menu->screen.sc_Screens[screen],entries,32);
+    }
+#else
+    (void)menu; (void)level;
+#endif
+}
+static void close_full_cover(Menu *menu);
+/* The browser takes several video frames to draw, which showed as a stall
+ * leaving full-screen video. Draw it while the screen is dark instead,
+ * along with the frames playback must catch up on. */
+static void fade_step(Menu *menu)
+{
+    unsigned long elapsed;
+    if (!menu->fade) return;
+    elapsed=now_ms(menu)-menu->fade_since;
+    if (menu->fade==1) {
+        if (elapsed<FADE_OUT_MS) { set_brightness(menu,256UL-elapsed*256UL/FADE_OUT_MS); return; }
+        set_brightness(menu,0);
+        close_full_cover(menu);
+        draw(menu); draw(menu);
+        menu->fade=2; menu->fade_since=now_ms(menu);
+    } else if (elapsed<FADE_IN_MS) set_brightness(menu,elapsed*256UL/FADE_IN_MS);
+    else { set_brightness(menu,256UL); menu->fade=0; }
+}
 static void close_full_cover(Menu *menu)
 {
     if (!menu->full_view) return;
+    if (menu->full_view==2) set_smoothing(menu,0);
     sport_wait(menu);
     /* The TV picture missed the full-screen frames: redraw it from the map. */
     if (menu->stream.open && menu->stream.frame && menu->full_view==2 &&
@@ -2419,7 +2579,7 @@ static void update_cover(Menu *menu)
         lookup = path + 9; /* remove /Storage/ */
         if (menu->depth && !(menu->path_ids[0] & 0xffffffUL))
             lookup += strlen(menu->path[0]) + 1; /* device labels are not USB path components */
-        file = menu_cover_find(menu->usb_art.entries, menu->usb_art.count, lookup);
+        file = usb_media_find(&menu->usb_art, lookup);
         if (!file) { menu->cover_attempted=1; return; }
         volume=entry->toc_id&0xff000000UL;
         if (!cover_cache_contains(&menu->cover_cache,volume,file) && now_ms(menu)-menu->selection_since<COVER_IDLE_MS) return;
@@ -2559,7 +2719,7 @@ static const char *selected_preview(Menu *menu)
     if (game) { strcat(path,"/"); strcat(path,discs[0]); }
     lookup = path+9;
     if (menu->depth && !(menu->path_ids[0]&0xffffffUL)) lookup += strlen(menu->path[0])+1;
-    return menu_cover_find(menu->usb_previews.entries,menu->usb_previews.count,lookup);
+    return usb_media_find(&menu->usb_previews,lookup);
 }
 /* X swaps the selected game between its preview and its cover; 0 when it has
  * no preview, so X keeps its other job. */
@@ -2594,7 +2754,7 @@ static u32 media_x_input(Menu *menu, u32 buttons, u32 pressed, u32 released)
         if (now_ms(menu) - menu->x_since >= 500UL) {
             menu->x_pending = 0;
             menu->suppress_buttons |= ControlX;
-            if (menu->preview_cel) menu->full_view = 2;
+            if (menu->preview_cel) { menu->full_view = 2; set_smoothing(menu,1); }
             else { stop_preview(menu); open_full_cover(menu); }
         }
     } else {
@@ -2797,6 +2957,7 @@ static void connect_ode(Menu *menu)
         menu->message = menu->bus.timed_out ? "No ODE reply. C: View demo" : "ODE not available. C: View demo";
         goto done;
     }
+    boot_step(menu,BOOT_IDENTIFY);
     menu->message = "Reading USB config...";
     menu->boot_stage=2; draw(menu);
     if (GetControlPad(1, 0, &pad) >= 0 && (pad.cped_ButtonBits & ControlX))
@@ -2811,18 +2972,22 @@ static void connect_ode(Menu *menu)
     menu->settings_recent_games = menu->config.recent_games;
     menu->settings_video_previews = menu->config.video_previews;
     menu->saved_config = menu->config;
+    boot_step(menu,BOOT_CONFIG);
     if (menu->bus.timed_out) {
         menu->message = "Config I/O failed. Restart console.";
         goto done;
     }
     if (config_result == 0) learn_saves(menu);
+    boot_step(menu,BOOT_SAVES);
     if (ode_playlist_clear(&menu->ode, &menu->playlist) < 0) {
         menu->message = menu->ode.error;
         goto done;
     }
+    boot_step(menu,BOOT_QUEUE);
     menu->boot_stage=3; load_directory(menu, 0);
     menu->boot_stage=4;
     if (menu->ready && config_result == 0 && menu->config.remember_position) load_position(menu);
+    boot_step(menu,BOOT_POSITION);
     if (menu->ready && config_result < 0) menu->message = "Config not loaded. Defaults used.";
     else if (menu->ready && config_result == 1) menu->message = "USB config unsupported. Defaults used.";
     else if (menu->ready && config_result == 2) menu->message = "Config skipped. Defaults used.";
@@ -2830,6 +2995,7 @@ done:
     menu->booting=0; startup_menu=NULL;
     if (menu->splash) { UnloadCel(menu->splash); menu->splash=NULL; }
     draw(menu);
+    boot_step(menu,BOOT_READY);
 }
 
 static void go_back(Menu *menu)
@@ -3362,6 +3528,16 @@ static void export_diagnostics(Menu *menu)
     format(line,"queue_count=%lu\nqueue_synchronized=%d\nqueue_dirty=%d\n",(unsigned long)menu->playlist.count,menu->playlist.synchronized,menu->playlist.dirty); strcat(data,line);
     format(line,"usb_write_check=%d\nbackup_result=%d\nrestore_result=%d\nnvram_error=%08lx\n",menu->usb_tested,menu->backup_result,menu->restore_result,(unsigned long)menu->nvram_info.last_error & 0xffffffffUL); strcat(data,line);
     format(line,"position_result=%d\nrecent_result=%d\nfolder=%.64s\n",menu->position_result,menu->recent_result,menu->breadcrumb); strcat(data,line);
+    format(line,"boot_at_ms=%lu\nboot_draws=%lu\nboot_draw_ms=%lu\n",menu->boot_at,menu->boot_draws,menu->boot_draw_ms); strcat(data,line);
+    for (i=0;i<17;++i) if (menu->boot_kind_count[i]) {
+        format(line,"boot_ode_%s=%lu/%lu\n",i<8 ? (const char *)"e0\0e1\0e2\0e3\0e4\0e5\0e6\0e7"+i*3 : i<16 ? (const char *)"c0\0c1\0c2\0c3\0c4\0c5\0c6\0c7"+(i-8)*3 : "other",
+               menu->boot_kind_count[i],menu->boot_kind_ms[i]);
+        strcat(data,line);
+    }
+    for (i=0;i<BOOT_STEPS;++i) {
+        format(line,"boot_%s_ms=%lu\nboot_%s_commands=%lu\n",boot_step_names[i],menu->boot_ms[i],boot_step_names[i],menu->boot_commands[i]);
+        strcat(data,line);
+    }
     format(line,"preview_result=%d\npreview_load_ms=%lu\n",menu->preview_result,menu->preview_load_ms); strcat(data,line);
     format(line,"preview_read_ms=%lu\npreview_check_ms=%lu\npreview_navigation_ms=%lu\npreview_setup_ms=%lu\n",menu->preview_read_ms,menu->preview_check_ms,menu->preview_navigation_ms,menu->preview_setup_ms); strcat(data,line);
     format(line,"preview_bytes=%lu\npreview_commands=%lu\npreview_frames=%u\npreview_fps=%u\n",menu->preview_bytes,menu->preview_commands,menu->preview_frames,menu->preview_fps); strcat(data,line);
@@ -5112,6 +5288,7 @@ int main(int argc, char **argv)
     if (menu.vbl < 0) { DeleteBasicDisplay(&menu.screen); KillControlPad(); return 1; }
     menu.clock = GetTimerIOReq();
     if (menu.clock < 0) { DeleteIOReq(menu.vbl); DeleteBasicDisplay(&menu.screen); KillControlPad(); return 1; }
+    menu.boot_at = now_ms(&menu);
     /* Copies between the screen buffers for full-screen streamed video; without
      * one, each such frame is drawn whole. */
     menu.sport = GetVRAMIOReq();
@@ -5125,6 +5302,7 @@ int main(int argc, char **argv)
     /* Black pixels in the splash are transparent: the live static shows there. */
     if (menu.splash) { menu.splash->ccb_Flags |= CCB_LAST; menu.splash->ccb_Flags &= ~CCB_BGND; }
     menu.booting=1; draw(&menu);
+    boot_step(&menu,BOOT_SPLASH);
 #endif
     menu.logo = LoadCel("$boot/logo.cel", MEMTYPE_CEL);
     init_channel_gecko(&menu);
@@ -5133,6 +5311,7 @@ int main(int argc, char **argv)
         menu.logo->ccb_YPos = 8 << 16;
         menu.logo->ccb_Flags |= CCB_LAST;
     }
+    boot_step(&menu,BOOT_ART);
 #ifdef MENU_DEMO
     show_demo(&menu);
 #else
@@ -5149,6 +5328,7 @@ int main(int argc, char **argv)
         size_t old_selection;
         int old_review;
         if (menu.launching) { WaitVBL(menu.vbl, 1); continue; }
+        fade_step(&menu);
         if (GetControlPad(1, 0, &pad) < 0) {
             menu.message = "Controller read failed";
             draw(&menu);
@@ -5191,7 +5371,9 @@ int main(int argc, char **argv)
         }
         if (menu.full_view) {
             if (pressed) {
-                close_full_cover(&menu);
+                if (menu.full_view==2 && FADES) {
+                    if (!menu.fade) { menu.fade=1; menu.fade_since=now_ms(&menu); }
+                } else close_full_cover(&menu);
                 menu.suppress_buttons |= buttons;
             }
             draw(&menu); WaitVBL(menu.vbl, 1); continue;

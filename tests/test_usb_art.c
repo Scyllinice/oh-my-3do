@@ -6,8 +6,8 @@
 #include <string.h>
 
 typedef struct FakeUsb {
-    unsigned char index[4096], image[1024], buffer[2048];
-    size_t index_size, image_size, position;
+    unsigned char index[4096], image[1024], buffer[2048], text[20000];
+    size_t index_size, image_size, text_size, position;
     const unsigned char *file;
     size_t size;
     int calls, fail_at, closed, opened, words, reads;
@@ -46,9 +46,11 @@ static int transfer(void *context, const unsigned char *packet,
             name+=strlen(fake->folder)+1;
         }
         assert(!strncmp(name,".ohmy3do/",9)); name+=9;
-        assert(!strncmp(name,"covers/",7) || !strcmp(name,"recent.txt"));
+        assert(!strncmp(name,"covers/",7) || !strcmp(name,"recent.txt") || !strcmp(name,"save-names.txt"));
         if (!strcmp(name,"covers/index.3di")) {
             fake->file=fake->index; fake->size=fake->index_size;
+        } else if (!strcmp(name,"save-names.txt")) {
+            fake->file=fake->text; fake->size=fake->text_size;
         } else { fake->file=fake->image; fake->size=fake->image_size; }
         fake->position=0;
         fake->opened=1;
@@ -153,9 +155,20 @@ int main(void)
     assert(usb_art_index_load(&ode,reader,&index) < 0 && !index.count);
     setup(&fake,&ode); put32(fake.index+12,131073);
     assert(usb_art_index_load(&ode,reader,&index) < 0 && !index.count);
+    /* Entries are checked on use: a bad one costs only its own game's media. */
+    setup(&fake,&ode);
+    assert(!usb_art_index_load(&ode,reader,&index));
+    assert(!strcmp(usb_media_find(&index,"Games/Road Rash.iso"),"aaaaaaaaaaaaaaaaaaaaaaaa.3dc"));
+    assert(!usb_media_find(&index,"Games/Other.iso")); usb_art_index_free(&index);
     setup(&fake,&ode); fake.index[28]='.'; fake.index[29]='.'; fake.index[30]='/';
     put32(fake.index+16,usb_art_crc32(fake.index+24,fake.index_size-24));
-    assert(usb_art_index_load(&ode,reader,&index) < 0 && !index.count);
+    assert(!usb_art_index_load(&ode,reader,&index) && index.count==1);
+    assert(!usb_media_find(&index,"Games/Road Rash.iso")); usb_art_index_free(&index);
+    setup(&fake,&ode); fake.index[28+20]='/';
+    put32(fake.index+16,usb_art_crc32(fake.index+24,fake.index_size-24));
+    assert(!usb_art_index_load(&ode,reader,&index) && index.count==1);
+    assert(menu_cover_find(index.entries,index.count,"Games/Road Rash.iso") && !usb_media_find(&index,"Games/Road Rash.iso"));
+    usb_art_index_free(&index);
     setup(&fake,&ode); strcpy(ode.identity,"OTHER!");
     assert(usb_art_index_load(&ode,reader,&index) < 0 && !fake.calls);
     {
@@ -177,7 +190,57 @@ int main(void)
         setup(&fake,&ode); fake.image_size=0;
         assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && !length);
     }
-    puts("USB text: bounded short reads, poisoned stale EOF, exact block boundaries and every I/O failure passed");
+    {
+        /* Long text: whole blocks after the first 2 KiB, the end over a
+         * cleared buffer. Every result must match a byte-exact read. */
+        static char text[20480];
+        static const size_t sizes[] = {2047,2048,2049,4095,4096,4097,6143,6144,6145,10000,16378,20000};
+        size_t length, k, j;
+        for (k = 0; k < sizeof(sizes)/sizeof(sizes[0]); ++k) {
+            setup(&fake,&ode); fake.text_size=sizes[k];
+            for (j = 0; j < fake.text_size; ++j) fake.text[j]=(unsigned char)('a'+(j*7+j/13)%26);
+            assert(!usb_file_text(&ode,reader,"save-names.txt",text,sizeof(text),&length));
+            assert(length==sizes[k] && !memcmp(text,fake.text,length) && !text[length] && !fake.opened);
+            if (sizes[k]==16378) assert(fake.calls < 150); /* 4,360 clearing it all in pieces */
+        }
+        /* A 16 KiB buffer, nearly full. */
+        {
+            static const size_t tight[] = {12000,16378,16383,16384};
+            for (k = 0; k < sizeof(tight)/sizeof(tight[0]); ++k) {
+                setup(&fake,&ode); fake.text_size=tight[k];
+                for (j = 0; j < fake.text_size; ++j) fake.text[j]=(unsigned char)('a'+(j*7+j/13)%26);
+                if (tight[k] == 16384) { assert(usb_file_text(&ode,reader,"save-names.txt",text,16384,&length)<0 && !fake.opened); continue; }
+                assert(!usb_file_text(&ode,reader,"save-names.txt",text,16384,&length));
+                assert(length==tight[k] && !memcmp(text,fake.text,length) && !text[length]);
+                if (tight[k] == 16378) assert(fake.calls < 150);
+            }
+        }
+        /* Text ends at a zero byte, also inside a complete later block. */
+        setup(&fake,&ode); fake.text_size=9000;
+        for (j = 0; j < fake.text_size; ++j) fake.text[j]=(unsigned char)('a'+j%26);
+        fake.text[5000]=0;
+        assert(!usb_file_text(&ode,reader,"save-names.txt",text,sizeof(text),&length));
+        assert(length==5000 && !memcmp(text,fake.text,5000));
+        /* Repeated blocks look like an end; the careful read still gets it right. */
+        setup(&fake,&ode); fake.text_size=10000; memset(fake.text,'x',fake.text_size);
+        assert(!usb_file_text(&ode,reader,"save-names.txt",text,sizeof(text),&length));
+        assert(length==10000 && !memcmp(text,fake.text,length));
+        /* Text that leaves no room for its terminator fails. */
+        setup(&fake,&ode); fake.text_size=9000;
+        for (j = 0; j < fake.text_size; ++j) fake.text[j]=(unsigned char)('a'+j%26);
+        assert(usb_file_text(&ode,reader,"save-names.txt",text,9000,&length)<0 && !fake.opened);
+        assert(!usb_file_text(&ode,reader,"save-names.txt",text,9001,&length) && length==9000);
+        setup(&fake,&ode); fake.text_size=9000;
+        for (j = 0; j < fake.text_size; ++j) fake.text[j]=(unsigned char)('a'+j%26);
+        assert(!usb_file_text(&ode,reader,"save-names.txt",text,sizeof(text),&length));
+        calls=fake.calls;
+        for (i=1;i<=calls;++i) {
+            setup(&fake,&ode); fake.text_size=9000; fake.fail_at=i;
+            for (j = 0; j < fake.text_size; ++j) fake.text[j]=(unsigned char)('a'+j%26);
+            assert(usb_file_text(&ode,reader,"save-names.txt",text,sizeof(text),&length)<0);
+        }
+    }
+    puts("USB text: bounded short reads, poisoned stale EOF, exact block boundaries, long text in whole blocks and every I/O failure passed");
     puts("USB artwork: index CRC, bounds, layouts, media beside a game and I/O failures passed");
     return 0;
 }

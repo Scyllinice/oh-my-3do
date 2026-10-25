@@ -60,6 +60,13 @@ fi
 cp "$project_dir/assets/saves-README.txt" "$project_dir/iso/saves/README.txt"
 mkdir -p "$project_dir/iso" "$project_dir/build/console-$mode"
 3dt pack "$stage/takeme" -o "$stage/$name.iso"
+# The FCare ODE reads an image whose size is a multiple of 2352 bytes as raw
+# CD sectors (third_party/SataTo3DO/src/interfaces/MSC.c), so the console
+# hangs after the 3DO logo. That happens whenever the block count is a
+# multiple of 147; a blank block past the filesystem's end avoids it.
+if (( $(stat -c %s "$stage/$name.iso") % 2352 == 0 )); then
+    head -c 2048 /dev/zero >> "$stage/$name.iso"
+fi
 3dt verify "$stage/$name.iso"
 3dt unpack "$stage/$name.iso" -o "$stage/unpacked" > "$stage/unpack.log"
 # Check the complete packed runtime, rather than only the menu and artwork.

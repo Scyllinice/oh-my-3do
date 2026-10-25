@@ -23,4 +23,7 @@ void library_metadata_free(LibraryMetadata *metadata);
 int library_metadata_parse(const unsigned char *data,size_t size,LibraryMetadata *metadata);
 int library_metadata_load(Ode *ode,OdeReadBuffer reader,LibraryMetadata *metadata);
 const LibraryGameInfo *library_metadata_find(const LibraryMetadata *metadata,const char *path);
+/* Whether a library path is a relative path to a disc image the menu may
+ * open: no empty, '.' or '..' parts, no control or reserved characters. */
+int library_path_safe(const char *path);
 #endif

@@ -72,6 +72,11 @@ done:
     library_catalog_free(&next); free(data); return result;
 }
 
+int library_path_safe(const char *path)
+{
+    return relative(path,0);
+}
+
 void library_metadata_free(LibraryMetadata *metadata)
 {
     free(metadata->entries); free(metadata->storage);
@@ -97,24 +102,22 @@ int library_metadata_parse(const unsigned char *data,size_t size,LibraryMetadata
     for (i=0;i<(size_t)count;++i) {
         const char *fields[4];
         unsigned int field;
+        /* Only the shape: each string ends where its length says. Checking
+         * every entry's content took most of a second on the console. Paths
+         * are compared, and checked before use (library_path_safe); text is
+         * drawn with anything unprintable as '?'. An entry out of order is
+         * just not found. */
         for (field=0;field<4;++field) {
-            size_t length, k;
+            size_t length;
             if (bytes-pos<2) goto invalid;
             length=(size_t)next.storage[pos]*256+next.storage[pos+1]; pos+=2;
-            if (!length || length>bytes-pos || next.storage[pos+length-1] ||
-                memchr(next.storage+pos,0,length-1)) goto invalid;
+            if (length<(field ? 1U : 2U) || length>bytes-pos || next.storage[pos+length-1] ||
+                (field && length>97)) goto invalid;
             fields[field]=(const char *)next.storage+pos;
-            if (!field) { if (!relative(fields[field],0)) goto invalid; }
-            else {
-                if (length>97) goto invalid;
-                for (k=0;k+1<length;++k)
-                    if (next.storage[pos+k]<32 || next.storage[pos+k]>126) goto invalid;
-            }
             pos+=length;
         }
         next.entries[i].path=fields[0]; next.entries[i].genre=fields[1];
         next.entries[i].publisher=fields[2]; next.entries[i].released=fields[3];
-        if (i && menu_path_compare(next.entries[i-1].path,fields[0])>=0) goto invalid;
     }
     if (pos!=bytes) goto invalid;
     next.count=(size_t)count;

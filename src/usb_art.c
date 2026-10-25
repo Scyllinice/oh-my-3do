@@ -168,20 +168,10 @@ int usb_media_filename(const char *name)
     return 1;
 }
 
-static int safe_path(const char *name)
+const char *usb_media_find(const UsbArtIndex *index, const char *path)
 {
-    const char *part = name, *p;
-    if (!*name || *name == '/' || strlen(name) > 8192) return 0;
-    for (p = name;; ++p) {
-        if (*p && ((unsigned char)*p < 32 || *p == '\\' || *p == ':' || *p == 127)) return 0;
-        if (!*p || *p == '/') {
-            size_t n = (size_t)(p - part);
-            if (!n || (n == 1 && part[0] == '.') || (n == 2 && !memcmp(part, "..", 2))) return 0;
-            if (!*p) break;
-            part = p + 1;
-        }
-    }
-    return 1;
+    const char *file = menu_cover_find(index->entries, index->count, path);
+    return file && usb_media_filename(file) ? file : NULL;
 }
 
 int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, const char *folder)
@@ -214,14 +204,14 @@ int usb_media_index_load(Ode *ode, OdeReadBuffer reader, UsbArtIndex *index, con
         key = (size_t)next.storage[pos] * 256 + next.storage[pos + 1];
         file = (size_t)next.storage[pos + 2] * 256 + next.storage[pos + 3];
         pos += 4;
+        /* Only the shape here: each string ends where its length says. Checking
+         * every entry's content took most of a second on the console; a file
+         * name is checked when used (usb_media_find), and the paths are only
+         * ever compared. An entry out of order is just not found. */
         if (key < 2 || (file < 6 || file > 97) || key + file > bytes - pos) goto done;
-        if (next.storage[pos + key - 1] || next.storage[pos + key + file - 1] ||
-            memchr(next.storage + pos, 0, key - 1) ||
-            memchr(next.storage + pos + key, 0, file - 1)) goto done;
+        if (next.storage[pos + key - 1] || next.storage[pos + key + file - 1]) goto done;
         next.entries[i].path = (char *)next.storage + pos;
         next.entries[i].file = (char *)next.storage + pos + key;
-        if (!safe_path(next.entries[i].path) || !usb_media_filename(next.entries[i].file) ||
-            (i && menu_path_compare(next.entries[i - 1].path, next.entries[i].path) >= 0)) goto done;
         pos += key + file;
     }
     if (pos != bytes) goto done;
@@ -287,26 +277,84 @@ int usb_file_verify(Ode *ode, OdeReadBuffer reader, const unsigned char *expecte
 
 /* Text files have no checksum/length header. Clear every byte before each
  * read, so FCare's lying EOF count cannot expose stale text as favorites. */
-int usb_file_text(Ode *ode, OdeReadBuffer reader, const char *name, char *out, size_t capacity, size_t *length)
+/* Fill the ODE's buffer with the next n bytes of the open file. */
+static int file_fill(Ode *ode, size_t n)
+{
+    unsigned char packet[7], reply[32];
+    memset(packet,0,sizeof(packet)); packet[0] = 0xe3; packet[1] = (unsigned char)(n >> 8); packet[2] = (unsigned char)n;
+    return exchange(ode,packet,reply,4) < 0 || reply[1] != packet[1] || reply[2] != packet[2] ? -1 : 0;
+}
+
+/* Text up to its end, in pieces read over a cleared buffer, until *used
+ * reaches limit. 1 at the end of the text, 0 at the limit, -1 on failure. */
+static int text_pieces(Ode *ode, OdeReadBuffer reader, unsigned char *block, char *out, size_t capacity, size_t limit, size_t *used)
 {
     static const unsigned char zero[4] = {0,0,0,0};
-    unsigned char block[2048], packet[7], reply[32];
-    size_t used = 0;
-    int result = -1;
-    if (!capacity || usb_file_open(ode,name) < 0) return -1;
-    while (used < capacity) {
-        size_t i, n = capacity - used;
+    while (*used < capacity && *used < limit) {
+        size_t i, n = capacity - *used;
         /* Short text is common at launch. Clear/read 128 bytes at a time
          * instead of issuing 512 FIFO-word commands before its first byte. */
         if (n > 128) n = 128;
-        for (i = 0; i < (n+3)/4; ++i) if (buffer_word(ode,(unsigned int)i,zero) < 0) goto done;
-        memset(packet,0,sizeof(packet)); packet[0] = 0xe3; packet[1] = (unsigned char)(n >> 8); packet[2] = (unsigned char)n;
-        if (exchange(ode,packet,reply,4) < 0 || reply[1] != packet[1] || reply[2] != packet[2]) goto done;
-        if (reader(ode->context,block,sizeof(block)) < 0) { ode->navigation_failed = 1; goto done; }
+        for (i = 0; i < (n+3)/4; ++i) if (buffer_word(ode,(unsigned int)i,zero) < 0) return -1;
+        if (file_fill(ode,n) < 0) return -1;
+        if (reader(ode->context,block,2048) < 0) { ode->navigation_failed = 1; return -1; }
         for (i = 0; i < n && block[i]; ++i) {}
-        memcpy(out+used,block,i); used += i;
-        if (i < n) { out[used] = 0; *length = used; result = 0; goto done; }
+        memcpy(out+*used,block,i); *used += i;
+        if (i < n) return 1;
     }
+    return 0;
+}
+
+/* FCare reports a full read at the end of a file and leaves the rest of its
+ * buffer stale, so text ends where a cleared buffer stays zero. Clearing
+ * costs a command per word: 34 per 128 bytes, 4,000+ for a 16 KiB file.
+ * Past the first piece, read whole blocks; a block is complete once the next
+ * read brings new bytes (an end leaves the buffer as it was). Then reopen,
+ * pass over the complete blocks with fills alone, and read the last one over
+ * a buffer cleared from where it last differed from the block before it:
+ * bytes up to there are certainly the file's. */
+int usb_file_text(Ode *ode, OdeReadBuffer reader, const char *name, char *out, size_t capacity, size_t *length)
+{
+    static const unsigned char zero[4] = {0,0,0,0};
+    unsigned char block[2048];
+    size_t used = 0, skip, from = 0, i;
+    int result = -1, status, pending = 0, known = 0;
+    const char *last = NULL; /* the block the text may end in */
+    if (!capacity || usb_file_open(ode,name) < 0) return -1;
+    status = text_pieces(ode,reader,block,out,capacity,128,&used);
+    while (!status && (pending || used + sizeof(block) < capacity)) {
+        if (usb_file_read_block(ode,reader,block) < 0) goto done;
+        if (pending) {
+            const char *end = (const char *)memchr(out+used,0,sizeof(block));
+            if (!memcmp(block,out+used,sizeof(block))) { last = out+used; break; }
+            if (end) { used = (size_t)(end-out); status = 1; break; }
+            used += sizeof(block); known = 1; pending = 0;
+        }
+        /* Without room to keep it, compare this block where it was read. */
+        if (used + sizeof(block) >= capacity) { last = (const char *)block; break; }
+        memcpy(out+used,block,sizeof(block)); pending = 1;
+    }
+    if (!status && last) {
+        if (known) {
+            for (i = sizeof(block); i && last[i-1] == out[used-sizeof(block)+i-1]; --i) {}
+            from = i & ~(size_t)3;
+        }
+        if (usb_file_close(ode) < 0 || usb_file_open(ode,name) < 0) return -1;
+        for (skip = used; skip; skip -= skip > sizeof(block) ? sizeof(block) : skip)
+            if (file_fill(ode,skip > sizeof(block) ? sizeof(block) : skip) < 0) goto done;
+        /* Past halfway, clearing the tail costs less than pieces from the start. */
+        if (from >= sizeof(block)/2) {
+            for (i = from/4; i < sizeof(block)/4; ++i) if (buffer_word(ode,(unsigned int)i,zero) < 0) goto done;
+            if (file_fill(ode,sizeof(block)) < 0) goto done;
+            if (reader(ode->context,block,sizeof(block)) < 0) { ode->navigation_failed = 1; goto done; }
+            for (i = 0; i < sizeof(block) && block[i]; ++i) {}
+            if (i >= capacity-used) goto done;
+            memcpy(out+used,block,i); used += i;
+            if (i < sizeof(block)) status = 1;
+        }
+    }
+    if (!status) status = text_pieces(ode,reader,block,out,capacity,capacity,&used);
+    if (status == 1) { out[used] = 0; *length = used; result = 0; }
 done:
     if (usb_file_close(ode) < 0) result = -1;
     return result;
