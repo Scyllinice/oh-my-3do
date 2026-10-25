@@ -10,8 +10,8 @@ No ISO rebuild is needed.
 2. Use **Prepare missing media**, or select games in Library and prepare media
    for just those titles.
 3. Review any unmatched games and assign a cover or video manually if needed.
-4. Copy the games to the drive. For games already there, switch **View library**
-   to the drive and choose **Update media & information…**.
+4. Copy the games to the drive. For games already there, switch the view to
+   **USB / SD drive** and choose **Update media & information…**.
 
 The app can download covers and game information. For video sources, use your
 own clips or download 3DO Video Snaps from EmuMovies with a supporting membership.

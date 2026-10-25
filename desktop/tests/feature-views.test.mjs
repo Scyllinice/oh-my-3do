@@ -152,3 +152,28 @@ test('import review shows an empty category explicitly and disables unresolved s
  html=render();assert.match(html,/<option value="Music" selected>/);assert.ok(!/data-import-check="0"[^>]*disabled/.test(html));
  entry.blocked=true;html=render();assert.match(html,/data-import-check="0"[^>]*disabled/);
 });
+
+test('PC libraries and USB drives are separate lists that grow, show connection and end with add and manage',()=>{
+ const state={prefs:{library:'/pc/3DO',destination:'/media/card',libraries:['/pc/3DO'],browser_drives:[],drives:{'/media/card':{name:'LOCODE'}}},driveStatus:{}};
+ const option=(v,label,selected)=>`<option value="${e(v)}"${selected?' selected':''}>${e(label)}</option>`;
+ const context={state,option,displayPath};
+ const rootName=view('rootName',context);const driveName=view('driveName',context);
+ const remember=view('rememberRoots',context);remember();
+ assert.equal(JSON.stringify(state.prefs.browser_drives),JSON.stringify(['/media/card']));
+ state.prefs.library='/pc/Japan';remember();remember();assert.equal(JSON.stringify(state.prefs.libraries),JSON.stringify(['/pc/3DO','/pc/Japan']));
+ const libraries=view('pcLibraryOptions',{...context,rootName})();
+ assert.ok(libraries.includes('value="/pc/Japan" selected'));assert.ok(libraries.includes('3DO — /pc/3DO'));
+ assert.ok(libraries.includes('Add a PC library…'));assert.ok(libraries.includes('Manage libraries…'));
+ state.driveStatus={'/media/card':{connected:false,removable:false}};
+ const drives=view('driveOptions',{...context,driveName})();
+ assert.ok(drives.includes('LOCODE — /media/card (not connected)'));assert.ok(drives.includes('Add a drive…'));assert.ok(drives.includes('Manage drives…'));
+ state.prefs.destination='';assert.ok(view('driveOptions',{...context,driveName})().includes('Choose a USB / SD drive'));
+});
+
+test('the view switch shows which list is on screen and needs a drive for the drive view',()=>{
+ const state={browseRoot:'',prefs:{destination:''}};
+ const html=view('viewSwitch',{state})();
+ assert.ok(html.includes('data-action="view-pc" aria-pressed="true"'));assert.ok(html.includes('aria-pressed="false" disabled'));
+ state.browseRoot='/media/card';state.prefs.destination='/media/card';
+ const drive=view('viewSwitch',{state})();assert.ok(drive.includes('data-action="view-drive" aria-pressed="true"'));assert.ok(!drive.includes('disabled'));
+});

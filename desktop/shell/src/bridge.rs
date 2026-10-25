@@ -506,6 +506,7 @@ fn dispatch(
             s.copy=None;s.cleanup=None;
             Ok(json!({"root":result.root,"message":result.message,"backup_closed":backup_closed,"library_closed":library_closed}))
         }
+        "drive_status" => Ok(json!(strings(a,"roots")?.iter().map(|root|core::eject::status(Path::new(root))).collect::<Vec<_>>())),
         "drive_check" => Ok(json!(core::readiness::check(&path(a,"root")?,job)?)),
         "support_export" => {
             core::support_report::export(&path(a,"root")?, &path(a,"target")?, &strings(a,"activity")?, job)?;

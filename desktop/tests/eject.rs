@@ -15,3 +15,10 @@ fn listing()->serde_json::Value {json!({"blockdevices":[{"path":"/dev/sdz","type
  calls.clear();linux_remove(&target,|args|{calls.push(args.join(" "));Ok(())}).unwrap();assert_eq!(calls,vec!["unmount --block-device /dev/sdz1 --no-user-interaction","power-off --block-device /dev/sdz --no-user-interaction"]);
  let failure=linux_remove(&target,|args|{if args[0]=="power-off"{anyhow::bail!("unsupported")}Ok(())}).unwrap_err();assert!(failure.to_string().contains("did not confirm"));
 }
+#[test]fn status_offers_eject_only_for_a_connected_removable_root(){
+ let folder=std::env::temp_dir().join(format!("oh3do-status-{}",std::process::id()));std::fs::create_dir_all(&folder).unwrap();
+ let present=oh_my_3do_library::eject::status(&folder);assert!(present.connected&&!present.removable);
+ let missing=oh_my_3do_library::eject::status(&folder.join("missing"));assert!(!missing.connected&&!missing.removable);
+ assert!(!oh_my_3do_library::eject::status(Path::new("/")).removable);
+ std::fs::remove_dir_all(&folder).unwrap();
+}

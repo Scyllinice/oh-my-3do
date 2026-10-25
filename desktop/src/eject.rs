@@ -66,7 +66,9 @@ fn platform(root:&Path)->Result<()>{
  let b=plain.as_bytes();
  ensure!(b.len()==3&&b[0].is_ascii_alphabetic()&&b[1]==b':'&&b[2]==b'\\',"Choose a removable drive root such as K:\\");
  let wide:Vec<u16>=std::ffi::OsStr::new(&plain).encode_wide().chain(Some(0)).collect();
- ensure!(matches!(unsafe{GetDriveTypeW(wide.as_ptr())},2|3),"Use Windows Safely Remove Hardware for network or unsupported drives");
+ // Only removable media, as the removal script also requires: an internal
+ // or external fixed disk is the system's to remove.
+ ensure!(unsafe{GetDriveTypeW(wide.as_ptr())}==2,"This is not a removable drive; use Windows Safely Remove Hardware");
  // Avoid no-media dialogs while checking whether Shell actually removed it.
  let mut old=0;
  ensure!(unsafe{SetThreadErrorMode(0x8001,&mut old)}!=0,"Cannot configure safe drive detection");
@@ -97,3 +99,48 @@ fn platform(root:&Path)->Result<()>{
 }
 #[cfg(not(any(windows,target_os="linux")))]
 fn platform(_: &Path)->Result<()>{bail!("Use your operating system's eject controls on this platform")}
+
+/// A saved library or drive root as the app lists it: whether it is there,
+/// and whether the app may offer to eject it.
+#[derive(Debug,Serialize)]
+pub struct Status {pub root:PathBuf,pub connected:bool,pub removable:bool}
+pub fn status(root:&Path)->Status{
+ let connected=quietly(||!f::is_link(root)&&root.is_dir());
+ let removable=connected&&f::root(root).is_ok_and(|root|ejectable(&root));
+ Status{root:root.to_owned(),connected,removable}
+}
+/// Only a removable drive's own root, which eject() would accept: never
+/// the system drive, an internal or external fixed disk, or a network share.
+#[cfg(target_os="linux")]
+fn ejectable(root:&Path)->bool{
+ let Ok(output)=std::process::Command::new("lsblk").args(["--json","--output","PATH,TYPE,RM,HOTPLUG,MOUNTPOINTS"]).output() else {return false};
+ output.status.success()&&serde_json::from_slice(&output.stdout).is_ok_and(|listing|linux_target(root,&listing).is_ok())
+}
+#[cfg(windows)]
+fn ejectable(root:&Path)->bool{
+ use std::os::windows::ffi::OsStrExt;
+ #[link(name="kernel32")]
+ extern "system" {fn GetDriveTypeW(root:*const u16)->u32;}
+ let plain=root.to_string_lossy().trim_start_matches("\\\\?\\").to_owned();
+ let b=plain.as_bytes();
+ if !(b.len()==3&&b[0].is_ascii_alphabetic()&&b[1]==b':'&&b[2]==b'\\'){return false;}
+ let system=std::env::var("SystemDrive").unwrap_or_else(|_|"C:".into());
+ if plain[..2].eq_ignore_ascii_case(system.trim_end_matches('\\')){return false;}
+ let wide:Vec<u16>=std::ffi::OsStr::new(&plain).encode_wide().chain(Some(0)).collect();
+ (unsafe{GetDriveTypeW(wide.as_ptr())})==2
+}
+#[cfg(not(any(windows,target_os="linux")))]
+fn ejectable(_: &Path)->bool{false}
+/// Run a check without Windows' "no disk" dialog for an empty card slot.
+#[cfg(windows)]
+fn quietly<T>(check:impl FnOnce()->T)->T{
+ #[link(name="kernel32")]
+ extern "system" {fn SetThreadErrorMode(mode:u32,old:*mut u32)->i32;}
+ let mut old=0;
+ let set=unsafe{SetThreadErrorMode(0x8001,&mut old)}!=0;
+ let result=check();
+ if set{unsafe{SetThreadErrorMode(old,std::ptr::null_mut());}}
+ result
+}
+#[cfg(not(windows))]
+fn quietly<T>(check:impl FnOnce()->T)->T{check()}

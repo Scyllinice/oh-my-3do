@@ -22,9 +22,14 @@ saves and preferences.
 
 ## Browse your PC library and console drives
 
-Use **View library** above the game grid to switch between the PC library and
-USB/SD drives. **PC folder…** changes the source library; **Browse another drive…**
-adds a drive. Each library remembers its own selection and filters.
+The top bar has two pickers. **PC library** chooses which of your PC libraries
+to work with, and **USB / SD drive** chooses the console drive; games you copy go
+from the one to the other. Each picker lists everything you have added, with
+**Add…** for another folder or drive and **Manage…** to remove entries (removing
+only takes it off the list; nothing on disk changes). **Safely eject** appears
+for drives the system reports as removable. The **PC library / USB / SD drive**
+switch above the game grid chooses which one is shown. Each library remembers
+its own selection and filters.
 
 Use search and filters to find games. Click tiles to select them; Shift-click
 selects a range and Ctrl+A selects all shown games. Use arrow keys to move between
@@ -112,7 +117,7 @@ the app offers to download them.
 To update media on an existing drive:
 
 1. Prepare or edit it in the PC library.
-2. Switch **View library** to the console drive.
+2. Choose the console drive in **USB / SD drive** and switch the view to it.
 3. Choose **Update media & information…**, review, and apply.
 
 Select games first to update a subset; leave the selection empty to match the

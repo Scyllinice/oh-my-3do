@@ -131,3 +131,4 @@ h1:focus,h2:focus,#content:focus{outline:none}
 html,.content{scroll-padding-bottom:var(--fixed-ui-space,0px)}
 @media(max-width:760px){.cover{aspect-ratio:auto;height:clamp(100px,25vh,180px)}}
 input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
+.view-switch{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px}.view-switch button{border:0;border-radius:0;padding:8px 16px}.view-switch button+button{border-left:1px solid var(--border)}.view-switch button[aria-pressed="true"]{background:var(--selected);color:var(--selected-text)}.root-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--card-border);border-radius:9px;background:var(--surface);margin-bottom:10px}.root-row .note{margin:2px 0 0}

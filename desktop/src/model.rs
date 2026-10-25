@@ -101,6 +101,8 @@ pub struct Plan {
 #[serde(default)]
 pub struct Preferences {
     pub library: String,
+    /// Every PC library the person added; `library` is the one in use.
+    pub libraries: Vec<String>,
     pub emumovies: String,
     pub destination: String,
     pub video_tools: String,
@@ -115,6 +117,7 @@ pub struct Preferences {
     pub theme: Theme,
     pub text_scale: Option<u16>,
     pub drives: std::collections::BTreeMap<String, crate::drive_identity::Identity>,
+    /// Every USB / SD drive the person added; `destination` is the one in use.
     pub browser_drives: Vec<String>,
     pub library_views: std::collections::BTreeMap<String, LibraryView>,
 }
