@@ -19,6 +19,9 @@ stubs = r"""
 #include <stdlib.h>
 #include <string.h>
 #define MAX_DEPTH 32
+#define FOLDER_PATH_BYTES 8193
+#define ENTRY_PATH_BYTES 9218
+#define STORAGE_PREFIX 9
 typedef struct Menu {
     Ode ode; OdeListing listing; OdePlaylist playlist,group;
     unsigned int depth;

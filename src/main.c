@@ -103,6 +103,13 @@
 /* The deepest folder the browser follows. */
 #define MAX_DEPTH 32
 
+/* Room for a menu path: a folder ("/Storage/Games/USA"), and a folder plus
+ * one entry's name. The USB media indexes and saved records use the part
+ * after "/Storage/", STORAGE_PREFIX characters in. */
+#define FOLDER_PATH_BYTES 8193
+#define ENTRY_PATH_BYTES  9218
+#define STORAGE_PREFIX    9
+
 /* The four directions on the controller's pad. */
 #define DIRECTIONS (ControlUp | ControlDown | ControlLeft | ControlRight)
 
@@ -1069,7 +1076,7 @@ static const char *display_game_variant(const char *name, int directory, unsigne
 {
     /* Big enough for full paths from favorites and the queue, not just one
      * folder entry's name. */
-    static char title[9218];
+    static char title[ENTRY_PATH_BYTES];
     size_t n = menu_display_title(title, sizeof(title), name, directory);
     if (variant && n + 16 < sizeof(title))
         format(title + n, " [%u]", variant);
@@ -3187,8 +3194,11 @@ static void draw(Menu *menu)
     draw_browser_full(menu, &d, frame, shell, picture, controls, playing, hash);
 }
 
-/* Called after every 2 KiB read and every directory batch; 15 redraws a
- * second is enough. Preview loads run with this hook disabled (art_at_root). */
+/* ==== Loading folders, recovering and the media indexes ==== */
+
+/* Called after every 2 KiB read and every directory batch, to keep the
+ * screen moving during long reads; 15 redraws a second is enough. Preview
+ * loads run with this hook disabled (art_at_root). */
 static void progress(void *context, size_t count)
 {
     Menu *menu = (Menu *)context;
@@ -3199,8 +3209,8 @@ static void progress(void *context, size_t count)
     menu->progress_drawn = now;
     draw(menu);
 }
-/* Every ODE command passes through here; during startup it keeps the static
- * moving (BOOT_STATIC_MS). */
+/* The OdeTransfer the menu uses: every ODE command passes through here, so
+ * during startup it can keep the static moving (BOOT_STATIC_MS). */
 static Menu *startup_menu;
 static int menu_transfer(void *context, const unsigned char *command, unsigned char *reply,
                          size_t capacity, size_t *length)
@@ -3214,6 +3224,12 @@ static int menu_transfer(void *context, const unsigned char *command, unsigned c
     return result;
 }
 
+/*
+ * Reads the folder the drive emulator is now in, selecting row `selected`.
+ * At the drive's top, also remembers what it looks like (for
+ * recover_library). On failure the old listing stays but is marked out of
+ * date (view_valid 0) with the error on the status line.
+ */
 static void load_directory(Menu *menu, size_t selected)
 {
     OdeListing next;
@@ -3228,6 +3244,7 @@ static void load_directory(Menu *menu, size_t selected)
     if (ode_read_directory(&menu->ode, &next) == 0) {
         free_listing(menu);
         menu->listing = next;
+        /* The drive's top folder (not a list of volumes): remember it. */
         if (storage_root(menu)) {
             size_t i;
             for (i = 0; i < menu->listing.count; ++i)
@@ -3257,12 +3274,23 @@ static void load_directory(Menu *menu, size_t selected)
     if (menu->ready)
         refresh_usb_art(menu);
 }
+/*
+ * Whether "Return to library" can be offered after browsing failed: the top
+ * folder is known, the FCare answered sensibly so far, and an earlier
+ * recovery did not fail.
+ */
 static int can_recover_library(const Menu *menu)
 {
     return menu->root_known && !menu->demo && !menu->bus.timed_out &&
            !menu->ode.transport_uncertain && !strcmp(menu->ode.identity, "LOCODE") &&
            menu->recovery_result >= 0;
 }
+/*
+ * Tries to get back to the drive's top folder after a USB failure (see
+ * ode_recover_root). On success browsing works again, but covers and
+ * previews stay off until a restart, since the media reads were what was
+ * in doubt. Returns 0, or -1.
+ */
 static int recover_library(Menu *menu)
 {
     OdeListing root;
@@ -3305,6 +3333,11 @@ static int recover_library(Menu *menu)
     return 0;
 }
 
+/*
+ * At the drive's top folder, (re)loads what the menu keeps from the
+ * .ohmy3do folder there: the categories, the cover and preview indexes and
+ * the game metadata. Done once per USB volume; elsewhere it does nothing.
+ */
 static void refresh_usb_art(Menu *menu)
 {
     unsigned int root = menu->depth && !(menu->path_ids[0] & 0xffffffUL) ? 1 : 0;
@@ -3317,7 +3350,7 @@ static void refresh_usb_art(Menu *menu)
         for (i = 0; i < menu->listing.count; ++i)
             if (!(menu->listing.entries[i]->toc_id & 0xffffffUL)) {
                 menu->covers_enabled = 0;
-                return; /* virtual device list is not a filesystem root */
+                return; /* a list of volumes, not a folder with files in it */
             }
     }
     volume = root ? menu->path_ids[0] & 0xff000000UL
@@ -3326,6 +3359,7 @@ static void refresh_usb_art(Menu *menu)
         menu->covers_enabled = menu->config.usb_covers && menu->usb_art.count != 0;
         return;
     }
+    /* A new volume (or the first time): forget the old indexes. */
     usb_art_index_free(&menu->usb_art);
     usb_art_index_free(&menu->usb_previews);
     menu->game_lookups_valid = 0;
@@ -3336,6 +3370,11 @@ static void refresh_usb_art(Menu *menu)
         return;
     menu->art_index_volume = volume;
     menu->art_indexes_valid = 1; /* Missing indexes also wait for explicit refresh. */
+    /*
+     * The categories file. Without one, the defaults apply, with Adult
+     * hidden if the old hide_adult setting asked for it. Once a categories
+     * file is in charge, that setting is cleared: the file decides.
+     */
     {
         char *text = (char *)malloc(MENU_CATEGORIES_BYTES);
         size_t length = 0;
@@ -3366,6 +3405,7 @@ static void refresh_usb_art(Menu *menu)
             menu_set_hide_adult(0);
         }
     }
+    /* The indexes and metadata, each only if still connected. */
     message = menu->message;
     menu->message = "Reading media indexes...";
     draw(menu);
@@ -3391,6 +3431,8 @@ static void refresh_usb_art(Menu *menu)
     }
 }
 
+/* Writes the current folder's full menu path ("/Storage/Games/USA") into
+ * `buffer`. Returns 0, or -1 if it does not fit in `capacity`. */
 static int directory_path(Menu *menu, char *buffer, size_t capacity)
 {
     unsigned int i;
@@ -3407,6 +3449,9 @@ static int directory_path(Menu *menu, char *buffer, size_t capacity)
     return 0;
 }
 
+/* ==== Covers and the full-screen view ==== */
+
+/* What a cover read needs, passed through media_read to read_usb_cover. */
 typedef struct UsbCoverRead {
     Menu *menu;
     const char *filename;
@@ -3437,6 +3482,13 @@ static void tuning_tick(Menu *menu)
     tuning_overlay(menu, selected);
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
+/*
+ * The MediaCancel the menu gives every media read: polls the controller
+ * (and keeps the tuning static moving) between blocks. Any button but a
+ * lone shoulder cancels the read, so scrolling past a game never waits for
+ * its cover or preview; the directions pressed are remembered so the list
+ * still moves by them afterwards.
+ */
 static int media_cancel(void *context)
 {
     Menu *menu = (Menu *)context;
@@ -3465,9 +3517,11 @@ static int media_cancel(void *context)
     return menu->media_cancelled;
 }
 
-/* Read beside the disc without a trip to the volume root. For a collapsed
- * game folder, enter it temporarily so E1 gets the short local media path;
- * verify the return without changing the browser or remembered position. */
+/* Runs `read` where the media is: beside the disc (without a trip to the
+ * volume root) or, for drives laid out the old way, at the root (see
+ * art_at_root). For a collapsed game folder, enters it temporarily so the
+ * open command gets the short local media path, and verifies the return
+ * without changing the browser or remembered position. */
 static int media_read(Menu *menu, ArtRouteStep *route, int beside, ArtRootRead read, void *context)
 {
     OdeProgress progress = menu->ode.progress;
@@ -3492,6 +3546,7 @@ static int media_read(Menu *menu, ArtRouteStep *route, int beside, ArtRootRead r
     menu->ode.media_beside = 0;
     return menu->ode.navigation_failed ? -2 : result;
 }
+/* Reads the cover in a UsbCoverRead: a PNG, or a prepared .3dc. */
 static int read_usb_cover(void *context)
 {
     UsbCoverRead *read = (UsbCoverRead *)context;
@@ -3502,6 +3557,7 @@ static int read_usb_cover(void *context)
                           media_cancel, read->menu);
 }
 
+/* Reads the full-screen NAME-large.3dc for the cover in a UsbCoverRead. */
 static int read_large_cover(void *context)
 {
     UsbCoverRead *read = (UsbCoverRead *)context;
@@ -3529,6 +3585,7 @@ static void set_smoothing(Menu *menu, int on)
     (void)on;
 #endif
 }
+/* Fading out of full-screen video (the PC preview has no color tables). */
 #ifndef UI_PREVIEW_GLASS
 #define FADES 1
 #else
@@ -3536,7 +3593,10 @@ static void set_smoothing(Menu *menu, int on)
 #endif
 #define FADE_OUT_MS 100UL
 #define FADE_IN_MS  133UL
-/* Both screens' color tables scaled to level/256 of full brightness. */
+
+/* Scales both screens' color tables to level/256 of full brightness. Each
+ * 5-bit level i becomes an 8-bit value (i << 3 | i >> 2) before scaling;
+ * 256 restores the normal tables. */
 static void set_brightness(Menu *menu, unsigned long level)
 {
 #if FADES
@@ -3558,9 +3618,12 @@ static void set_brightness(Menu *menu, unsigned long level)
 #endif
 }
 static void close_full_cover(Menu *menu);
-/* The browser takes several video frames to draw, which showed as a stall
- * leaving full-screen video. Draw it while the screen is dark instead,
- * along with the frames playback must catch up on. */
+/*
+ * One step of leaving full-screen video: fade out, draw the browser in the
+ * dark, fade back in. The browser takes several video frames to draw, which
+ * showed as a stall; in the dark it is not seen, along with the frames
+ * playback must catch up on. Call every main-loop pass while `fade` is set.
+ */
 static void fade_step(Menu *menu)
 {
     unsigned long elapsed;
@@ -3585,6 +3648,7 @@ static void fade_step(Menu *menu)
         menu->fade = 0;
     }
 }
+/* Leaves the full-screen view (cover or video) and frees the large cover. */
 static void close_full_cover(Menu *menu)
 {
     if (!menu->full_view)
@@ -3604,6 +3668,11 @@ static void close_full_cover(Menu *menu)
     menu->clear_frames = 2;
     menu->panel_frames = 0;
 }
+/*
+ * Opens the full-screen view of the selected game's cover (hold X): the
+ * 192x240 large cover if the library has one, otherwise the normal cover
+ * doubled. Pressing a button while it loads cancels.
+ */
 static void open_full_cover(Menu *menu)
 {
     ArtRouteStep route[MAX_DEPTH];
@@ -3648,6 +3717,8 @@ static void open_full_cover(Menu *menu)
         }
     }
     if (cel) {
+        /* Centered; CCB_BGND draws its black pixels instead of leaving
+         * them transparent. */
         cel->ccb_XPos = (long)((320 - USB_LARGE_COVER_WIDTH) / 2) << 16;
         cel->ccb_YPos = 0;
         cel->ccb_Flags |= CCB_LAST | CCB_BGND;
@@ -3704,6 +3775,7 @@ static void draw_full_stream(Menu *menu)
         preview_stream_invalidate(&menu->stream, PREVIEW7_SCREEN);
     menu->full_cleared = 1;
 }
+/* Draws the full-screen view: video (streamed or loaded) or a cover. */
 static void draw_full_cover(Menu *menu)
 {
     CCB copy;
@@ -3766,137 +3838,191 @@ static void draw_full_cover(Menu *menu)
     DisplayScreen(menu->screen.sc_Screens[menu->screen.sc_curScreen], 0);
 }
 
+/*
+ * Writes the selected game's menu path into `path` (ENTRY_PATH_BYTES): its
+ * disc, or for a folder acting as its game, that folder's first disc, whose
+ * cover and preview stand for the game. Returns the entry, and through
+ * `game` what folder_game says of it; NULL when the selection is not a game
+ * (the ".." row or an ordinary folder) or the path is too long.
+ */
+static const MenuEntry *selected_game_path(Menu *menu, char *path, size_t *game)
+{
+    const MenuEntry *entry;
+    const char *discs[ODE_MAX_DISCS];
+    if (!row_count(menu) || (menu->listing.has_parent && !menu->selected))
+        return NULL;
+    entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
+    *game = folder_game(menu, entry, discs);
+    if ((entry->is_directory && !*game) || directory_path(menu, path, FOLDER_PATH_BYTES) < 0)
+        return NULL;
+    if (strlen(path) + strlen(entry->name) + (*game ? strlen(discs[0]) + 1 : 0) + 2 >
+        ENTRY_PATH_BYTES)
+        return NULL;
+    strcat(path, "/");
+    strcat(path, entry->name);
+    if (*game) {
+        strcat(path, "/");
+        strcat(path, discs[0]);
+    }
+    return entry;
+}
+
+/* The part of a menu path the USB media indexes are keyed by: below
+ * "/Storage/", and below the device label when the first folder is a
+ * device rather than a folder on the drive. */
+static const char *usb_media_path(Menu *menu, const char *path)
+{
+    const char *lookup = path + STORAGE_PREFIX;
+    if (menu->depth && !(menu->path_ids[0] & 0xffffffUL))
+        lookup += strlen(menu->path[0]) + 1;
+    return lookup;
+}
+
+/*
+ * Loads the cover `file` (named in the USB index) for the selected `entry`
+ * into menu->cover: from the cover cache if it is there, otherwise from the
+ * drive, showing "Loading cover..." while it reads. A button press cancels
+ * the read. Leaves menu->cover NULL if there is no memory, the read fails or
+ * it was canceled; a transport failure stops the browser.
+ */
+static void load_usb_cover(Menu *menu, const MenuEntry *entry, size_t game, const char *file)
+{
+    ArtRouteStep route[MAX_DEPTH];
+    UsbCoverRead read;
+    CCB *cover;
+    const char *message;
+    unsigned int i;
+    int result;
+    size_t bytes = (size_t)USB_COVER_WIDTH * USB_COVER_HEIGHT * 2;
+    unsigned long started, commands, volume = entry->toc_id & 0xff000000UL;
+
+    /* Covers the cache already holds show at once; others wait until the
+     * selection has rested, so scrolling never stops to read one. */
+    if (!cover_cache_contains(&menu->cover_cache, volume, file) &&
+        now_ms(menu) - menu->selection_since < COVER_IDLE_MS)
+        return;
+    menu->cover_attempted = 1;
+
+    /* The cel the cover is decoded into. If memory is short, the cache gives
+     * way, but then the cover waits for the usual rest like a new one. */
+    cover = CreateCel(USB_COVER_WIDTH, USB_COVER_HEIGHT, 16, CREATECEL_UNCODED, NULL);
+    if (!cover && menu->cover_cache.clock) {
+        cover_cache_clear(&menu->cover_cache);
+        cover = CreateCel(USB_COVER_WIDTH, USB_COVER_HEIGHT, 16, CREATECEL_UNCODED, NULL);
+        if (cover && now_ms(menu) - menu->selection_since < COVER_IDLE_MS) {
+            UnloadCel(cover);
+            menu->cover_attempted = 0;
+            return;
+        }
+    }
+    if (!cover)
+        return;
+    menu->cover_file = file;
+    menu->cover_folder = game ? entry->name : NULL;
+
+    if (cover_cache_get(&menu->cover_cache, volume, file, (unsigned char *)cover->ccb_SourcePtr,
+                        bytes)) {
+        menu->cover_cached = 1;
+        menu->cover_load_ms = menu->cover_commands = 0;
+        menu->cover = cover;
+        return;
+    }
+
+    /* Read it from the drive, timing the read for the diagnostics. */
+    for (i = 0; i < menu->depth; ++i) {
+        route[i].id = menu->path_ids[i];
+        route[i].name = menu->path[i];
+    }
+    read.menu = menu;
+    read.filename = file;
+    read.pixels = (unsigned char *)cover->ccb_SourcePtr;
+    message = menu->message;
+    pause_scroll(menu);
+    menu->message = "Loading cover...";
+    draw(menu);
+    started = now_ms(menu);
+    commands = menu->bus.commands;
+    menu->cover_cached = 0;
+    menu->media_cancelled = 0;
+    menu->ode.media_folder = game ? entry->name : NULL;
+    result = media_read(menu, route, menu->usb_art.beside, read_usb_cover, &read);
+    menu->ode.media_folder = NULL;
+    menu->cover_load_ms = now_ms(menu) - started;
+    menu->cover_commands = menu->bus.commands - commands;
+    resume_scroll(menu);
+    menu->message = message;
+
+    if (result < 0 || menu->media_cancelled) {
+        UnloadCel(cover);
+        menu->cover_file = menu->cover_folder = NULL;
+    } else {
+        menu->cover = cover;
+        cover_cache_put(&menu->cover_cache, volume, file,
+                        (const unsigned char *)cover->ccb_SourcePtr, bytes);
+    }
+    if (result == -2 || menu->bus.timed_out) {
+        menu->ode.navigation_failed = 1;
+        menu->ready = menu->view_valid = 0;
+        menu->message = "Cover I/O failed. Restart console.";
+    }
+}
+
+/*
+ * Shows the selected game's cover beside the list, if it has one and the
+ * browser is idle. Called every main-loop pass; it does its work once per
+ * selection (cover_attempted), and only after the selection has rested for
+ * COVER_IDLE_MS unless the cover is cached. The demo reads covers from the
+ * menu's own disc instead of the drive.
+ */
 static void update_cover(Menu *menu)
 {
     const MenuEntry *entry;
-    const char *file, *discs[ODE_MAX_DISCS];
-    char path[9218];
-    const char *lookup;
+    const char *file;
+    char path[ENTRY_PATH_BYTES];
     size_t game;
     if (menu->recovery_media_off || menu->tools || menu->tools_requested || !menu->covers_enabled ||
         menu->review || !menu->ready || menu->loading || menu->cover_attempted ||
         menu->bus.timed_out || menu->ode.navigation_failed)
         return;
-    if (!row_count(menu) || (menu->listing.has_parent && !menu->selected))
+    entry = selected_game_path(menu, path, &game);
+    if (!entry)
         return;
-    entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
-    game = folder_game(menu, entry, discs);
-    if ((entry->is_directory && !game) || directory_path(menu, path, 8193) < 0)
-        return;
-    /* A folder acting as its game shows its (first) disc's cover. */
-    if (strlen(path) + strlen(entry->name) + (game ? strlen(discs[0]) + 1 : 0) + 2 > sizeof(path))
-        return;
-    strcat(path, "/");
-    strcat(path, entry->name);
-    if (game) {
-        strcat(path, "/");
-        strcat(path, discs[0]);
-    }
     if (menu->demo) {
         if (now_ms(menu) - menu->selection_since < COVER_IDLE_MS)
             return;
         menu->cover_attempted = 1;
         file = menu_cover_lookup(path);
-        if (!file)
-            return;
-        menu->cover = LoadCel((char *)file, MEMTYPE_CEL);
+        if (file)
+            menu->cover = LoadCel((char *)file, MEMTYPE_CEL);
     } else {
-        ArtRouteStep route[MAX_DEPTH];
-        UsbCoverRead read;
-        CCB *cover;
-        const char *message;
-        unsigned int i;
-        int result, width, height;
-        size_t bytes;
-        unsigned long started, commands, volume;
-        lookup = path + 9; /* remove /Storage/ */
-        if (menu->depth && !(menu->path_ids[0] & 0xffffffUL))
-            lookup += strlen(menu->path[0]) + 1; /* device labels are not USB path components */
-        file = usb_media_find(&menu->usb_art, lookup);
-        if (!file) {
+        file = usb_media_find(&menu->usb_art, usb_media_path(menu, path));
+        if (file)
+            load_usb_cover(menu, entry, game, file);
+        else
             menu->cover_attempted = 1;
-            return;
-        }
-        volume = entry->toc_id & 0xff000000UL;
-        if (!cover_cache_contains(&menu->cover_cache, volume, file) &&
-            now_ms(menu) - menu->selection_since < COVER_IDLE_MS)
-            return;
-        menu->cover_attempted = 1;
-        width = USB_COVER_WIDTH;
-        height = USB_COVER_HEIGHT;
-        bytes = (size_t)width * height * 2;
-        cover = CreateCel(width, height, 16, CREATECEL_UNCODED, NULL);
-        if (!cover && menu->cover_cache.clock) {
-            cover_cache_clear(&menu->cover_cache);
-            cover = CreateCel(width, height, 16, CREATECEL_UNCODED, NULL);
-            if (cover && now_ms(menu) - menu->selection_since < COVER_IDLE_MS) {
-                UnloadCel(cover);
-                menu->cover_attempted = 0;
-                return;
-            }
-        }
-        if (!cover)
-            return;
-        for (i = 0; i < menu->depth; ++i) {
-            route[i].id = menu->path_ids[i];
-            route[i].name = menu->path[i];
-        }
-        menu->cover_file = file;
-        menu->cover_folder = game ? entry->name : NULL;
-        if (cover_cache_get(&menu->cover_cache, volume, file, (unsigned char *)cover->ccb_SourcePtr,
-                            bytes)) {
-            menu->cover_cached = 1;
-            menu->cover_load_ms = menu->cover_commands = 0;
-            menu->cover = cover;
-            goto positioned;
-        }
-        read.menu = menu;
-        read.filename = file;
-        read.pixels = (unsigned char *)cover->ccb_SourcePtr;
-        message = menu->message;
-        pause_scroll(menu);
-        menu->message = "Loading cover...";
-        draw(menu);
-        started = now_ms(menu);
-        commands = menu->bus.commands;
-        menu->cover_cached = 0;
-        menu->media_cancelled = 0;
-        menu->ode.media_folder = game ? entry->name : NULL;
-        result = media_read(menu, route, menu->usb_art.beside, read_usb_cover, &read);
-        menu->ode.media_folder = NULL;
-        menu->cover_load_ms = now_ms(menu) - started;
-        menu->cover_commands = menu->bus.commands - commands;
-        resume_scroll(menu);
-        menu->message = message;
-        if (result < 0 || menu->media_cancelled) {
-            UnloadCel(cover);
-            menu->cover_file = menu->cover_folder = NULL;
-        } else {
-            menu->cover = cover;
-            cover_cache_put(&menu->cover_cache, volume, file,
-                            (const unsigned char *)cover->ccb_SourcePtr, bytes);
-        }
-        if (result == -2 || menu->bus.timed_out) {
-            menu->ode.navigation_failed = 1;
-            menu->ready = menu->view_valid = 0;
-            menu->message = "Cover I/O failed. Restart console.";
-            return;
-        }
     }
-positioned:
-    if (menu->cover) {
+    if (menu->cover && !menu->ode.navigation_failed) {
+        /* Beside the list; CCB_BGND draws its black pixels. */
         menu->cover->ccb_XPos = 236 << 16;
         menu->cover->ccb_YPos = 86 << 16;
         menu->cover->ccb_Flags |= CCB_LAST | CCB_BGND;
     }
 }
 
+/* ==== Previews ==== */
+
+/* A preview read in progress, passed through media_read to read_usb_preview.
+ * The times split the load for the diagnostics: reading the clip, then
+ * checking it (phase 1 onward). */
 typedef struct PreviewRead {
     Menu *menu;
     const char *file;
     unsigned long started, checked, finished;
     int checking;
 } PreviewRead;
+
+/* The loader's progress callback: records when reading ended and checking
+ * began (phase 1), and how long each has taken so far. */
 static void preview_phase(void *context, int phase)
 {
     PreviewRead *read = (PreviewRead *)context;
@@ -3935,6 +4061,8 @@ static int start_stream(Menu *menu, const char *file, const char *folder)
         menu->media_cancelled = 1;
     return result == -4 ? USB_PREVIEW_NO_MEMORY : result;
 }
+/* Loads the clip in a PreviewRead whole (or, for a streamed clip, just its
+ * header: then it returns USB_PREVIEW_STREAM). */
 static int read_usb_preview(void *context)
 {
     PreviewRead *read = (PreviewRead *)context;
@@ -3968,28 +4096,11 @@ static void memory_available(int pool, unsigned long *free_bytes, unsigned long 
 /* The selected game's preview clip in the USB index, or NULL. */
 static const char *selected_preview(Menu *menu)
 {
-    static char path[9218];
-    const MenuEntry *entry;
-    const char *lookup, *discs[ODE_MAX_DISCS];
+    static char path[ENTRY_PATH_BYTES];
     size_t game;
-    if (!menu->usb_previews.count || !row_count(menu) ||
-        (menu->listing.has_parent && !menu->selected))
+    if (!menu->usb_previews.count || !selected_game_path(menu, path, &game))
         return NULL;
-    entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
-    game = folder_game(menu, entry, discs);
-    if ((entry->is_directory && !game) || directory_path(menu, path, 8193) < 0 ||
-        strlen(path) + strlen(entry->name) + (game ? strlen(discs[0]) + 1 : 0) + 2 > sizeof(path))
-        return NULL;
-    strcat(path, "/");
-    strcat(path, entry->name);
-    if (game) {
-        strcat(path, "/");
-        strcat(path, discs[0]);
-    }
-    lookup = path + 9;
-    if (menu->depth && !(menu->path_ids[0] & 0xffffffUL))
-        lookup += strlen(menu->path[0]) + 1;
-    return usb_media_find(&menu->usb_previews, lookup);
+    return usb_media_find(&menu->usb_previews, usb_media_path(menu, path));
 }
 /* X swaps the selected game between its preview and its cover; 0 when it has
  * no preview, so X keeps its other job. */
@@ -4013,8 +4124,14 @@ static int toggle_preview(Menu *menu)
     }
     return 1;
 }
-/* Defer a media X press until release or a 500 ms hold. Navigation/chords
- * cancel the pending tap. Keep the preview alive while deciding. */
+/*
+ * X does two things with media showing: a tap swaps preview and cover
+ * (toggle_preview), a 500 ms hold opens the full-screen view. So a media X
+ * press is held back until it is released (passed on as a press then) or
+ * held long enough (the full-screen view opens and the press is dropped).
+ * Other buttons or the browser being busy cancel the wait. The preview keeps
+ * playing meanwhile. Returns `pressed`, less any X held back.
+ */
 static u32 media_x_input(Menu *menu, u32 buttons, u32 pressed, u32 released)
 {
     if (menu->tools || menu->review || *menu->filter || !menu->ready ||
@@ -4048,6 +4165,15 @@ static u32 media_x_input(Menu *menu, u32 buttons, u32 pressed, u32 released)
     }
     return pressed;
 }
+/*
+ * Starts the selected game's preview, if it has one, once the selection has
+ * rested for PREVIEW_IDLE_MS. Like changing channel on the TV: the channel
+ * number blinks, static plays while the clip loads, then the clip plays in
+ * the TV. A button press at any point cancels and leaves the browser
+ * responsive. Called every main-loop pass; it does its work once per
+ * selection (preview_attempted). Records timings for the diagnostics, and
+ * reports failures in a notice.
+ */
 static void update_preview(Menu *menu)
 {
     const MenuEntry *entry;
@@ -4072,6 +4198,7 @@ static void update_preview(Menu *menu)
         return;
     entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
     game = folder_game(menu, entry, discs);
+
     /* Changing channel: the number blinks twice, then the static starts.
      * A press during the blink cancels like one during the read. */
     pause_scroll(menu);
@@ -4097,6 +4224,8 @@ static void update_preview(Menu *menu)
      * at allocation boundaries if memory or fragmentation requires it. */
     memory_available(0, &menu->preview_free_bytes, &menu->preview_largest_bytes);
     memory_available(1, &menu->preview_vram_free_bytes, &menu->preview_vram_largest_bytes);
+
+    /* Load it, with static on the TV, and reset the diagnostics. */
     for (i = 0; i < menu->depth; ++i) {
         route[i].id = menu->path_ids[i];
         route[i].name = menu->path[i];
@@ -4140,6 +4269,8 @@ static void update_preview(Menu *menu)
         result = -1;
         menu->preview_result = -5;
     }
+
+    /* Loaded: wrap the first frame in a cel for the TV and start playing. */
     if (!result) {
         /* A stream shows its 160x120 TV picture in the browser. */
         unsigned char *pixels = menu->stream.open ? menu->stream.thumb : menu->preview.frame_buffer;
@@ -4186,6 +4317,7 @@ static void update_preview(Menu *menu)
             menu->preview_result = -4;
         }
     }
+
     menu->preview_setup_ms = now_ms(menu) - setup_started;
     menu->preview_load_ms = now_ms(menu) - started;
     menu->preview_commands = menu->bus.commands - commands;
@@ -4441,10 +4573,10 @@ static void activate(Menu *menu)
         {
             /* activate also calls the disc-group helper, which owns large
              * path buffers. Keep this buffer off the 32 KiB task stack. */
-            char *full = (char *)malloc(9218);
+            char *full = (char *)malloc(ENTRY_PATH_BYTES);
             if (full) {
-                if (!directory_path(menu, full, 9218) &&
-                    strlen(full) + strlen(entry->name) + 2 <= 9218) {
+                if (!directory_path(menu, full, ENTRY_PATH_BYTES) &&
+                    strlen(full) + strlen(entry->name) + 2 <= ENTRY_PATH_BYTES) {
                     strcat(full, "/");
                     strcat(full, entry->name);
                     record_launch(menu, full);
@@ -4471,7 +4603,7 @@ static void activate(Menu *menu)
 
 static void queue_selected_disc(Menu *menu)
 {
-    char directory[8193], full[9218];
+    char directory[FOLDER_PATH_BYTES], full[ENTRY_PATH_BYTES];
     const MenuEntry *entry;
     const char *discs[ODE_MAX_DISCS];
     size_t game, i;
@@ -4574,14 +4706,14 @@ static int apply_queue(Menu *menu)
     ode_listing_init(&fresh);
     if (menu->bus.timed_out || menu->ode.navigation_failed || !menu->playlist.synchronized)
         return -1;
-    directory = (char *)malloc(8193);
+    directory = (char *)malloc(FOLDER_PATH_BYTES);
     if (!directory) {
         menu->ode.error = "Not enough queue memory";
         return -1;
     }
     menu->message = "Checking queued game paths...";
     draw(menu);
-    if (!directory_path(menu, directory, 8193))
+    if (!directory_path(menu, directory, FOLDER_PATH_BYTES))
         local = library_current_files(&menu->listing, directory, menu->playlist.paths,
                                       menu->playlist.count, entries);
     if (local < 0) {
@@ -4635,7 +4767,7 @@ checked:
 static int queue_set(Menu *menu, const MenuEntry *entry)
 {
     const MenuEntry *entries[ODE_MAX_DISCS];
-    char directory[8193], path[9218];
+    char directory[FOLDER_PATH_BYTES], path[ENTRY_PATH_BYTES];
     size_t position,
         count = menu_disc_group(&menu->listing, entry, entries, ODE_MAX_DISCS, &position), i;
     if (count < position + 2 || directory_path(menu, directory, sizeof(directory)) < 0)
@@ -5018,8 +5150,9 @@ static void record_launch(Menu *menu, const char *path)
         free(nvram);
         return;
     }
-    op.recent = menu->config.recent_games && !(menu->recent_valid && menu->recent.count &&
-                                               !menu_path_compare(menu->recent.paths[0], path + 9));
+    op.recent = menu->config.recent_games &&
+                !(menu->recent_valid && menu->recent.count &&
+                  !menu_path_compare(menu->recent.paths[0], path + STORAGE_PREFIX));
     /* NVRAM as the game finds it, so the next startup can tell which saves it wrote. */
     base = strrchr(path, '/') + 1;
     base = display_game_title(base, 0);
@@ -5043,7 +5176,7 @@ static void record_launch(Menu *menu, const char *path)
         return;
     current_route(menu, route);
     op.menu = menu;
-    op.path = path + 9;
+    op.path = path + STORAGE_PREFIX;
     result = art_at_root(&menu->ode, route, menu->depth, &menu->listing, folder_workaround(menu),
                          record_recent_at_root, &op);
     free(snapshot);
@@ -5427,7 +5560,7 @@ too_long:
 static int saved_game_folder(Menu *menu, const char *path, char *folder, size_t size)
 {
     static char prefix[9217];
-    const char *discs[ODE_MAX_DISCS], *name = strrchr(path, '/'), *relative = path + 9;
+    const char *discs[ODE_MAX_DISCS], *name = strrchr(path, '/'), *relative = path + STORAGE_PREFIX;
     size_t count, i, n;
     int attempt;
     if (!name || strncmp(path, "/Storage/", 9) || (size_t)(name - path) >= size)
@@ -5455,7 +5588,7 @@ static int saved_game_folder(Menu *menu, const char *path, char *folder, size_t 
  * its game shows that folder selected, as browsing to the game would. */
 static void open_saved_path(Menu *menu, const char *path)
 {
-    static char folder[9218];
+    static char folder[ENTRY_PATH_BYTES];
     ArtRouteStep route[MAX_DEPTH];
     LibraryLocation *location;
     int result;
@@ -5971,7 +6104,7 @@ static void draw_game_details(Menu *menu)
     const char *discs[ODE_MAX_DISCS];
     size_t row = 0, count, i;
     char line[80];
-    static char path[9218];
+    static char path[ENTRY_PATH_BYTES];
     if (row_count(menu) && !(menu->listing.has_parent && !menu->selected) && !menu->review)
         entry = browser_entry(menu, menu->selected - (menu->listing.has_parent ? 1 : 0));
     if (!entry) {
