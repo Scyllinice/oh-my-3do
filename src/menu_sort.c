@@ -72,8 +72,20 @@ static int compare_entries(const void *left, const void *right)
     return a->toc_id < b->toc_id ? -1 : 1;
 }
 
+/* A shell sort: the ARM60 C library's qsort took about a millisecond per
+ * entry, around 150 ms for a folder of 150 games. The order is total (ties
+ * fall to the TOC ID), so an unstable sort gives the same result. */
 void menu_sort(const MenuEntry **view, size_t count)
 {
-    if (count > 1)
-        qsort(view, count, sizeof(*view), compare_entries);
+    static const size_t gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
+    size_t g, i, j;
+    for (g = 0; g < sizeof(gaps) / sizeof(gaps[0]); ++g) {
+        size_t gap = gaps[g];
+        for (i = gap; i < count; ++i) {
+            const MenuEntry *entry = view[i];
+            for (j = i; j >= gap && compare_entries(&view[j - gap], &entry) > 0; j -= gap)
+                view[j] = view[j - gap];
+            view[j] = entry;
+        }
+    }
 }

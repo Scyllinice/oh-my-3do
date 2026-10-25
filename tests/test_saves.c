@@ -7,9 +7,9 @@
 #include <string.h>
 
 typedef struct Fake {
-    unsigned char file[65536], test[5000], buffer[2048];
-    size_t size, test_size, position;
-    int is_test, opened, calls, fail_at, short_write, short_read, no_write;
+    unsigned char file[65536], test[5000], buffer[2048], blank[2048];
+    size_t size, test_size, blank_size, position;
+    int is_test, is_blank, opened, calls, fail_at, short_write, short_read, no_write;
     int forbidden, writes;
 } Fake;
 static int fault(Fake *f) { return ++f->calls == f->fail_at; }
@@ -24,9 +24,15 @@ static int transfer(void *context, const unsigned char *p, unsigned char *r, siz
     } else if (p[0] == 0xe1) {
         const char *name=(const char *)f->buffer;
         assert(!strncmp(name,".ohmy3do/",9)); name+=9;
-        assert(!strncmp(name, "saves/", 6) || !strcmp(name,"ohmy3do.ini") || !strcmp(name,"favorites.txt"));
+        assert(!strncmp(name, "saves/", 6) || !strcmp(name,"ohmy3do.ini") || !strcmp(name,"favorites.txt") || !strcmp(name,"blank.bin"));
         f->is_test = !strcmp(name, "saves/usb-test.bin");
+        f->is_blank = !strcmp(name, "blank.bin"); /* the text reader's file of zeros */
         f->position = 0; f->opened = 1; r[1] = 1; *len = 3;
+    } else if (p[0] == 0xe4 && f->is_blank) {
+        n = (size_t)p[1] * 256 + p[2]; assert(f->opened && f->position + n <= sizeof(f->blank));
+        memcpy(f->blank + f->position, f->buffer, n); f->position += n;
+        if (f->position > f->blank_size) f->blank_size = f->position;
+        r[1] = p[1]; r[2] = p[2]; *len = 4;
     } else if (p[0] == 0xe4) {
         unsigned char *file = f->is_test ? f->test : f->file;
         size_t *size = f->is_test ? &f->test_size : &f->size;
@@ -41,8 +47,8 @@ static int transfer(void *context, const unsigned char *p, unsigned char *r, siz
         /* Lie about short/failed writes just like the reference can. */
         r[1] = p[1]; r[2] = p[2]; *len = 4;
     } else if (p[0] == 0xe3) {
-        const unsigned char *file = f->is_test ? f->test : f->file;
-        size_t size = f->is_test ? f->test_size : f->size;
+        const unsigned char *file = f->is_blank ? f->blank : f->is_test ? f->test : f->file;
+        size_t size = f->is_blank ? f->blank_size : f->is_test ? f->test_size : f->size;
         assert(f->opened); n = (size_t)p[1] * 256 + p[2]; assert(n <= 2048);
         if (n > size - f->position) n = size - f->position;
         if (f->short_read && n) --n;
@@ -61,6 +67,7 @@ static int reader(void *context, unsigned char *data, size_t size)
 static void setup(Fake *f, Ode *ode)
 {
     memset(f, 0, sizeof(*f)); memset(ode, 0, sizeof(*ode));
+    f->blank_size = sizeof(f->blank);
     ode->transfer = transfer; ode->context = f; strcpy(ode->identity, "LOCODE");
 }
 static void fix_crc(unsigned char *data, size_t size)

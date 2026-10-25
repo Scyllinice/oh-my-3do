@@ -119,7 +119,7 @@ typedef struct BrowserFrame {
     int scroll_count, controls, gecko, letter;
     int valid;
 } BrowserFrame;
-typedef struct TitleHash { unsigned long hash; size_t index; } TitleHash;
+typedef struct TitleHash { unsigned long hash, title; size_t index; } TitleHash;
 
 typedef struct Menu {
     size_t game_details_page, game_details_pages;
@@ -1073,6 +1073,9 @@ static void draw_channel_gecko(Menu *menu)
  * around its solid logo panel (x 52-267, y 62-173); assets/startup.cel. Once
  * both buffers hold the panel, a frame repaints only these strips, in pieces
  * no wider than the static's source at double size. */
+/* The startup static changes about 8 times a second: each frame costs
+ * about 18 ms on the console, while the menu is busy starting. */
+#define BOOT_STATIC_MS 125UL
 static const short splash_static[6][4]={
     {10,10,150,52},{160,10,150,52},{10,174,150,56},{160,174,150,56},{10,62,42,112},{268,62,42,112}};
 /* An uncoded 16-bit cel cut down to w x h pixels starting at source. */
@@ -1535,28 +1538,53 @@ static unsigned int title_variant(Menu *menu,size_t index)
         memset(menu->title_variants,0,count*sizeof(*menu->title_variants));
         hashes=(TitleHash *)malloc(count*sizeof(*hashes));
         if (!hashes) return 0;
-        /* Every entry is grouped by title first. Whether a folder acts as a
-         * game costs an index search, so only titles shared by several
-         * entries ask, keeping their games: about 300 searches fewer for a
-         * large folder, which took a quarter second on the console. */
+        /* Every entry is grouped first by the name before its first tag
+         * group and extension: display titles drop only tags, so equal
+         * titles share it. Titles, and whether a folder acts as a game (an
+         * index search), are then worked out only for shared ones, keeping
+         * their games. Doing both for every entry of a large folder took
+         * half a second on the console. */
         for (i=0;i<count;++i) {
-            const char *c;
+            const char *name=entries[i]->name;
+            size_t length=menu_title_length(name,0),k;
             unsigned long hash=2166136261UL;
-            menu_display_title(first,sizeof(first),entries[i]->name,0);
-            for (c=first;*c;++c) hash=(hash^(unsigned char)*c)*16777619UL;
+            for (k=0;k<length && !(name[k]==' ' && (name[k+1]=='(' || name[k+1]=='['));++k)
+                hash=(hash^(unsigned char)name[k])*16777619UL;
             hashes[n].hash=hash;hashes[n++].index=i;
         }
-        qsort(hashes,n,sizeof(*hashes),compare_title_hash);
+        {
+            /* A shell sort; the C library's qsort took ~1 ms per entry. */
+            static const size_t gaps[]={701,301,132,57,23,10,4,1};
+            size_t g,k;
+            for (g=0;g<sizeof(gaps)/sizeof(gaps[0]);++g)
+                for (k=gaps[g];k<n;++k) {
+                    TitleHash item=hashes[k];
+                    for (j=k;j>=gaps[g] && compare_title_hash(&hashes[j-gaps[g]],&item)>0;j-=gaps[g]) hashes[j]=hashes[j-gaps[g]];
+                    hashes[j]=item;
+                }
+        }
         for (i=0;i<n;i=end) {
             size_t games=i;
             for (end=i+1;end<n && hashes[end].hash==hashes[i].hash;++end) {}
             if (end-i<2) continue;
-            /* Keep the group's games at its front, in their order. */
-            for (j=i;j<end;++j) if (game_entry(menu,entries[hashes[j].index])) hashes[games++]=hashes[j];
+            /* Each title once, as a hash; a title takes a millisecond. */
+            for (j=i;j<end;++j) {
+                const char *c;
+                unsigned long hash=2166136261UL;
+                menu_display_title(first,sizeof(first),entries[hashes[j].index]->name,0);
+                for (c=first;*c;++c) hash=(hash^(unsigned char)*c)*16777619UL;
+                hashes[j].title=hash;
+            }
+            /* Keep, in order, the games whose title another entry shares. */
+            for (j=i;j<end;++j) {
+                size_t k;
+                for (k=i;k<end && (k==j || hashes[k].title!=hashes[j].title);++k) {}
+                if (k<end && game_entry(menu,entries[hashes[j].index])) hashes[games++]=hashes[j];
+            }
             for (j=i;j<games;++j) {
                 size_t k,matches=0,rank=0;
                 menu_display_title(first,sizeof(first),entries[hashes[j].index]->name,0);
-                for (k=i;k<games;++k) {
+                for (k=i;k<games;++k) if (hashes[k].title==hashes[j].title) {
                     menu_display_title(other,sizeof(other),entries[hashes[k].index]->name,0);
                     if (!strcmp(first,other)) { ++matches;if (k<=j) ++rank; }
                 }
@@ -1845,12 +1873,12 @@ static void boot_screen(Menu *menu,unsigned long now)
     if (menu->splash) {
         crt_cels(menu);
         if (menu->noise && menu->splash_frames>=2) {
-            for (i=0;i<6;++i) noise_part(menu,splash_static[i],(now/67UL+1UL)*2654435761UL+(unsigned long)i*40503UL);
+            for (i=0;i<6;++i) noise_part(menu,splash_static[i],(now/BOOT_STATIC_MS+1UL)*2654435761UL+(unsigned long)i*40503UL);
             for (i=0;i<6;++i) splash_part(menu,splash_static[i]);
         } else {
             if (menu->noise) {
-                noise_at(menu,0,(now/67UL+1UL)*2654435761UL);
-                noise_at(menu,160,(now/67UL+1UL)*40503UL);
+                noise_at(menu,0,(now/BOOT_STATIC_MS+1UL)*2654435761UL);
+                noise_at(menu,160,(now/BOOT_STATIC_MS+1UL)*40503UL);
             } else rectangle(menu,0,0,320,240,DIM);
             DrawCels(menu->screen.sc_BitmapItems[menu->screen.sc_curScreen],menu->splash);
             ++menu->splash_frames;
@@ -2112,19 +2140,19 @@ static void progress(void *context, size_t count)
     Menu *menu = (Menu *)context;
     unsigned long now = now_ms(menu);
     menu->read_count = count;
-    if (now - menu->progress_drawn < 66UL) return;
+    if (now - menu->progress_drawn < (menu->booting ? BOOT_STATIC_MS : 66UL)) return;
     menu->progress_drawn = now;
     draw(menu);
 }
 /* Every ODE command passes through here; during startup it keeps the static
- * moving at about 15 frames a second. */
+ * moving (BOOT_STATIC_MS). */
 static Menu *startup_menu;
 static int menu_transfer(void *context, const unsigned char *command,
                          unsigned char *reply, size_t capacity, size_t *length)
 {
     int result=ode_bus_transfer(context,command,reply,capacity,length);
     Menu *menu=startup_menu;
-    if (menu && menu->booting && now_ms(menu)-menu->progress_drawn>=66UL) {
+    if (menu && menu->booting && now_ms(menu)-menu->progress_drawn>=BOOT_STATIC_MS) {
         menu->progress_drawn=now_ms(menu);
         draw(menu);
     }

@@ -305,23 +305,63 @@ static int text_pieces(Ode *ode, OdeReadBuffer reader, unsigned char *block, cha
     return 0;
 }
 
+/* FCare has no command to clear its buffer, and clearing it word by word
+ * costs a command per 4 bytes. Reading a file of zeros clears it with one;
+ * the menu makes .ohmy3do/blank.bin on first use and checks the buffer
+ * every time, so a damaged file only means the slower way. 1 when clear. */
+static int blank_unwritable;
+static int zero_buffer(Ode *ode, OdeReadBuffer reader, unsigned char *block)
+{
+    size_t i;
+    int attempt, clear = 0;
+    for (attempt = 0; attempt < 2 && !clear; ++attempt) {
+        if (attempt && blank_unwritable) break;
+        if (usb_file_open(ode,"blank.bin") < 0) break;
+        if (attempt) {
+            memset(block,0,2048);
+            if (usb_file_write(ode,block,2048) < 0) { blank_unwritable = 1; usb_file_close(ode); break; }
+            if (usb_file_close(ode) < 0) break;
+            if (usb_file_open(ode,"blank.bin") < 0) break;
+        }
+        if (file_fill(ode,2048) < 0) { usb_file_close(ode); break; }
+        if (reader(ode->context,block,2048) < 0) { ode->navigation_failed = 1; usb_file_close(ode); break; }
+        for (i = 0; i < 2048 && !block[i]; ++i) {}
+        clear = i == 2048;
+        if (usb_file_close(ode) < 0) return 0;
+    }
+    return clear;
+}
+
 /* FCare reports a full read at the end of a file and leaves the rest of its
- * buffer stale, so text ends where a cleared buffer stays zero. Clearing
- * costs a command per word: 34 per 128 bytes, 4,000+ for a 16 KiB file.
- * Past the first piece, read whole blocks; a block is complete once the next
- * read brings new bytes (an end leaves the buffer as it was). Then reopen,
- * pass over the complete blocks with fills alone, and read the last one over
- * a buffer cleared from where it last differed from the block before it:
- * bytes up to there are certainly the file's. */
+ * buffer stale, so text ends where a cleared buffer stays zero. Over a buffer
+ * zeroed with blank.bin, one read finds the end of text under 2 KiB, once the
+ * path the open left in its first words is cleared. Otherwise the first piece
+ * is read over words cleared one by one. Past that, read whole blocks; a
+ * block is complete once the next read brings new bytes (an end leaves the
+ * buffer as it was). Then reopen, pass over the complete blocks with fills
+ * alone, and read the last one over a buffer cleared from where it last
+ * differed from the block before it: bytes up to there are certainly the
+ * file's. */
 int usb_file_text(Ode *ode, OdeReadBuffer reader, const char *name, char *out, size_t capacity, size_t *length)
 {
     static const unsigned char zero[4] = {0,0,0,0};
     unsigned char block[2048];
     size_t used = 0, skip, from = 0, i;
-    int result = -1, status, pending = 0, known = 0;
+    int result = -1, status = 0, pending = 0, known = 0;
+    /* Not beside a game: blank.bin belongs in the volume's own .ohmy3do. */
+    int clear = capacity && !ode->media_beside && zero_buffer(ode,reader,block);
     const char *last = NULL; /* the block the text may end in */
     if (!capacity || usb_file_open(ode,name) < 0) return -1;
-    status = text_pieces(ode,reader,block,out,capacity,128,&used);
+    if (clear) {
+        for (i = 0; i < (strlen(ode->file_path)+4)/4; ++i) if (buffer_word(ode,(unsigned int)i,zero) < 0) goto done;
+        if (file_fill(ode,sizeof(block)) < 0) goto done;
+        if (reader(ode->context,block,sizeof(block)) < 0) { ode->navigation_failed = 1; goto done; }
+        for (i = 0; i < sizeof(block) && block[i]; ++i) {}
+        if (i >= capacity) goto done;
+        memcpy(out,block,i); used = i;
+        if (i < sizeof(block)) status = 1;
+        else known = 1; /* a whole block of text: the next read's background */
+    } else status = text_pieces(ode,reader,block,out,capacity,128,&used);
     while (!status && (pending || used + sizeof(block) < capacity)) {
         if (usb_file_read_block(ode,reader,block) < 0) goto done;
         if (pending) {

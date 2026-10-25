@@ -6,11 +6,11 @@
 #include <string.h>
 
 typedef struct FakeUsb {
-    unsigned char index[4096], image[1024], buffer[2048], text[20000];
-    size_t index_size, image_size, text_size, position;
+    unsigned char index[4096], image[1024], buffer[2048], text[20000], blank[2048];
+    size_t index_size, image_size, text_size, blank_size, position;
     const unsigned char *file;
     size_t size;
-    int calls, fail_at, closed, opened, words, reads;
+    int calls, fail_at, closed, opened, words, reads, writes, write_fail, on_blank;
     const char *folder; /* expected subfolder before .ohmy3do/ */
 } FakeUsb;
 
@@ -46,8 +46,12 @@ static int transfer(void *context, const unsigned char *packet,
             name+=strlen(fake->folder)+1;
         }
         assert(!strncmp(name,".ohmy3do/",9)); name+=9;
-        assert(!strncmp(name,"covers/",7) || !strcmp(name,"recent.txt") || !strcmp(name,"save-names.txt"));
-        if (!strcmp(name,"covers/index.3di")) {
+        assert(!strncmp(name,"covers/",7) || !strcmp(name,"recent.txt") || !strcmp(name,"save-names.txt") ||
+               (!strcmp(name,"blank.bin") && !fake->folder));
+        fake->on_blank=!strcmp(name,"blank.bin");
+        if (fake->on_blank) {
+            fake->file=fake->blank; fake->size=fake->blank_size;
+        } else if (!strcmp(name,"covers/index.3di")) {
             fake->file=fake->index; fake->size=fake->index_size;
         } else if (!strcmp(name,"save-names.txt")) {
             fake->file=fake->text; fake->size=fake->text_size;
@@ -66,9 +70,20 @@ static int transfer(void *context, const unsigned char *packet,
         /* Leave the tail untouched, and lie about the count, just as FCare
          * does on EOF. The menu must validate size/header/CRC independently. */
         reply[1]=packet[1]; reply[2]=packet[2]; *length=4;
+    } else if (packet[0] == 0xe4) {
+        /* The menu writes only its blank file of zeros. */
+        size_t n=(size_t)packet[1]*256+packet[2];
+        assert(fake->opened && fake->on_blank && fake->position+n <= sizeof(fake->blank));
+        ++fake->writes;
+        reply[1]=packet[1]; reply[2]=packet[2]; *length=4;
+        if (fake->write_fail) reply[3]=0x10;
+        else {
+            memcpy(fake->blank+fake->position,fake->buffer,n); fake->position+=n;
+            if (fake->position>fake->blank_size) fake->blank_size=fake->position;
+        }
     } else if (packet[0] == 0xe5) {
         ++fake->closed; fake->opened=0;
-    } else assert(0); /* No seek, file-write, playlist or navigation commands. */
+    } else assert(0); /* No seek, playlist or navigation commands. */
     return 0;
 }
 
@@ -99,6 +114,7 @@ static void setup(FakeUsb *fake, Ode *ode)
     fake->index_size=24+payload;
     for (i=0;i<sizeof(fake->image);++i) fake->image[i]=(unsigned char)(i*7+3);
     fake->image_size=sizeof(fake->image);
+    fake->blank_size=sizeof(fake->blank); /* made on an earlier read */
 }
 
 /* Opens a cover the way the menu's loaders do; the fake checks the path. */
@@ -176,7 +192,7 @@ int main(void)
         setup(&fake,&ode); memcpy(fake.image,"Games/D.iso\n",12); fake.image_size=12;
         assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length));
         assert(length==12 && !strcmp(text,"Games/D.iso\n") && fake.closed);
-        assert(fake.reads==1 && fake.words<40); /* formerly 128+ for this capacity, 512 for favorites */
+        assert(fake.reads==2 && fake.words<40 && !fake.writes); /* the blank file, then the text */
         calls=fake.calls;
         for (i=1;i<=calls;++i) {
             setup(&fake,&ode); fake.image_size=0; fake.fail_at=i;
@@ -184,7 +200,7 @@ int main(void)
         }
         setup(&fake,&ode); memset(fake.image,'x',256); fake.image_size=256;
         assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length));
-        assert(length==256 && fake.reads==3 && text[256]==0);
+        assert(length==256 && fake.reads==2 && text[256]==0);
         setup(&fake,&ode); memset(fake.image,'x',512); fake.image_size=512;
         assert(usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length)<0 && fake.closed);
         setup(&fake,&ode); fake.image_size=0;
@@ -240,7 +256,23 @@ int main(void)
             assert(usb_file_text(&ode,reader,"save-names.txt",text,sizeof(text),&length)<0);
         }
     }
-    puts("USB text: bounded short reads, poisoned stale EOF, exact block boundaries, long text in whole blocks and every I/O failure passed");
+    {
+        /* The blank file: made on first use, remade when not all zeros, and a
+         * card that refuses the write falls back to clearing word by word. */
+        char text[512]; size_t length; unsigned int k;
+        setup(&fake,&ode); fake.blank_size=0; memcpy(fake.image,"Games/D.iso\n",12); fake.image_size=12;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && length==12 && !strcmp(text,"Games/D.iso\n"));
+        assert(fake.writes==1 && fake.blank_size==2048);
+        for (k=0;k<2048;++k) assert(!fake.blank[k]);
+        setup(&fake,&ode); memset(fake.blank,'x',sizeof(fake.blank)); memcpy(fake.image,"Games/D.iso\n",12); fake.image_size=12;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && length==12);
+        assert(fake.writes==1 && !fake.blank[0] && !fake.blank[2047]);
+        setup(&fake,&ode); fake.blank_size=0; fake.write_fail=1; memcpy(fake.image,"Games/D.iso\n",12); fake.image_size=12;
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && length==12 && !strcmp(text,"Games/D.iso\n"));
+        assert(fake.writes==1);
+        assert(!usb_file_text(&ode,reader,"recent.txt",text,sizeof(text),&length) && length==12 && fake.writes==1);
+    }
+    puts("USB text: bounded short reads, poisoned stale EOF, exact block boundaries, long text in whole blocks, the blank file and every I/O failure passed");
     puts("USB artwork: index CRC, bounds, layouts, media beside a game and I/O failures passed");
     return 0;
 }
