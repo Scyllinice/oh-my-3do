@@ -490,6 +490,7 @@ test('import review shows an empty category explicitly and disables unresolved s
   const render = runInNewContext(`${source.slice(start, end)};importView`, {
     state,
     e,
+    escapeHtml: e,
     bytes,
     pathLabel: e,
     importReady: ready,

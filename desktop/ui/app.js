@@ -1270,17 +1270,38 @@ async function loadLibrary() {
   setStatus(`${state.groups.length} games ${state.browseRoot ? 'on drive' : 'in the PC library'}`);
 }
 
+// ---- Dialogs ----
+
+/**
+ * Opens (or redraws) the dialog `id` with a title, body HTML and footer
+ * buttons. Redrawing keeps focus on the same control. Closing returns focus
+ * to whatever opened it; Escape closes it unless an operation is running.
+ */
 function dialog(title, body, footer = '', id = 'main-dialog') {
-  const previous = document.getElementById(id),
-    focus = previous ? captureFocus(previous) : null;
+  const previous = document.getElementById(id);
+  const focus = previous ? captureFocus(previous) : null;
   const opener = previous?.returnFocus || captureFocus(document);
   previous?.remove();
+
   const element = document.createElement('dialog');
   element.id = id;
   element.returnFocus = opener;
   element.setAttribute('aria-labelledby', id + '-title');
-  element.innerHTML = `<div class="dialog-head"><h2 id="${id}-title" tabindex="-1">${e(title)}</h2>${action('close-dialog', '×', 'icon quiet', `data-dialog="${id}" aria-label="Close ${e(title)}"`)}</div><div class="sr-only" data-announcer="polite" role="status" aria-live="polite" aria-atomic="true"></div><div class="sr-only" data-announcer="alert" role="alert" aria-live="assertive" aria-atomic="true"></div><div class="dialog-body">${body}</div><div class="dialog-foot">${footer}</div>`;
+  const close = action(
+    'close-dialog',
+    '×',
+    'icon quiet',
+    `data-dialog="${id}" aria-label="Close ${escapeHtml(title)}"`,
+  );
+  element.innerHTML = [
+    `<div class="dialog-head"><h2 id="${id}-title" tabindex="-1">${escapeHtml(title)}</h2>${close}</div>`,
+    '<div class="sr-only" data-announcer="polite" role="status" aria-live="polite" aria-atomic="true"></div>',
+    '<div class="sr-only" data-announcer="alert" role="alert" aria-live="assertive" aria-atomic="true"></div>',
+    `<div class="dialog-body">${body}</div>`,
+    `<div class="dialog-foot">${footer}</div>`,
+  ].join('');
   document.body.append(element);
+
   element.addEventListener('close', () => {
     element.remove();
     const front = [...document.querySelectorAll('dialog[open]')].at(-1);
@@ -1291,7 +1312,9 @@ function dialog(title, body, footer = '', id = 'main-dialog') {
     if (element.dataset.operationBusy !== 'true')
       perform(() => handlers['close-dialog']({ dataset: { dialog: id } }));
   });
+
   element.showModal();
+  // A new dialog focuses its chosen control, its safe answer, or its heading.
   if (!restoreFocus(focus, element)) {
     const initial = element.querySelector(
       '[autofocus],[data-answer="cancel"],[data-dirty="cancel"]',
@@ -1301,39 +1324,48 @@ function dialog(title, body, footer = '', id = 'main-dialog') {
   dialogProgress.attach(element);
   return element;
 }
+
+/** Closes a dialog, unless an operation in it is still running. */
 function closeDialog(id = 'main-dialog') {
   const element = document.getElementById(id);
   if (element?.dataset.operationBusy !== 'true') element?.close();
 }
+
+/** Asks a yes/no question; resolves true for yes. */
 function confirmAction(title, message, yes = 'Continue', danger = false) {
   return new Promise((resolve) => {
-    const d = dialog(
-      title,
-      `<p>${e(message)}</p>`,
-      `<button data-answer="cancel">Cancel</button><button class="${danger ? 'danger' : 'primary'}" data-answer="yes">${e(yes)}</button>`,
-      'confirm-dialog',
-    );
-    d.addEventListener('click', (event) => {
+    const buttons =
+      '<button data-answer="cancel">Cancel</button>' +
+      `<button class="${danger ? 'danger' : 'primary'}" data-answer="yes">${escapeHtml(yes)}</button>`;
+    const question = dialog(title, `<p>${escapeHtml(message)}</p>`, buttons, 'confirm-dialog');
+    question.addEventListener('click', (event) => {
       const answer = event.target.closest('[data-answer]');
       if (answer) {
         resolve(answer.dataset.answer === 'yes');
-        d.close();
+        question.close();
       }
     });
-    d.addEventListener('cancel', () => resolve(false));
-    d.addEventListener('close', () => resolve(false));
+    question.addEventListener('cancel', () => resolve(false));
+    question.addEventListener('close', () => resolve(false));
   });
 }
+
+/**
+ * Before leaving an edited save backup: asks to save or discard the edits.
+ * Resolves true to go on (saved, discarded, or nothing to save).
+ */
 async function resolveDirty() {
   if (!state.backup?.dirty && !state.hexDirty) return true;
   return new Promise((resolve) => {
-    const d = dialog(
+    const question = dialog(
       'Unsaved save edits',
       '<p>Save your edited backup before continuing?</p>',
-      '<button data-dirty="cancel">Cancel</button><button data-dirty="discard">Discard changes</button><button data-dirty="save" class="primary">Save changes</button>',
+      '<button data-dirty="cancel">Cancel</button>' +
+        '<button data-dirty="discard">Discard changes</button>' +
+        '<button data-dirty="save" class="primary">Save changes</button>',
       'dirty-dialog',
     );
-    d.addEventListener('click', (event) => {
+    question.addEventListener('click', (event) => {
       const answer = event.target.closest('[data-dirty]');
       if (!answer) return;
       perform(async () => {
@@ -1347,41 +1379,116 @@ async function resolveDirty() {
           state.hexDirty = false;
           resolve(true);
         } else resolve(false);
-        d.close();
+        question.close();
       });
     });
-    d.addEventListener('cancel', () => resolve(false));
-    d.addEventListener('close', () => resolve(false));
+    question.addEventListener('cancel', () => resolve(false));
+    question.addEventListener('close', () => resolve(false));
   });
 }
+
+// ---- Copying games to a drive ----
+
+/** Opens the copy dialog for the selected games. */
 function copyDialog() {
-  const chosen = state.groups.filter((g) => state.selected.has(g.key));
-  state.copyDiscs = chosen.flatMap((g) => g.discs);
+  const chosen = state.groups.filter((group) => state.selected.has(group.key));
+  state.copyDiscs = chosen.flatMap((group) => group.discs);
   state.copyRoot = state.prefs.library;
   state.copy = null;
   renderCopyDialog(chosen);
 }
-function renderCopyDialog(chosen = state.groups.filter((g) => state.selected.has(g.key))) {
+
+/** Draws the copy dialog, with the review once there is one (`state.copy`). */
+function renderCopyDialog(chosen = state.groups.filter((group) => state.selected.has(group.key))) {
+  const copy = state.copy;
+  const review = copy
+    ? [
+        '<div class="card section">',
+        `<p><strong>Destination: ${escapeHtml(copy.drive?.identity?.name || 'Unnamed drive')}</strong> · ${pathLabel(copy.destination)}</p>`,
+        storageView(copy.storage),
+        copySummary(copy),
+        '<details><summary>Show file details</summary><div class="progress-log">',
+        copy.files
+          .map((file) => `${escapeHtml(file.status.padEnd(10))} ${pathLabel(file.path)}`)
+          .join('\n'),
+        '</div></details>',
+        '</div>',
+      ].join('')
+    : '';
+  const body = [
+    `<p><strong>${quantity(chosen.length, 'game')}</strong> · ${quantity(state.copyDiscs.length, 'disc')}. `,
+    'Covers, previews and menu support are included.</p>',
+    '<details><summary>Selected games</summary>',
+    chosen.map((group) => `<div>${escapeHtml(group.title)}</div>`).join(''),
+    '</details>',
+    '<label class="field">USB destination<div class="row">',
+    `<input class="grow" id="copy-destination" value="${escapeHtml(state.prefs.destination)}" placeholder="Choose the drive root">`,
+    action('copy-destination', 'Browse…', '', 'aria-label="Choose copy destination"'),
+    '</div></label>',
+    '<div class="notice">Games, settings, favorites and saves already on this drive are preserved.</div>',
+    checkbox('copy-verify', 'Verify existing disc contents (slower)', state.copyVerify),
+    review,
+  ].join('');
+
   dialog(
     'Copy games to USB',
-    `<p><strong>${quantity(chosen.length, 'game')}</strong> · ${quantity(state.copyDiscs.length, 'disc')}. Covers, previews and menu support are included.</p><details><summary>Selected games</summary>${chosen.map((g) => `<div>${e(g.title)}</div>`).join('')}</details><label class="field">USB destination<div class="row"><input class="grow" id="copy-destination" value="${e(state.prefs.destination)}" placeholder="Choose the drive root">${action('copy-destination', 'Browse…', '', 'aria-label="Choose copy destination"')}</div></label><div class="notice">Games, settings, favorites and saves already on this drive are preserved.</div>${checkbox('copy-verify', 'Verify existing disc contents (slower)', state.copyVerify)}${state.copy ? `<div class="card section"><p><strong>Destination: ${e(state.copy.drive?.identity?.name || 'Unnamed drive')}</strong> · ${pathLabel(state.copy.destination)}</p>${storageView(state.copy.storage)}${copySummary(state.copy)}<details><summary>Show file details</summary><div class="progress-log">${state.copy.files.map((f) => `${e(f.status.padEnd(10))} ${pathLabel(f.path)}`).join('\n')}</div></details></div>` : ''}`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
       action(
-        state.copy ? 'copy-apply' : 'copy-preview',
-        state.copy ? 'Copy to USB' : 'Review copy',
+        copy ? 'copy-apply' : 'copy-preview',
+        copy ? 'Copy to USB' : 'Review copy',
         'primary',
-        state.copy && !state.copy.storage.fits ? 'disabled' : '',
+        copy && !copy.storage.fits ? 'disabled' : '',
       ),
   );
 }
 
+/**
+ * The recovery copies dialog: save backups the app kept before replacing
+ * files, which the person can choose to delete. Nothing is chosen
+ * automatically.
+ */
 function recoveryDialog() {
-  const r = state.cleanup;
-  if (!r) return;
-  const selected = r.copies.filter((c) => state.cleanupSelected.has(c.name));
+  const review = state.cleanup;
+  if (!review) return;
+  const selected = review.copies.filter((copy) => state.cleanupSelected.has(copy.name));
+  const selectedBytes = selected.reduce((total, copy) => total + copy.bytes, 0);
+
+  const copyRow = (copy) => {
+    const checked = state.cleanupSelected.has(copy.name) ? 'checked' : '';
+    const badge = copy.newest
+      ? ' <span class="badge">Newest copy</span>'
+      : copy.keep
+        ? ' <span class="badge">Newest valid copy</span>'
+        : '';
+    const when = escapeHtml(new Date(copy.modified * 1000).toLocaleString());
+    const validity = copy.valid ? 'Valid archive' : 'Invalid archive — inspect before discarding';
+    return [
+      `<label class="card"><input type="checkbox" data-recovery-copy="${escapeHtml(copy.name)}" ${checked}>`,
+      `<span><strong>${escapeHtml(copy.original)}</strong>${badge}<br>`,
+      `<small>${escapeHtml(copy.name)}<br>${bytes(copy.bytes)} · ${when} · ${validity}</small></span>`,
+      '</label>',
+    ].join('');
+  };
+  const list = review.copies.length
+    ? `<div class="stack">${review.copies.map(copyRow).join('')}</div>`
+    : '<p>No app-created save recovery copies were found in this folder.</p>';
+  const count = review.copies.length;
+  const body = [
+    `<p>${pathLabel(review.directory)}</p>`,
+    `<p>${count} app-created save recovery ${count === 1 ? 'copy' : 'copies'} · <strong>${bytes(review.bytes)}</strong> total. `,
+    'Current .3ds slots, recovery.3ds/recovery2.3ds and unrelated .bak files are excluded.</p>',
+    '<div class="row">',
+    action('recovery-older', 'Select older copies (keep newest)', 'small'),
+    action('recovery-clear', 'Clear selection', 'quiet small'),
+    '</div>',
+    `<p class="note">${selected.length} selected · ${bytes(selectedBytes)} to reclaim. Nothing is selected automatically.</p>`,
+    list,
+  ].join('');
+
   dialog(
     'Recovery copies',
-    `<p>${pathLabel(r.directory)}</p><p>${r.copies.length} app-created save recovery ${r.copies.length === 1 ? 'copy' : 'copies'} · <strong>${bytes(r.bytes)}</strong> total. Current .3ds slots, recovery.3ds/recovery2.3ds and unrelated .bak files are excluded.</p><div class="row">${action('recovery-older', 'Select older copies (keep newest)', 'small')}${action('recovery-clear', 'Clear selection', 'quiet small')}</div><p class="note">${selected.length} selected · ${bytes(selected.reduce((n, c) => n + c.bytes, 0))} to reclaim. Nothing is selected automatically.</p>${r.copies.length ? `<div class="stack">${r.copies.map((c) => `<label class="card"><input type="checkbox" data-recovery-copy="${e(c.name)}" ${state.cleanupSelected.has(c.name) ? 'checked' : ''}><span><strong>${e(c.original)}</strong>${c.newest ? ' <span class="badge">Newest copy</span>' : c.keep ? ' <span class="badge">Newest valid copy</span>' : ''}<br><small>${e(c.name)}<br>${bytes(c.bytes)} · ${e(new Date(c.modified * 1000).toLocaleString())} · ${c.valid ? 'Valid archive' : 'Invalid archive — inspect before discarding'}</small></span></label>`).join('')}</div>` : '<p>No app-created save recovery copies were found in this folder.</p>'}`,
+    body,
     action('close-dialog', 'Close', '', 'data-dialog="main-dialog"') +
       action(
         'recovery-delete',
@@ -1392,98 +1499,398 @@ function recoveryDialog() {
   );
 }
 
+/** A copy review's counts: discs, files, folders to move, and files by status. */
 function copySummary(plan) {
   const count = (status) => plan.files.filter((file) => file.status === status).length;
-  const items = [
+  // Each status, with its wording for one file and for several.
+  const statuses = [
     ['copy', 'new file', 'new files'],
     ['update', 'file to update', 'files to update'],
     ['preserve', 'existing file kept', 'existing files kept'],
     ['unchanged', 'file already up to date', 'files already up to date'],
     ['remap', 'reference file to adjust', 'reference files to adjust'],
     ['remove', 'old file to remove', 'old files to remove'],
-  ]
+  ];
+  const items = statuses
     .filter(([status]) => count(status))
     .map(
       ([status, one, many]) =>
         `${count(status).toLocaleString('en-US')} ${count(status) === 1 ? one : many}`,
     );
-  return `<div class="copy-summary"><p>${quantity(plan.games, 'disc')} · ${quantity(plan.files.length, 'file')}${plan.folders_to_move ? ' · ' + quantity(plan.folders_to_move, 'folder') + ' to move' : ''}</p><ul>${items.map((text) => `<li>${e(text)}</li>`).join('')}</ul></div>`;
+  const folders = plan.folders_to_move
+    ? ' · ' + quantity(plan.folders_to_move, 'folder') + ' to move'
+    : '';
+  return [
+    '<div class="copy-summary">',
+    `<p>${quantity(plan.games, 'disc')} · ${quantity(plan.files.length, 'file')}${folders}</p>`,
+    `<ul>${items.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul>`,
+    '</div>',
+  ].join('');
 }
-function storageView(s) {
-  return `<div class="storage-estimate"><h3>Transfer size</h3><p class="transfer-size"><strong>${bytes(s.to_copy)}</strong> to transfer</p><details><summary>Size breakdown</summary><div class="row"><span>Games <strong>${bytes(s.games)}</strong></span><span>Covers <strong>${bytes(s.covers)}</strong></span><span>Previews <strong>${bytes(s.previews)}</strong></span><span>Menu & support <strong>${bytes(s.support)}</strong></span></div><p class="note">Selected files total ${bytes(s.total)}, including files already on the drive.</p></details><p><strong>${bytes(s.available)}</strong> free now · <strong>${bytes(s.remaining)}</strong> estimated free after copying.</p>${s.fits ? '' : `<div class="notice error">Not enough room: ${bytes(s.shortfall)} more free space is needed. Select fewer games or choose another drive.</div>`}<p class="note">Estimate includes ${bytes(s.reserve)} reserved for filesystem allocation and temporary/support files. Free space is checked again before copying.</p></div>`;
+
+/** A copy's size: what will be transferred, the breakdown, and whether it fits. */
+function storageView(size) {
+  const shortfall = size.fits
+    ? ''
+    : `<div class="notice error">Not enough room: ${bytes(size.shortfall)} more free space is needed. Select fewer games or choose another drive.</div>`;
+  return [
+    '<div class="storage-estimate"><h3>Transfer size</h3>',
+    `<p class="transfer-size"><strong>${bytes(size.to_copy)}</strong> to transfer</p>`,
+    '<details><summary>Size breakdown</summary><div class="row">',
+    `<span>Games <strong>${bytes(size.games)}</strong></span>`,
+    `<span>Covers <strong>${bytes(size.covers)}</strong></span>`,
+    `<span>Previews <strong>${bytes(size.previews)}</strong></span>`,
+    `<span>Menu & support <strong>${bytes(size.support)}</strong></span>`,
+    '</div>',
+    `<p class="note">Selected files total ${bytes(size.total)}, including files already on the drive.</p>`,
+    '</details>',
+    `<p><strong>${bytes(size.available)}</strong> free now · <strong>${bytes(size.remaining)}</strong> estimated free after copying.</p>`,
+    shortfall,
+    `<p class="note">Estimate includes ${bytes(size.reserve)} reserved for filesystem allocation and temporary/support files. `,
+    'Free space is checked again before copying.</p>',
+    '</div>',
+  ].join('');
 }
+
+/** The last drive check's results, if they are for the chosen drive. */
 function readinessView() {
-  const r = state.readiness;
-  if (!r || r.requested_root !== state.prefs.destination) return '';
-  return `<div id="readiness-results" class="section"><div class="notice ${r.errors ? 'error' : ''}"><strong>${r.ready ? (r.warnings ? 'Ready with warnings' : 'Drive checks passed') : 'Drive needs attention'}</strong> · ${r.errors} errors · ${r.warnings} warnings</div><p class="note">${pathLabel(r.root)} · Snapshot from the last check. This does not test console booting or perform a full game checksum scan.</p><div class="stack">${r.checks.map((c) => `<div class="card"><strong><span class="badge ${c.status === 'error' ? 'error' : c.status === 'warning' ? 'warning' : ''}">${e(c.status === 'ok' ? 'Passed' : c.status)}</span> ${e(c.name)}</strong><p class="note">${e(c.detail)}</p>${c.fix ? `<p>${e(c.fix)}</p>` : ''}</div>`).join('')}</div></div>`;
+  const report = state.readiness;
+  if (!report || report.requested_root !== state.prefs.destination) return '';
+
+  const verdict = report.ready
+    ? report.warnings
+      ? 'Ready with warnings'
+      : 'Drive checks passed'
+    : 'Drive needs attention';
+  const checkCard = (check) => {
+    const badge = check.status === 'error' ? 'error' : check.status === 'warning' ? 'warning' : '';
+    const status = check.status === 'ok' ? 'Passed' : check.status;
+    const fix = check.fix ? `<p>${escapeHtml(check.fix)}</p>` : '';
+    return [
+      `<div class="card"><strong><span class="badge ${badge}">${escapeHtml(status)}</span> ${escapeHtml(check.name)}</strong>`,
+      `<p class="note">${escapeHtml(check.detail)}</p>${fix}</div>`,
+    ].join('');
+  };
+  return [
+    '<div id="readiness-results" class="section">',
+    `<div class="notice ${report.errors ? 'error' : ''}"><strong>${verdict}</strong> · ${report.errors} errors · ${report.warnings} warnings</div>`,
+    `<p class="note">${pathLabel(report.root)} · Snapshot from the last check. `,
+    'This does not test console booting or perform a full game checksum scan.</p>',
+    `<div class="stack">${report.checks.map(checkCard).join('')}</div>`,
+    '</div>',
+  ].join('');
 }
+
+/** Shows how the open backup differs from the backup at `path`. */
 function comparisonDialog(result, path) {
   const rows = result.rows;
+  const identical =
+    !result.added && !result.removed && !result.changed
+      ? '<p class="section">The archives contain identical saves, filenames and file types.</p>'
+      : '';
+  const changed = rows
+    .filter((row) => row.state !== 'Unchanged')
+    .map(comparisonRow)
+    .join('');
+  const unchanged = result.unchanged
+    ? [
+        `<details class="section"><summary>Show ${result.unchanged} unchanged saves</summary>`,
+        rows
+          .filter((row) => row.state === 'Unchanged')
+          .map(comparisonRow)
+          .join(''),
+        '</details>',
+      ].join('')
+    : '';
+  const body = [
+    `<p>Reference: ${pathLabel(path)}<br>Current: ${pathLabel(state.backup.path || 'Unsaved draft')}</p>`,
+    '<p>Changes below describe the current draft relative to the reference. Comparing does not change either archive.</p>',
+    '<div class="row">',
+    `<span class="badge">${result.added} added</span>`,
+    `<span class="badge">${result.removed} removed</span>`,
+    `<span class="badge warning">${result.changed} changed</span>`,
+    `<span class="badge">${result.unchanged} unchanged</span>`,
+    '</div>',
+    identical,
+    changed,
+    unchanged,
+  ].join('');
   dialog(
     'Compare backup archives',
-    `<p>Reference: ${pathLabel(path)}<br>Current: ${pathLabel(state.backup.path || 'Unsaved draft')}</p><p>Changes below describe the current draft relative to the reference. Comparing does not change either archive.</p><div class="row"><span class="badge">${result.added} added</span><span class="badge">${result.removed} removed</span><span class="badge warning">${result.changed} changed</span><span class="badge">${result.unchanged} unchanged</span></div>${!result.added && !result.removed && !result.changed ? '<p class="section">The archives contain identical saves, filenames and file types.</p>' : ''}${rows
-      .filter((r) => r.state !== 'Unchanged')
-      .map(comparisonRow)
-      .join('')}${
-      result.unchanged
-        ? `<details class="section"><summary>Show ${result.unchanged} unchanged saves</summary>${rows
-            .filter((r) => r.state === 'Unchanged')
-            .map(comparisonRow)
-            .join('')}</details>`
-        : ''
-    }`,
+    body,
     action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
   );
 }
-function comparisonRow(r) {
-  const size = (n) => (n === null ? 'Absent' : bytes(n));
-  return `<details class="section"><summary><span class="badge ${r.state === 'Changed' ? 'warning' : ''}">${e(r.state)}</span> ${e(r.game)}${r.game !== r.name ? ` · ${e(r.name)}` : ''} · ${r.changed_bytes} changed bytes</summary><p class="note">Reference: ${size(r.before_size)} → Current: ${size(r.after_size)}${r.type_changed ? ' · File type changed' : ''}${r.name_changed ? ' · Filename changed' : ''}</p>${r.after_index !== null ? action('compare-edit', 'Open current save in hex editor', 'small', `data-index="${r.after_index}"`) : '<p class="note">This save is absent from the current draft.</p>'}<pre class="progress-log">${r.changes.length ? 'Offset   Reference → Current\n' + r.changes.map(([offset, before, after]) => `${offset.toString(16).padStart(4, '0')}     ${before === null ? '--' : before.toString(16).padStart(2, '0')} → ${after === null ? '--' : after.toString(16).padStart(2, '0')}`).join('\n') : 'No byte differences.'}${r.changed_bytes > 512 ? '\nFirst 512 differences shown.' : ''}</pre></details>`;
+
+/** One save in a comparison, with its changed bytes (offset, before → after). */
+function comparisonRow(row) {
+  const size = (count) => (count === null ? 'Absent' : bytes(count));
+  const hexByte = (value) => (value === null ? '--' : value.toString(16).padStart(2, '0'));
+  const name = row.game !== row.name ? ` · ${escapeHtml(row.name)}` : '';
+  const notes =
+    (row.type_changed ? ' · File type changed' : '') +
+    (row.name_changed ? ' · Filename changed' : '');
+  const open =
+    row.after_index !== null
+      ? action(
+          'compare-edit',
+          'Open current save in hex editor',
+          'small',
+          `data-index="${row.after_index}"`,
+        )
+      : '<p class="note">This save is absent from the current draft.</p>';
+  const changes = row.changes.length
+    ? 'Offset   Reference → Current\n' +
+      row.changes
+        .map(
+          ([offset, before, after]) =>
+            `${offset.toString(16).padStart(4, '0')}     ${hexByte(before)} → ${hexByte(after)}`,
+        )
+        .join('\n')
+    : 'No byte differences.';
+  const truncated = row.changed_bytes > 512 ? '\nFirst 512 differences shown.' : '';
+  return [
+    '<details class="section"><summary>',
+    `<span class="badge ${row.state === 'Changed' ? 'warning' : ''}">${escapeHtml(row.state)}</span> `,
+    `${escapeHtml(row.game)}${name} · ${row.changed_bytes} changed bytes</summary>`,
+    `<p class="note">Reference: ${size(row.before_size)} → Current: ${size(row.after_size)}${notes}</p>`,
+    open,
+    `<pre class="progress-log">${changes}${truncated}</pre>`,
+    '</details>',
+  ].join('');
 }
 
+// ---- Adding discs ----
+
+/** Whether an import entry can be imported (identified, with a destination). */
 function importReady(entry) {
   return !entry.blocked && !!entry.category && !!entry.target;
 }
+
+/** The Add discs page: the chosen sources, then the scanned import to review. */
 function importView() {
-  const entries = state.plan?.entries || [];
+  const sources = state.paths.length;
+  const sourceList = sources
+    ? `<details><summary>Source files and folders</summary><div class="progress-log">${state.paths.map(pathLabel).join('\n')}</div></details>`
+    : '<p class="note">Choose ISO/CUE files or a folder. You can also drop files onto this window.</p>';
+  const sourcesCard = [
+    '<div class="card"><div class="row spread">',
+    `<strong>${sources} source${sources === 1 ? '' : 's'} selected</strong>`,
+    '<div class="row">',
+    checkbox('quick-scan', 'Fast name-only scan', state.prefs.quick),
+    action('scan', 'Scan discs', 'primary', !sources ? 'disabled' : ''),
+    action('clear-sources', 'Clear', 'quiet'),
+    '</div></div>',
+    sourceList,
+    '</div>',
+  ].join('');
+
   return (
     heading(
       'Add discs',
       'Identify and copy discs into your game library. Original files stay in place.',
       action('import-files', 'Add ISO / CUE…') + action('import-folder', 'Add folder…'),
     ) +
-    `<div class="card"><div class="row spread"><strong>${state.paths.length} source${state.paths.length === 1 ? '' : 's'} selected</strong><div class="row">${checkbox('quick-scan', 'Fast name-only scan', state.prefs.quick)}${action('scan', 'Scan discs', 'primary', !state.paths.length ? 'disabled' : '')}${action('clear-sources', 'Clear', 'quiet')}</div></div>${state.paths.length ? `<details><summary>Source files and folders</summary><div class="progress-log">${state.paths.map(pathLabel).join('\n')}</div></details>` : '<p class="note">Choose ISO/CUE files or a folder. You can also drop files onto this window.</p>'}</div>` +
-    (state.plan
-      ? `<div class="row spread section"><h2>Review import</h2>${action('import-apply', `Import ${entries.filter((e) => e.selected).length} selected`, 'primary', !entries.some((e) => e.selected) ? 'disabled' : '')}</div><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th></th><th>Game / identification</th><th>Category</th><th>Destination</th><th></th></tr></thead><tbody>${entries.map((r, i) => `<tr><td><input type="checkbox" data-import-check="${i}" aria-label="Import ${e(r.title)}" ${r.selected ? 'checked' : ''} ${!importReady(r) ? 'disabled' : ''}></td><td><strong>${e(r.title)}</strong><p class="note">${e(r.reason)}</p><span class="badge ${r.blocked ? 'error' : r.confidence === 'sha1' ? '' : 'warning'}">${e(r.confidence)}</span></td><td><select data-import-category="${i}" aria-label="Category for ${e(r.title)}"><option value="" ${r.category ? '' : 'selected'} disabled>Choose a category…</option>${categories.map((c) => option(c, c, r.category === c)).join('')}</select></td><td class="path">${pathLabel(r.target)}</td><td>${action('import-resolve', 'Identify…', 'small', `data-index="${i}" aria-label="Identify ${e(r.title)}"`)}</td></tr>`).join('')}</tbody></table></div>`
-      : '')
+    sourcesCard +
+    (state.plan ? importReview(state.plan.entries || []) : '')
   );
 }
+
+/** The scanned import: one row per disc, with its identification, category and destination. */
+function importReview(entries) {
+  const selectedCount = entries.filter((entry) => entry.selected).length;
+  const row = (entry, index) => {
+    const title = escapeHtml(entry.title);
+    const badge = entry.blocked ? 'error' : entry.confidence === 'sha1' ? '' : 'warning';
+    const categoryChoices = categories
+      .map((category) => option(category, category, entry.category === category))
+      .join('');
+    return [
+      '<tr>',
+      `<td><input type="checkbox" data-import-check="${index}" aria-label="Import ${title}" ${entry.selected ? 'checked' : ''} ${!importReady(entry) ? 'disabled' : ''}></td>`,
+      `<td><strong>${title}</strong><p class="note">${escapeHtml(entry.reason)}</p><span class="badge ${badge}">${escapeHtml(entry.confidence)}</span></td>`,
+      `<td><select data-import-category="${index}" aria-label="Category for ${title}">`,
+      `<option value="" ${entry.category ? '' : 'selected'} disabled>Choose a category…</option>${categoryChoices}</select></td>`,
+      `<td class="path">${pathLabel(entry.target)}</td>`,
+      `<td>${action('import-resolve', 'Identify…', 'small', `data-index="${index}" aria-label="Identify ${title}"`)}</td>`,
+      '</tr>',
+    ].join('');
+  };
+  return [
+    '<div class="row spread section"><h2>Review import</h2>',
+    action(
+      'import-apply',
+      `Import ${selectedCount} selected`,
+      'primary',
+      !selectedCount ? 'disabled' : '',
+    ),
+    '</div>',
+    '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table>',
+    '<thead><tr><th></th><th>Game / identification</th><th>Category</th><th>Destination</th><th></th></tr></thead>',
+    `<tbody>${entries.map(row).join('')}</tbody>`,
+    '</table></div>',
+  ].join('');
+}
+
+// ---- The Save Manager page ----
+
+/** The Save Manager: slot search, the open backup and its saves, and recovery copies. */
 function savesView() {
-  const b = state.backup;
-  const entry = state.entry;
+  const slotSearch = [
+    '<div class="card"><div class="row spread"><h3>Find saves across slots</h3><div class="row">',
+    action('slots-usb', 'Use USB'),
+    action('slots-library', 'Use library'),
+    action('slots-folder', 'Choose folder…'),
+    action('slots-refresh', 'Refresh', 'small'),
+    '</div></div>',
+    '<div class="row">',
+    `<input class="grow" id="slots-directory" aria-label="Save backups folder" placeholder="Drive/.ohmy3do/saves" value="${escapeHtml(state.slotDirectory || '')}">`,
+    `<input id="slot-search" aria-label="Search backup slots" type="search" placeholder="Game, filename, label or notes…" value="${escapeHtml(state.slotQuery)}">`,
+    '</div>',
+    `<div id="slot-results">${slotResults()}</div>`,
+    '</div>',
+  ].join('');
+  const backup = state.backup
+    ? backupView(state.backup)
+    : empty(
+        'Your console saves, in one place',
+        'Open a .3ds backup, search the slots on your drive, or create a draft and combine individual saves from other backups.',
+      );
+  const recovery = [
+    '<div class="card section"><h3>Recovery copies</h3>',
+    '<p>Review app-created recovery copies and remove selected older copies to reclaim space.</p>',
+    action('recovery-open', 'Manage recovery copies…'),
+    '</div>',
+  ].join('');
+
   return (
     heading(
       'Save Manager',
       'Search slots, edit individual saves and assemble backup archives.',
       action('backup-open', 'Open backup…') + action('backup-new', 'New backup', 'primary'),
     ) +
-    `<div class="card"><div class="row spread"><h3>Find saves across slots</h3><div class="row">${action('slots-usb', 'Use USB')}${action('slots-library', 'Use library')}${action('slots-folder', 'Choose folder…')}${action('slots-refresh', 'Refresh', 'small')}</div></div><div class="row"><input class="grow" id="slots-directory" aria-label="Save backups folder" placeholder="Drive/.ohmy3do/saves" value="${e(state.slotDirectory || '')}"><input id="slot-search" aria-label="Search backup slots" type="search" placeholder="Game, filename, label or notes…" value="${e(state.slotQuery)}"></div><div id="slot-results">${slotResults()}</div></div>` +
-    (b
-      ? `<div class="row spread section"><div><h2>${e(basename(b.path) || 'New backup')}${b.dirty || state.hexDirty ? ' <span class="badge warning">Unsaved changes</span>' : ''}</h2><p class="note">${b.entries.length} saves · ${bytes(b.bytes)} of 64 KB · ${pathLabel(b.path || 'Not saved yet')}</p></div><div class="row">${action('backup-save', 'Save', 'primary')}${action('backup-save-as', 'Save as…')}${action('backup-merge', 'Add saves from…')}${action('backup-compare', 'Compare…')}${b.path ? action('slot-label', 'Name slot…', 'quiet') + (/^slot[0-9]+\.3ds$/i.test(basename(b.path)) ? action('slot-notes', 'Notes…', 'quiet') : '') : ''}</div></div><div class="notice">Saving writes the entire destination backup slot. Use “Add saves from…” to merge individual saves before saving. Existing archives get a recovery copy.</div><div class="split"><div class="card entry-list">${b.entries.length ? b.entries.map((r, i) => `<button class="entry-button${state.entryIndex === i ? ' active' : ''}" data-entry="${i}" aria-pressed="${state.entryIndex === i}"><strong>${e(r.known || r.name)}</strong><small>${e(r.name)} · ${bytes(r.size)}</small></button>`).join('') : '<p class="note">This draft is empty. Add saves from another backup to build a slot.</p>'}</div><div class="card">${entry ? `<div class="row spread"><h3>${e(entry.name)}</h3>${action('backup-remove', 'Remove from draft', 'danger small')}</div>${entry.profile ? `<div class="notice"><strong>${e(entry.profile.game)}</strong><p class="note">${e(entry.profile.notes)}</p><div class="form-grid">${entry.profile.fields.map((f, i) => `<label class="field">${e(f.label)}<input type="number" data-cheat-field="${i}" min="${f.min}" max="${f.max}" value="${entry.values[i] ?? ''}"></label>`).join('')}</div><div class="row section">${entry.profile.presets.map((p, i) => action('cheat-preset', e(p.label), 'small', `data-index="${i}"`)).join('')}</div></div>` : '<p class="note">No verified game-specific editor is available for this save. Raw hex editing remains available.</p>'}<div class="row section">${action('backup-export-raw', 'Export raw…', 'small')}${action('backup-export-one', 'Export this save…', 'small')}${action('backup-import-raw', 'Import raw bytes…', 'small')}</div><details ${!entry.profile ? 'open' : ''}><summary>Raw hex editor · offsets in bytes</summary><div class="row spread"><small>Offset 0000 · ${entry.data.length} bytes</small>${action('hex-apply', 'Apply hex edits', 'small')}</div><textarea id="hex-editor" class="hex" spellcheck="false" aria-label="Save data in hexadecimal">${e(entry.hex)}</textarea><div class="ascii">${e(entry.data.map((c) => (c >= 32 && c <= 126 ? String.fromCharCode(c) : '·')).join(''))}</div><p class="note">Two hex digits per byte. Apply edits to the draft, then Save to write the archive. Game-specific controls also maintain the game’s checksum.</p></details>` : '<p>Select a save to inspect or edit it.</p>'}</div></div>`
-      : empty(
-          'Your console saves, in one place',
-          'Open a .3ds backup, search the slots on your drive, or create a draft and combine individual saves from other backups.',
-        )) +
-    `<div class="card section"><h3>Recovery copies</h3><p>Review app-created recovery copies and remove selected older copies to reclaim space.</p>${action('recovery-open', 'Manage recovery copies…')}</div>`
+    slotSearch +
+    backup +
+    recovery
   );
 }
-function slotResults() {
-  const slots = state.slots.filter((s) => slotMatches(s, state.slotQuery));
-  return slots.length
-    ? `<details open><summary>${slots.length} occupied slots</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th>Slot</th><th>Games / saves</th><th></th></tr></thead><tbody>${slots.map((s) => `<tr><td>${e(s.name)}${!s.valid ? ' <span class="badge error">Invalid</span>' : ''}</td><td>${e(s.games)}${s.notes ? `<small class="note">${e(s.notes.slice(0, 160))}${s.notes.length > 160 ? '…' : ''}</small>` : ''}</td><td>${action('slot-open', 'Open', 'small', `data-path="${e(s.path)}" aria-label="Open ${e(s.name)}" ${!s.valid ? 'disabled' : ''}`)}</td></tr>`).join('')}</tbody></table></div></details>`
-    : state.slots.length
-      ? '<p class="note">No matching occupied slots.</p>'
-      : '';
+
+/** The open backup: its name and buttons, its saves, and the chosen save's editor. */
+function backupView(backup) {
+  const unsaved =
+    backup.dirty || state.hexDirty ? ' <span class="badge warning">Unsaved changes</span>' : '';
+  // Slot files (slotNN.3ds) can be named and have notes.
+  const slotButtons = backup.path
+    ? action('slot-label', 'Name slot…', 'quiet') +
+      (/^slot[0-9]+\.3ds$/i.test(basename(backup.path))
+        ? action('slot-notes', 'Notes…', 'quiet')
+        : '')
+    : '';
+  const header = [
+    '<div class="row spread section"><div>',
+    `<h2>${escapeHtml(basename(backup.path) || 'New backup')}${unsaved}</h2>`,
+    `<p class="note">${backup.entries.length} saves · ${bytes(backup.bytes)} of 64 KB · ${pathLabel(backup.path || 'Not saved yet')}</p>`,
+    '</div><div class="row">',
+    action('backup-save', 'Save', 'primary'),
+    action('backup-save-as', 'Save as…'),
+    action('backup-merge', 'Add saves from…'),
+    action('backup-compare', 'Compare…'),
+    slotButtons,
+    '</div></div>',
+    '<div class="notice">Saving writes the entire destination backup slot. ',
+    'Use “Add saves from…” to merge individual saves before saving. Existing archives get a recovery copy.</div>',
+  ].join('');
+  const saves = backup.entries.length
+    ? backup.entries
+        .map((save, index) => {
+          const active = state.entryIndex === index;
+          return [
+            `<button class="entry-button${active ? ' active' : ''}" data-entry="${index}" aria-pressed="${active}">`,
+            `<strong>${escapeHtml(save.known || save.name)}</strong>`,
+            `<small>${escapeHtml(save.name)} · ${bytes(save.size)}</small></button>`,
+          ].join('');
+        })
+        .join('')
+    : '<p class="note">This draft is empty. Add saves from another backup to build a slot.</p>';
+  const editor = state.entry
+    ? saveEditorView(state.entry)
+    : '<p>Select a save to inspect or edit it.</p>';
+  return `${header}<div class="split"><div class="card entry-list">${saves}</div><div class="card">${editor}</div></div>`;
 }
+
+/** The chosen save: its game-specific editor (if its format is known) and the hex editor. */
+function saveEditorView(entry) {
+  const profile = entry.profile;
+  const cheats = profile
+    ? [
+        `<div class="notice"><strong>${escapeHtml(profile.game)}</strong><p class="note">${escapeHtml(profile.notes)}</p>`,
+        '<div class="form-grid">',
+        profile.fields
+          .map(
+            (field, index) =>
+              `<label class="field">${escapeHtml(field.label)}<input type="number" data-cheat-field="${index}" min="${field.min}" max="${field.max}" value="${entry.values[index] ?? ''}"></label>`,
+          )
+          .join(''),
+        '</div><div class="row section">',
+        profile.presets
+          .map((preset, index) =>
+            action('cheat-preset', escapeHtml(preset.label), 'small', `data-index="${index}"`),
+          )
+          .join(''),
+        '</div></div>',
+      ].join('')
+    : '<p class="note">No verified game-specific editor is available for this save. Raw hex editing remains available.</p>';
+  // Printable ASCII as itself, everything else as a dot.
+  const ascii = entry.data
+    .map((code) => (code >= 32 && code <= 126 ? String.fromCharCode(code) : '·'))
+    .join('');
+  return [
+    `<div class="row spread"><h3>${escapeHtml(entry.name)}</h3>${action('backup-remove', 'Remove from draft', 'danger small')}</div>`,
+    cheats,
+    '<div class="row section">',
+    action('backup-export-raw', 'Export raw…', 'small'),
+    action('backup-export-one', 'Export this save…', 'small'),
+    action('backup-import-raw', 'Import raw bytes…', 'small'),
+    '</div>',
+    `<details ${!profile ? 'open' : ''}><summary>Raw hex editor · offsets in bytes</summary>`,
+    `<div class="row spread"><small>Offset 0000 · ${entry.data.length} bytes</small>${action('hex-apply', 'Apply hex edits', 'small')}</div>`,
+    `<textarea id="hex-editor" class="hex" spellcheck="false" aria-label="Save data in hexadecimal">${escapeHtml(entry.hex)}</textarea>`,
+    `<div class="ascii">${escapeHtml(ascii)}</div>`,
+    '<p class="note">Two hex digits per byte. Apply edits to the draft, then Save to write the archive. ',
+    'Game-specific controls also maintain the game’s checksum.</p>',
+    '</details>',
+  ].join('');
+}
+
+/** The slots matching the search, as a table. */
+function slotResults() {
+  const slots = state.slots.filter((slot) => slotMatches(slot, state.slotQuery));
+  if (!slots.length)
+    return state.slots.length ? '<p class="note">No matching occupied slots.</p>' : '';
+
+  const row = (slot) => {
+    const invalid = !slot.valid ? ' <span class="badge error">Invalid</span>' : '';
+    const notes = slot.notes
+      ? `<small class="note">${escapeHtml(slot.notes.slice(0, 160))}${slot.notes.length > 160 ? '…' : ''}</small>`
+      : '';
+    const open = action(
+      'slot-open',
+      'Open',
+      'small',
+      `data-path="${escapeHtml(slot.path)}" aria-label="Open ${escapeHtml(slot.name)}" ${!slot.valid ? 'disabled' : ''}`,
+    );
+    return `<tr><td>${escapeHtml(slot.name)}${invalid}</td><td>${escapeHtml(slot.games)}${notes}</td><td>${open}</td></tr>`;
+  };
+  return [
+    `<details open><summary>${slots.length} occupied slots</summary>`,
+    '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table>',
+    '<thead><tr><th>Slot</th><th>Games / saves</th><th></th></tr></thead>',
+    `<tbody>${slots.map(row).join('')}</tbody>`,
+    '</table></div></details>',
+  ].join('');
+}
+
+/** Applies typed hex edits to the open save, if there are any. */
 async function commitHex() {
   if (!state.hexDirty) return;
   state.backup = await call('backup_edit', {
@@ -1493,6 +1900,8 @@ async function commitHex() {
   state.hexDirty = false;
   state.entry = await call('backup_entry', { index: state.entryIndex });
 }
+
+/** Opens a backup (after dealing with unsaved edits) and shows its first save. */
 async function openBackup(path) {
   if (!(await resolveDirty())) return;
   state.backup = await call('backup_open', { path });
@@ -1502,26 +1911,34 @@ async function openBackup(path) {
   state.page = 'saves';
   render();
 }
-async function saveBackup(as = false) {
+
+/**
+ * Saves the open backup: to where it came from, or (`saveAs`, or a new
+ * backup) to a chosen file. Asks first, since the whole slot is replaced.
+ * Returns whether it was saved.
+ */
+async function saveBackup(saveAs = false) {
   await commitHex();
-  let path = !as && state.backup?.path;
+  let path = !saveAs && state.backup?.path;
   if (!path) path = await pick('archive_save', state.slotDirectory || state.prefs.destination);
   if (!path) return false;
+
   const overwrite = await confirmAction(
     'Save backup archive',
-    `Write the complete archive (${state.backup.entries.length} saves) to ${displayPath(path)}? Any existing destination slot is replaced as a whole, with a recovery backup kept.`,
+    `Write the complete archive (${state.backup.entries.length} saves) to ${displayPath(path)}? ` +
+      'Any existing destination slot is replaced as a whole, with a recovery backup kept.',
     'Save archive',
   );
   if (!overwrite) return false;
+
   const result = await call('backup_save', { path, overwrite: true });
   state.backup = result.backup;
-  toast(
-    result.catalog_warning ||
-      `Backup saved and verified${result.recovery ? `. Recovery copy: ${displayPath(result.recovery)}` : ''}`,
-  );
+  const recovery = result.recovery ? `. Recovery copy: ${displayPath(result.recovery)}` : '';
+  toast(result.catalog_warning || `Backup saved and verified${recovery}`);
   render();
   return true;
 }
+
 function mediaView() {
   const game = state.groups.find((g) => g.discs.includes(state.mediaDisc));
   return (
