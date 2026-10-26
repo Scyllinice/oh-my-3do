@@ -3748,90 +3748,195 @@ const handlers = {
   },
 };
 
+/** Exports the open save: its raw bytes, or as a one-save archive. */
 async function exportSave(raw) {
   await commitHex();
   const path = await pick(raw ? 'raw_save' : 'archive_save');
   if (!path) return;
-  if (
-    !(await confirmAction(
-      'Export selected save',
-      `Write ${state.entry.name} to ${displayPath(path)}? An existing export will get a recovery copy.`,
-      'Export save',
-    ))
-  )
-    return;
+  const confirmed = await confirmAction(
+    'Export selected save',
+    `Write ${state.entry.name} to ${displayPath(path)}? An existing export will get a recovery copy.`,
+    'Export save',
+  );
+  if (!confirmed) return;
   await call('backup_export', { index: state.entryIndex, path, raw, overwrite: true });
   toast('Selected save exported and verified.');
 }
+
+/** Lists the save slots in the chosen folder. */
 async function refreshSlots() {
   if (!state.slotDirectory) throw new Error('Choose the .ohmy3do/saves folder first.');
   state.slots = await call('slots', { directory: state.slotDirectory });
   render();
 }
+
+/**
+ * Installs the menu on the drive in Drive setup: from a boot.iso (`source`)
+ * or the latest release (`release`), with the initial settings from the
+ * form. Checks the drive and asks first.
+ */
 async function setupDrive(source, release = false) {
   state.prefs.destination = $('#drive-destination').value;
   if (!state.prefs.destination) throw new Error('Choose a USB / SD destination first.');
   const settings = readSettings('drive');
   await preferences();
-  const d = await inspectWriteDrive(state.prefs.destination);
-  if (
-    !(await confirmAction(
-      'Prepare drive',
-      `Prepare ${d.identity?.name || 'unnamed drive'} at ${displayPath(d.root)}? Existing games and saves are preserved.`,
-      'Prepare drive',
-    ))
-  )
-    return;
+  const drive = await inspectWriteDrive(state.prefs.destination);
+  const confirmed = await confirmAction(
+    'Prepare drive',
+    `Prepare ${drive.identity?.name || 'unnamed drive'} at ${displayPath(drive.root)}? Existing games and saves are preserved.`,
+    'Prepare drive',
+  );
+  if (!confirmed) return;
   await call('drive_setup', {
     destination: state.prefs.destination,
     source,
     release,
     settings,
-    drive_token: d.token,
+    drive_token: drive.token,
   });
   toast('Drive prepared and verified. You can use Save Manager without installing games.');
 }
+
+// ---- The cheat database editor ----
+//
+// The editor works on `state.cheats`, the database as JSON text. The form
+// edits a parsed copy (`databaseDraft`) and writes it back (`writeDraft`);
+// the Advanced JSON box edits the text directly.
+
+/** The database being edited, parsed. */
 function databaseDraft() {
   return JSON.parse(state.cheats);
 }
-function writeDraft(db) {
-  state.cheats = JSON.stringify(db, null, 2);
+
+/** Stores an edited database (and shows it in the JSON box). */
+function writeDraft(database) {
+  state.cheats = JSON.stringify(database, null, 2);
   state.cheatsDirty = true;
   const textarea = $('#cheats-json');
   if (textarea) textarea.value = state.cheats;
 }
+
+/** A field's columns in the editor: [key, value shown]. */
+function cheatFieldCells(field) {
+  return [
+    ['label', field.label],
+    ['offset', '0x' + field.offset.toString(16)],
+    ['width', field.width ?? 4],
+    ['min', field.min],
+    ['max', field.max],
+    ['mask', '0x' + (field.mask ?? 4294967295).toString(16)],
+  ];
+}
+
+/** The chosen profile's form: names, layout, fields and presets. */
+function cheatProfileEditor(profile) {
+  const textInput = (label, key) =>
+    `<label class="field">${label}<input data-profile-key="${key}" value="${escapeHtml(profile[key] || '')}"></label>`;
+  const details = [
+    '<div class="form-grid">',
+    `<label class="field">Game<input data-profile-key="game" value="${escapeHtml(profile.game)}"></label>`,
+    `<label class="field">Save filename<input data-profile-key="filename" value="${escapeHtml(profile.filename)}"></label>`,
+    '</div>',
+    '<details><summary>Layout, source and checksum</summary><div class="form-grid">',
+    ['id', 'encoding', 'source', 'notes'].map((key) => textInput(escapeHtml(key), key)).join(''),
+    `<label class="field">Save size (bytes)<input data-profile-key="size" type="number" value="${profile.size}"></label>`,
+    '</div>',
+    '<p class="note">Signature and checksum algorithms are preserved. ',
+    'Edit their exact structure in Advanced JSON when defining a new format.</p>',
+    '</details>',
+  ].join('');
+
+  const fieldRows = profile.fields
+    .map((field, index) => {
+      const cells = cheatFieldCells(field)
+        .map(
+          ([key, value]) =>
+            `<td><input data-db-field="${index}" data-key="${key}" value="${escapeHtml(value)}" aria-label="${escapeHtml(key)}"></td>`,
+        )
+        .join('');
+      const remove = action(
+        'cheats-remove-field',
+        '×',
+        'danger small',
+        `data-index="${index}" aria-label="Remove field"`,
+      );
+      return `<tr>${cells}<td>${remove}</td></tr>`;
+    })
+    .join('');
+  const fields = [
+    `<div class="row spread section"><h3>Fields</h3>${action('cheats-add-field', 'Add field', 'small')}</div>`,
+    '<div class="table-wrap cheat-fields"><table>',
+    '<thead><tr><th>Name</th><th>Offset</th><th>Bytes</th><th>Minimum</th><th>Maximum</th><th>Mask</th><th></th></tr></thead>',
+    `<tbody>${fieldRows}</tbody>`,
+    '</table></div>',
+  ].join('');
+
+  const presetRows = profile.presets
+    .map((preset, index) => {
+      const fieldChoices = profile.fields
+        .map((field, fieldIndex) => option(fieldIndex, field.label, preset.field === fieldIndex))
+        .join('');
+      return [
+        '<div class="row">',
+        `<input class="grow" data-db-preset="${index}" data-key="label" value="${escapeHtml(preset.label)}" aria-label="Preset name">`,
+        `<select data-db-preset="${index}" data-key="field" aria-label="Preset field">${fieldChoices}</select>`,
+        `<input class="preset-value" type="number" data-db-preset="${index}" data-key="value" value="${preset.value}" aria-label="Preset value">`,
+        action(
+          'cheats-remove-preset',
+          '×',
+          'danger small',
+          `data-index="${index}" aria-label="Remove preset"`,
+        ),
+        '</div>',
+      ].join('');
+    })
+    .join('');
+  const presets = [
+    `<div class="row spread section"><h3>Presets</h3>${action('cheats-add-preset', 'Add preset', 'small')}</div>`,
+    `<div class="stack">${presetRows || '<small>No presets yet.</small>'}</div>`,
+  ].join('');
+
+  return details + fields + presets;
+}
+
+/** Draws the cheat database editor for the chosen profile. */
 function cheatDialog() {
-  const db = databaseDraft();
-  state.cheatProfile = Math.min(state.cheatProfile || 0, Math.max(0, db.profiles.length - 1));
-  const p = db.profiles[state.cheatProfile];
-  const d = dialog(
+  const database = databaseDraft();
+  const lastProfile = Math.max(0, database.profiles.length - 1);
+  state.cheatProfile = Math.min(state.cheatProfile || 0, lastProfile);
+  const profile = database.profiles[state.cheatProfile];
+
+  const profileChoices = database.profiles
+    .map((each, index) => option(index, each.game, index === state.cheatProfile))
+    .join('');
+  const body = [
+    '<p>Edit known save formats and presets. ',
+    'These definitions do not change your save archives until you apply a cheat in Save Manager.</p>',
+    '<div class="row">',
+    action('cheats-load', 'Open JSON…'),
+    action(
+      'cheats-download',
+      'Merge published profiles',
+      '',
+      state.prefs.offline ? 'disabled' : '',
+    ),
+    action('cheats-validate', 'Validate'),
+    '</div>',
+    '<div class="row section">',
+    `<select id="cheat-profile" class="grow" aria-label="Game profile">${profileChoices}</select>`,
+    action('cheats-new-profile', 'Add profile…', 'small'),
+    action('cheats-remove-profile', 'Remove profile', 'danger small', !profile ? 'disabled' : ''),
+    '</div>',
+    profile ? cheatProfileEditor(profile) : '',
+    '<details class="section"><summary>Advanced JSON — signatures, checksums and multi-field presets</summary>',
+    `<textarea id="cheats-json" class="json-editor" spellcheck="false" aria-label="Cheat database JSON">${escapeHtml(state.cheats)}</textarea>`,
+    action('cheats-apply-json', 'Apply JSON to editor', 'small'),
+    '</details>',
+  ].join('');
+
+  dialog(
     'Save cheat database',
-    `<p>Edit known save formats and presets. These definitions do not change your save archives until you apply a cheat in Save Manager.</p><div class="row">${action('cheats-load', 'Open JSON…')}${action('cheats-download', 'Merge published profiles', '', state.prefs.offline ? 'disabled' : '')}${action('cheats-validate', 'Validate')}</div><div class="row section"><select id="cheat-profile" class="grow" aria-label="Game profile">${db.profiles.map((p, i) => option(i, p.game, i === state.cheatProfile)).join('')}</select>${action('cheats-new-profile', 'Add profile…', 'small')}${action('cheats-remove-profile', 'Remove profile', 'danger small', !p ? 'disabled' : '')}</div>${
-      p
-        ? `<div class="form-grid"><label class="field">Game<input data-profile-key="game" value="${e(p.game)}"></label><label class="field">Save filename<input data-profile-key="filename" value="${e(p.filename)}"></label></div><details><summary>Layout, source and checksum</summary><div class="form-grid">${['id', 'encoding', 'source', 'notes'].map((key) => `<label class="field">${e(key)}<input data-profile-key="${key}" value="${e(p[key] || '')}"></label>`).join('')}<label class="field">Save size (bytes)<input data-profile-key="size" type="number" value="${p.size}"></label></div><p class="note">Signature and checksum algorithms are preserved. Edit their exact structure in Advanced JSON when defining a new format.</p></details><div class="row spread section"><h3>Fields</h3>${action('cheats-add-field', 'Add field', 'small')}</div><div class="table-wrap cheat-fields"><table><thead><tr><th>Name</th><th>Offset</th><th>Bytes</th><th>Minimum</th><th>Maximum</th><th>Mask</th><th></th></tr></thead><tbody>${p.fields
-            .map(
-              (f, i) =>
-                `<tr>${[
-                  ['label', f.label],
-                  ['offset', '0x' + f.offset.toString(16)],
-                  ['width', f.width ?? 4],
-                  ['min', f.min],
-                  ['max', f.max],
-                  ['mask', '0x' + (f.mask ?? 4294967295).toString(16)],
-                ]
-                  .map(
-                    ([key, value]) =>
-                      `<td><input data-db-field="${i}" data-key="${key}" value="${e(value)}" aria-label="${e(key)}"></td>`,
-                  )
-                  .join(
-                    '',
-                  )}<td>${action('cheats-remove-field', '×', 'danger small', `data-index="${i}" aria-label="Remove field"`)}</td></tr>`,
-            )
-            .join(
-              '',
-            )}</tbody></table></div><div class="row spread section"><h3>Presets</h3>${action('cheats-add-preset', 'Add preset', 'small')}</div><div class="stack">${p.presets.map((preset, i) => `<div class="row"><input class="grow" data-db-preset="${i}" data-key="label" value="${e(preset.label)}" aria-label="Preset name"><select data-db-preset="${i}" data-key="field" aria-label="Preset field">${p.fields.map((f, j) => option(j, f.label, preset.field === j)).join('')}</select><input class="preset-value" type="number" data-db-preset="${i}" data-key="value" value="${preset.value}" aria-label="Preset value">${action('cheats-remove-preset', '×', 'danger small', `data-index="${i}" aria-label="Remove preset"`)}</div>`).join('') || '<small>No presets yet.</small>'}</div>`
-        : ''
-    }<details class="section"><summary>Advanced JSON — signatures, checksums and multi-field presets</summary><textarea id="cheats-json" class="json-editor" spellcheck="false" aria-label="Cheat database JSON">${e(state.cheats)}</textarea>${action('cheats-apply-json', 'Apply JSON to editor', 'small')}</details>`,
+    body,
     action('close-dialog', 'Close', '', 'data-dialog="cheats-dialog"') +
       action('cheats-use', 'Use in Save Manager') +
       action('cheats-save', 'Save JSON…') +
@@ -3839,11 +3944,14 @@ function cheatDialog() {
     'cheats-dialog',
   );
 }
+
+// The cheat editor's own buttons.
 Object.assign(handlers, {
   'cheats-validate': async () => {
     await call('cheats_validate', { json: $('#cheats-json').value });
     toast('Database structure, addresses, ranges and checksums validated.');
   },
+  // Uses the edited definitions in the Save Manager for this session.
   'cheats-use': async () => {
     await call('cheats_activate', { json: $('#cheats-json').value });
     if (state.entryIndex !== null && state.backup) {
@@ -3853,15 +3961,16 @@ Object.assign(handlers, {
     toast('Validated definitions are active in Save Manager for this session.');
   },
   'cheats-apply-json': () => {
-    const db = JSON.parse($('#cheats-json').value);
-    if (!Array.isArray(db.profiles)) throw new Error('Database needs a profiles array.');
-    state.cheats = JSON.stringify(db, null, 2);
+    const database = JSON.parse($('#cheats-json').value);
+    if (!Array.isArray(database.profiles)) throw new Error('Database needs a profiles array.');
+    state.cheats = JSON.stringify(database, null, 2);
     state.cheatsDirty = true;
     cheatDialog();
   },
+  // Adds a placeholder profile to fill in.
   'cheats-new-profile': () => {
-    const db = databaseDraft();
-    db.profiles.push({
+    const database = databaseDraft();
+    database.profiles.push({
       id: 'custom-' + Date.now(),
       game: 'New game',
       filename: 'SaveName',
@@ -3874,29 +3983,27 @@ Object.assign(handlers, {
       fields: [{ label: 'Value', offset: 1, width: 1, min: 0, max: 255, mask: 255 }],
       presets: [],
     });
-    state.cheatProfile = db.profiles.length - 1;
-    writeDraft(db);
+    state.cheatProfile = database.profiles.length - 1;
+    writeDraft(database);
     cheatDialog();
   },
   'cheats-remove-profile': async () => {
-    if (
-      !(await confirmAction(
-        'Remove game profile',
-        'Remove this profile from the draft database?',
-        'Remove profile',
-        true,
-      ))
-    )
-      return;
-    const db = databaseDraft();
-    db.profiles.splice(state.cheatProfile, 1);
+    const confirmed = await confirmAction(
+      'Remove game profile',
+      'Remove this profile from the draft database?',
+      'Remove profile',
+      true,
+    );
+    if (!confirmed) return;
+    const database = databaseDraft();
+    database.profiles.splice(state.cheatProfile, 1);
     state.cheatProfile = 0;
-    writeDraft(db);
+    writeDraft(database);
     cheatDialog();
   },
   'cheats-add-field': () => {
-    const db = databaseDraft();
-    db.profiles[state.cheatProfile].fields.push({
+    const database = databaseDraft();
+    database.profiles[state.cheatProfile].fields.push({
       label: 'New field',
       offset: 0,
       width: 1,
@@ -3904,39 +4011,43 @@ Object.assign(handlers, {
       max: 255,
       mask: 255,
     });
-    writeDraft(db);
+    writeDraft(database);
     cheatDialog();
   },
+  // Removes a field, the presets that use it, and renumbers the rest.
   'cheats-remove-field': (button) => {
-    const db = databaseDraft(),
-      p = db.profiles[state.cheatProfile],
-      index = Number(button.dataset.index);
-    p.fields.splice(index, 1);
-    p.presets = p.presets.filter(
-      (v) => v.field !== index && !(v.additional || []).some((c) => c.field === index),
+    const database = databaseDraft();
+    const profile = database.profiles[state.cheatProfile];
+    const index = Number(button.dataset.index);
+    profile.fields.splice(index, 1);
+    profile.presets = profile.presets.filter(
+      (preset) =>
+        preset.field !== index &&
+        !(preset.additional || []).some((change) => change.field === index),
     );
-    for (const preset of p.presets) {
+    for (const preset of profile.presets) {
       if (preset.field > index) preset.field--;
-      for (const c of preset.additional || []) if (c.field > index) c.field--;
+      for (const change of preset.additional || []) if (change.field > index) change.field--;
     }
-    writeDraft(db);
+    writeDraft(database);
     cheatDialog();
   },
   'cheats-add-preset': () => {
-    const db = databaseDraft(),
-      p = db.profiles[state.cheatProfile];
-    if (!p.fields.length) throw new Error('Add a field first.');
-    p.presets.push({ label: 'New preset', field: 0, value: p.fields[0].min });
-    writeDraft(db);
+    const database = databaseDraft();
+    const profile = database.profiles[state.cheatProfile];
+    if (!profile.fields.length) throw new Error('Add a field first.');
+    profile.presets.push({ label: 'New preset', field: 0, value: profile.fields[0].min });
+    writeDraft(database);
     cheatDialog();
   },
   'cheats-remove-preset': (button) => {
-    const db = databaseDraft();
-    db.profiles[state.cheatProfile].presets.splice(Number(button.dataset.index), 1);
-    writeDraft(db);
+    const database = databaseDraft();
+    database.profiles[state.cheatProfile].presets.splice(Number(button.dataset.index), 1);
+    writeDraft(database);
     cheatDialog();
   },
 });
+
 document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-action]');
   if (button) {
