@@ -1,5 +1,33 @@
 #!/usr/bin/env python3
-"""Identify and organize a 3DO USB library; preview first, apply explicitly."""
+"""Identify and organize a 3DO USB library; preview first, apply explicitly.
+
+Usage:
+  organize-library.py scan USB_ROOT [--plan PLAN.json] [--quick] [--overrides FILE]
+                      [--categories FILE] [--offline] [--refresh-catalog]
+                      [--dat FILE] [--launchbox FILE]
+  organize-library.py apply USB_ROOT [--plan PLAN.json] [--accept-name-matches]
+                      [--no-covers | --cover-dir DIR] [--preview-dir DIR ...]
+  organize-library.py report PLAN.json [--output FILE.html]
+  organize-library.py register USB_ROOT DISC --title TITLE --category CATEGORY
+  organize-library.py undo USB_ROOT JOURNAL
+  organize-library.py clean-empty USB_ROOT [--apply]
+
+How it works:
+  1. scan reads every disc image on the drive (.iso, or .cue with its
+     tracks), identifies it against the Redump catalog (by checksum when
+     possible, otherwise by file name), picks a category, and writes a plan
+     (JSON) plus an HTML report. Nothing on the drive changes.
+  2. apply carries out a reviewed plan: each identified disc moves to
+     Category/Region/Game/, covers and previews are added, and the menu's
+     indexes and the library database (.ohmy3do/library.json and
+     library.sqlite) are rebuilt. Every change is recorded in an undo
+     journal under .ohmy3do/transactions/.
+  3. undo reverses an applied journal, refusing if files changed since.
+
+register adds a disc the catalog doesn't know without moving it, and
+clean-empty removes empty folders left behind. library-maintenance.py and
+the desktop app build on the same files.
+"""
 import argparse
 import base64
 import collections
@@ -25,6 +53,7 @@ import zipfile
 
 
 def module(name):
+    """Load a sibling tool (for example "index-media") as a module."""
     spec = importlib.util.spec_from_file_location(
         name.replace("-", "_"), Path(__file__).with_name(name + ".py")
     )
@@ -37,7 +66,11 @@ catalog_tools = module("library-catalog")
 index_tools = module("index-media")
 sector_tools = module("sector-codec")
 SCANNER_VERSION = "1.0.3"
+
+# Top-level folders that never hold games to organize.
 SKIP = {".ohmy3do", "$boot", "system"}
+
+# The menu's support files an apply may rewrite, checked before it starts.
 STATE_FILES = [
     "favorites.txt",
     "recent.txt",
@@ -49,6 +82,10 @@ STATE_FILES = [
     ".ohmy3do/library.json",
     ".ohmy3do/library.sqlite",
 ]
+
+# The built-in categories. A drive can rename, hide or add categories in
+# .ohmy3do/categories.json; these names stay the "roles" that say where
+# newly organized discs of each kind go.
 CATEGORIES = (
     "Games",
     "Demos",
@@ -60,52 +97,86 @@ CATEGORIES = (
     "Adult",
 )
 
+MAX_CATEGORIES = 32
+MAX_CATEGORY_CONFIG_BYTES = 8192
+
+# Characters FAT and Windows forbid in names.
+FORBIDDEN_NAME_CHARACTERS = '<>:"/\\|?*'
+
+# Windows marks junctions and other reparse points with this attribute.
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def default_category_config():
+    """The configuration used when a drive has no categories.json: the
+    built-in categories, all visible, each the destination for its role."""
+    rows = [
+        dict(id="category-" + str(i), name=name, hidden=False) for i, name in enumerate(CATEGORIES)
+    ]
+    return dict(
+        schema=1,
+        categories=rows,
+        defaults={name: row["id"] for name, row in zip(CATEGORIES, rows)},
+    )
+
+
+def is_valid_category_name(name, names_so_far):
+    """A folder name FAT and the menu can use, not already taken (ignoring
+    case), and not .ohmy3do or a name Windows reserves."""
+    base = name.split(".")[0].upper()
+    return not (
+        not name
+        or len(name) > 48
+        or name.strip() != name
+        or name.endswith(".")
+        or any(ord(c) < 32 or ord(c) >= 127 or c in FORBIDDEN_NAME_CHARACTERS for c in name)
+        or name.casefold() in names_so_far
+        or name.casefold() == ".ohmy3do"
+        or base in ("CON", "PRN", "AUX", "NUL")
+        or re.fullmatch(r"(COM|LPT)[1-9]", base)
+    )
+
 
 def category_config(root):
+    """The drive's category configuration (.ohmy3do/categories.json).
+
+    Returns {"schema": 1, "categories": [{"id", "name", "hidden"}],
+    "defaults": {built-in category: id}}. Raises ValueError for a damaged
+    file: bad ids, duplicate or unusable names, or defaults that don't name
+    a category for every built-in role.
+    """
     path = relative_path(root, ".ohmy3do/categories.json")
     if not path.exists():
-        rows = [
-            dict(id="category-" + str(i), name=name, hidden=False)
-            for i, name in enumerate(CATEGORIES)
-        ]
-        return dict(
-            schema=1,
-            categories=rows,
-            defaults={name: row["id"] for name, row in zip(CATEGORIES, rows)},
-        )
+        return default_category_config()
     raw = path.read_bytes()
-    if len(raw) > 8192:
+    if len(raw) > MAX_CATEGORY_CONFIG_BYTES:
         raise ValueError("Category configuration exceeds 8 KiB")
+    # The menu writes into a fixed buffer, so the text may be NUL-padded.
     config = json.loads(raw.split(b"\0", 1)[0])
+
     rows = config.get("categories", [])
+    if (
+        config.get("schema") != 1
+        or not isinstance(rows, list)
+        or not 1 <= len(rows) <= MAX_CATEGORIES
+    ):
+        raise ValueError("Invalid category configuration")
     ids = set()
     names = set()
-    if config.get("schema") != 1 or not isinstance(rows, list) or not 1 <= len(rows) <= 32:
-        raise ValueError("Invalid category configuration")
     for row in rows:
         name = row.get("name", "")
         identifier = row.get("id", "")
-        base = name.split(".")[0].upper()
         if (
             not isinstance(row.get("hidden"), bool)
             or not re.fullmatch(r"[A-Za-z0-9-]{1,40}", identifier)
             or identifier in ids
         ):
             raise ValueError("Invalid category identifier or visibility")
-        if (
-            not name
-            or len(name) > 48
-            or name.strip() != name
-            or name.endswith(".")
-            or any(ord(c) < 32 or ord(c) >= 127 or c in '<>:"/\\|?*' for c in name)
-            or name.casefold() in names
-            or name.casefold() == ".ohmy3do"
-            or base in ("CON", "PRN", "AUX", "NUL")
-            or re.fullmatch(r"(COM|LPT)[1-9]", base)
-        ):
+        if not is_valid_category_name(name, names):
             raise ValueError("Invalid category name")
         ids.add(identifier)
         names.add(name.casefold())
+
     defaults = config.get("defaults", {})
     if set(defaults) != set(CATEGORIES) or any(
         identifier not in ids for identifier in defaults.values()
@@ -115,24 +186,35 @@ def category_config(root):
 
 
 def transfer_categories(source, target):
+    """The category configuration to give the drive `target` when copying the
+    library `source` to it.
+
+    The library's categories win, but the drive keeps its own hidden
+    settings, and categories only the drive has are kept when the drive was
+    configured or has a folder for them. Raises ValueError when the result
+    has too many categories or two with the same name.
+    """
     config = category_config(source)
     previous = category_config(target)
     configured = relative_path(target, ".ohmy3do/categories.json").exists()
+
     hidden = {c["id"]: c["hidden"] for c in previous["categories"]}
     for category in config["categories"]:
         if configured or hidden.get(category["id"], False):
             category["hidden"] = hidden.get(category["id"], category["hidden"])
+
     known = {c["id"] for c in config["categories"]}
     for category in previous["categories"]:
         if category["id"] not in known and (
             configured or relative_path(target, category["name"]).exists()
         ):
             config["categories"].append(category)
-    if len(config["categories"]) > 32 or len(
-        {c["name"].casefold() for c in config["categories"]}
-    ) != len(config["categories"]):
+
+    names = {c["name"].casefold() for c in config["categories"]}
+    if len(config["categories"]) > MAX_CATEGORIES or len(names) != len(config["categories"]):
         raise ValueError(
-            "Library and drive categories conflict; resolve them in Manage categories before copying"
+            "Library and drive categories conflict; "
+            "resolve them in Manage categories before copying"
         )
     return config
 
@@ -141,6 +223,7 @@ def category_names(root):
     return tuple(row["name"] for row in category_config(root)["categories"])
 
 
+# Region words found in file names and folder names, and what they mean.
 REGIONS = {
     "us": "USA",
     "usa": "USA",
@@ -161,24 +244,39 @@ REGIONS = {
     "australia": "Australia",
     "canada": "Canada",
 }
+
+# A disc number in brackets: "(Disc 2)", "(CD 1 of 2)".
 DISC = re.compile(r"\(\s*(?:disc|disk|cd)\s*0*(\d+)(?:\s+of\s+\d+)?\s*\)", re.I)
+
+# A disc number at the end of a name: "Game - Disc 2", "Game_CD1".
 DISC_SUFFIX = re.compile(
     r"(?:\s*[-_.]\s*|\s+)(?:disc|disk|cd)[\s_.-]*0*(\d+)(?:\s+of\s+\d+)?$", re.I
 )
+
+# A CUE sheet's FILE line, captured as: the "FILE " prefix, the name (quoted
+# or bare), the rest of the line (the file type), and any carriage return.
 FILE_LINE = re.compile(
     r'^([ \t]*FILE[ \t]+)(?:"([^"\r\n]+)"|([^\s]+))([ \t]+\S+[^\r\n]*)(\r?)$', re.I | re.M
 )
 
+MIB = 1024 * 1024
+MAX_CUE_BYTES = 256 * 1024
+
 
 def digest(path):
+    """SHA-1 of a file, read a block at a time."""
     sha = hashlib.sha1()
     with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        for chunk in iter(lambda: stream.read(MIB), b""):
             sha.update(chunk)
     return sha.hexdigest()
 
 
 def fingerprint(path, hashes=True):
+    """A file's size and modification time, plus its SHA-1 when `hashes`.
+
+    Raises ValueError if the file changes while it is being read.
+    """
     before = path.stat()
     result = dict(size=before.st_size, mtime_ns=before.st_mtime_ns)
     if hashes:
@@ -189,8 +287,18 @@ def fingerprint(path, hashes=True):
     return result
 
 
+def is_reparse_point(path):
+    return bool(getattr(path.lstat(), "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def relative_path(root, relative):
-    """Reject traversal, symlinks and names Windows/FAT cannot distinguish."""
+    """Reject traversal, symlinks and names Windows/FAT cannot distinguish.
+
+    `relative` is a path inside the drive written with forward slashes.
+    Returns root/relative after checking each part: no "." or "..", no
+    trailing space or dot, no forbidden characters, no existing entry that
+    differs only in case, and no links or junctions.
+    """
     if not isinstance(relative, str) or not relative or "\\" in relative:
         raise ValueError(f"Invalid relative path: {relative!r}")
     parts = PurePosixPath(relative).parts
@@ -203,6 +311,7 @@ def relative_path(root, relative):
             or any(ord(c) < 32 or ord(c) == 127 or c in ':*?"<>|' for c in part)
         ):
             raise ValueError(f"Unsafe USB path: {relative}")
+
     path = root
     for part in parts:
         if path.exists() and not path.is_dir():
@@ -212,14 +321,15 @@ def relative_path(root, relative):
             if any(name != part for name in matches):
                 raise ValueError(f"Path differs only in case from an existing entry: {relative}")
         path = path / part
-        if path.is_symlink() or (
-            path.exists() and getattr(path.lstat(), "st_file_attributes", 0) & 0x400
-        ):
+        if path.is_symlink() or (path.exists() and is_reparse_point(path)):
             raise ValueError(f"Symlinks/junctions are not supported: {relative}")
     return path
 
 
 def safe_name(name, maximum=110):
+    """`name` made safe as a FAT file or folder name of at most `maximum`
+    UTF-8 bytes. Forbidden characters become " - "; a name that is too long
+    is cut and given a short hash so different long names stay different."""
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', " - ", name)
     name = re.sub(r"\s+", " ", name).strip(" .")
     if not name:
@@ -234,6 +344,7 @@ def safe_name(name, maximum=110):
 
 
 def region_of(name):
+    """The regions named in a title's bracketed groups: "(USA, Europe)"."""
     result = set()
     for group in re.findall(r"\(([^)]*)\)", name):
         for part in re.split(r"[,/-]", group):
@@ -243,11 +354,14 @@ def region_of(name):
 
 
 def disc_of(name):
+    """The disc number in a name, or None."""
     match = DISC.search(name) or DISC_SUFFIX.search(name)
     return int(match[1]) if match else None
 
 
 def identification_title(name):
+    """A name's normalized title (see library-catalog.py's title_key), with a
+    trailing disc number removed."""
     return catalog_tools.title_key(DISC_SUFFIX.sub("", name).strip())
 
 
@@ -256,6 +370,8 @@ def without_disc(name):
 
 
 def folder_regions(source):
+    """Regions named by the folders a disc sits in ("USA/Game.iso"), ignoring
+    a leading sort number such as "01 - "."""
     hints = set()
     for part in PurePosixPath(source).parts[:-1]:
         token = re.sub(r"^\d+[\s._-]+", "", part).strip().casefold()
@@ -265,22 +381,30 @@ def folder_regions(source):
 
 
 def product_codes(name):
-    return [
-        tag.strip()
-        for tag in re.findall(r"\[([^]]+)\]", name)
-        if not tag.casefold().startswith("variant ")
-        and len(tag.strip()) >= 4
-        and re.fullmatch(r"[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*", tag.strip())
-        and re.search(r"[A-Za-z]", tag)
-        and re.search(r"\d", tag)
-    ]
+    """Product codes in square brackets ("[T-6801G]"): words of letters and
+    digits containing both, at least 4 characters. "[Variant ...]" tags are
+    not codes."""
+    codes = []
+    for tag in re.findall(r"\[([^]]+)\]", name):
+        stripped = tag.strip()
+        if (
+            not tag.casefold().startswith("variant ")
+            and len(stripped) >= 4
+            and re.fullmatch(r"[A-Za-z0-9]+(?:[ ._-][A-Za-z0-9]+)*", stripped)
+            and re.search(r"[A-Za-z]", tag)
+            and re.search(r"\d", tag)
+        ):
+            codes.append(stripped)
+    return codes
 
 
 def serial_key(serial):
+    """A serial reduced to lowercase letters and digits, for comparison."""
     return re.sub(r"[^a-z0-9]", "", serial.casefold())
 
 
 def catalog_serials(game):
+    """Every serial a catalog game lists (its own and its tracks'), as keys."""
     result = set()
     for serial in [game.get("serial", "")] + [r.get("serial", "") for r in game["roms"]]:
         for part in re.split(r"[,;/]", serial):
@@ -290,6 +414,8 @@ def catalog_serials(game):
 
 
 def disc_stem(name, maximum=110):
+    """A file name (without extension) for a disc: the title made safe, its
+    trailing [tags] kept when they fit, and " (Disc N)" when numbered."""
     number = disc_of(name)
     base = without_disc(name)
     variant = re.search(r"\s*((?:\[[^][]+\]\s*)+)$", base)
@@ -298,8 +424,21 @@ def disc_stem(name, maximum=110):
     suffix = (" " + variant[1].strip()) if variant else ""
     if variant:
         base = base[: variant.start()].strip()
-    suffix += f" (Disc {number})" if number is not None else ""
+    if number is not None:
+        suffix += f" (Disc {number})"
     return safe_name(base, maximum - len(suffix)) + suffix
+
+
+def dump_signature(game):
+    """A game's tracks as sorted (size, best checksum) pairs, in JSON."""
+    identity = []
+    for rom in game["roms"]:
+        checksum = next(
+            (key + ":" + rom[key].lower() for key in ("sha1", "md5", "crc") if rom.get(key)),
+            "unknown",
+        )
+        identity.append((str(rom["size"]), checksum))
+    return json.dumps(sorted(identity), separators=(",", ":"))
 
 
 def release_records(games):
@@ -307,38 +446,30 @@ def release_records(games):
 
     Serial-only duplicates with identical data describe the same dump. The
     fallback code identifies a disc dump, not an inferred multi-disc edition.
+
+    Returns copies of the catalog games with "_release_name" (the name the
+    disc is filed under), "_dump_signature" and "_variant" (an 8-digit code
+    when several different dumps share one name, else None).
     """
-    result, signatures = [], collections.defaultdict(set)
+    result = []
+    signatures = collections.defaultdict(set)
     for game in games:
         row = dict(game)
+        # The track file names may carry labels the game title lacks.
         stems = {
             re.sub(r"\s*\(Track\s+\d+\)\s*$", "", Path(rom["name"]).stem, flags=re.I).strip()
             for rom in game["roms"]
             if rom.get("name")
         }
         name = next(iter(stems)) if len(stems) == 1 else game["name"]
-        if catalog_tools.title_key(name) != catalog_tools.title_key(game["name"]) or disc_of(
-            name
-        ) != disc_of(game["name"]):
+        same_title = catalog_tools.title_key(name) == catalog_tools.title_key(game["name"])
+        if not same_title or disc_of(name) != disc_of(game["name"]):
             name = game["name"]
-        identity = sorted(
-            (
-                str(rom["size"]),
-                next(
-                    (
-                        key + ":" + rom[key].lower()
-                        for key in ("sha1", "md5", "crc")
-                        if rom.get(key)
-                    ),
-                    "unknown",
-                ),
-            )
-            for rom in game["roms"]
-        )
-        row["_dump_signature"] = json.dumps(identity, separators=(",", ":"))
+        row["_dump_signature"] = dump_signature(game)
         row["_release_name"] = name
         signatures[name.casefold()].add(row["_dump_signature"])
         result.append(row)
+
     for row in result:
         row["_variant"] = None
         if len(signatures[row["_release_name"].casefold()]) > 1:
@@ -346,26 +477,39 @@ def release_records(games):
             row["_variant"] = code
             number = disc_of(row["_release_name"])
             name = without_disc(row["_release_name"])
-            row["_release_name"] = (
-                name + f" [Variant {code}]" + (f" (Disc {number})" if number is not None else "")
-            )
+            disc = f" (Disc {number})" if number is not None else ""
+            row["_release_name"] = name + f" [Variant {code}]" + disc
     return result
 
 
+def decode_cue(raw):
+    """CUE text and the encoding to write it back with: UTF-8 (keeping a
+    byte-order mark if there was one), or Windows-1252 for older sheets."""
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252"), "cp1252"
+    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+    return text, encoding
+
+
 def cue_files(root, relative):
+    """Read the CUE sheet at `relative` and check the files it names.
+
+    Every FILE must be a sibling of the sheet (matched ignoring case) that
+    exists, isn't another CUE sheet and isn't the menu's boot image.
+    Returns (the files' paths relative to the drive, the sheet's text, its
+    encoding, its raw bytes). The text keeps every non-FILE line verbatim.
+    """
     path = relative_path(root, relative)
-    if path.stat().st_size > 256 * 1024:
+    if path.stat().st_size > MAX_CUE_BYTES:
         raise ValueError("CUE exceeds 256 KiB")
     raw = path.read_bytes()
-    if len(raw) > 256 * 1024:
+    if len(raw) > MAX_CUE_BYTES:
         raise ValueError("CUE exceeds 256 KiB")
     # Preserve the original encoding and all non-FILE lines verbatim.
-    try:
-        text, encoding = raw.decode("utf-8-sig"), (
-            "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
-        )
-    except UnicodeDecodeError:
-        text, encoding = raw.decode("cp1252"), "cp1252"
+    text, encoding = decode_cue(raw)
+
     refs = []
     for match in FILE_LINE.finditer(text):
         name = match[2] or match[3]
@@ -385,14 +529,18 @@ def cue_files(root, relative):
             raise ValueError(f"A CUE track cannot be another CUE: {ref}")
         if ref not in refs:
             refs.append(ref)
+
     if not refs:
         raise ValueError("No FILE references in CUE")
+    # A FILE line FILE_LINE can't read would otherwise be silently skipped.
     if len(re.findall(r"^\s*FILE\b", text, re.I | re.M)) != len(list(FILE_LINE.finditer(text))):
         raise ValueError("Cannot parse every CUE FILE directive")
     return refs, text, encoding, raw
 
 
-def scan_units(root):
+def disc_image_paths(root):
+    """Every .iso and .cue on the drive, relative to its root, skipping links,
+    hidden and system folders, and the menu's own images."""
     paths = []
 
     def walk(directory):
@@ -405,56 +553,96 @@ def scan_units(root):
             elif path.suffix.lower() in (".iso", ".cue"):
                 if path.name.lower() == "oh my 3do - folder navigation helper (keep).iso":
                     continue
-                rel = path.relative_to(root).as_posix()
                 if path.parent == root and path.name.lower() in ("boot.iso", "menu-demo.iso"):
                     continue
-                paths.append(rel)
+                paths.append(path.relative_to(root).as_posix())
 
     walk(root)
-    units, consumed = [], set()
-    for source in sorted(paths, key=lambda p: (Path(p).suffix.lower() != ".cue", p)):
+    return paths
+
+
+def files_named_by_broken_cue(root, source):
+    """The existing sibling files a CUE sheet that failed to parse still names.
+
+    Even a broken CUE may reference an existing ISO. Keep that ISO with the
+    unresolved set rather than moving it separately.
+    """
+    path = relative_path(root, source)
+    if path.stat().st_size > MAX_CUE_BYTES:
+        return []
+    text = path.read_bytes().decode("utf-8-sig", errors="replace")
+    found = []
+    for match in FILE_LINE.finditer(text):
+        name = match[2] or match[3]
+        if "/" in name or "\\" in name:
+            continue
+        for sibling in path.parent.iterdir():
+            if (
+                sibling.name.casefold() == name.casefold()
+                and sibling.is_file()
+                and not sibling.is_symlink()
+            ):
+                found.append(sibling.relative_to(root).as_posix())
+    return found
+
+
+def cue_unit(root, source, consumed):
+    """The disc entry for a CUE sheet, adding its track files to `consumed`.
+
+    A CUE that only wraps a plain .iso becomes an entry for the .iso, with
+    the sheet kept as an alias to be archived when organized.
+    """
+    unit = dict(source=source, files=[source])
+    try:
+        refs, text, encoding, raw = cue_files(root, source)
+        unit.update(files=[source] + refs, cue_text=text, cue_encoding=encoding)
+        consumed.update(refs)
+        if len(refs) == 1 and index_tools.redundant_iso_name(text):
+            unit.update(
+                source=refs[0],
+                name_source=source,
+                files=[refs[0], source],
+                ignored_cues=[source],
+                aliases=[source],
+            )
+    except (ValueError, OSError) as error:
+        unit["error"] = str(error)
+        for ref in files_named_by_broken_cue(root, source):
+            if ref not in unit["files"]:
+                unit["files"].append(ref)
+                consumed.add(ref)
+    return unit
+
+
+def scan_units(root):
+    """Group the drive's disc images into disc entries ("units").
+
+    Each unit is a dict with "source" (the .iso or .cue that names the disc)
+    and "files" (the source plus any track files), and may have:
+      cue_text, cue_encoding   the sheet's text, for CUE entries
+      name_source, aliases, ignored_cues
+                               for an .iso wrapped by a redundant CUE
+      error                    why the entry can't be organized
+      invalid_data             the data isn't a disc image (empty or archive)
+    """
+    units = []
+    consumed = set()  # track files already claimed by a CUE sheet
+    # CUE sheets first, so their tracks aren't also treated as discs.
+    paths = sorted(disc_image_paths(root), key=lambda p: (Path(p).suffix.lower() != ".cue", p))
+    for source in paths:
         if source in consumed:
             continue
-        unit = dict(source=source, files=[source])
         if Path(source).suffix.lower() == ".cue":
-            try:
-                refs, text, encoding, raw = cue_files(root, source)
-                unit.update(files=[source] + refs, cue_text=text, cue_encoding=encoding)
-                consumed.update(refs)
-                if len(refs) == 1 and index_tools.redundant_iso_name(text):
-                    unit.update(
-                        source=refs[0],
-                        name_source=source,
-                        files=[refs[0], source],
-                        ignored_cues=[source],
-                        aliases=[source],
-                    )
-            except (ValueError, OSError) as error:
-                unit["error"] = str(error)
-                # Even a broken CUE may reference an existing ISO. Keep that
-                # ISO with the unresolved set rather than moving it separately.
-                path = relative_path(root, source)
-                if path.stat().st_size <= 256 * 1024:
-                    text = path.read_bytes().decode("utf-8-sig", errors="replace")
-                    for match in FILE_LINE.finditer(text):
-                        name = match[2] or match[3]
-                        if "/" in name or "\\" in name:
-                            continue
-                        for sibling in path.parent.iterdir():
-                            if (
-                                sibling.name.casefold() == name.casefold()
-                                and sibling.is_file()
-                                and not sibling.is_symlink()
-                            ):
-                                ref = sibling.relative_to(root).as_posix()
-                                if ref not in unit["files"]:
-                                    unit["files"].append(ref)
-                                    consumed.add(ref)
-        units.append(unit)
+            units.append(cue_unit(root, source, consumed))
+        else:
+            units.append(dict(source=source, files=[source]))
+
+    # Files claimed by more than one entry can't be moved safely.
     owners = collections.Counter(file for unit in units for file in unit["files"])
     for unit in units:
         if any(owners[file] > 1 for file in unit["files"]):
             if unit.get("ignored_cues"):
+                # Treat the wrapping CUE as the entry again.
                 cue = unit["ignored_cues"][0]
                 unit.update(source=cue, files=[cue] + [f for f in unit["files"] if f != cue])
                 unit.pop("ignored_cues")
@@ -471,101 +659,183 @@ def scan_units(root):
     return units
 
 
-def identify(unit, games, stats, override=None, quick=False):
-    if override:
-        selected = [g for g in games if g["_release_name"] == override]
-        if not selected:
-            selected = [g for g in games if g["name"] == override]
-        if not selected or len({g["_release_name"] for g in selected}) != 1:
-            return (
-                None,
-                "ambiguous",
-                "Override needs an exact release/variant name",
-                sorted({g["_release_name"] for g in selected}),
-            )
+# identify() and its steps return (game or None, confidence, reason,
+# suggestions). The confidence says how the disc was identified:
+#   manual              chosen in an overrides file
+#   checksum            every data file's SHA-1 and size match a release
+#   converted-checksum  an .iso matches once rebuilt as full 2352-byte sectors
+#   data-track          only the first data track matches (others missing)
+#   filename            the file name names one release (not checksum-verified)
+#   unverified-release  the title matches one release whose labels differ
+#   ambiguous           more than one release fits; an override is needed
+#   unmatched           nothing safe matches; the file stays in place
+
+
+def identify_override(games, override):
+    """The release an overrides file names, by exact release or catalog name."""
+    selected = [g for g in games if g["_release_name"] == override]
+    if not selected:
+        selected = [g for g in games if g["name"] == override]
+    names = sorted({g["_release_name"] for g in selected})
+    if not selected or len(names) != 1:
+        return None, "ambiguous", "Override needs an exact release/variant name", names
+    return (
+        selected[0],
+        "manual",
+        "Explicit overrides file; catalog dump checksum not verified",
+        [],
+    )
+
+
+def identify_by_checksum(games, data):
+    """A release whose tracks match the data files' sizes and SHA-1s exactly.
+    Returns None when nothing matches."""
+    checksums = sorted((f["size"], f["sha1"].lower()) for f in data)
+    matches = [
+        g
+        for g in games
+        if sorted((int(r["size"]), r.get("sha1", "").lower()) for r in g["roms"]) == checksums
+    ]
+    if matches and len({g["_release_name"].casefold() for g in matches}) == 1:
+        return matches[0], "checksum", "Complete data-file SHA-1 and size match", []
+    if len(matches) > 1:
         return (
-            selected[0],
-            "manual",
-            "Explicit overrides file; catalog dump checksum not verified",
+            None,
+            "ambiguous",
+            "Checksums identify multiple catalog releases",
+            [g["_release_name"] for g in matches],
+        )
+    return None
+
+
+def is_first_track(rom):
+    return re.search(r"(?:\(Track\s+0*1\)|\btrack0*1)\.bin$", rom.get("name", ""), re.I)
+
+
+def identify_by_reconstruction(games, raw):
+    """Match an .iso's rebuilt 2352-byte-sector checksum (see sector-codec.py)
+    against single-track releases, or against the first track of
+    multi-track releases. Returns None when nothing matches."""
+    key = (raw["size"], raw["sha1"].lower())
+    complete = []
+    partial = []
+    for game in games:
+        roms = game["roms"]
+        if len(roms) == 1:
+            if (int(roms[0]["size"]), roms[0].get("sha1", "").lower()) == key:
+                complete.append(game)
+        else:
+            # DAT ordering is not a track number. Only a named first
+            # track can identify data when the other tracks are absent.
+            first = [r for r in roms if is_first_track(r)]
+            if len(first) == 1 and (int(first[0]["size"]), first[0].get("sha1", "").lower()) == key:
+                partial.append(game)
+
+    names = sorted({g["_release_name"] for g in complete + partial})
+    if len(names) > 1:
+        return (
+            None,
+            "ambiguous",
+            "Reconstructed data checksum identifies multiple releases; exact disc unresolved",
+            names,
+        )
+    if complete:
+        return (
+            complete[0],
+            "converted-checksum",
+            "Complete single-track SHA-1 and size match after MODE1/2048 reconstruction (LBA 0); "
+            "source ISO unchanged",
             [],
         )
-    data = [stats[f] for f in unit["files"] if Path(f).suffix.lower() != ".cue"]
-    matches = []
-    if not quick:
-        checksums = sorted((f["size"], f["sha1"].lower()) for f in data)
-        matches = [
-            g
-            for g in games
-            if sorted((int(r["size"]), r.get("sha1", "").lower()) for r in g["roms"]) == checksums
-        ]
-        if matches and len({g["_release_name"].casefold() for g in matches}) == 1:
-            return matches[0], "checksum", "Complete data-file SHA-1 and size match", []
-        if len(matches) > 1:
-            return (
-                None,
-                "ambiguous",
-                "Checksums identify multiple catalog releases",
-                [g["_release_name"] for g in matches],
-            )
-        if len(data) == 1 and data[0].get("mode1_raw"):
-            raw = data[0]["mode1_raw"]
-            key = (raw["size"], raw["sha1"].lower())
-            complete, partial = [], []
-            for game in games:
-                roms = game["roms"]
-                if len(roms) == 1:
-                    if (int(roms[0]["size"]), roms[0].get("sha1", "").lower()) == key:
-                        complete.append(game)
-                else:
-                    # DAT ordering is not a track number. Only a named first
-                    # track can identify data when the other tracks are absent.
-                    first = [
-                        r
-                        for r in roms
-                        if re.search(
-                            r"(?:\(Track\s+0*1\)|\btrack0*1)\.bin$", r.get("name", ""), re.I
-                        )
-                    ]
-                    if (
-                        len(first) == 1
-                        and (int(first[0]["size"]), first[0].get("sha1", "").lower()) == key
-                    ):
-                        partial.append(game)
-            names = sorted({g["_release_name"] for g in complete + partial})
-            if len(names) > 1:
-                return (
-                    None,
-                    "ambiguous",
-                    "Reconstructed data checksum identifies multiple releases; exact disc unresolved",
-                    names,
-                )
-            if complete:
-                return (
-                    complete[0],
-                    "converted-checksum",
-                    "Complete single-track SHA-1 and size match after MODE1/2048 reconstruction (LBA 0); source ISO unchanged",
-                    [],
-                )
-            if partial:
-                return (
-                    partial[0],
-                    "data-track",
-                    "Reconstructed first data-track SHA-1 and size match; remaining catalog tracks are absent and unverified; review required",
-                    [],
-                )
-    name = Path(unit.get("name_source", unit["source"])).stem
+    if partial:
+        return (
+            partial[0],
+            "data-track",
+            "Reconstructed first data-track SHA-1 and size match; remaining catalog tracks are "
+            "absent and unverified; review required",
+            [],
+        )
+    return None
+
+
+def exact_name_matches(games, name):
+    """Releases whose name (or file name) is exactly `name`, ignoring case;
+    otherwise the catalog games of that name if they are one release."""
+    folded = name.casefold()
     exact = [
         g
         for g in games
-        if name.casefold()
-        in (g["_release_name"].casefold(), disc_stem(g["_release_name"]).casefold())
+        if folded in (g["_release_name"].casefold(), disc_stem(g["_release_name"]).casefold())
     ]
     if not exact:
-        aliases = [g for g in games if g["name"].casefold() == name.casefold()]
+        aliases = [g for g in games if g["name"].casefold() == folded]
         if len({g["_release_name"].casefold() for g in aliases}) == 1:
             exact = aliases
+    return exact
+
+
+def special_release_tags(name):
+    """Bracketed tags marking a revision, beta, prototype, demo, sample,
+    unlicensed or alternate release."""
+    return {
+        tag.casefold()
+        for tag in re.findall(r"\(([^)]*)\)", name)
+        if re.search(r"\b(rev|beta|proto|demo|sample|unl|alt)\b", tag, re.I)
+    }
+
+
+def game_level_entry(candidates, name, codes, regions, hint):
+    """A filename code absent from Redump can still identify a game-level
+    entry. Preserve it without assigning an unsupported Redump edition.
+
+    Returns a match built from the candidates' shared LaunchBox metadata,
+    or None when they don't share one.
+    """
+    metadata = {json.dumps(g.get("metadata", {}), sort_keys=True) for g in candidates}
+    if len(metadata) != 1 or not candidates[0].get("metadata"):
+        return None
+    row = dict(candidates[0])
+    title = (
+        row["metadata"].get("title")
+        or re.split(r"[\[(]", without_disc(name), maxsplit=1)[0].strip()
+    )
+    region = next(iter(regions))
+    base = f"{title} ({region})"
+    label = base + " " + " ".join("[" + code + "]" for code in codes)
+    number = disc_of(name)
+    disc = f" (Disc {number})" if number is not None else ""
+    row.update(
+        name=base + disc,
+        region=region,
+        _release_name=label + disc,
+        _variant="; ".join(codes),
+        _edition_unresolved=True,
+        roms=[],
+    )
+    return (
+        row,
+        "filename",
+        "Game-level title/region match"
+        + hint
+        + "; source code preserved; exact edition unresolved; dump checksum not verified",
+        [],
+    )
+
+
+def identify_by_name(unit, games):
+    """Identify a disc from its file name (and folder), never guessing.
+
+    In order: an exact release name; then the same title and disc number,
+    narrowed by region (from the name, or a single region folder) and by
+    product codes in the name. A unique result that doesn't silently pick a
+    revision, demo or other special release is accepted; otherwise the
+    candidates are returned as suggestions.
+    """
+    name = Path(unit.get("name_source", unit["source"])).stem
+    exact = exact_name_matches(games, name)
     if exact:
         return exact[0], "filename", "Exact catalog filename; dump checksum not verified", []
+
     title = identification_title(name)
     candidates = [
         g
@@ -573,6 +843,7 @@ def identify(unit, games, stats, override=None, quick=False):
         if identification_title(g["name"]) == title and disc_of(g["name"]) == disc_of(name)
     ]
     title_candidates = candidates
+
     regions = region_of(name)
     hint = ""
     if not regions:
@@ -582,16 +853,12 @@ def identify(unit, games, stats, override=None, quick=False):
             hint = " using folder region " + next(iter(folders))
     if regions:
         candidates = [g for g in candidates if regions <= region_of(g["name"])]
+
     codes = product_codes(name)
     if codes:
-        known_serials = [
-            g
-            for g in title_candidates
-            if {serial_key(code) for code in codes} <= catalog_serials(g)
-        ]
-        serial_matches = [
-            g for g in candidates if {serial_key(code) for code in codes} <= catalog_serials(g)
-        ]
+        code_keys = {serial_key(code) for code in codes}
+        known_serials = [g for g in title_candidates if code_keys <= catalog_serials(g)]
+        serial_matches = [g for g in candidates if code_keys <= catalog_serials(g)]
         if known_serials and not serial_matches:
             return (
                 None,
@@ -599,23 +866,19 @@ def identify(unit, games, stats, override=None, quick=False):
                 "Catalog serial conflicts with the filename/folder region; explicit override needed",
                 sorted({g["_release_name"] for g in known_serials}),
             )
-        serial_names = {g["_release_name"] for g in serial_matches}
-        if len(serial_names) == 1:
+        if len({g["_release_name"] for g in serial_matches}) == 1:
             return (
                 serial_matches[0],
                 "filename",
                 "Exact title/disc/catalog serial match" + hint + "; dump checksum not verified",
                 [],
             )
+
+    # One candidate per release name.
     candidates = list({g["_release_name"].casefold(): g for g in candidates}.values())
     # Do not silently choose a revision, prototype, demo or alternate language.
     if len(candidates) == 1 and not codes:
-        tags = lambda s: {
-            x.casefold()
-            for x in re.findall(r"\(([^)]*)\)", s)
-            if re.search(r"\b(rev|beta|proto|demo|sample|unl|alt)\b", x, re.I)
-        }
-        if tags(name) == tags(candidates[0]["_release_name"]):
+        if special_release_tags(name) == special_release_tags(candidates[0]["_release_name"]):
             return (
                 candidates[0],
                 "filename",
@@ -623,40 +886,15 @@ def identify(unit, games, stats, override=None, quick=False):
                 [],
             )
     if codes and candidates and len(regions) == 1:
-        # A filename code absent from Redump can still identify a game-level
-        # entry. Preserve it without assigning an unsupported Redump edition.
-        metadata = {json.dumps(g.get("metadata", {}), sort_keys=True) for g in candidates}
-        if len(metadata) == 1 and candidates[0].get("metadata"):
-            row = dict(candidates[0])
-            title = (
-                row["metadata"].get("title")
-                or re.split(r"[\[(]", without_disc(name), maxsplit=1)[0].strip()
-            )
-            region = next(iter(regions))
-            base = f"{title} ({region})"
-            label = base + " " + " ".join("[" + code + "]" for code in codes)
-            number = disc_of(name)
-            row.update(
-                name=base + (f" (Disc {number})" if number is not None else ""),
-                region=region,
-                _release_name=label + (f" (Disc {number})" if number is not None else ""),
-                _variant="; ".join(codes),
-                _edition_unresolved=True,
-                roms=[],
-            )
-            return (
-                row,
-                "filename",
-                "Game-level title/region match"
-                + hint
-                + "; source code preserved; exact edition unresolved; dump checksum not verified",
-                [],
-            )
+        match = game_level_entry(candidates, name, codes, regions, hint)
+        if match:
+            return match
     if len(candidates) == 1:
         return (
             None,
             "unverified-release",
-            "Title matches one catalog entry, but its release/variant labels differ; exact edition and checksum remain unverified",
+            "Title matches one catalog entry, but its release/variant labels differ; "
+            "exact edition and checksum remain unverified",
             [candidates[0]["_release_name"]],
         )
     if candidates:
@@ -666,29 +904,59 @@ def identify(unit, games, stats, override=None, quick=False):
             "More than one release or variant; explicit override needed",
             [g["_release_name"] for g in candidates][:20],
         )
-    suggestions = difflib.get_close_matches(
+
+    # Nothing fits: suggest releases with similar titles and the same disc.
+    similar = difflib.get_close_matches(
         title, {identification_title(g["name"]) for g in games}, n=3, cutoff=0.65
     )
-    return (
-        None,
-        "unmatched",
-        "No safe match; file stays in place",
-        [
-            g["_release_name"]
-            for g in games
-            if identification_title(g["name"]) in suggestions
-            and (disc_of(name) is None or disc_of(g["name"]) == disc_of(name))
-        ][:12],
-    )
+    suggestions = [
+        g["_release_name"]
+        for g in games
+        if identification_title(g["name"]) in similar
+        and (disc_of(name) is None or disc_of(g["name"]) == disc_of(name))
+    ]
+    return None, "unmatched", "No safe match; file stays in place", suggestions[:12]
+
+
+def identify(unit, games, stats, override=None, quick=False):
+    """Identify one disc entry against the catalog's release records.
+
+    `stats` holds each file's fingerprint (with "mode1_raw" for an .iso whose
+    rebuilt sectors were hashed). `override` is a release name from an
+    overrides file. With `quick`, no checksums were read, so only names are
+    used. Returns (game or None, confidence, reason, suggestions); see the
+    confidence list above.
+    """
+    if override:
+        return identify_override(games, override)
+
+    data = [stats[f] for f in unit["files"] if Path(f).suffix.lower() != ".cue"]
+    if not quick:
+        result = identify_by_checksum(games, data)
+        if result:
+            return result
+        if len(data) == 1 and data[0].get("mode1_raw"):
+            result = identify_by_reconstruction(games, data[0]["mode1_raw"])
+            if result:
+                return result
+    return identify_by_name(unit, games)
 
 
 def support_path(root, name):
+    """A menu support file's path relative to the drive: names not already
+    under .ohmy3do/ are placed in it."""
     if name.startswith(".ohmy3do/"):
         return name
     return (index_tools.support_base(root) / name).relative_to(root).as_posix()
 
 
 def asset_associations(root, folder):
+    """The media a folder ("covers" or "previews") already has for discs.
+
+    Returns {} when the folder doesn't exist, otherwise {"previous": {folded
+    disc path: file} from its index (files that still exist), "assets":
+    {folded file stem: file} for every media file in it}.
+    """
     directory = relative_path(root, support_path(root, folder))
     if not directory.exists():
         return {}
@@ -714,13 +982,18 @@ def asset_associations(root, folder):
 
 
 def existing_asset(associations, source):
-    return associations.get("assets", {}).get(
+    """The media file for a disc: one named like the disc file, or else the
+    one its index entry names."""
+    by_name = associations.get("assets", {})
+    by_index = associations.get("previous", {})
+    return by_name.get(
         index_tools.fold(Path(source).stem),
-        associations.get("previous", {}).get(index_tools.fold(source)),
+        by_index.get(index_tools.fold(source)),
     )
 
 
 def row_asset(associations, row):
+    """The existing media for a plan row, checking its aliases too."""
     for source in [row["source"]] + row.get("aliases", []):
         name = existing_asset(associations, source)
         if name:
@@ -728,88 +1001,119 @@ def row_asset(associations, row):
     return None
 
 
+# Redump category names that map to a different built-in category.
+REDUMP_CATEGORY_ALIASES = {
+    "video": "Multimedia",
+    "audio": "Multimedia",
+    "coverdiscs": "Samplers",
+    "add-ons": "Games",
+}
+
+# LaunchBox genres that mark a game.
+GAME_GENRES = {
+    "action",
+    "adventure",
+    "arcade",
+    "board game",
+    "casino",
+    "compilation",
+    "fighting",
+    "flight simulator",
+    "horror",
+    "pinball",
+    "platform",
+    "puzzle",
+    "racing",
+    "role-playing",
+    "shooter",
+    "simulation",
+    "sports",
+    "strategy",
+    "visual novel",
+    "quiz",
+    "sandbox",
+    "party",
+    "construction and management simulation",
+}
+
+# Title words and genres that suggest each non-game category.
+DEMO_TITLE = r"\((?:demo|demonstration|trial)(?:[^)]*)\)|\b(?:demo|demonstration|trial\s+version)\b"
+APPLICATION_TITLE = r"\b(?:storage\s+manager|system\s+utility|utilities|operating\s+system)\b"
+APPLICATION_GENRES = {"utility", "utilities", "application", "applications", "operating system"}
+MULTIMEDIA_TITLE = (
+    r"\b(?:atlas|almanac|encyclop(?:e|ae)dia|dictionary|museum|art\s+gallery|documentary"
+    r"|photo\s*(?:cd|shoot)|slide\s*show|interactive\s+(?:book|magazine)|music\s+video|karaoke)\b"
+)
+MULTIMEDIA_GENRES = {
+    "multimedia",
+    "reference",
+    "documentary",
+    "encyclopedia",
+    "music video",
+    "karaoke",
+}
+NON_GAME_GENRES = {
+    "education",
+    "educational",
+    "multimedia",
+    "reference",
+    "documentary",
+    "encyclopedia",
+}
+
+
+def category_evidence(title, genres, release):
+    """{category: reason} for every non-game category the title, genres or
+    LaunchBox release type point to."""
+    evidence = {}
+    if re.search(r"\bbonus\s+(?:disc|cd)\b", title, re.I) or release in ("bonus disc", "bonus cd"):
+        evidence["Bonus Discs"] = "Catalog title/release type identifies a bonus disc"
+    if re.search(r"\b(?:sampler|sample\s+(?:disc|cd))\b", title, re.I) or release == "sampler":
+        evidence["Samplers"] = "Catalog title/release type identifies a sampler"
+    if re.search(DEMO_TITLE, title, re.I) or release in ("demo", "demonstration", "trial"):
+        evidence["Demos"] = "Catalog title/release type identifies a demo"
+    if re.search(APPLICATION_TITLE, title, re.I) or genres & APPLICATION_GENRES:
+        evidence["Applications"] = "Catalog title/genre identifies an application"
+    if re.search(MULTIMEDIA_TITLE, title, re.I) or genres & MULTIMEDIA_GENRES:
+        evidence["Multimedia"] = "Catalog title/genre identifies multimedia/reference content"
+    is_educational = genres & {"education", "educational"} or re.search(
+        r"\beducational\b", title, re.I
+    )
+    if is_educational and not evidence.keys() & {"Demos", "Samplers", "Multimedia", "Bonus Discs"}:
+        evidence["Educational"] = "Catalog title/genre identifies educational software"
+    return evidence
+
+
 def classify(game, override=None, allowed=None):
+    """Choose a category for an identified release.
+
+    Returns (category or None, reason). An explicit `override` must be one
+    of `allowed` (the drive's category names; the built-in ones by default).
+    Otherwise Redump's own category is used when it has one, then evidence
+    in the title, genres and release type. None means the evidence is
+    missing or conflicting, so the disc waits for a person to choose.
+    """
     if override is not None:
         choices = {name.casefold(): name for name in (allowed or CATEGORIES)}
         if not isinstance(override, str) or override.casefold() not in choices:
             raise ValueError("Category must be one of: " + ", ".join(allowed or CATEGORIES))
         return choices[override.casefold()], "Explicit category override"
+
     category = game.get("category", "").casefold()
     categories = {name.casefold(): name for name in CATEGORIES}
-    categories.update(
-        video="Multimedia", audio="Multimedia", coverdiscs="Samplers", **{"add-ons": "Games"}
-    )
+    categories.update(REDUMP_CATEGORY_ALIASES)
     if category in categories:
         return categories[category], "Redump category: " + game["category"]
+
     title = game["_release_name"]
     metadata = game.get("metadata", {})
     genres = {
         s.strip().casefold() for s in re.split(r"[;,]", metadata.get("genre") or "") if s.strip()
     }
     release = (metadata.get("release_type") or "").strip().casefold()
-    game_genres = {
-        "action",
-        "adventure",
-        "arcade",
-        "board game",
-        "casino",
-        "compilation",
-        "fighting",
-        "flight simulator",
-        "horror",
-        "pinball",
-        "platform",
-        "puzzle",
-        "racing",
-        "role-playing",
-        "shooter",
-        "simulation",
-        "sports",
-        "strategy",
-        "visual novel",
-        "quiz",
-        "sandbox",
-        "party",
-        "construction and management simulation",
-    }
-    evidence = {}
-    if re.search(r"\bbonus\s+(?:disc|cd)\b", title, re.I) or release in ("bonus disc", "bonus cd"):
-        evidence["Bonus Discs"] = "Catalog title/release type identifies a bonus disc"
-    if re.search(r"\b(?:sampler|sample\s+(?:disc|cd))\b", title, re.I) or release == "sampler":
-        evidence["Samplers"] = "Catalog title/release type identifies a sampler"
-    if re.search(
-        r"\((?:demo|demonstration|trial)(?:[^)]*)\)|\b(?:demo|demonstration|trial\s+version)\b",
-        title,
-        re.I,
-    ) or release in ("demo", "demonstration", "trial"):
-        evidence["Demos"] = "Catalog title/release type identifies a demo"
-    if re.search(
-        r"\b(?:storage\s+manager|system\s+utility|utilities|operating\s+system)\b", title, re.I
-    ) or genres & {"utility", "utilities", "application", "applications", "operating system"}:
-        evidence["Applications"] = "Catalog title/genre identifies an application"
-    if re.search(
-        r"\b(?:atlas|almanac|encyclop(?:e|ae)dia|dictionary|museum|art\s+gallery|documentary|photo\s*(?:cd|shoot)|slide\s*show|interactive\s+(?:book|magazine)|music\s+video|karaoke)\b",
-        title,
-        re.I,
-    ) or genres & {
-        "multimedia",
-        "reference",
-        "documentary",
-        "encyclopedia",
-        "music video",
-        "karaoke",
-    }:
-        evidence["Multimedia"] = "Catalog title/genre identifies multimedia/reference content"
-    if (
-        genres & {"education", "educational"} or re.search(r"\beducational\b", title, re.I)
-    ) and not evidence.keys() & {"Demos", "Samplers", "Multimedia", "Bonus Discs"}:
-        evidence["Educational"] = "Catalog title/genre identifies educational software"
-    if (
-        "Multimedia" in evidence
-        and genres & game_genres
-        and not genres
-        & {"education", "educational", "multimedia", "reference", "documentary", "encyclopedia"}
-    ):
+    evidence = category_evidence(title, genres, release)
+
+    if "Multimedia" in evidence and genres & GAME_GENRES and not genres & NON_GAME_GENRES:
         return None, "Multimedia title/genre conflicts with a game genre; choose a category"
     if len(evidence) == 1:
         return next(iter(evidence.items()))
@@ -821,9 +1125,10 @@ def classify(game, override=None, allowed=None):
     }:
         return (
             None,
-            "Music/life-simulation/sample labels alone do not establish a category; choose a category",
+            "Music/life-simulation/sample labels alone do not establish a category; "
+            "choose a category",
         )
-    if genres & game_genres:
+    if genres & GAME_GENRES:
         return "Games", "Catalog genre identifies a game"
     return (
         None,
@@ -831,255 +1136,315 @@ def classify(game, override=None, allowed=None):
     )
 
 
-def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, categories=None):
-    config = category_config(root)
-    allowed = tuple(row["name"] for row in config["categories"])
-    destinations = {
+def category_destinations(config):
+    """{built-in category: the drive's folder name for it}."""
+    return {
         role: next(row["name"] for row in config["categories"] if row["id"] == identifier)
         for role, identifier in config["defaults"].items()
     }
-    units = scan_units(root)
 
-    def choice(mapping, unit):
-        values = {
-            mapping[key] for key in [unit["source"]] + unit.get("aliases", []) if key in mapping
-        }
-        if len(values) > 1:
-            raise ValueError("Conflicting ISO/CUE choices for " + unit["source"])
-        return next(iter(values), None)
 
-    categories = {} if categories is None else categories
+def choice_for(mapping, unit):
+    """The value an overrides or categories file gives a disc entry (under
+    its source or an alias), or None. Raises ValueError if they disagree."""
+    keys = [unit["source"]] + unit.get("aliases", [])
+    values = {mapping[key] for key in keys if key in mapping}
+    if len(values) > 1:
+        raise ValueError("Conflicting ISO/CUE choices for " + unit["source"])
+    return next(iter(values), None)
+
+
+def check_category_overrides(categories, units, allowed):
+    """A categories file must map scanned disc paths to known category names."""
     if not isinstance(categories, dict):
         raise ValueError(
             "Category overrides must be a JSON object mapping relative paths to categories"
         )
+    scanned = {key for unit in units for key in [unit["source"]] + unit.get("aliases", [])}
     for source, category in categories.items():
-        if source not in {
-            key for unit in units for key in [unit["source"]] + unit.get("aliases", [])
-        }:
+        if source not in scanned:
             raise ValueError(f"Category override does not name a scanned disc entry: {source}")
         if not isinstance(category, str):
             raise ValueError("Category overrides must contain category names")
         classify({}, category, allowed)
-    saved, registrations = {}, {}
+
+
+def previous_choices(root, allowed):
+    """What an earlier library.json remembers.
+
+    Returns (records with a category someone chose, by path; registered
+    discs, by path).
+    """
     database = relative_path(root, ".ohmy3do/library.json")
-    if database.exists():
-        if not database.is_file() or database.stat().st_size > 16 * 1024 * 1024:
-            raise ValueError("Invalid existing library.json")
-        records = json.loads(database.read_text(encoding="utf-8")).get("games", [])
-        registrations = {
-            r["path"]: r
-            for r in records
-            if r.get("identification") == "unverified" and r.get("registration")
-        }
-        saved = {
-            row["path"]: row
-            for row in records
-            if row.get("category") in allowed
-            and row.get("category_reason") == "Explicit category override"
-        }
-    games = release_records(catalog["games"])
-    raw_sizes = {
-        int(r["size"])
-        for g in games
-        for r in g["roms"]
-        if re.fullmatch(r"[0-9a-fA-F]{40}", r.get("sha1", ""))
+    if not database.exists():
+        return {}, {}
+    if not database.is_file() or database.stat().st_size > 16 * MIB:
+        raise ValueError("Invalid existing library.json")
+    records = json.loads(database.read_text(encoding="utf-8")).get("games", [])
+    registrations = {
+        r["path"]: r
+        for r in records
+        if r.get("identification") == "unverified" and r.get("registration")
     }
-    encoder, announced = None, False
-    associations = {folder: asset_associations(root, folder) for folder in ("covers", "previews")}
-    entries = []
-    for number, unit in enumerate(units, 1):
-        print(f'[{number}/{len(units)}] {unit["source"]}', flush=True)
-        row = dict(
-            source=unit["source"],
-            status="unmatched",
-            moves=[],
-            metadata={},
-            ignored_cues=unit.get("ignored_cues", []),
-            aliases=unit.get("aliases", []),
-        )
-        if unit.get("error"):
-            row["reason"] = unit["error"]
-            if unit.get("invalid_data"):
-                row["status"] = "blocked"
-            entries.append(row)
-            continue
-        registered = registrations.get(unit["source"])
-        if registered:
-            certificate = registered["registration"]
-            same = set(certificate) == set(unit["files"])
-            for name, expected in certificate.items():
-                if not same:
-                    break
-                actual = fingerprint(relative_path(root, name), not quick)
-                same = all(
-                    actual.get(k) == expected.get(k)
-                    for k in ("size", "mtime_ns") + (() if quick else ("sha1",))
-                )
-            if same:
-                row.update(
-                    status="registered",
-                    confidence="unverified",
-                    canonical=registered["title"],
-                    target=unit["source"],
-                    region=registered.get("region"),
-                    category=registered["category"],
-                    category_reason=registered.get("category_reason"),
-                    category_review=False,
-                    registration=certificate,
-                    reason="Previously registered disc; catalog identity remains unverified; files unchanged"
-                    + (" (size/time only in quick scan)" if quick else " (SHA-1 checked)"),
-                    metadata=registered.get("metadata", {}),
-                    cover=registered.get("cover"),
-                    preview=registered.get("preview"),
-                )
-                entries.append(row)
-                continue
-        track_modes = re.findall(r"^\s*TRACK\s+\d+\s+(\S+)", unit.get("cue_text", ""), re.I | re.M)
-        if track_modes and all(mode.upper() == "AUDIO" for mode in track_modes):
-            row.update(
-                confidence="audio-only",
-                reason="Audio-only CD; not a game disc. WAV/CUE sets can be prepared with prepare-audio-disc.py; preserve originals until hardware playback is tested.",
-                category="Bonus Discs",
-                category_review=False,
-            )
-            entries.append(row)
-            continue
-        stats = {}
-        data_files = [f for f in unit["files"] if Path(f).suffix.lower() != ".cue"]
-        for file in unit["files"]:
-            path = relative_path(root, file)
-            size = path.stat().st_size
-            reconstruct = (
-                not quick
-                and len(data_files) == 1
-                and file == unit["source"]
-                and path.suffix.lower() == ".iso"
-                and size > 0
-                and size % 2048 == 0
-                and size // 2048 <= sector_tools.MAX_SECTORS
-                and size // 2048 * 2352 in raw_sizes
-            )
-            if reconstruct:
-                if not announced:
-                    encoder = sector_tools.native_encoder() or sector_tools.encode_python
-                    print(
-                        "Converted ISO verification: "
-                        + (
-                            "native accelerator"
-                            if encoder != sector_tools.encode_python
-                            else "portable Python (slower; see build-sector-codec.py)"
-                        ),
-                        flush=True,
-                    )
-                    announced = True
-                stats[file] = sector_tools.digests(path, encoder)
+    saved = {
+        row["path"]: row
+        for row in records
+        if row.get("category") in allowed
+        and row.get("category_reason") == "Explicit category override"
+    }
+    return saved, registrations
+
+
+def registration_still_valid(root, certificate, unit, quick):
+    """Whether a registered disc's files are exactly those recorded (same
+    names and sizes and times, and SHA-1s unless `quick`)."""
+    if set(certificate) != set(unit["files"]):
+        return False
+    keys = ("size", "mtime_ns") + (() if quick else ("sha1",))
+    for name, expected in certificate.items():
+        actual = fingerprint(relative_path(root, name), not quick)
+        if not all(actual.get(k) == expected.get(k) for k in keys):
+            return False
+    return True
+
+
+def registered_row(row, registered, quick):
+    """Fill in a plan row for a disc registered earlier, left in place."""
+    row.update(
+        status="registered",
+        confidence="unverified",
+        canonical=registered["title"],
+        target=row["source"],
+        region=registered.get("region"),
+        category=registered["category"],
+        category_reason=registered.get("category_reason"),
+        category_review=False,
+        registration=registered["registration"],
+        reason="Previously registered disc; catalog identity remains unverified; files unchanged"
+        + (" (size/time only in quick scan)" if quick else " (SHA-1 checked)"),
+        metadata=registered.get("metadata", {}),
+        cover=registered.get("cover"),
+        preview=registered.get("preview"),
+    )
+
+
+def is_audio_only(unit):
+    """Whether a CUE entry's tracks are all audio (a music CD)."""
+    track_modes = re.findall(r"^\s*TRACK\s+\d+\s+(\S+)", unit.get("cue_text", ""), re.I | re.M)
+    return bool(track_modes) and all(mode.upper() == "AUDIO" for mode in track_modes)
+
+
+class Mode1Encoder:
+    """The sector encoder used to rebuild .iso files as full sectors (see
+    sector-codec.py), loaded on first use with a note saying which one."""
+
+    def __init__(self):
+        self.encoder = None
+        self.announced = False
+
+    def get(self):
+        if not self.announced:
+            self.encoder = sector_tools.native_encoder() or sector_tools.encode_python
+            if self.encoder != sector_tools.encode_python:
+                kind = "native accelerator"
             else:
-                stats[file] = fingerprint(path, not quick or path.suffix.lower() == ".cue")
-        game, confidence, reason, suggestions = identify(
-            unit, games, stats, choice(overrides or {}, unit), quick
+                kind = "portable Python (slower; see build-sector-codec.py)"
+            print("Converted ISO verification: " + kind, flush=True)
+            self.announced = True
+        return self.encoder
+
+
+def file_stats(root, unit, quick, raw_sizes, encoder):
+    """Fingerprint each of a disc entry's files ({path: fingerprint}).
+
+    A lone .iso whose size, rebuilt as 2352-byte sectors, matches some
+    catalog track is also hashed that way ("mode1_raw"), since Redump lists
+    full-sector checksums. With `quick` only CUE sheets are hashed.
+    """
+    stats = {}
+    data_files = [f for f in unit["files"] if Path(f).suffix.lower() != ".cue"]
+    for file in unit["files"]:
+        path = relative_path(root, file)
+        size = path.stat().st_size
+        sectors = size // 2048
+        reconstruct = (
+            not quick
+            and len(data_files) == 1
+            and file == unit["source"]
+            and path.suffix.lower() == ".iso"
+            and size > 0
+            and size % 2048 == 0
+            and sectors <= sector_tools.MAX_SECTORS
+            and sectors * 2352 in raw_sizes
         )
-        if any(f.get("mode1_raw") for f in stats.values()):
-            if confidence in ("filename", "unmatched"):
-                reason += "; reconstructed Mode 1 checksum did not match the catalog"
-            elif confidence == "manual":
-                reason += "; explicit choice takes precedence over checksum identification"
-        if row["ignored_cues"]:
-            reason += "; redundant ISO CUE will be archived if this entry is applied"
-        row.update(confidence=confidence, reason=reason, suggestions=suggestions)
-        if game is None:
-            if confidence == "unverified-release" and not quick:
-                row["reason"] += "; no complete disc checksum matched"
-            entries.append(row)
-            continue
-        canonical = game["_release_name"]
-        primary = next(
-            (
-                REGIONS[tag.split(",")[0].strip().casefold()]
-                for tag in re.findall(r"\(([^)]*)\)", canonical)
-                if tag.split(",")[0].strip().casefold() in REGIONS
-            ),
-            "Unknown",
-        )
-        region = game.get("region") or primary
-        # Opaque dump codes do not imply an edition shared by other discs.
-        # Keep them in filenames; retain the common game folder.
-        group = re.sub(r"\s*\[Variant [0-9A-F]{8}\]", "", without_disc(canonical)).strip()
-        if game.get("_edition_unresolved"):
-            group = without_disc(game["name"])
-        override = choice(categories, unit)
-        previous = next(
-            (saved[k] for k in [unit["source"]] + unit.get("aliases", []) if k in saved), {}
-        )
-        if override is None and previous.get("title") == canonical:
-            override = previous["category"]
-        category, category_reason = classify(game, override, allowed)
-        if override is None and any(
-            re.sub(r"^\d+[\s._-]+", "", part).casefold() == "bonus discs"
-            for part in PurePosixPath(unit["source"]).parts[:-1]
-        ):
-            category, category_reason = "Bonus Discs", "Source folder identifies a bonus disc"
-        bonus_category = category == "Bonus Discs"
-        if override is None and category:
-            category = destinations.get(category, category)
-        directory = (
-            PurePosixPath(category) / safe_name(region) / safe_name(group) if category else None
-        )
-        # An extra disc can share a base game's title but have its own audio or
-        # pack-in labels. Keep those source labels instead of renaming it as the game.
-        output_title = (
-            Path(unit.get("name_source", unit["source"])).stem if bonus_category else canonical
-        )
-        main = (
-            str(directory / (disc_stem(output_title) + Path(unit["source"]).suffix.lower()))
-            if directory
-            else None
-        )
+        if reconstruct:
+            stats[file] = sector_tools.digests(path, encoder.get())
+        else:
+            stats[file] = fingerprint(path, not quick or path.suffix.lower() == ".cue")
+    return stats
+
+
+def primary_region(canonical):
+    """The first region named in a release name's brackets, or "Unknown"."""
+    for tag in re.findall(r"\(([^)]*)\)", canonical):
+        first = tag.split(",")[0].strip().casefold()
+        if first in REGIONS:
+            return REGIONS[first]
+    return "Unknown"
+
+
+def in_bonus_folder(source):
+    """Whether a disc sits in a "Bonus Discs" folder (with or without a
+    leading sort number)."""
+    return any(
+        re.sub(r"^\d+[\s._-]+", "", part).casefold() == "bonus discs"
+        for part in PurePosixPath(source).parts[:-1]
+    )
+
+
+def planned_moves(unit, directory, main, output_title, stats):
+    """Where each of an entry's files goes: the source to `main`, a redundant
+    CUE to .ohmy3do/ignored-cues/, and track files beside the main file
+    named after the title (numbered when there are several)."""
+    moves = []
+    for track, file in enumerate(unit["files"]):
+        if file == unit["source"]:
+            target = main
+        elif file in unit.get("ignored_cues", []):
+            target = (
+                ".ohmy3do/ignored-cues/" + hashlib.sha256(file.encode()).hexdigest()[:24] + ".cue"
+            )
+        else:
+            # Disc tags keep common track01.bin names from colliding across discs.
+            track_tag = f" (Track {track:02d})" if len(unit["files"]) > 2 else ""
+            name = disc_stem(output_title, 95) + track_tag + Path(file).suffix.lower()
+            target = str(directory / name)
+        moves.append(dict(source=file, target=target, fingerprint=stats[file]))
+    return moves
+
+
+def plan_identified(row, unit, game, confidence, reason, context):
+    """Fill in the row for an identified disc: its category, its target
+    Category/Region/Game/ path, and the moves to get there."""
+    canonical = game["_release_name"]
+    region = game.get("region") or primary_region(canonical)
+    # Opaque dump codes do not imply an edition shared by other discs.
+    # Keep them in filenames; retain the common game folder.
+    group = re.sub(r"\s*\[Variant [0-9A-F]{8}\]", "", without_disc(canonical)).strip()
+    if game.get("_edition_unresolved"):
+        group = without_disc(game["name"])
+
+    # The category: chosen in a categories file, remembered from an earlier
+    # choice for the same release, from a "Bonus Discs" folder, or classified.
+    override = choice_for(context["categories"], unit)
+    saved = context["saved"]
+    previous = next(
+        (saved[k] for k in [unit["source"]] + unit.get("aliases", []) if k in saved), {}
+    )
+    if override is None and previous.get("title") == canonical:
+        override = previous["category"]
+    category, category_reason = classify(game, override, context["allowed"])
+    if override is None and in_bonus_folder(unit["source"]):
+        category, category_reason = "Bonus Discs", "Source folder identifies a bonus disc"
+    bonus_category = category == "Bonus Discs"
+    if override is None and category:
+        category = context["destinations"].get(category, category)
+
+    directory = None
+    if category:
+        directory = PurePosixPath(category) / safe_name(region) / safe_name(group)
+    # An extra disc can share a base game's title but have its own audio or
+    # pack-in labels. Keep those source labels instead of renaming it as the game.
+    if bonus_category:
+        output_title = Path(unit.get("name_source", unit["source"])).stem
+    else:
+        output_title = canonical
+    main = None
+    if directory:
+        main = str(directory / (disc_stem(output_title) + Path(unit["source"]).suffix.lower()))
+
+    verified = confidence in ("checksum", "converted-checksum", "manual")
+    associations = context["associations"]
+    row.update(
+        status="ready" if verified or context["accept_names"] else "review",
+        canonical=canonical,
+        region=region,
+        disc=disc_of(canonical),
+        target=main,
+        catalog_name=None if game.get("_edition_unresolved") else game["name"],
+        variant=game["_variant"],
+        edition_unresolved=bool(game.get("_edition_unresolved")),
+        category=category,
+        category_reason=category_reason,
+        category_review=category is None,
+        metadata=game.get("metadata", {}),
+        group=group,
+        cover=row_asset(associations["covers"], row),
+        preview=row_asset(associations["previews"], row),
+    )
+    if category is None:
+        row.update(status="category-review", reason=reason + "; " + category_reason)
+        return
+    row["moves"] = planned_moves(unit, directory, main, output_title, context["stats"])
+    if "cue_text" in unit:
+        row["cue_encoding"] = unit["cue_encoding"]
+
+
+def plan_unit(root, unit, games, context, overrides, quick):
+    """The plan row for one disc entry."""
+    row = dict(
+        source=unit["source"],
+        status="unmatched",
+        moves=[],
+        metadata={},
+        ignored_cues=unit.get("ignored_cues", []),
+        aliases=unit.get("aliases", []),
+    )
+    if unit.get("error"):
+        row["reason"] = unit["error"]
+        if unit.get("invalid_data"):
+            row["status"] = "blocked"
+        return row
+
+    registered = context["registrations"].get(unit["source"])
+    if registered and registration_still_valid(root, registered["registration"], unit, quick):
+        registered_row(row, registered, quick)
+        return row
+
+    if is_audio_only(unit):
         row.update(
-            status=(
-                "ready"
-                if confidence in ("checksum", "converted-checksum", "manual") or accept_names
-                else "review"
-            ),
-            canonical=canonical,
-            region=region,
-            disc=disc_of(canonical),
-            target=main,
-            catalog_name=None if game.get("_edition_unresolved") else game["name"],
-            variant=game["_variant"],
-            edition_unresolved=bool(game.get("_edition_unresolved")),
-            category=category,
-            category_reason=category_reason,
-            category_review=category is None,
-            metadata=game.get("metadata", {}),
-            group=group,
-            cover=row_asset(associations["covers"], row),
-            preview=row_asset(associations["previews"], row),
+            confidence="audio-only",
+            reason="Audio-only CD; not a game disc. WAV/CUE sets can be prepared with "
+            "prepare-audio-disc.py; preserve originals until hardware playback is tested.",
+            category="Bonus Discs",
+            category_review=False,
         )
-        if category is None:
-            row.update(status="category-review", reason=reason + "; " + category_reason)
-            entries.append(row)
-            continue
-        for track, file in enumerate(unit["files"]):
-            if file == unit["source"]:
-                target = main
-            elif file in unit.get("ignored_cues", []):
-                target = (
-                    ".ohmy3do/ignored-cues/"
-                    + hashlib.sha256(file.encode()).hexdigest()[:24]
-                    + ".cue"
-                )
-            else:
-                # Disc tags keep common track01.bin names from colliding across discs.
-                track_tag = f" (Track {track:02d})" if len(unit["files"]) > 2 else ""
-                target = str(
-                    directory
-                    / (disc_stem(output_title, 95) + track_tag + Path(file).suffix.lower())
-                )
-            row["moves"].append(dict(source=file, target=target, fingerprint=stats[file]))
-        if "cue_text" in unit:
-            row["cue_encoding"] = unit["cue_encoding"]
-        entries.append(row)
+        return row
+
+    stats = file_stats(root, unit, quick, context["raw_sizes"], context["encoder"])
+    game, confidence, reason, suggestions = identify(
+        unit, games, stats, choice_for(overrides or {}, unit), quick
+    )
+    if any(f.get("mode1_raw") for f in stats.values()):
+        if confidence in ("filename", "unmatched"):
+            reason += "; reconstructed Mode 1 checksum did not match the catalog"
+        elif confidence == "manual":
+            reason += "; explicit choice takes precedence over checksum identification"
+    if row["ignored_cues"]:
+        reason += "; redundant ISO CUE will be archived if this entry is applied"
+    row.update(confidence=confidence, reason=reason, suggestions=suggestions)
+
+    if game is None:
+        if confidence == "unverified-release" and not quick:
+            row["reason"] += "; no complete disc checksum matched"
+        return row
+    plan_identified(row, unit, game, confidence, reason, dict(context, stats=stats))
+    return row
+
+
+def mark_collisions(root, entries):
+    """Block entries whose move would land on an existing file or on another
+    entry's destination (ignoring case)."""
     targets = collections.defaultdict(list)
     for row in entries:
         for move in row["moves"]:
@@ -1088,32 +1453,85 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
         for move in row["moves"]:
             try:
                 target = relative_path(root, move["target"])
-                if len(targets[move["target"].casefold()]) > 1 or (
-                    target.exists() and move["source"] != move["target"]
-                ):
+                shared = len(targets[move["target"].casefold()]) > 1
+                occupied = target.exists() and move["source"] != move["target"]
+                if shared or occupied:
                     raise ValueError(f'Destination collision: {move["target"]}')
             except ValueError as error:
                 row.update(status="blocked", reason=str(error))
+
+
+def note_duplicates(entries):
+    """Point out entries whose data files are identical to another's.
+    Nothing is deleted; the note only helps the reader tidy up."""
+    duplicates = collections.defaultdict(list)
+    for row in entries:
+        data = [m for m in row["moves"] if Path(m["source"]).suffix.lower() != ".cue"]
+        if data and all(m["fingerprint"].get("sha1") for m in data):
+            key = tuple(sorted((m["fingerprint"]["size"], m["fingerprint"]["sha1"]) for m in data))
+            duplicates[key].append(row)
+    for group in duplicates.values():
+        if len(group) <= 1:
+            continue
+        for row in group:
+            row["duplicate_sources"] = [other["source"] for other in group if other is not row]
+            row["reason"] += (
+                "; identical data-file checksums also found at: "
+                + ", ".join(row["duplicate_sources"])
+                + "; CUE layouts are not compared; no duplicate is deleted automatically"
+            )
+
+
+def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, categories=None):
+    """Scan the drive and decide what to do with every disc entry.
+
+    `catalog` comes from library-catalog.py's load_catalog. `overrides` maps
+    disc paths to release names and `categories` maps them to category
+    names. With `quick`, no checksums are read. With `accept_names`,
+    filename matches are marked ready instead of needing review.
+
+    Returns the plan: {"schema": 2, "root", "created", "quick", "sources",
+    "entries": one row per disc entry, "categories": the drive's category
+    names}. Each row has a "status": ready, review, registered,
+    category-review, unmatched or blocked.
+    """
+    config = category_config(root)
+    allowed = tuple(row["name"] for row in config["categories"])
+    units = scan_units(root)
+    categories = {} if categories is None else categories
+    check_category_overrides(categories, units, allowed)
+    saved, registrations = previous_choices(root, allowed)
+
+    games = release_records(catalog["games"])
+    # The catalog's full-sector track sizes, to spot .iso files worth rebuilding.
+    raw_sizes = {
+        int(r["size"])
+        for g in games
+        for r in g["roms"]
+        if re.fullmatch(r"[0-9a-fA-F]{40}", r.get("sha1", ""))
+    }
+    context = dict(
+        allowed=allowed,
+        destinations=category_destinations(config),
+        categories=categories,
+        saved=saved,
+        registrations=registrations,
+        raw_sizes=raw_sizes,
+        encoder=Mode1Encoder(),
+        accept_names=accept_names,
+        associations={
+            folder: asset_associations(root, folder) for folder in ("covers", "previews")
+        },
+    )
+
+    entries = []
+    for number, unit in enumerate(units, 1):
+        print(f'[{number}/{len(units)}] {unit["source"]}', flush=True)
+        entries.append(plan_unit(root, unit, games, context, overrides, quick))
+
+    mark_collisions(root, entries)
     if not quick:
-        duplicates = collections.defaultdict(list)
-        for row in entries:
-            data = [m for m in row["moves"] if Path(m["source"]).suffix.lower() != ".cue"]
-            if data and all(m["fingerprint"].get("sha1") for m in data):
-                key = tuple(
-                    sorted((m["fingerprint"]["size"], m["fingerprint"]["sha1"]) for m in data)
-                )
-                duplicates[key].append(row)
-        for group in duplicates.values():
-            if len(group) > 1:
-                for row in group:
-                    row["duplicate_sources"] = [
-                        other["source"] for other in group if other is not row
-                    ]
-                    row["reason"] += (
-                        "; identical data-file checksums also found at: "
-                        + ", ".join(row["duplicate_sources"])
-                        + "; CUE layouts are not compared; no duplicate is deleted automatically"
-                    )
+        note_duplicates(entries)
     return dict(
         schema=2,
         root=str(root),
