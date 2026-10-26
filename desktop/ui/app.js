@@ -4048,6 +4048,25 @@ Object.assign(handlers, {
   },
 });
 
+// ---- Clicks, typing and changes ----
+
+/** Buttons that edit or copy games, which only work in the PC library. */
+const libraryOnlyActions = [
+  'add-discs',
+  'copy-open',
+  'move-games',
+  'move-apply',
+  'game-info-edit',
+  'game-info-bulk',
+  'game-info-save',
+  'information-refresh',
+  'information-tools',
+  'media-selected',
+];
+
+// Clicks: a `data-action` button runs its handler; a sidebar button opens
+// its page; a game toggles its selection (Shift+click selects a range); a
+// save in the open backup is shown.
 document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-action]');
   if (button) {
@@ -4055,32 +4074,20 @@ document.addEventListener('click', (event) => {
     const handler = handlers[button.dataset.action];
     if (handler)
       perform(() => {
-        if (
-          state.browseRoot &&
-          [
-            'add-discs',
-            'copy-open',
-            'move-games',
-            'move-apply',
-            'game-info-edit',
-            'game-info-bulk',
-            'game-info-save',
-            'information-refresh',
-            'information-tools',
-            'media-selected',
-          ].includes(button.dataset.action)
-        )
+        if (state.browseRoot && libraryOnlyActions.includes(button.dataset.action))
           throw new Error('Switch to your PC library to edit or copy games.');
         return handler(button);
       });
     return;
   }
+
   const nav = event.target.closest('[data-page]');
   if (nav) {
     perform(async () => {
       if (state.hexDirty) await commitHex();
       if (nav.dataset.page === 'updates')
         state.versionTarget = state.browseRoot || state.prefs.destination || state.prefs.library;
+      // Other pages work on the PC library, so leave the drive view.
       if (state.browseRoot && nav.dataset.page !== 'library') {
         await switchLibrary('');
       }
@@ -4090,21 +4097,24 @@ document.addEventListener('click', (event) => {
     });
     return;
   }
+
   const tile = event.target.closest('[data-game]');
   if (tile) {
     const visible = visibleGames(state.groups, state.filter);
-    const i = visible.findIndex((g) => g.key === tile.dataset.game);
+    const index = visible.findIndex((group) => group.key === tile.dataset.game);
     if (event.shiftKey && state.anchor !== null) {
-      for (const g of visible.slice(Math.min(i, state.anchor), Math.max(i, state.anchor) + 1))
-        state.selected.add(g.key);
+      const first = Math.min(index, state.anchor);
+      const last = Math.max(index, state.anchor);
+      for (const group of visible.slice(first, last + 1)) state.selected.add(group.key);
     } else if (!state.selected.delete(tile.dataset.game)) state.selected.add(tile.dataset.game);
-    state.anchor = i;
+    state.anchor = index;
     state.focusedGame = tile.dataset.game;
     rememberLibraryView();
     render();
     announce(`${state.selected.size} games selected`);
     return;
   }
+
   const entry = event.target.closest('[data-entry]');
   if (entry)
     perform(async () => {
@@ -4114,235 +4124,266 @@ document.addEventListener('click', (event) => {
       render();
     });
 });
+
+// Typing: searches, editors and fields that update as they change.
 document.addEventListener('input', (event) => {
-  const n = event.target;
-  if (n.id === 'information-match-query' || n.id === 'information-match-all')
+  const input = event.target;
+
+  // The game information dialogs.
+  if (input.id === 'information-match-query' || input.id === 'information-match-all')
     renderInformationMatchList();
-  if (n.id === 'information-choice-query') renderInformationChoices();
-  if (n.dataset.infoApply !== undefined) {
-    const input = $(`#game-info-${n.dataset.infoApply}`);
-    if (input) input.disabled = !n.checked;
+  if (input.id === 'information-choice-query') renderInformationChoices();
+  if (input.dataset.infoApply !== undefined) {
+    // In the bulk editor, a field is only edited (and applied) when checked.
+    const field = $(`#game-info-${input.dataset.infoApply}`);
+    if (field) field.disabled = !input.checked;
     markInformationRestores();
   }
-  if (n.dataset.infoImport !== undefined) updateInformationImportButton();
-  if (n.id.startsWith('game-info-') && state.informationEditor) {
-    state.informationEditor.restoreFields?.delete(n.id.slice(10));
+  if (input.dataset.infoImport !== undefined) updateInformationImportButton();
+  if (input.id.startsWith('game-info-') && state.informationEditor) {
+    // Typing over a field cancels restoring its downloaded value.
+    state.informationEditor.restoreFields?.delete(input.id.slice('game-info-'.length));
     markInformationRestores();
   }
-  if (n.id === 'library-search') {
-    const cursor = n.selectionStart;
-    state.filter.search = n.value;
+
+  // Searching the library redraws it, keeping the cursor in the search box.
+  if (input.id === 'library-search') {
+    const cursor = input.selectionStart;
+    state.filter.search = input.value;
     rememberLibraryView();
     render();
     $('#library-search').focus();
     $('#library-search').setSelectionRange(cursor, cursor);
   }
-  if (n.id === 'slot-search') {
-    state.slotQuery = n.value;
+  if (input.id === 'slot-search') {
+    state.slotQuery = input.value;
     $('#slot-results').innerHTML = slotResults();
   }
-  if (n.dataset.categoryName !== undefined)
-    state.categoryDraft.categories[Number(n.dataset.categoryName)].name = n.value;
-  if (n.id === 'drive-destination') {
+
+  if (input.dataset.categoryName !== undefined)
+    state.categoryDraft.categories[Number(input.dataset.categoryName)].name = input.value;
+  // A different drive makes the last drive check stale.
+  if (input.id === 'drive-destination') {
     state.readiness = null;
     $('#readiness-results')?.remove();
   }
-  if (n.dataset.recoveryCopy !== undefined) {
-    if (n.checked) state.cleanupSelected.add(n.dataset.recoveryCopy);
-    else state.cleanupSelected.delete(n.dataset.recoveryCopy);
+  if (input.dataset.recoveryCopy !== undefined) {
+    if (input.checked) state.cleanupSelected.add(input.dataset.recoveryCopy);
+    else state.cleanupSelected.delete(input.dataset.recoveryCopy);
     recoveryDialog();
   }
-  if (n.id === 'hex-editor') state.hexDirty = true;
-  if (n.id === 'cheats-json') {
-    state.cheats = n.value;
+  if (input.id === 'hex-editor') state.hexDirty = true;
+  if (input.id === 'cheats-json') {
+    state.cheats = input.value;
     state.cheatsDirty = true;
   }
-  if (n.id === 'copy-destination' && state.copy) {
+
+  // Changing the copy destination makes the copy review stale: the Copy
+  // button is disabled and a Review button offered again.
+  if (input.id === 'copy-destination' && state.copy) {
     state.copy = null;
     const apply = document.querySelector('[data-action="copy-apply"]');
     if (apply) {
       apply.disabled = true;
       apply.textContent = 'Destination changed — review again';
     }
-    const body = n.closest('.dialog-body');
+    const body = input.closest('.dialog-body');
     if (!document.querySelector('[data-action="copy-preview"]')) {
-      const b = document.createElement('button');
-      b.dataset.action = 'copy-preview';
-      b.textContent = 'Review copy';
-      body.append(b);
+      const review = document.createElement('button');
+      review.dataset.action = 'copy-preview';
+      review.textContent = 'Review copy';
+      body.append(review);
     }
   }
 });
+
+/** The library's filter selects, and the filter each sets. */
+const filterSelects = {
+  'library-search-scope': 'searchScope',
+  'library-information': 'information',
+  'library-media': 'media',
+  'library-region': 'region',
+};
+
+/** Choosing a PC library in the top bar (or adding or managing them). */
+async function choosePcLibrary(select) {
+  const value = select.value;
+  updateLocation();
+  if (value === 'add') {
+    await handlers['choose-library']();
+    return;
+  }
+  if (value === 'manage') {
+    await manageRoots('libraries');
+    return;
+  }
+  if (!value || value === state.prefs.library || !(await resolveDirty())) return;
+  rememberLibraryView();
+  await flushLibraryView();
+  state.prefs.library = value;
+  state.coverCache.clear();
+  await preferences();
+  if (!state.browseRoot) await loadLibrary();
+}
+
+/** Choosing a drive in the top bar (or adding or managing them). */
+async function chooseDrive(select) {
+  const value = select.value;
+  updateLocation();
+  if (value === 'add') {
+    await handlers['add-drive']();
+    return;
+  }
+  if (value === 'manage') {
+    await manageRoots('drives');
+    return;
+  }
+  if (!value || value === state.prefs.destination) return;
+  state.prefs.destination = value;
+  await preferences();
+  if (state.browseRoot) await switchLibrary(value);
+  else await loadLibrary();
+}
+
+/** Applies a change made in the cheat database editor's form. */
+function changeCheatDatabase(control) {
+  const database = databaseDraft();
+  const profile = database.profiles[state.cheatProfile];
+  // Names are text; everything else is a number.
+  const value = (key) => (key === 'label' ? control.value : Number(control.value));
+  if (control.dataset.profileKey) {
+    const key = control.dataset.profileKey;
+    profile[key] = key === 'size' ? Number(control.value) : control.value;
+  }
+  if (control.dataset.dbField !== undefined)
+    profile.fields[Number(control.dataset.dbField)][control.dataset.key] = value(
+      control.dataset.key,
+    );
+  if (control.dataset.dbPreset !== undefined)
+    profile.presets[Number(control.dataset.dbPreset)][control.dataset.key] = value(
+      control.dataset.key,
+    );
+  writeDraft(database);
+}
+
+// Changes: choosers, filters, preferences, and form fields that save as
+// soon as they change.
 document.addEventListener('change', (event) => {
-  const n = event.target;
+  const control = event.target;
   perform(async () => {
-    if (n.id === 'pc-library') {
-      const value = n.value;
-      updateLocation();
-      if (value === 'add') {
-        await handlers['choose-library']();
-        return;
-      }
-      if (value === 'manage') {
-        await manageRoots('libraries');
-        return;
-      }
-      if (!value || value === state.prefs.library || !(await resolveDirty())) return;
-      rememberLibraryView();
-      await flushLibraryView();
-      state.prefs.library = value;
-      state.coverCache.clear();
-      await preferences();
-      if (!state.browseRoot) await loadLibrary();
-      return;
-    }
-    if (n.id === 'usb-drive') {
-      const value = n.value;
-      updateLocation();
-      if (value === 'add') {
-        await handlers['add-drive']();
-        return;
-      }
-      if (value === 'manage') {
-        await manageRoots('drives');
-        return;
-      }
-      if (!value || value === state.prefs.destination) return;
-      state.prefs.destination = value;
-      await preferences();
-      if (state.browseRoot) await switchLibrary(value);
-      else await loadLibrary();
-      return;
-    }
-    if (n.id === 'information-choice') renderInformationMatchPreview();
-    if (n.dataset.categoryHidden !== undefined)
-      state.categoryDraft.categories[Number(n.dataset.categoryHidden)].hidden = n.checked;
-    if (n.dataset.categoryRole !== undefined)
-      state.categoryDraft.defaults[n.dataset.categoryRole] = n.value;
-    if (n.id === 'cheat-profile') {
-      state.cheatProfile = Number(n.value);
+    if (control.id === 'pc-library') return choosePcLibrary(control);
+    if (control.id === 'usb-drive') return chooseDrive(control);
+
+    // Dialog editors.
+    if (control.id === 'information-choice') renderInformationMatchPreview();
+    if (control.dataset.categoryHidden !== undefined)
+      state.categoryDraft.categories[Number(control.dataset.categoryHidden)].hidden =
+        control.checked;
+    if (control.dataset.categoryRole !== undefined)
+      state.categoryDraft.defaults[control.dataset.categoryRole] = control.value;
+    if (control.id === 'cheat-profile') {
+      state.cheatProfile = Number(control.value);
       cheatDialog();
     }
-    if (n.dataset.profileKey) {
-      const db = databaseDraft();
-      db.profiles[state.cheatProfile][n.dataset.profileKey] =
-        n.dataset.profileKey === 'size' ? Number(n.value) : n.value;
-      writeDraft(db);
-    }
-    if (n.dataset.dbField !== undefined) {
-      const db = databaseDraft();
-      db.profiles[state.cheatProfile].fields[Number(n.dataset.dbField)][n.dataset.key] =
-        n.dataset.key === 'label' ? n.value : Number(n.value);
-      writeDraft(db);
-    }
-    if (n.dataset.dbPreset !== undefined) {
-      const db = databaseDraft();
-      db.profiles[state.cheatProfile].presets[Number(n.dataset.dbPreset)][n.dataset.key] =
-        n.dataset.key === 'label' ? n.value : Number(n.value);
-      writeDraft(db);
-    }
-    if (n.id === 'library-search-scope') {
-      state.filter.searchScope = n.value;
+    const cheatControl =
+      control.dataset.profileKey ||
+      control.dataset.dbField !== undefined ||
+      control.dataset.dbPreset !== undefined;
+    if (cheatControl) changeCheatDatabase(control);
+
+    // Library filters.
+    const filter = filterSelects[control.id];
+    if (filter) {
+      state.filter[filter] = control.value;
       state.anchor = null;
       rememberLibraryView();
       render();
     }
-    if (n.id === 'library-information') {
-      state.filter.information = n.value;
-      state.anchor = null;
-      rememberLibraryView();
-      render();
-    }
-    if (n.id === 'library-media') {
-      state.filter.media = n.value;
-      state.anchor = null;
-      rememberLibraryView();
-      render();
-    }
-    if (n.id === 'library-region') {
-      state.filter.region = n.value;
-      state.anchor = null;
-      rememberLibraryView();
-      render();
-    }
-    if (n.id === 'quick-scan') {
-      state.prefs.quick = n.checked;
+
+    // Preferences.
+    if (control.id === 'quick-scan') {
+      state.prefs.quick = control.checked;
       await preferences();
     }
-    if (n.id === 'pref-developer') {
-      state.prefs.developer_mode = n.checked;
+    if (control.id === 'pref-developer') {
+      state.prefs.developer_mode = control.checked;
       await developerPreferences();
     }
-    if (n.id === 'developer-directory') {
-      state.prefs.developer_updates_directory = n.value.trim();
+    if (control.id === 'developer-directory') {
+      state.prefs.developer_updates_directory = control.value.trim();
       await developerPreferences();
     }
-    if (n.id === 'pref-text-scale') {
-      state.prefs.text_scale = textScale(n.value);
+    if (control.id === 'pref-text-scale') {
+      state.prefs.text_scale = textScale(control.value);
       applyTheme();
       await preferences();
     }
-    if (n.id === 'pref-theme') {
-      state.prefs.theme = n.value;
+    if (control.id === 'pref-theme') {
+      state.prefs.theme = control.value;
       applyTheme();
       await preferences();
     }
-    if (n.id === 'pref-software') {
-      state.prefs.software_rendering = n.checked;
+    if (control.id === 'pref-software') {
+      state.prefs.software_rendering = control.checked;
       await preferences();
     }
-    if (n.id === 'pref-offline') {
-      state.prefs.offline = n.checked;
+    if (control.id === 'pref-offline') {
+      state.prefs.offline = control.checked;
       await preferences();
     }
-    if (n.id === 'version-root') {
-      state.versionTarget = n.value;
+    if (control.id === 'version-root') {
+      state.versionTarget = control.value;
       await refreshInstalledVersions();
       render();
     }
-    if (n.id === 'pref-update-notices') {
-      state.prefs.hide_update_notifications = !n.checked;
+    if (control.id === 'pref-update-notices') {
+      state.prefs.hide_update_notifications = !control.checked;
       await preferences();
       renderUpdateNotice();
     }
-    if (n.id === 'pref-updates') {
-      state.prefs.disable_update_checks = !n.checked;
+    if (control.id === 'pref-updates') {
+      state.prefs.disable_update_checks = !control.checked;
       await preferences();
     }
-    if (n.id === 'media-game') {
-      state.mediaDisc = n.value;
+
+    // Pages' own fields.
+    if (control.id === 'media-game') {
+      state.mediaDisc = control.value;
       render();
     }
-    if (n.dataset.importCheck !== undefined) {
+    if (control.dataset.importCheck !== undefined) {
       state.plan = await call('edit_import', {
-        index: Number(n.dataset.importCheck),
-        selected: n.checked,
+        index: Number(control.dataset.importCheck),
+        selected: control.checked,
       });
       render();
     }
-    if (n.dataset.importCategory !== undefined && n.value) {
+    if (control.dataset.importCategory !== undefined && control.value) {
       state.plan = await call('edit_import', {
-        index: Number(n.dataset.importCategory),
-        category: n.value,
+        index: Number(control.dataset.importCategory),
+        category: control.value,
       });
       render();
     }
-    if (n.dataset.cheatField !== undefined) {
+    if (control.dataset.cheatField !== undefined) {
       await commitHex();
       state.backup = await call('backup_edit', {
         index: state.entryIndex,
-        field: Number(n.dataset.cheatField),
-        value: Number(n.value),
+        field: Number(control.dataset.cheatField),
+        value: Number(control.value),
       });
       state.entry = await call('backup_entry', { index: state.entryIndex });
       render();
     }
-    if (n.id === 'copy-verify' && state.copy) {
+    // Verifying or not changes the review, so it is redone.
+    if (control.id === 'copy-verify' && state.copy) {
       state.copy = null;
       renderCopyDialog();
     }
   });
 });
+
+// The focused game is the grid's one Tab stop.
 document.addEventListener('focusin', (event) => {
   const game = event.target.closest('[data-game]');
   if (game) {
@@ -4352,69 +4393,124 @@ document.addEventListener('focusin', (event) => {
     game.tabIndex = 0;
   }
 });
+
+// Keys: Tab stays inside an open dialog; arrow keys move between games;
+// in the library, Ctrl+A selects all shown and Escape clears the selection.
 document.addEventListener('keydown', (event) => {
   if (trapDialogTab(event)) return;
-  if (
-    event.target.matches('[data-game]') &&
-    !event.altKey &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    moveGameFocus(event.target, event.key)
-  ) {
+  const plainKey = !event.altKey && !event.ctrlKey && !event.metaKey;
+  if (event.target.matches('[data-game]') && plainKey && moveGameFocus(event.target, event.key)) {
     event.preventDefault();
     return;
   }
   if (event.target.matches('input,textarea,select')) return;
-  if (
-    (event.ctrlKey || event.metaKey) &&
-    event.key.toLowerCase() === 'a' &&
-    state.page === 'library' &&
-    !document.querySelector('dialog[open]')
-  ) {
+
+  const dialogOpen = !!document.querySelector('dialog[open]');
+  const selectAll = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a';
+  if (selectAll && state.page === 'library' && !dialogOpen) {
     event.preventDefault();
     handlers['select-shown']();
   }
-  if (
-    event.key === 'Escape' &&
-    !document.querySelector('dialog[open]') &&
-    state.page === 'library'
-  ) {
+  if (event.key === 'Escape' && !dialogOpen && state.page === 'library') {
     state.selected.clear();
     render();
   }
 });
+
+// ---- Closing and starting ----
+
+/**
+ * Before the app closes: refuses while an operation runs, asks about
+ * unsaved edits, and saves the library view. Returns true if it may close.
+ */
 async function prepareClose() {
   if (state.busy) {
     toast('Wait for the current operation or cancel it before closing.');
     return false;
   }
-  if (
-    hasInformationChanges() &&
-    !(await confirmAction(
+  if (hasInformationChanges()) {
+    const confirmed = await confirmAction(
       'Unsaved game information',
       'Discard your information edits and close the app?',
       'Discard and close',
       true,
-    ))
-  )
-    return;
+    );
+    if (!confirmed) return;
+  }
   if (!(await resolveDirty())) return;
-  if (
-    state.cheatsDirty &&
-    !(await confirmAction(
+  if (state.cheatsDirty) {
+    const confirmed = await confirmAction(
       'Unsaved cheat database',
       'Discard unsaved database edits and close the app?',
       'Discard and close',
       true,
-    ))
-  )
-    return;
+    );
+    if (!confirmed) return;
+  }
   await flushLibraryView();
   return true;
 }
+
 async function closeApp() {
   if (await prepareClose()) await call('quit');
 }
+
+/** Controls that stay usable while an operation runs. */
+const alwaysUsableActions = ['cancel', 'logs', 'close-dialog'];
+
+/**
+ * While an operation runs (`busy`), disables every control except Cancel,
+ * Activity and Close, remembering which were already disabled. Afterwards,
+ * puts them back and returns focus to where it was.
+ */
+let busyFocus = null;
+function showBusy(busy) {
+  if (busy && !state.busy) busyFocus = document.activeElement;
+  state.busy = busy;
+  document.body.classList.toggle('busy-ui', busy);
+  $('#content')?.setAttribute('aria-busy', String(busy));
+  if (!busy) {
+    const cancel = $('#cancel-job');
+    cancel.disabled = false;
+    cancel.textContent = 'Cancel';
+  }
+
+  for (const control of document.querySelectorAll('button,input,select,textarea')) {
+    if (alwaysUsableActions.includes(control.dataset.action)) continue;
+    if (busy) {
+      control.dataset.busyLock = control.disabled ? '1' : '0';
+      control.disabled = true;
+    } else if (control.dataset.busyLock !== undefined) {
+      control.disabled = control.dataset.busyLock === '1';
+      delete control.dataset.busyLock;
+    }
+    if (control.closest('dialog')?.dataset.operationBusy === 'true') control.disabled = true;
+  }
+
+  if (!busy && busyFocus?.isConnected && !busyFocus.disabled) {
+    // Only within the front dialog, if one is open.
+    const dialogs = [...document.querySelectorAll('dialog[open]')];
+    if (!dialogs.length || busyFocus.closest('dialog') === dialogs.at(-1))
+      busyFocus.focus({ preventScroll: true });
+    busyFocus = null;
+  }
+  $('#busy-dot').classList.toggle('hidden', !busy);
+  $('#cancel-job').classList.toggle('hidden', !busy);
+}
+
+/** The pages `--tab N` opens (1 to 5). */
+const tabPages = ['library', 'import', 'media', 'drive', 'settings'];
+
+/**
+ * Starts the interface: loads the preferences, draws the window, listens
+ * for the backend's events, loads the library, applies command-line
+ * options, and checks for updates (unless turned off or offline).
+ *
+ * Options: `--guided-setup` opens Drive setup; `--tab N` opens a page;
+ * `--save-slots <folder>` and `--save-backup <file>` open the Save Manager;
+ * `--update-ready`, `--update-exit` and `--update-failed <log>` are used by
+ * the updater.
+ */
 async function init() {
   const initial = await call('init');
   state.prefs = initial.prefs;
@@ -4424,43 +4520,15 @@ async function init() {
   state.version = initial.version;
   categories.splice(0, categories.length, ...initial.categories);
   shell();
+
   await listen('operation-progress', ({ payload }) => dialogProgress.updateProgress(payload));
   await listen('progress', ({ payload }) => {
     recordActivity(payload);
     setStatus(String(payload));
   });
-  let busyFocus = null;
-  await listen('busy', ({ payload }) => {
-    if (payload && !state.busy) busyFocus = document.activeElement;
-    state.busy = payload;
-    document.body.classList.toggle('busy-ui', payload);
-    $('#content')?.setAttribute('aria-busy', String(payload));
-    if (!payload) {
-      const cancel = $('#cancel-job');
-      cancel.disabled = false;
-      cancel.textContent = 'Cancel';
-    }
-    for (const n of document.querySelectorAll('button,input,select,textarea')) {
-      if (['cancel', 'logs', 'close-dialog'].includes(n.dataset.action)) continue;
-      if (payload) {
-        n.dataset.busyLock = n.disabled ? '1' : '0';
-        n.disabled = true;
-      } else if (n.dataset.busyLock !== undefined) {
-        n.disabled = n.dataset.busyLock === '1';
-        delete n.dataset.busyLock;
-      }
-      if (n.closest('dialog')?.dataset.operationBusy === 'true') n.disabled = true;
-    }
-    if (!payload && busyFocus?.isConnected && !busyFocus.disabled) {
-      const dialogs = [...document.querySelectorAll('dialog[open]')];
-      if (!dialogs.length || busyFocus.closest('dialog') === dialogs.at(-1))
-        busyFocus.focus({ preventScroll: true });
-      busyFocus = null;
-    }
-    $('#busy-dot').classList.toggle('hidden', !payload);
-    $('#cancel-job').classList.toggle('hidden', !payload);
-  });
+  await listen('busy', ({ payload }) => showBusy(payload));
   await listen('close-requested', () => perform(closeApp));
+  // Discs dropped on the window are added to the import.
   await listen('tauri://drag-drop', ({ payload }) => {
     if (state.busy || state.browseRoot) return;
     state.paths = [...new Set([...state.paths, ...payload.paths])];
@@ -4468,53 +4536,60 @@ async function init() {
     state.page = 'import';
     render();
   });
+
   const args = initial.args;
-  const arg = (flag) => {
-    const i = args.indexOf(flag);
-    return i >= 0 ? args[i + 1] : null;
+  const argument = (flag) => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : null;
   };
   if (!args.includes('--update-exit')) await perform(loadLibrary);
   await perform(refreshDriveStatus);
+  // A drive may have been plugged in or removed while the app was in the background.
   window.addEventListener('focus', () => {
     if (!state.busy) perform(refreshDriveStatus);
   });
+
   if (args.includes('--guided-setup')) state.page = 'drive';
-  if (arg('--tab'))
-    state.page = ['library', 'import', 'media', 'drive', 'settings'][
-      Math.max(0, Math.min(4, Number(arg('--tab')) - 1))
-    ];
-  if (arg('--save-slots')) {
+  if (argument('--tab')) {
+    const tab = Math.max(0, Math.min(4, Number(argument('--tab')) - 1));
+    state.page = tabPages[tab];
+  }
+  if (argument('--save-slots')) {
     state.page = 'saves';
-    state.slotDirectory = arg('--save-slots');
+    state.slotDirectory = argument('--save-slots');
     await perform(refreshSlots);
   }
-  if (arg('--save-backup')) await perform(() => openBackup(arg('--save-backup')));
+  if (argument('--save-backup')) await perform(() => openBackup(argument('--save-backup')));
   render();
   await call('ready');
-  if (arg('--update-failed') && !state.updateReport)
+
+  if (argument('--update-failed') && !state.updateReport)
     toast(
-      `The desktop update failed. Keep the recovery files. Log: ${arg('--update-failed')}`,
+      `The desktop update failed. Keep the recovery files. Log: ${argument('--update-failed')}`,
       true,
     );
-  if (
-    !args.includes('--update-exit') &&
-    (!state.prefs.offline || state.prefs.developer_mode) &&
-    !state.prefs.disable_update_checks
-  )
+  const checksAllowed = !state.prefs.offline || state.prefs.developer_mode;
+  if (!args.includes('--update-exit') && checksAllowed && !state.prefs.disable_update_checks)
     perform(() => checkUpdates(true));
 }
+
 init().catch((error) => {
   document.getElementById('app').textContent = `Oh My 3DO could not initialize: ${error}`;
 });
 
+/**
+ * Checks the drive at `root` before writing to it: refuses if a different
+ * drive is there than the one remembered at that location.
+ */
 async function inspectWriteDrive(root) {
-  const d = await call('drive_inspect', { root });
-  if (d.mismatch)
+  const drive = await call('drive_inspect', { root });
+  if (drive.mismatch)
     throw new Error(
-      `A different drive is mounted here. Expected ${d.expected.name}. Check and remember this drive in Drive setup first.`,
+      `A different drive is mounted here. Expected ${drive.expected.name}. Check and remember this drive in Drive setup first.`,
     );
-  return d;
+  return drive;
 }
+
 function showGameDetails(key = [...state.selected][0]) {
   const group = state.groups.find((g) => g.key === key);
   if (!group) return;
