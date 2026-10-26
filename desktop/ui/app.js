@@ -23,7 +23,6 @@ import {
   visibleGames,
   selectedDiscs,
   escapeHtml,
-  escapeHtml as e,
   formatBytes as bytes,
   slotMatches,
   displayPath,
@@ -4590,27 +4589,53 @@ async function inspectWriteDrive(root) {
   return drive;
 }
 
+// ---- Game details and information ----
+
+/** Where LaunchBox's information is downloaded from (shown as "LaunchBox"). */
+const LAUNCHBOX_SOURCE = 'https://gamesdb.launchbox-app.com/Metadata.zip';
+
+/** A game's details: its information, description and disc files. */
 function showGameDetails(key = [...state.selected][0]) {
-  const group = state.groups.find((g) => g.key === key);
+  const group = state.groups.find((each) => each.key === key);
   if (!group) return;
-  const record = state.records.find((r) => group.discs.includes(r.path));
-  const m = record?.metadata || {};
-  const source = m.description_source || m.source;
+  const record = state.records.find((each) => group.discs.includes(each.path));
+  const metadata = record?.metadata || {};
+  const source = metadata.description_source || metadata.source;
+
+  const details = [
+    ['Region', group.region],
+    ['Genre', metadata.genre],
+    ['Developer', metadata.developer],
+    ['Publisher', metadata.publisher],
+    ['Released', metadata.release_date || metadata.year],
+    ['Players', metadata.players],
+  ]
+    .filter(([, value]) => value)
+    .map(
+      ([label, value]) =>
+        `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}${informationDetailBadge(record, label)}</dd>`,
+    )
+    .join('');
+  const description =
+    metadata.description ||
+    metadata.overview ||
+    'No description available. Prepare missing media or edit this game’s information.';
+  const sourceNote = source
+    ? `<p class="note">Description source: ${escapeHtml(source === LAUNCHBOX_SOURCE ? 'LaunchBox' : source)}</p>`
+    : '';
+  const body = [
+    `<dl>${details}</dl>`,
+    informationDetailBadge(record, 'Description'),
+    `<p class="game-description">${escapeHtml(description)}</p>`,
+    '<details><summary>Disc files</summary>',
+    group.discs.map((path) => `<p class="path">${pathLabel(path)}</p>`).join(''),
+    '</details>',
+    sourceNote,
+  ].join('');
+
   dialog(
     group.title,
-    `<dl>${[
-      ['Region', group.region],
-      ['Genre', m.genre],
-      ['Developer', m.developer],
-      ['Publisher', m.publisher],
-      ['Released', m.release_date || m.year],
-      ['Players', m.players],
-    ]
-      .filter(([, v]) => v)
-      .map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}${informationDetailBadge(record, k)}</dd>`)
-      .join(
-        '',
-      )}</dl>${informationDetailBadge(record, 'Description')}<p class="game-description">${e(m.description || m.overview || 'No description available. Prepare missing media or edit this game’s information.')}</p><details><summary>Disc files</summary>${group.discs.map((p) => `<p class="path">${pathLabel(p)}</p>`).join('')}</details>${source ? `<p class="note">Description source: ${e(source === 'https://gamesdb.launchbox-app.com/Metadata.zip' ? 'LaunchBox' : source)}</p>` : ''}`,
+    body,
     action('close-dialog', 'Close', '', 'data-dialog="main-dialog"') +
       (state.browseRoot
         ? ''
@@ -4618,10 +4643,12 @@ function showGameDetails(key = [...state.selected][0]) {
             'game-info-edit',
             'Edit information…',
             'primary',
-            `data-game-key="${e(group.key)}"`,
+            `data-game-key="${escapeHtml(group.key)}"`,
           )),
   );
 }
+
+/** The game information fields that can be edited, and their labels. */
 const informationFields = [
   ['description', 'Description'],
   ['genre', 'Genre'],
@@ -4631,132 +4658,239 @@ const informationFields = [
   ['year', 'Release year'],
   ['players', 'Players'],
 ];
+
+/** A field's label, from its key. */
+function informationFieldLabel(key) {
+  return informationFields.find(([field]) => field === key)?.[1] || key;
+}
+
+/**
+ * The changes in the open information editor, by field: fields that
+ * differ from what was loaded (or, in the bulk editor, are checked to
+ * apply). Fields being restored to their downloaded values are not included.
+ */
 function informationPatch() {
   if (!state.informationEditor) return {};
   const edit = state.informationEditor;
+  const changed = ([key, value]) => {
+    if (edit.restoreFields?.has(key) || value === undefined) return false;
+    if (edit.bulk) return $(`[data-info-apply="${key}"]`)?.checked;
+    return value !== edit.fields[key];
+  };
   return Object.fromEntries(
-    informationFields
-      .map(([key]) => [key, $(`#game-info-${key}`)?.value])
-      .filter(
-        ([key, value]) =>
-          !edit.restoreFields?.has(key) &&
-          value !== undefined &&
-          (edit.bulk ? $(`[data-info-apply="${key}"]`)?.checked : value !== edit.fields[key]),
-      ),
+    informationFields.map(([key]) => [key, $(`#game-info-${key}`)?.value]).filter(changed),
   );
 }
+
+/** Whether the information editor has unsaved changes (edits or restores). */
 function hasInformationChanges() {
   return (
     Object.keys(informationPatch()).length > 0 || !!state.informationEditor?.restoreFields?.size
   );
 }
+
+/**
+ * A field's label in the information editor, with its "edited" marker,
+ * its "downloaded value staged" note, and its Restore downloaded button.
+ */
 function informationLabel(key, label) {
-  return `<span class="row spread"><label for="game-info-${key}">${label} <small class="badge hidden" data-info-marker="${key}"></small><small data-info-restored="${key}" class="hidden"> · Downloaded value staged</small></label>${action('game-info-restore', 'Restore downloaded', 'quiet small', `data-field="${key}" aria-label="Restore downloaded ${e(label.toLowerCase())}"`)}</span>`;
-}
-async function openInformationEditor(key) {
-  const group = state.groups.find((g) => g.key === key);
-  if (!group) throw new Error('Game selection changed.');
-  const view = await call('game_info_load', { discs: group.discs });
-  state.informationEditor = { ...view, key, restoreFields: new Set() };
-  const d = dialog(
-    'Edit ' + group.title,
-    `<p>Changed fields apply to all ${quantity(group.discs.length, 'disc')} in this game. Your edits are kept when downloading information later.</p><div class="row section">${action('game-info-restore', 'Restore downloaded information…', 'small', 'data-field="all"')}</div><div class="field">${informationLabel('description', 'Description')}<textarea id="game-info-description" rows="7" aria-label="Game description">${e(view.fields.description)}</textarea></div><div class="form-grid">${informationFields
-      .slice(1)
-      .map(
-        ([key, label]) =>
-          `<div class="field">${informationLabel(key, label)}<input id="game-info-${key}" aria-label="${label}" ${key === 'year' || key === 'players' ? `type="number" min="1" max="${key === 'year' ? 9999 : 64}"` : ''} value="${e(view.fields[key])}"></div>`,
-      )
-      .join(
-        '',
-      )}</div><p class="note">Restore previews downloaded values before saving and lets future downloads update those fields again. Fields not supplied by LaunchBox are kept. Copy the games to update your console drive. Undo is available in Settings & tools.</p>`,
-    action('close-dialog', 'Cancel', '', 'data-dialog="game-info-dialog"') +
-      action('game-info-save', 'Save information', 'primary'),
-    'game-info-dialog',
+  const restore = action(
+    'game-info-restore',
+    'Restore downloaded',
+    'quiet small',
+    `data-field="${key}" aria-label="Restore downloaded ${escapeHtml(label.toLowerCase())}"`,
   );
-  d.addEventListener('cancel', (event) => {
+  return [
+    '<span class="row spread">',
+    `<label for="game-info-${key}">${label} <small class="badge hidden" data-info-marker="${key}"></small>`,
+    `<small data-info-restored="${key}" class="hidden"> · Downloaded value staged</small></label>`,
+    restore,
+    '</span>',
+  ].join('');
+}
+
+/** The extra attributes of a number field (year and players). */
+function informationNumberAttributes(key) {
+  if (key !== 'year' && key !== 'players') return '';
+  return `type="number" min="1" max="${key === 'year' ? 9999 : 64}"`;
+}
+
+/**
+ * Asks before closing the information editor with Escape, like its Cancel
+ * button (and not while it is saving).
+ */
+function confirmInformationEscape(editor) {
+  editor.addEventListener('cancel', (event) => {
     event.preventDefault();
     if (!state.busy)
       perform(() => handlers['close-dialog']({ dataset: { dialog: 'game-info-dialog' } }));
   });
+}
+
+/** Opens the information editor for one game (all of its discs). */
+async function openInformationEditor(key) {
+  const group = state.groups.find((each) => each.key === key);
+  if (!group) throw new Error('Game selection changed.');
+  const view = await call('game_info_load', { discs: group.discs });
+  state.informationEditor = { ...view, key, restoreFields: new Set() };
+
+  const otherFields = informationFields
+    .slice(1)
+    .map(
+      ([field, label]) =>
+        `<div class="field">${informationLabel(field, label)}<input id="game-info-${field}" aria-label="${label}" ${informationNumberAttributes(field)} value="${escapeHtml(view.fields[field])}"></div>`,
+    )
+    .join('');
+  const body = [
+    `<p>Changed fields apply to all ${quantity(group.discs.length, 'disc')} in this game. `,
+    'Your edits are kept when downloading information later.</p>',
+    `<div class="row section">${action('game-info-restore', 'Restore downloaded information…', 'small', 'data-field="all"')}</div>`,
+    `<div class="field">${informationLabel('description', 'Description')}`,
+    `<textarea id="game-info-description" rows="7" aria-label="Game description">${escapeHtml(view.fields.description)}</textarea></div>`,
+    `<div class="form-grid">${otherFields}</div>`,
+    '<p class="note">Restore previews downloaded values before saving and lets future downloads update those fields again. ',
+    'Fields not supplied by LaunchBox are kept. Copy the games to update your console drive. Undo is available in Settings & tools.</p>',
+  ].join('');
+
+  const editor = dialog(
+    'Edit ' + group.title,
+    body,
+    action('close-dialog', 'Cancel', '', 'data-dialog="game-info-dialog"') +
+      action('game-info-save', 'Save information', 'primary'),
+    'game-info-dialog',
+  );
+  confirmInformationEscape(editor);
   markInformationRestores();
 }
+
+/**
+ * Updates the information editor's markers: which fields are staged for
+ * restore, and which are (or will be) manual edits, on all discs or some.
+ */
 function markInformationRestores() {
   const edit = state.informationEditor;
   if (!edit) return;
   const patch = informationPatch();
   document
     .querySelectorAll('[data-info-restored]')
-    .forEach((n) => n.classList.toggle('hidden', !edit.restoreFields?.has(n.dataset.infoRestored)));
-  document.querySelectorAll('[data-info-marker]').forEach((n) => {
-    const key = n.dataset.infoMarker,
-      count = edit.records.filter((r) => Object.hasOwn(r.overrides || {}, key)).length;
-    const text = edit.restoreFields?.has(key)
-      ? ''
-      : Object.hasOwn(patch, key)
-        ? 'Edited on save'
-        : count === edit.records.length
-          ? 'Edited'
-          : count
-            ? 'Some discs edited'
-            : '';
-    n.textContent = text;
-    n.classList.toggle('hidden', !text);
-    n.title = 'Manual edits are protected from downloaded updates.';
+    .forEach((note) =>
+      note.classList.toggle('hidden', !edit.restoreFields?.has(note.dataset.infoRestored)),
+    );
+  document.querySelectorAll('[data-info-marker]').forEach((marker) => {
+    const key = marker.dataset.infoMarker;
+    const editedDiscs = edit.records.filter((record) =>
+      Object.hasOwn(record.overrides || {}, key),
+    ).length;
+    let text = '';
+    if (edit.restoreFields?.has(key)) text = '';
+    else if (Object.hasOwn(patch, key)) text = 'Edited on save';
+    else if (editedDiscs === edit.records.length) text = 'Edited';
+    else if (editedDiscs) text = 'Some discs edited';
+    marker.textContent = text;
+    marker.classList.toggle('hidden', !text);
+    marker.title = 'Manual edits are protected from downloaded updates.';
   });
 }
+
+/** A metadata value as text ('' for none). */
 function informationValue(value) {
   return value === null || value === undefined ? '' : String(value);
 }
+
+/** An "Edited" badge for a detail whose value the person set by hand. */
 function informationDetailBadge(record, label) {
-  const keys =
-    {
-      Description: ['description'],
-      Genre: ['genre'],
-      Developer: ['developer'],
-      Publisher: ['publisher'],
-      Released: ['release_date', 'year'],
-      Players: ['players'],
-    }[label] || [];
-  return keys.some((k) => Object.hasOwn(record?.metadata_overrides || {}, k))
+  const keysByLabel = {
+    Description: ['description'],
+    Genre: ['genre'],
+    Developer: ['developer'],
+    Publisher: ['publisher'],
+    Released: ['release_date', 'year'],
+    Players: ['players'],
+  };
+  const keys = keysByLabel[label] || [];
+  const edited = keys.some((key) => Object.hasOwn(record?.metadata_overrides || {}, key));
+  return edited
     ? ' <span class="badge" title="Protected from downloaded updates">Edited</span>'
     : '';
 }
+
+/**
+ * Opens the information editor for all selected games at once: each field
+ * is applied only if checked. A field all discs share is filled in.
+ */
 async function openBulkInformationEditor() {
   const discs = selectedDiscs(state.groups, state.selected);
   if (!discs.length) throw new Error('Select games first.');
   const view = await call('game_info_load', { discs });
   const gameCount = state.selected.size;
   state.informationEditor = { ...view, bulk: true, gameCount, restoreFields: new Set() };
-  const d = dialog(
+
+  const fields = informationFields
+    .slice(1)
+    .map(([key, label]) => {
+      const values = view.records.map((record) => informationValue(record.metadata?.[key]));
+      const same = new Set(values).size === 1;
+      return [
+        '<div class="field">',
+        `<label class="row"><input type="checkbox" data-info-apply="${key}">Apply ${escapeHtml(label.toLowerCase())} `,
+        `<small class="badge hidden" data-info-marker="${key}"></small></label>`,
+        `<input id="game-info-${key}" aria-label="${label}" disabled ${informationNumberAttributes(key)}`,
+        ` placeholder="${same ? '' : 'Mixed values — choose a shared value'}" value="${same ? escapeHtml(values[0]) : ''}">`,
+        '</div>',
+      ].join('');
+    })
+    .join('');
+  const body = [
+    `<p>Choose which shared fields to apply to ${gameCount} games (${quantity(discs.length, 'disc')}). `,
+    'Unchecked fields and each game’s description are kept. Checking Apply with a blank value clears that field.</p>',
+    `<div class="form-grid">${fields}</div>`,
+    '<p class="note">Applied values become manual edits protected from future downloads. ',
+    'You can undo the entire change in Settings & tools.</p>',
+  ].join('');
+
+  const editor = dialog(
     'Edit selected games',
-    `<p>Choose which shared fields to apply to ${gameCount} games (${quantity(discs.length, 'disc')}). Unchecked fields and each game’s description are kept. Checking Apply with a blank value clears that field.</p><div class="form-grid">${informationFields
-      .slice(1)
-      .map(([key, label]) => {
-        const values = view.records.map((r) => informationValue(r.metadata?.[key]));
-        const same = new Set(values).size === 1;
-        return `<div class="field"><label class="row"><input type="checkbox" data-info-apply="${key}">Apply ${e(label.toLowerCase())} <small class="badge hidden" data-info-marker="${key}"></small></label><input id="game-info-${key}" aria-label="${label}" disabled ${key === 'year' || key === 'players' ? `type="number" min="1" max="${key === 'year' ? 9999 : 64}"` : ''} placeholder="${same ? '' : 'Mixed values — choose a shared value'}" value="${same ? e(values[0]) : ''}"></div>`;
-      })
-      .join(
-        '',
-      )}</div><p class="note">Applied values become manual edits protected from future downloads. You can undo the entire change in Settings & tools.</p>`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="game-info-dialog"') +
       action('game-info-save', 'Save information', 'primary'),
     'game-info-dialog',
   );
-  d.addEventListener('cancel', (event) => {
-    event.preventDefault();
-    if (!state.busy)
-      perform(() => handlers['close-dialog']({ dataset: { dialog: 'game-info-dialog' } }));
-  });
+  confirmInformationEscape(editor);
   markInformationRestores();
 }
+
+/** The Metadata tools dialog: matching, exporting and importing, and backups. */
 function informationTools() {
-  dialog(
-    'Metadata tools',
-    `<div class="metadata-tools stack"><section><h3>Match game information</h3><p>Review unmatched games or change an existing LaunchBox match.</p>${action('information-matches', 'Review information matches…')}</section><section><h3>Back up custom edits</h3><p>Export your edits, including cleared fields, or review an import before applying it.</p><div class="row">${action('information-export', 'Export all…', '', 'data-scope="all"')}${action('information-export', `Export selected… (${state.selected.size})`, '', `data-scope="selected" ${state.selected.size ? '' : 'disabled'}`)}${action('information-import-preview', 'Import metadata…')}</div></section><section><h3>Automatic backups</h3><p>Review the five most recent snapshots saved on this computer.</p>${action('information-backups', 'Automatic metadata backups…')}</section></div><p class="note">Manual edits are protected from downloads. Metadata imports and match changes support Undo.</p>`,
-    action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
-  );
+  const selectedCount = state.selected.size;
+  const body = [
+    '<div class="metadata-tools stack">',
+    '<section><h3>Match game information</h3>',
+    '<p>Review unmatched games or change an existing LaunchBox match.</p>',
+    action('information-matches', 'Review information matches…'),
+    '</section>',
+    '<section><h3>Back up custom edits</h3>',
+    '<p>Export your edits, including cleared fields, or review an import before applying it.</p>',
+    '<div class="row">',
+    action('information-export', 'Export all…', '', 'data-scope="all"'),
+    action(
+      'information-export',
+      `Export selected… (${selectedCount})`,
+      '',
+      `data-scope="selected" ${selectedCount ? '' : 'disabled'}`,
+    ),
+    action('information-import-preview', 'Import metadata…'),
+    '</div></section>',
+    '<section><h3>Automatic backups</h3>',
+    '<p>Review the five most recent snapshots saved on this computer.</p>',
+    action('information-backups', 'Automatic metadata backups…'),
+    '</section>',
+    '</div>',
+    '<p class="note">Manual edits are protected from downloads. Metadata imports and match changes support Undo.</p>',
+  ].join('');
+  dialog('Metadata tools', body, action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'));
 }
+
+/** Exports the person's own information: for the selected games, or all. */
 async function exportInformation(selected) {
   const discs = selected ? selectedDiscs(state.groups, state.selected) : [];
   if (selected && !discs.length) throw new Error('Select games first.');
@@ -4765,31 +4899,82 @@ async function exportInformation(selected) {
   const result = await call('game_info_export', { target, discs });
   toast(`Exported custom metadata for ${quantity(result.count, 'disc')}.`);
 }
+
+/** Chooses a metadata file and reviews importing it. */
 async function previewInformationImport() {
   const file = await pick('metadata');
   if (!file) return;
   const preview = await call('game_info_import_preview', { file });
   showInformationImport(preview, file);
 }
+
+/** A disc's current value of a field (a description may be in "overview"). */
+function currentInformation(metadata, key) {
+  return key === 'description' ? metadata?.description || metadata?.overview : metadata?.[key];
+}
+
+/**
+ * Reviews an information import (from a file or an automatic backup): one
+ * section per disc, each field's current and imported value. Discs whose
+ * own edits would be replaced start unchecked.
+ */
 function showInformationImport(preview, file) {
   state.informationImport = preview;
+
+  const discSection = (record, index) => {
+    const conflicts = record.conflicts.length;
+    const fieldRows = Object.entries(record.fields)
+      .map(([key, value]) => {
+        const edited = record.conflicts.includes(key)
+          ? ' <span class="badge warning">Edited</span>'
+          : '';
+        const current =
+          informationValue(currentInformation(record.original.metadata, key)) || '(Empty)';
+        const imported = informationValue(value) || '(Empty — clears this field)';
+        return [
+          `<tr><td>${escapeHtml(informationFieldLabel(key))}${edited}</td>`,
+          `<td><div class="game-description">${escapeHtml(current)}</div></td>`,
+          `<td><div class="game-description">${escapeHtml(imported)}</div></td></tr>`,
+        ].join('');
+      })
+      .join('');
+    const from =
+      record.path !== record.source_path ? ` · From ${pathLabel(record.source_path)}` : '';
+    const differing = conflicts ? ' · ' + conflicts + ' manual edits differ' : '';
+    return [
+      '<section class="card"><label class="row">',
+      `<input type="checkbox" data-info-import="${index}" ${conflicts ? '' : 'checked'}>`,
+      `<strong>${escapeHtml(record.title)}</strong>`,
+      conflicts ? '<span class="badge warning">Replaces manual edits</span>' : '',
+      '</label>',
+      `<p class="note path">${pathLabel(record.path)}<br>${escapeHtml(record.matching)}${from}</p>`,
+      `<details ${index === 0 ? 'open' : ''}><summary>Review ${quantity(Object.keys(record.fields).length, 'field')}${differing}</summary>`,
+      '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table">',
+      '<table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Imported</th></tr></thead>',
+      `<tbody>${fieldRows}</tbody></table></div></details>`,
+      '</section>',
+    ].join('');
+  };
+  const skipped = preview.skipped.length
+    ? [
+        `<details class="section"><summary>${preview.skipped.length} skipped entries</summary>`,
+        `<ul>${preview.skipped.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul></details>`,
+      ].join('')
+    : '';
+  const body = [
+    `<p>${pathLabel(file)}</p>`,
+    `<p>Changes found for ${quantity(preview.records.length, 'disc')}. Select the entries to import, then review their fields below.</p>`,
+    '<p class="note">Entries that replace different manual edits start unchecked. ',
+    'Check them only if you want the imported values. Other fields are kept.</p>',
+    `<div class="stack">${preview.records.map(discSection).join('')}</div>`,
+    skipped,
+    '<p class="note">Importing saves the checked fields as manual edits. Copy the affected games afterward to update your console drive. ',
+    'Undo is available in Settings & tools.</p>',
+  ].join('');
+
   dialog(
     'Review custom metadata import',
-    `<p>${pathLabel(file)}</p><p>Changes found for ${quantity(preview.records.length, 'disc')}. Select the entries to import, then review their fields below.</p><p class="note">Entries that replace different manual edits start unchecked. Check them only if you want the imported values. Other fields are kept.</p><div class="stack">${preview.records
-      .map(
-        (r, index) =>
-          `<section class="card"><label class="row"><input type="checkbox" data-info-import="${index}" ${r.conflicts.length ? '' : 'checked'}><strong>${e(r.title)}</strong>${r.conflicts.length ? '<span class="badge warning">Replaces manual edits</span>' : ''}</label><p class="note path">${pathLabel(r.path)}<br>${e(r.matching)}${r.path !== r.source_path ? ` · From ${pathLabel(r.source_path)}` : ''}</p><details ${index === 0 ? 'open' : ''}><summary>Review ${quantity(Object.keys(r.fields).length, 'field')}${r.conflicts.length ? ' · ' + r.conflicts.length + ' manual edits differ' : ''}</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Imported</th></tr></thead><tbody>${Object.entries(
-            r.fields,
-          )
-            .map(
-              ([key, value]) =>
-                `<tr><td>${e(informationFields.find(([k]) => k === key)?.[1] || key)}${r.conflicts.includes(key) ? ' <span class="badge warning">Edited</span>' : ''}</td><td><div class="game-description">${e(informationValue(key === 'description' ? r.original.metadata?.description || r.original.metadata?.overview : r.original.metadata?.[key]) || '(Empty)')}</div></td><td><div class="game-description">${e(informationValue(value) || '(Empty — clears this field)')}</div></td></tr>`,
-            )
-            .join('')}</tbody></table></div></details></section>`,
-      )
-      .join(
-        '',
-      )}</div>${preview.skipped.length ? `<details class="section"><summary>${preview.skipped.length} skipped entries</summary><ul>${preview.skipped.map((text) => `<li>${e(text)}</li>`).join('')}</ul></details>` : ''}<p class="note">Importing saves the checked fields as manual edits. Copy the affected games afterward to update your console drive. Undo is available in Settings & tools.</p>`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
       action(
         'information-import-save',
@@ -4800,9 +4985,11 @@ function showInformationImport(preview, file) {
   );
   updateInformationImportButton();
 }
+
+/** Labels the import button with how many discs are checked. */
 function updateInformationImportButton() {
-  const button = $('#information-import-save'),
-    count = document.querySelectorAll('[data-info-import]:checked').length;
+  const button = $('#information-import-save');
+  const count = document.querySelectorAll('[data-info-import]:checked').length;
   if (button) {
     button.disabled = !count;
     button.textContent = count
@@ -4810,48 +4997,91 @@ function updateInformationImportButton() {
       : 'Select entries to import';
   }
 }
+
+/** Statuses of a disc that already has information matched. */
+const matchedStatuses = ['Automatic match', 'Chosen match'];
+
+/** Opens the review of which LaunchBox entry each game's information comes from. */
 async function openInformationMatches() {
   state.informationMatches = await call('game_info_matches');
-  const d = state.informationMatches;
-  const unmatched = d.records.filter(
-    (r) => !['Automatic match', 'Chosen match'].includes(d.status[r.path]),
+  const review = state.informationMatches;
+  const unmatched = review.records.filter(
+    (record) => !matchedStatuses.includes(review.status[record.path]),
   ).length;
+  const body = [
+    `<p>${quantity(unmatched, 'disc')} ${unmatched === 1 ? 'needs' : 'need'} a match. `,
+    'Choose the correct LaunchBox title to preview and apply its information. Manual edits are kept. ',
+    'Chosen matches are remembered for future information downloads and missing-media preparation.</p>',
+    '<div class="row">',
+    '<input id="information-match-query" type="search" placeholder="Find a library game…" aria-label="Find a game to match">',
+    '<label><input type="checkbox" id="information-match-all"> Show matched games too</label>',
+    '</div>',
+    '<div id="information-match-list" class="stack section"></div>',
+    '<p class="note">This changes information only. Disc identification, folder names, game files and media associations are kept. ',
+    'Cached LaunchBox information works offline. Undo is available in Settings & tools.</p>',
+  ].join('');
   dialog(
     'Review information matches',
-    `<p>${quantity(unmatched, 'disc')} ${unmatched === 1 ? 'needs' : 'need'} a match. Choose the correct LaunchBox title to preview and apply its information. Manual edits are kept. Chosen matches are remembered for future information downloads and missing-media preparation.</p><div class="row"><input id="information-match-query" type="search" placeholder="Find a library game…" aria-label="Find a game to match"><label><input type="checkbox" id="information-match-all"> Show matched games too</label></div><div id="information-match-list" class="stack section"></div><p class="note">This changes information only. Disc identification, folder names, game files and media associations are kept. Cached LaunchBox information works offline. Undo is available in Settings & tools.</p>`,
+    body,
     action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
   );
   renderInformationMatchList();
 }
+
+/** Lists the games to match: unmatched ones (or all), filtered by the search. */
 function renderInformationMatchList() {
-  const target = $('#information-match-list'),
-    review = state.informationMatches;
+  const target = $('#information-match-list');
+  const review = state.informationMatches;
   if (!target || !review) return;
-  const query = ($('#information-match-query')?.value || '').trim().toLocaleLowerCase(),
-    all = $('#information-match-all')?.checked;
+  const query = ($('#information-match-query')?.value || '').trim().toLocaleLowerCase();
+  const showAll = $('#information-match-all')?.checked;
   const games = groupGames(review.records).filter(
-    (g) =>
-      (!query || g.title.toLocaleLowerCase().includes(query)) &&
-      (all || g.discs.some((p) => !['Automatic match', 'Chosen match'].includes(review.status[p]))),
+    (game) =>
+      (!query || game.title.toLocaleLowerCase().includes(query)) &&
+      (showAll || game.discs.some((path) => !matchedStatuses.includes(review.status[path]))),
   );
+
   target.innerHTML = games.length
     ? games
-        .map(
-          (g) =>
-            `<div class="card row spread"><div><strong>${e(g.title)}</strong><p class="note">${e(g.region)} · ${e([...new Set(g.discs.map((p) => review.status[p]))].join('; '))} · ${quantity(g.discs.length, 'disc')}</p></div>${action('information-match-game', 'Choose match…', 'small', `data-key="${e(g.key)}"`)}</div>`,
-        )
+        .map((game) => {
+          const statuses = [...new Set(game.discs.map((path) => review.status[path]))].join('; ');
+          return [
+            '<div class="card row spread"><div>',
+            `<strong>${escapeHtml(game.title)}</strong>`,
+            `<p class="note">${escapeHtml(game.region)} · ${escapeHtml(statuses)} · ${quantity(game.discs.length, 'disc')}</p>`,
+            '</div>',
+            action(
+              'information-match-game',
+              'Choose match…',
+              'small',
+              `data-key="${escapeHtml(game.key)}"`,
+            ),
+            '</div>',
+          ].join('');
+        })
         .join('')
     : '<p>No games match this view. Clear the search or enable Show matched games too.</p>';
 }
+
+/** Opens the chooser of LaunchBox entries for one game. */
 function openInformationMatch(key) {
-  const review = state.informationMatches,
-    game = groupGames(review.records).find((g) => g.key === key);
+  const review = state.informationMatches;
+  const game = groupGames(review.records).find((each) => each.key === key);
   if (!game) throw new Error('Review information matches again.');
   state.informationMatchGame = game;
   state.informationMatchChoice = '';
+  const body = [
+    `<p>Applies to ${quantity(game.discs.length, 'disc')}. `,
+    'Check the description, release year and publisher before choosing a match.</p>',
+    '<label class="field">Search LaunchBox titles',
+    '<input id="information-choice-query" type="search" placeholder="Search the downloaded 3DO titles…"></label>',
+    '<label class="field">LaunchBox title<select id="information-choice" size="8" aria-label="LaunchBox title"></select></label>',
+    '<p class="note" id="information-choice-count"></p>',
+    '<div id="information-match-preview"></div>',
+  ].join('');
   dialog(
     'Choose information for ' + game.title,
-    `<p>Applies to ${quantity(game.discs.length, 'disc')}. Check the description, release year and publisher before choosing a match.</p><label class="field">Search LaunchBox titles<input id="information-choice-query" type="search" placeholder="Search the downloaded 3DO titles…"></label><label class="field">LaunchBox title<select id="information-choice" size="8" aria-label="LaunchBox title"></select></label><p class="note" id="information-choice-count"></p><div id="information-match-preview"></div>`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="information-match-dialog"') +
       action(
         'information-match-save',
@@ -4863,68 +5093,87 @@ function openInformationMatch(key) {
   );
   renderInformationChoices();
 }
+
+/** Lists the LaunchBox entries matching the search. */
 function renderInformationChoices() {
   const target = $('#information-choice');
   if (!target) return;
   const query = ($('#information-choice-query')?.value || '').trim().toLocaleLowerCase();
   const choices = state.informationMatches.choices.filter(
-    (m) => !query || String(m.title).toLocaleLowerCase().includes(query),
+    (choice) => !query || String(choice.title).toLocaleLowerCase().includes(query),
   );
+  const label = (choice) =>
+    [choice.title, choice.year, choice.publisher, 'ID ' + choice.launchbox_id]
+      .filter(Boolean)
+      .join(' · ');
   target.innerHTML =
     option('', 'Choose a LaunchBox title', true) +
-    choices
-      .map((m) =>
-        option(
-          m.launchbox_id,
-          [m.title, m.year, m.publisher, 'ID ' + m.launchbox_id].filter(Boolean).join(' · '),
-          false,
-        ),
-      )
-      .join('');
+    choices.map((choice) => option(choice.launchbox_id, label(choice), false)).join('');
   state.informationMatchChoice = '';
   $('#information-choice-count').textContent = `${choices.length} matching LaunchBox titles.`;
   renderInformationMatchPreview();
 }
+
+/**
+ * Previews the chosen LaunchBox entry: for each disc, each field's current
+ * value and what it would become. Manual edits are kept.
+ */
 function renderInformationMatchPreview() {
-  const review = state.informationMatches,
-    id = $('#information-choice')?.value || '',
-    meta = review?.choices.find((m) => m.launchbox_id === id);
+  const review = state.informationMatches;
+  const id = $('#information-choice')?.value || '';
+  const chosen = review?.choices.find((choice) => choice.launchbox_id === id);
   state.informationMatchChoice = id;
-  const target = $('#information-match-preview'),
-    button = $('#information-match-save');
-  if (button) button.disabled = !meta;
+  const target = $('#information-match-preview');
+  const button = $('#information-match-save');
+  if (button) button.disabled = !chosen;
   if (!target) return;
-  if (!meta) {
+  if (!chosen) {
     target.innerHTML =
       '<p class="note">Choose a title to preview the changes. No files have been changed.</p>';
     return;
   }
-  const game = state.informationMatchGame,
-    records = review.records.filter((r) => game.discs.includes(r.path));
-  target.innerHTML = `<h3>${e(meta.title)}</h3><p class="note">${e([meta.year, meta.publisher, meta.developer].filter(Boolean).join(' · '))} · LaunchBox ID ${e(id)}</p>${records
-    .map(
-      (r, index) =>
-        `<details ${index === 0 ? 'open' : ''}><summary>${pathLabel(r.path)}</summary><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Downloaded</th></tr></thead><tbody>${informationFields
-          .map(([key, label]) => {
-            const current =
-                key === 'description'
-                  ? r.metadata?.description || r.metadata?.overview
-                  : r.metadata?.[key],
-              value = meta[key],
-              manual = Object.hasOwn(r.metadata_overrides || {}, key),
-              supplied = value !== null && value !== undefined && String(value).trim() !== '';
-            return `<tr><td>${e(label)}</td><td><div class="game-description">${e(informationValue(current) || '(Empty)')}</div></td><td><div class="game-description">${manual ? '<span class="badge">Manual edit kept</span>' : supplied ? e(informationValue(value)) : 'Not supplied — current value kept'}</div></td></tr>`;
-          })
-          .join('')}</tbody></table></div></details>`,
-    )
-    .join(
-      '',
-    )}<p class="note">Using this match saves downloaded fields immediately and remembers the LaunchBox entry. Manual edits remain protected; use Restore downloaded in the information editor to remove an override.</p>`;
+
+  const game = state.informationMatchGame;
+  const records = review.records.filter((record) => game.discs.includes(record.path));
+  const fieldRow = (record, key, label) => {
+    const current = currentInformation(record.metadata, key);
+    const value = chosen[key];
+    const manual = Object.hasOwn(record.metadata_overrides || {}, key);
+    const supplied = value !== null && value !== undefined && String(value).trim() !== '';
+    let downloaded;
+    if (manual) downloaded = '<span class="badge">Manual edit kept</span>';
+    else if (supplied) downloaded = escapeHtml(informationValue(value));
+    else downloaded = 'Not supplied — current value kept';
+    return [
+      `<tr><td>${escapeHtml(label)}</td>`,
+      `<td><div class="game-description">${escapeHtml(informationValue(current) || '(Empty)')}</div></td>`,
+      `<td><div class="game-description">${downloaded}</div></td></tr>`,
+    ].join('');
+  };
+  const discTable = (record, index) =>
+    [
+      `<details ${index === 0 ? 'open' : ''}><summary>${pathLabel(record.path)}</summary>`,
+      '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table">',
+      '<table class="information-restore-table"><thead><tr><th>Field</th><th>Current</th><th>Downloaded</th></tr></thead>',
+      `<tbody>${informationFields.map(([key, label]) => fieldRow(record, key, label)).join('')}</tbody>`,
+      '</table></div></details>',
+    ].join('');
+  const facts = [chosen.year, chosen.publisher, chosen.developer].filter(Boolean).join(' · ');
+
+  target.innerHTML = [
+    `<h3>${escapeHtml(chosen.title)}</h3>`,
+    `<p class="note">${escapeHtml(facts)} · LaunchBox ID ${escapeHtml(id)}</p>`,
+    records.map(discTable).join(''),
+    '<p class="note">Using this match saves downloaded fields immediately and remembers the LaunchBox entry. ',
+    'Manual edits remain protected; use Restore downloaded in the information editor to remove an override.</p>',
+  ].join('');
 }
+
+/** Uses the chosen LaunchBox entry for the game. */
 async function saveInformationMatch() {
-  const review = state.informationMatches,
-    game = state.informationMatchGame,
-    id = state.informationMatchChoice;
+  const review = state.informationMatches;
+  const game = state.informationMatchGame;
+  const id = state.informationMatchChoice;
   if (!review || !game || !id) throw new Error('Choose and preview a LaunchBox title first.');
   await call('game_info_choose_match', { token: review.token, discs: game.discs, id });
   state.informationMatches = null;
@@ -4935,19 +5184,50 @@ async function saveInformationMatch() {
     'Information match saved. Future downloads will use this entry. Copy the games to update your console drive.',
   );
 }
+
+/** Lists the automatic backups of the person's own information. */
 async function showInformationBackups() {
   const result = await call('game_info_backups');
+  const backups = result.backups.length
+    ? result.backups
+        .map((backup) =>
+          [
+            '<section class="card row spread"><div>',
+            `<strong>${escapeHtml(new Date(backup.modified * 1000).toLocaleString())}</strong>`,
+            `<p class="note">${quantity(backup.entries, 'disc')} · ${bytes(backup.bytes)}</p>`,
+            '</div>',
+            action(
+              'information-backup-preview',
+              'Review restore…',
+              'small',
+              `data-name="${escapeHtml(backup.name)}"`,
+            ),
+            '</section>',
+          ].join(''),
+        )
+        .join('')
+    : '<p>No snapshots yet. After you edit game information, a snapshot is saved before your next library change.</p>';
+  const body = [
+    '<p>The five newest distinct snapshots of your custom edits are kept for this library. ',
+    'Snapshots are saved before library changes, including metadata edits and updates, imports, media preparation, category changes and Undo.</p>',
+    '<p class="note">Snapshots stay on this computer and are independent of Undo. ',
+    'Restoring opens the normal import review, where you choose entries and resolve conflicts. Only manual information fields are backed up.</p>',
+    `<p class="path">${pathLabel(result.directory)}</p>`,
+    `<div class="stack">${backups}</div>`,
+  ].join('');
   dialog(
     'Automatic metadata backups',
-    `<p>The five newest distinct snapshots of your custom edits are kept for this library. Snapshots are saved before library changes, including metadata edits and updates, imports, media preparation, category changes and Undo.</p><p class="note">Snapshots stay on this computer and are independent of Undo. Restoring opens the normal import review, where you choose entries and resolve conflicts. Only manual information fields are backed up.</p><p class="path">${pathLabel(result.directory)}</p><div class="stack">${result.backups.length ? result.backups.map((b) => `<section class="card row spread"><div><strong>${e(new Date(b.modified * 1000).toLocaleString())}</strong><p class="note">${quantity(b.entries, 'disc')} · ${bytes(b.bytes)}</p></div>${action('information-backup-preview', 'Review restore…', 'small', `data-name="${e(b.name)}"`)}</section>`).join('') : '<p>No snapshots yet. After you edit game information, a snapshot is saved before your next library change.</p>'}</div>`,
+    body,
     action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
   );
 }
+
+/** Imports the checked discs of the reviewed information import. */
 async function saveInformationImport() {
   const plan = state.informationImport;
   if (!plan) throw new Error('Review a metadata import first.');
   const discs = [...document.querySelectorAll('[data-info-import]:checked')].map(
-    (n) => plan.records[Number(n.dataset.infoImport)].path,
+    (input) => plan.records[Number(input.dataset.infoImport)].path,
   );
   if (!discs.length) throw new Error('Check at least one entry to import.');
   await call('game_info_import', { token: plan.token, discs });
@@ -4958,39 +5238,63 @@ async function saveInformationImport() {
     `Imported custom metadata for ${quantity(discs.length, 'disc')}. Copy the games to update your console drive.`,
   );
 }
+
+/**
+ * Previews restoring downloaded values in the information editor, for one
+ * field or `all`: each disc's current (or draft) value and the downloaded
+ * one. Discs that agree are shown once.
+ */
 async function previewInformationRestore(field) {
   const edit = state.informationEditor;
   if (!edit) throw new Error('Open the information editor first.');
   if (!edit.restorePreview)
     edit.restorePreview = await call('game_info_restore_preview', { original: edit.records });
-  const preview = edit.restorePreview,
-    keys = field === 'all' ? informationFields.map(([key]) => key) : [field];
-  edit.restoreRequested = keys.filter((k) => preview.available.includes(k));
+  const preview = edit.restorePreview;
+  const keys = field === 'all' ? informationFields.map(([key]) => key) : [field];
+  edit.restoreRequested = keys.filter((key) => preview.available.includes(key));
   const patch = informationPatch();
+
   const rows = keys
     .map((key) => {
-      const label = informationFields.find(([k]) => k === key)?.[1] || key;
-      const values = preview.records.map((r, i) => {
-        const old = edit.records[i]?.metadata || {};
-        const current = edit.restoreFields.has(key)
-          ? informationValue(r.fields[key])
-          : Object.hasOwn(patch, key)
-            ? patch[key]
-            : informationValue(key === 'description' ? old.description || old.overview : old[key]);
-        return { path: r.path, current, downloaded: informationValue(r.fields[key]) };
+      const label = informationFieldLabel(key);
+      const values = preview.records.map((record, index) => {
+        const loaded = edit.records[index]?.metadata || {};
+        let current;
+        if (edit.restoreFields.has(key)) current = informationValue(record.fields[key]);
+        else if (Object.hasOwn(patch, key)) current = patch[key];
+        else current = informationValue(currentInformation(loaded, key));
+        return { path: record.path, current, downloaded: informationValue(record.fields[key]) };
       });
-      const same = new Set(values.map((v) => JSON.stringify([v.current, v.downloaded]))).size === 1;
+      const same =
+        new Set(values.map((value) => JSON.stringify([value.current, value.downloaded]))).size ===
+        1;
       return (same ? values.slice(0, 1) : values)
-        .map(
-          (v) =>
-            `<tr><td>${e(label)}${!same ? `<small class="path">${pathLabel(v.path)}</small>` : ''}</td><td><div class="game-description">${e(v.current || '(Empty)')}</div></td><td><div class="game-description">${preview.available.includes(key) ? e(v.downloaded) : 'Not supplied for every disc — kept'}</div></td></tr>`,
-        )
+        .map((value) => {
+          const path = !same ? `<small class="path">${pathLabel(value.path)}</small>` : '';
+          const downloaded = preview.available.includes(key)
+            ? escapeHtml(value.downloaded)
+            : 'Not supplied for every disc — kept';
+          return [
+            `<tr><td>${escapeHtml(label)}${path}</td>`,
+            `<td><div class="game-description">${escapeHtml(value.current || '(Empty)')}</div></td>`,
+            `<td><div class="game-description">${downloaded}</div></td></tr>`,
+          ].join('');
+        })
         .join('');
     })
     .join('');
+  const body = [
+    '<p>Review the LaunchBox values below. Choose Use downloaded values, then Save information in the editor to finish. ',
+    'Restored fields can receive future downloaded updates.</p>',
+    '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table">',
+    '<table class="information-restore-table"><thead><tr><th>Field</th><th>Current / draft</th><th>Downloaded</th></tr></thead>',
+    `<tbody>${rows}</tbody></table></div>`,
+    `<p class="note">Applies to ${quantity(edit.records.length, 'disc')}. Unavailable fields and your other edits are kept.</p>`,
+  ].join('');
+
   dialog(
     'Restore downloaded information',
-    `<p>Review the LaunchBox values below. Choose Use downloaded values, then Save information in the editor to finish. Restored fields can receive future downloaded updates.</p><div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table class="information-restore-table"><thead><tr><th>Field</th><th>Current / draft</th><th>Downloaded</th></tr></thead><tbody>${rows}</tbody></table></div><p class="note">Applies to ${quantity(edit.records.length, 'disc')}. Unavailable fields and your other edits are kept.</p>`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="game-info-restore-dialog"') +
       action(
         'game-info-stage-restore',
@@ -5001,6 +5305,11 @@ async function previewInformationRestore(field) {
     'game-info-restore-dialog',
   );
 }
+
+/**
+ * Puts the previewed downloaded values into the editor's fields; they are
+ * saved (and the manual edits removed) with Save information.
+ */
 function stageInformationRestore() {
   const edit = state.informationEditor;
   if (!edit?.restorePreview) return;
