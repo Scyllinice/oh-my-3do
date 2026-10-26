@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# Run project commands in the 3DO SDK development container (Dockerfile at the
+# repository root). The project is mounted at /workspace and files are created
+# as the current user.
+#
+# Usage: tools/dev-container ACTION [ARGUMENTS...]
+#   build                      build the container image (runs the tests)
+#   test                       make test (the default)
+#   menu | demo                build iso/boot.iso or iso/menu-demo.iso
+#   cover GAME IMAGE           prepare a cover (prepare-cover.py)
+#   covers                     export covers for the USB drive
+#   resize-covers IN OUT       resize cover images
+#   preview VIDEO OUTPUT       prepare a preview clip
+#   media-index USB_ROOT       index a USB drive (index-media.py)
+#   smoke                      the SDK's own smoke test
+#   shell                      an interactive shell
+#   run COMMAND ...            any command
+# OH3DO_IMAGE picks another image; DEVKIT_REF the SDK revision for build.
 set -euo pipefail
 
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Download the reference sources some tests and tools read, into third_party/:
+#   SataTo3DO      the FCare ODE firmware (how the drive reads images and files)
+#   portfolio_os   the 3DO OS source (the SDK font that preview-menu.py draws)
+# Each is fetched at a pinned revision; an existing checkout at a different
+# revision is left alone and reported.
 set -euo pipefail
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 mkdir -p "$project_dir/third_party"
