@@ -88,20 +88,28 @@ import clips already saved on the PC.
 
 ## Convert a video
 
-With Python 3.9+, FFmpeg and ffprobe installed:
+With Python 3.9+, FFmpeg and ffprobe installed, make a 160×120 clip for the
+`.ohmy3do/previews/` folder at the drive root with `--format 5`:
 
 ```powershell
-py prepare-preview.py input.mp4 "M:/.ohmy3do/previews/Road Rash.3dv"
+py prepare-preview.py --format 5 input.mp4 "M:/.ohmy3do/previews/Road Rash.3dv"
 py index-media.py M:/
 ```
 
 Use `--start 10` to choose a starting point, `--duration 10` for a shorter clip,
-or `--silent` to omit audio. Prepared clips are up to 15 seconds at 30 fps.
+or `--silent` to omit audio. These clips are up to 15 seconds at 30 fps.
+
+Without `--format 5`, `prepare-preview.py` makes a full-length 320×240 streamed
+preview (OM3DVID7). The menu streams those only from the `.ohmy3do` folder
+beside each disc, the layout the desktop app prepares, so a streamed clip in
+the root `previews/` folder fails to load ("Preview failed"). To replace one
+game's preview on a drive the desktop app prepared, write the new clip over the
+existing file in that game's `.ohmy3do` folder, keeping its name.
 
 From a source checkout, Docker can run the conversion:
 
 ```sh
-./tools/dev-container preview artwork/road-rash.mp4 'iso/previews/Road Rash.3dv'
+./tools/dev-container preview --format 5 artwork/road-rash.mp4 'iso/previews/Road Rash.3dv'
 ```
 
 ## Importing EmuMovies clips

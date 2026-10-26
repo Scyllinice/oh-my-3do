@@ -290,9 +290,17 @@ For a first test without FFmpeg, copy the included original moving test pattern
 "demo-preview.3dv" (moving pattern and quiet test tone) into USB .ohmy3do/previews/, rename it to match one game's basename
 (e.g. Road Rash.3dv), then run the indexer and enable previews as described below.
 
-Convert a local clip; the output is a 160x120, 30 fps RAM-playable animation:
-  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
+Convert a local clip into a 160x120, 30 fps RAM-playable animation for the
+.ohmy3do/previews/ folder at the drive root. Pass --format 5:
+  py prepare-preview.py --format 5 input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv"
   py index-media.py E:/
+
+Without --format 5, prepare-preview.py makes a full-length 320x240 streamed
+preview (OM3DVID7). The menu streams those only from the .ohmy3do folder beside
+each disc, the layout the desktop app prepares; in the root previews/ folder a
+streamed clip fails to load ("Preview failed"). To replace one game's preview on
+a drive the desktop app prepared, write the new clip over the existing file in
+that game's .ohmy3do folder, keeping its name.
 
 New conversions (OM3DVID5) are up to 15 seconds at 30 fps with source audio, in
 a 1,400 KiB payload budget; --budget-kib changes that. Decoder/frame buffers
@@ -301,13 +309,14 @@ and allocation guards require additional memory. Shorter sources stay shorter, a
 and firmware; conversion time depends on the PC and clip.
 The encoder library is included (preview-encoder-win64.dll / preview-encoder.so,
 or build it with "py build-preview-encoder.py --output ." where a C compiler is available).
-The menu plays OM3DVID5 previews. The desktop app converts original videos
-with Covers & previews > Rebuild media quality.
+The menu plays OM3DVID5 previews from either layout, and streamed OM3DVID7
+previews from the beside-disc layout. The desktop app converts original videos
+with Artwork & previews > Rebuild media quality.
 Audio is signed 8-bit 11025 Hz mono PCM.
 FFmpeg and ffprobe must both be on PATH; no additional audio encoder is needed.
 
 Optional:
-  py prepare-preview.py input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --duration 10
+  py prepare-preview.py --format 5 input.mp4 "E:/.ohmy3do/previews/Road Rash.3dv" --start 10 --duration 10
 Use --silent to omit audio.
 Enable Video previews in Tools > Settings, save, then cold boot. Preview sound
 can be toggled independently and saves as preview_sound=0/1 under [audio].

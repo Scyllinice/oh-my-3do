@@ -38,18 +38,22 @@ boot where prompted.
 
 ## Quality and loading
 
-Prepared previews play at 160×120 and 30 fps, with optional audio, for up to
-15 seconds. Full-screen viewing enlarges the same clip to 320×240, so it will
-look softer than the original video. Higher-quality source clips can improve
-conversion, but do not increase the playback resolution.
+The desktop app prepares previews at 320×240 and 30 fps, with optional audio,
+for the whole source clip up to a minute. The menu streams them from the drive
+while they play instead of loading them whole, and full-screen viewing shows
+them at their full resolution. Previews prepared by desktop 1.0.4
+or earlier are 160×120 and up to 15 seconds; they still play, enlarged in
+full screen.
 
 The desktop app prepares larger covers for full-screen viewing. Use **Rebuild
-media quality** to recreate covers and previews from available originals.
-Missing originals are skipped; existing media is retained.
+media quality** to recreate covers and previews from available originals, for
+example to turn older previews into streamed ones; then choose **Update media &
+information…** on the drive. Missing originals are skipped; existing media is
+retained.
 
-A preview loads before playback, so the first loop may take time to start.
-Moving to another game cancels loading. Press **L+R** to cancel and open Tools.
-A canceled or missing preview leaves the cover available.
+A streamed preview starts once its first few seconds have been read. Moving to
+another game cancels loading. Press **L+R** to cancel and open Tools. A canceled
+or missing preview leaves the cover available.
 
 After manually replacing media, [rebuild the drive indexes](media-tools.md#covers-and-indexes)
 and restart the console, or press X at the drive root to refresh. For failed loads,
