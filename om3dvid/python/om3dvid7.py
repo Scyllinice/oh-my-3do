@@ -1,11 +1,12 @@
-"""OM3DVID7 for Python: make streamed 3DO video clips, and check them.
+"""OM3DVID7 for Python: make streamed 3DO video clips, check them, and
+decode them.
 
 OM3DVID7 is the 320x240, 30 fps streamed video format of the om3dvid
 library (see om3dvid/include/om3dvid7.h for the layout). This module needs
 only the standard library.
 
-Encoding uses the library's native encoder, built from om3dvid/src as a
-shared library (om3dvid7.so, om3dvid7.dylib or om3dvid7-win64.dll; see
+Encoding and decoding use the library's native code, built from om3dvid/src
+as a shared library (om3dvid7.so, om3dvid7.dylib or om3dvid7-win64.dll; see
 tools/build-preview-encoder.py). Reading headers and checking files is pure
 Python.
 
@@ -18,6 +19,11 @@ Python.
                                       # or None for a silent clip
     open("clip.3dv", "wb").write(clip.data)
     om3dvid7.check(clip.data)         # raises ValueError if a player would refuse it
+
+    reader = om3dvid7.Reader(clip.data)
+    for rgb in reader:                # each frame once, as 320x240 RGB
+        ...
+    sound = reader.audio()            # b"" for a silent clip
 
 Sound is optional throughout: a clip may be silent, and a player decides for
 itself whether and how to play the sound it carries.
@@ -47,9 +53,15 @@ CHUNK_TABLE = 64
 CHUNK_HEADER = 24
 ENTRY4_BYTES, ENTRY2_BYTES = 40, 12
 
-# The native encoder's interface version this module speaks
-# (OM3DVID7_ENCODER_ABI in om3dvid7_encoder.h).
+# The native interface versions this module speaks (OM3DVID7_ENCODER_ABI in
+# om3dvid7_encoder.h, OM3DVID7_READER_ABI in om3dvid7_reader.h).
 ENCODER_ABI = 2
+READER_ABI = 1
+
+# The pictures a reader decodes (om3dvid7.h): the full 320x240 screen, or
+# the 160x120 TV picture of 2x2 averages that a menu shows small.
+SCREEN, TV = 0, 1
+TV_WIDTH, TV_HEIGHT = 160, 120
 
 # What om3dvid7_encoder_finish reports, in its order.
 STATISTICS = (
@@ -147,6 +159,37 @@ class Library:
             ctypes.POINTER(ctypes.c_uint32),  # statistics
         )
         self.native = native
+        self.has_reader = self._declare_reader()
+
+    def _declare_reader(self):
+        """Declares the reader's functions; False if this build has none."""
+        native = self.native
+        try:
+            native.om3dvid7_reader_abi.restype = ctypes.c_uint32
+        except AttributeError:
+            return False
+        if native.om3dvid7_reader_abi() != READER_ABI:
+            return False
+        native.om3dvid7_reader_workspace_bytes.restype = ctypes.c_uint64
+        native.om3dvid7_reader_workspace_bytes.argtypes = ()
+        native.om3dvid7_reader_open.restype = ctypes.c_int32
+        native.om3dvid7_reader_open.argtypes = (
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            ctypes.c_uint64,
+        )
+        native.om3dvid7_reader_frames.restype = ctypes.c_uint32
+        native.om3dvid7_reader_frames.argtypes = (ctypes.c_void_p,)
+        native.om3dvid7_reader_audio_rate.restype = ctypes.c_uint32
+        native.om3dvid7_reader_audio_rate.argtypes = (ctypes.c_void_p,)
+        native.om3dvid7_reader_next.restype = ctypes.c_int32
+        native.om3dvid7_reader_next.argtypes = (ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p)
+        native.om3dvid7_reader_rewind.restype = None
+        native.om3dvid7_reader_rewind.argtypes = (ctypes.c_void_p,)
+        native.om3dvid7_reader_audio.restype = ctypes.c_int64
+        native.om3dvid7_reader_audio.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
+        return True
 
     def default_settings(self):
         """The settings Oh My 3DO uses (about 200 KB/s, 10-frame chunks)."""
@@ -257,6 +300,75 @@ def encode(frames, audio=None, settings=None, library=None, max_frames=None):
     for frame in frames:
         encoder.add_frame(frame)
     return encoder.finish(audio, settings)
+
+
+# ---- Decoding ---------------------------------------------------------------
+
+
+class Reader:
+    """Decodes a clip (the whole file's bytes) frame by frame into RGB
+    pictures, exactly as a 3DO shows them. After the last frame it starts
+    over, as players loop.
+
+    `library` is a Library, a path for load_library, or None to find it."""
+
+    def __init__(self, data, library=None):
+        if not isinstance(library, Library):
+            library = load_library(library)
+        if not library.has_reader:
+            raise ValueError("This OM3DVID7 library has no reader: " + str(library.path))
+        self.library = library
+        native = library.native
+        self.data = bytes(data)  # kept: the reader decodes from it
+        size = native.om3dvid7_reader_workspace_bytes()
+        self.workspace = ctypes.create_string_buffer(size)
+        if native.om3dvid7_reader_open(self.workspace, size, self.data, len(self.data)):
+            raise ValueError("Not a readable OM3DVID7 clip")
+        self.frames = native.om3dvid7_reader_frames(self.workspace)
+        self.audio_rate = native.om3dvid7_reader_audio_rate(self.workspace)
+
+    @property
+    def has_sound(self):
+        return self.audio_rate != 0
+
+    def next(self, picture=SCREEN):
+        """Decodes the next frame. Returns (its number in the clip, RGB bytes
+        in rows: 320x240 for SCREEN, 160x120 for TV). Raises ValueError if
+        the clip is damaged."""
+        size = FRAME_BYTES if picture == SCREEN else TV_WIDTH * TV_HEIGHT * 3
+        rgb = ctypes.create_string_buffer(size)
+        number = self.library.native.om3dvid7_reader_next(self.workspace, picture, rgb)
+        if number < 0:
+            raise ValueError("Damaged OM3DVID7 clip (or an unknown picture)")
+        return number, rgb.raw
+
+    def rewind(self):
+        """Starts again from the first frame."""
+        self.library.native.om3dvid7_reader_rewind(self.workspace)
+
+    def __iter__(self):
+        """Each frame once, from the first, as 320x240 RGB."""
+        self.rewind()
+        for _ in range(self.frames):
+            yield self.next(SCREEN)[1]
+
+    def audio(self):
+        """The clip's whole sound: signed 8-bit mono at audio_rate (b"" when
+        silent). Raises ValueError if the clip is damaged."""
+        native = self.library.native
+        count = native.om3dvid7_reader_audio(self.workspace, None, 0)
+        if count < 0:
+            raise ValueError("Damaged OM3DVID7 clip")
+        samples = ctypes.create_string_buffer(max(count, 1))
+        native.om3dvid7_reader_audio(self.workspace, samples, count)
+        return samples.raw[:count]
+
+
+def decode(data, picture=SCREEN, library=None):
+    """Every frame of a clip once, as RGB bytes (see Reader.next)."""
+    reader = Reader(data, library)
+    for _ in range(reader.frames):
+        yield reader.next(picture)[1]
 
 
 # ---- Reading and checking files -------------------------------------------

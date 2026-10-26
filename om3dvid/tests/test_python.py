@@ -136,6 +136,39 @@ class Om3dvid7Test(unittest.TestCase):
             with self.subTest(name), self.assertRaises(ValueError):
                 om3dvid7.check(bad)
 
+    def test_decoding(self):
+        reader = om3dvid7.Reader(self.clip.data, self.library)
+        self.assertEqual((reader.frames, reader.audio_rate), (FRAMES, om3dvid7.AUDIO_RATE))
+        # The sound is stored as it was given.
+        self.assertEqual(reader.audio(), self.sound)
+        decoded = list(reader)
+        self.assertEqual(len(decoded), FRAMES)
+        for original, frame in zip(self.frames, decoded):
+            self.assertEqual(len(frame), om3dvid7.FRAME_BYTES)
+            # Lossy (and this test picture is busier than real footage), but
+            # each frame is far closer to its source than to a black frame.
+            error = sum(abs(a - b) for a, b in zip(original[::97], frame[::97]))
+            self.assertLess(error, sum(frame[::97]) / 2)
+        # The same frames again through decode(), and the TV picture's size.
+        self.assertEqual(list(om3dvid7.decode(self.clip.data, library=self.library)), decoded)
+        number, small = reader.next(om3dvid7.TV)
+        self.assertEqual((number, len(small)), (0, 160 * 120 * 3))  # looped back
+        silent = om3dvid7.Reader(self.silent.data, self.library)
+        self.assertFalse(silent.has_sound)
+        self.assertEqual(silent.audio(), b"")
+
+    def test_damaged_clip_fails_to_decode(self):
+        damaged = bytearray(self.clip.data)
+        damaged[-100] ^= 1  # in the last chunk
+        reader = om3dvid7.Reader(bytes(damaged), self.library)
+        with self.assertRaises(ValueError):
+            for _ in range(FRAMES):
+                reader.next()
+        with self.assertRaises(ValueError):
+            reader.audio()
+        with self.assertRaises(ValueError):
+            om3dvid7.Reader(self.clip.data[:-2048], self.library)
+
     def test_c_encoder_clip(self):
         if CLIP is None:
             self.skipTest("no clip from the C encoder test given")

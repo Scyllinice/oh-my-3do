@@ -5,7 +5,8 @@ Usage: build-preview-encoder.py [--output FOLDER] [--windows]
 
 Compiles the two shared libraries prepare-preview.py loads to encode game
 preview clips: preview-encoder (the older full-load .3dv format) and
-om3dvid7 (the streamed format: the om3dvid/ library's encoder and decoder).
+om3dvid7 (the streamed format: the om3dvid/ library's encoder, decoder and
+PC reader).
 Output goes to build/media-native/ by default.
 
 --windows cross-compiles x64 DLLs that need no C runtime, using clang and
@@ -26,7 +27,7 @@ LIBRARIES = (
     ("preview-encoder", ("preview-encoder.c",), "c89", ("tools",), (), "OH3DO_PREVIEW_DLL"),
     (
         "om3dvid7",
-        ("om3dvid7_encoder.c", "om3dvid7_decoder.c"),
+        ("om3dvid7_encoder.c", "om3dvid7_decoder.c", "om3dvid7_reader.c"),
         "c99",
         ("om3dvid/src",),
         ("om3dvid/include",),

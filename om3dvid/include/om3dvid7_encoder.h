@@ -18,12 +18,14 @@
 #define OM3DVID7_ENCODER_H
 #include <stdint.h>
 
+#ifndef OM3DVID7_EXPORT
 #if defined(_WIN32) && defined(OM3DVID7_DLL)
 #define OM3DVID7_EXPORT __declspec(dllexport)
 #elif defined(__GNUC__)
 #define OM3DVID7_EXPORT __attribute__((visibility("default")))
 #else
 #define OM3DVID7_EXPORT
+#endif
 #endif
 
 /* The encoder's interface version, returned by om3dvid7_encoder_abi. It
