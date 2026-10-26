@@ -1,4 +1,5 @@
-// The preview encoder is shared with tools/prepare-preview.py; compile the same C source in.
+// The older preview encoder is shared with tools/prepare-preview.py; compile the same C
+// source in. (The streamed format's comes from the om3dvid7 crate.)
 fn main() {
     // A precompiled resource keeps native and cargo-xwin builds independent
     // of the host's resource compiler. Regenerate it with prepare-branding.py.
@@ -31,26 +32,4 @@ fn main() {
         .opt_level(2)
         .warnings(true)
         .compile("preview_encoder");
-    // The streamed-preview encoder (the om3dvid/ library) keeps no static
-    // state, and checks every file it writes with the library's own decoder.
-    let library = "../om3dvid";
-    for file in [
-        "src/om3dvid7_encoder.c",
-        "src/om3dvid7_decoder.c",
-        "include/om3dvid7.h",
-        "include/om3dvid7_encoder.h",
-    ] {
-        println!("cargo:rerun-if-changed={library}/{file}");
-    }
-    let mut build = cc::Build::new();
-    build
-        .file(format!("{library}/src/om3dvid7_encoder.c"))
-        .file(format!("{library}/src/om3dvid7_decoder.c"))
-        .include(format!("{library}/include"))
-        .opt_level(2)
-        .warnings(true);
-    if !msvc {
-        build.flag("-std=c99");
-    }
-    build.compile("om3dvid7");
 }

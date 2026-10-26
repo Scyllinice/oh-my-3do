@@ -86,3 +86,6 @@ Thumbs.db
 # Tauri shell builds
 /desktop/shell/target/
 /desktop/shell/gen/
+
+# The om3dvid library's Rust crate builds
+/om3dvid/rust/target/

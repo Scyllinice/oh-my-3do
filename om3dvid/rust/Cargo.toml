@@ -1,0 +1,12 @@
+[package]
+name = "om3dvid7"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.88"
+description = "Encode, check and decode OM3DVID7, the om3dvid library's streamed 3DO video format"
+# The C sources are in the om3dvid/ folder above this crate.
+publish = false
+
+[build-dependencies]
+cc = "1.8"

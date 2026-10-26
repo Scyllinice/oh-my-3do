@@ -170,6 +170,7 @@ build/test_cover_cache: src/cover_cache.c src/cover_cache.h src/usb_art.c src/us
 .PHONY: test-desktop
 test-desktop:
 	cargo test --locked --manifest-path desktop/Cargo.toml
+	cargo test --locked --manifest-path om3dvid/rust/Cargo.toml
 
 build/test_save_cheats: src/save_cheats.c src/save_cheats.h src/save_cheat_db.h tests/test_save_cheats.c src/save_archive.c src/save_archive.h src/usb_art.c src/usb_file.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c
 	mkdir -p build

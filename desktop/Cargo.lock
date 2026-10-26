@@ -894,6 +894,7 @@ dependencies = [
  "fs2",
  "image",
  "kamadak-exif",
+ "om3dvid7",
  "quick-xml",
  "regex",
  "reqwest",
@@ -908,6 +909,13 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "om3dvid7"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

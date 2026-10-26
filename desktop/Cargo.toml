@@ -27,6 +27,8 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 encoding_rs = "0.8"
 anyhow = "1"
+# The om3dvid library: the OM3DVID7 encoder and checker.
+om3dvid7 = { path = "../om3dvid/rust" }
 
 tempfile = "3"
 unicode-normalization = "0.1"
