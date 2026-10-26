@@ -1912,68 +1912,84 @@ fn sqlite_copy(database: &Value) -> Result<Vec<u8>> {
     Ok(fs::read(path)?)
 }
 
+// ---- Importing discs ----
+
+/// The library folder for a kind of media ("cover" or "preview").
+fn media_folder(kind: &str) -> &'static str {
+    if kind == "cover" {
+        "covers"
+    } else {
+        "previews"
+    }
+}
+
 /// Adds a prepared media file; an existing file with other contents is an error.
-fn write_asset(tx: &mut Journal, root: &Path, relative: &str, source: &Path) -> Result<()> {
+fn write_asset(journal: &mut Journal, root: &Path, relative: &str, source: &Path) -> Result<()> {
     let bytes = fs::read(source)?;
     let path = f::safe(root, relative)?;
     if path.exists() && fs::read(&path)? != bytes {
         bail!("Existing media differs")
-    };
-    tx.write(relative, &bytes)
+    }
+    journal.write(relative, &bytes)
 }
+
+/// Copies prepared covers and previews into the library's media folders,
+/// with each cover's full-screen version. Discs can share a file, so each is
+/// written once.
+fn write_prepared_media(
+    journal: &mut Journal,
+    root: &Path,
+    prepared: &media::Outputs,
+) -> Result<()> {
+    let mut written = HashSet::new();
+    for ((_, kind), asset) in prepared {
+        let relative = format!(".ohmy3do/{}/{}", media_folder(kind), asset.name);
+        if !written.insert(relative.clone()) {
+            continue;
+        }
+        write_asset(journal, root, &relative, &asset.path)?;
+        if let Some(large) = &asset.large {
+            let large_relative = format!(".ohmy3do/covers/{}", media::large_name(&asset.name));
+            write_asset(journal, root, &large_relative, large)?;
+        }
+    }
+    Ok(())
+}
+
+/// The space to keep free on the library's drive beyond the discs.
+const IMPORT_SPARE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Imports the selected entries of a scan into the library: copies and
+/// checks each disc's files, prepares its cover and preview, records it in
+/// the database, and rebuilds the menu's indexes. Everything goes through
+/// one journal, and any failure undoes the whole import. The original files
+/// are never changed. Returns the journal's path.
 pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Result<PathBuf> {
     let root = f::root(&plan.root)?;
     let _lock = lock_library(&root, cache)?;
-    let mut entries = plan
+    let mut entries: Vec<Entry> = plan
         .entries
         .iter()
-        .filter(|e| e.selected)
+        .filter(|entry| entry.selected)
         .cloned()
-        .collect::<Vec<_>>();
+        .collect();
     if entries.is_empty() {
         bail!("Check at least one resolved entry")
     }
-    let mut targets = HashSet::new();
-    let mut sources = HashSet::new();
-    for entry in &entries {
-        if !entry.resolvable() {
-            bail!(
-                "Choose a category or identify {} before importing{}",
-                entry.title,
-                if entry.blocked {
-                    format!(": {}", entry.reason)
-                } else {
-                    String::new()
-                }
-            )
-        }
-        for file in &entry.files {
-            let path = f::safe(&root, &file.target)?;
-            if path.exists() || !targets.insert(f::fold(&file.target)) {
-                bail!("Destination is occupied: {}", file.target)
-            }
-            if !sources.insert(file.source.clone()) {
-                bail!("Entries share a source data file")
-            };
-            if file.source.canonicalize()?.starts_with(&root) {
-                bail!("Import source is already inside the library")
-            }
-            if f::stamp(&file.source)? != (file.fingerprint.size, file.fingerprint.mtime_ns) {
-                bail!("Source changed since scan")
-            }
-        }
-    }
-    let required = entries
+    check_import(&root, &entries)?;
+
+    let required: u64 = entries
         .iter()
-        .flat_map(|e| e.files.iter())
-        .map(|f| f.fingerprint.size)
-        .sum::<u64>();
-    if fs2::available_space(&root)? < required + 16 * 1024 * 1024 {
+        .flat_map(|entry| entry.files.iter())
+        .map(|file| file.fingerprint.size)
+        .sum();
+    if fs2::available_space(&root)? < required + IMPORT_SPARE_BYTES {
         bail!("Insufficient free space for the import")
     }
-    let mut db = database(&root)?;
-    let mut covers = read_media_index(&root, "covers")?;
-    let mut previews = read_media_index(&root, "previews")?;
+
+    let database = database(&root)?;
+    let covers = read_media_index(&root, "covers")?;
+    let previews = read_media_index(&root, "previews")?;
     let mut prepared = media::Outputs::new();
     for entry in &mut entries {
         job.check()?;
@@ -1987,172 +2003,27 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
             entry.category
         );
     }
-    let marker = f::safe(&root, ".ohmy3do/ohmy3do.ini")?;
-    let mut tx = Journal::new(&root, cache)?;
-    job.say(format!("Undo journal: {}", tx.path.display()));
-    let result = (|| -> Result<()> {
-        if !root.join(categories::PATH).exists() {
-            tx.write(categories::PATH, &category_config.encode()?)?;
-        }
-        if !marker.exists() {
-            tx.write(".ohmy3do/ohmy3do.ini", include_bytes!("../../ohmy3do.ini"))?;
-        }
-        let mut records = vec![];
-        let import_total = entries
-            .iter()
-            .flat_map(|entry| &entry.files)
-            .map(|file| file.fingerprint.size)
-            .sum::<u64>()
-            .max(1);
-        let mut imported_bytes = 0u64;
-        job.report(0, import_total, "Importing and verifying discs");
-        for (n, entry) in entries.iter().enumerate() {
-            job.check()?;
-            job.say(format!(
-                "Importing {}/{}: {}",
-                n + 1,
-                entries.len(),
-                entry.title
-            ));
-            for file in &entry.files {
-                job.say(format!("Copying and verifying {}", file.source.display()));
-                if f::stamp(&file.source)? != (file.fingerprint.size, file.fingerprint.mtime_ns) {
-                    bail!("Source changed since scan: {}", file.source.display())
-                }
-                tx.copy(
-                    &file.source,
-                    &file.target,
-                    Some(&file.fingerprint.sha256),
-                    &job.progress_range(
-                        imported_bytes,
-                        file.fingerprint.size,
-                        import_total,
-                        "Importing and verifying discs",
-                    ),
-                )?;
-                imported_bytes += file.fingerprint.size;
-                job.report(
-                    imported_bytes,
-                    import_total,
-                    "Importing and verifying discs",
-                );
-            }
-            if entry
-                .source
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .eq_ignore_ascii_case("cue")
-            {
-                let copied = fs::read(root.join(&entry.target))?;
-                let expected = tx
-                    .created
-                    .iter()
-                    .find(|file| file.path == entry.target)
-                    .context("Missing copied CUE receipt")?;
-                if format!("{:x}", Sha256::digest(&copied)) != expected.sha256 {
-                    bail!("Copied CUE changed during import")
-                }
-                let text = d::decode_cue(&copied)?;
-                let mapping = entry
-                    .files
-                    .iter()
-                    .map(|f| {
-                        (
-                            f.source
-                                .file_name()
-                                .unwrap()
-                                .to_string_lossy()
-                                .to_lowercase(),
-                            Path::new(&f.target)
-                                .file_name()
-                                .unwrap()
-                                .to_string_lossy()
-                                .into_owned(),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>();
-                let text = rx(r#"(?im)^(\s*FILE\s+)(?:"([^"\r\n]+)"|(\S+))(\s+\S+[^\r\n]*)"#)
-                    .replace_all(&text, |c: &regex::Captures<'_>| {
-                        format!(
-                            "{}\"{}\"{}",
-                            &c[1],
-                            mapping
-                                .get(
-                                    &c.get(2)
-                                        .or_else(|| c.get(3))
-                                        .unwrap()
-                                        .as_str()
-                                        .to_lowercase()
-                                )
-                                .unwrap(),
-                            &c[4]
-                        )
-                    })
-                    .into_owned();
-                tx.write(&entry.target, text.as_bytes())?;
-            }
-            let game = entry.game.map(|i| &plan.catalog.games[i]);
-            let metadata = game
-                .map(|g| g.metadata.clone())
-                .unwrap_or_else(|| json!({}));
-            let mut record = json!({"path":entry.target,"title":entry.title,"region":entry.region,"category":entry.category,"category_review":false,"category_reason":entry.category_reason,"catalog_name":game.map(|g|&g.name),"variant":game.and_then(|g|g.variant.as_ref()),"edition_unresolved":false,"disc":d::disc_number(&entry.title),"identification":entry.confidence,"status":if entry.confidence=="unverified"{"registered"}else{"organized"},"metadata":metadata,"cover":null,"cover_source":null,"preview":null,"preview_source":null,"suggestions":[]});
-            if entry.confidence == "unverified" {
-                let mut proof = serde_json::Map::new();
-                for file in &entry.files {
-                    let fingerprint = d::fingerprint(&root.join(&file.target), false, job)?;
-                    proof.insert(file.target.clone(),json!({"size":fingerprint.size,"mtime_ns":fingerprint.mtime_ns,"sha1":fingerprint.sha1}));
-                }
-                record["registration"] = Value::Object(proof);
-            }
-            for (kind, map) in [("cover", &mut covers), ("preview", &mut previews)] {
-                if let Some(asset) = prepared.get(&(entry.target.clone(), kind.to_owned())) {
-                    map.insert(f::fold(&entry.target), asset.name.clone());
-                    record[kind] = json!(asset.name);
-                    record[format!("{kind}_source")] = json!(asset.source);
-                }
-            }
-            records.push(record);
-        }
-        let mut written = HashSet::new();
-        job.phase("Saving library metadata and indexes");
-        for ((_, kind), asset) in &prepared {
-            let folder = if kind == "cover" {
-                "covers"
-            } else {
-                "previews"
-            };
-            let relative = format!(".ohmy3do/{folder}/{}", asset.name);
-            if written.insert(relative.clone()) {
-                write_asset(&mut tx, &root, &relative, &asset.path)?;
-                if let Some(large) = &asset.large {
-                    write_asset(
-                        &mut tx,
-                        &root,
-                        &format!(".ohmy3do/covers/{}", media::large_name(&asset.name)),
-                        large,
-                    )?;
-                }
-            }
-        }
-        if !covers.is_empty() {
-            tx.write(".ohmy3do/covers/index.3di", &media_index(&covers)?)?
-        }
-        if !previews.is_empty() {
-            tx.write(".ohmy3do/previews/index.3di", &media_index(&previews)?)?
-        }
-        write_database(&mut tx, db.take(), records, &plan.catalog.sources)?;
-        build_indexes(&root, &mut tx, job)?;
-        job.check()?;
-        tx.finish()?;
-        Ok(())
-    })();
+
+    let settings = f::safe(&root, ".ohmy3do/ohmy3do.ini")?;
+    let mut journal = Journal::new(&root, cache)?;
+    job.say(format!("Undo journal: {}", journal.path.display()));
+    let import = ImportWork {
+        root: &root,
+        settings: &settings,
+        plan,
+        entries: &entries,
+        prepared: &prepared,
+        category_config: &category_config,
+        job,
+    };
+    let result = import.run(&mut journal, database, covers, previews);
+
     if let Err(error) = result {
         job.say("Restoring the library after interrupted import");
-        if let Err(undo) = tx.undo() {
+        if let Err(undo) = journal.undo() {
             bail!(
                 "{error:#}. Automatic rollback could not finish: {undo:#}. Keep {}",
-                tx.path.display()
+                journal.path.display()
             )
         }
         return Err(error);
@@ -2161,9 +2032,293 @@ pub fn import(plan: &Plan, prefs: &Preferences, cache: &Path, job: &Job) -> Resu
         "Imported {} disc entries; originals unchanged",
         entries.len()
     ));
-    Ok(tx.path)
+    Ok(journal.path)
 }
 
+/// Checks the entries chosen for import before anything is changed: each is
+/// identified and has a category, no destination is taken or shared, no
+/// source file is used twice or already inside the library, and no source
+/// changed since it was scanned.
+fn check_import(root: &Path, entries: &[Entry]) -> Result<()> {
+    let mut destinations = HashSet::new();
+    let mut sources = HashSet::new();
+
+    for entry in entries {
+        if !entry.resolvable() {
+            let detail = if entry.blocked {
+                format!(": {}", entry.reason)
+            } else {
+                String::new()
+            };
+            bail!(
+                "Choose a category or identify {} before importing{detail}",
+                entry.title
+            )
+        }
+
+        for file in &entry.files {
+            let path = f::safe(root, &file.target)?;
+            if path.exists() || !destinations.insert(f::fold(&file.target)) {
+                bail!("Destination is occupied: {}", file.target)
+            }
+            if !sources.insert(file.source.clone()) {
+                bail!("Entries share a source data file")
+            }
+            if file.source.canonicalize()?.starts_with(root) {
+                bail!("Import source is already inside the library")
+            }
+            if f::stamp(&file.source)? != (file.fingerprint.size, file.fingerprint.mtime_ns) {
+                bail!("Source changed since scan")
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Everything the journaled part of an import needs.
+struct ImportWork<'a> {
+    root: &'a Path,
+    /// Where the console settings file goes.
+    settings: &'a Path,
+    plan: &'a Plan,
+    entries: &'a [Entry],
+    prepared: &'a media::Outputs,
+    category_config: &'a categories::Categories,
+    job: &'a Job,
+}
+
+impl ImportWork<'_> {
+    /// The journaled part of an import: support files, the discs, their
+    /// media, the database and the indexes.
+    fn run(
+        &self,
+        journal: &mut Journal,
+        mut database: Value,
+        mut covers: BTreeMap<String, String>,
+        mut previews: BTreeMap<String, String>,
+    ) -> Result<()> {
+        let job = self.job;
+
+        // A new library gets its categories file and console settings.
+        if !self.root.join(categories::PATH).exists() {
+            journal.write(categories::PATH, &self.category_config.encode()?)?;
+        }
+        if !self.settings.exists() {
+            journal.write(".ohmy3do/ohmy3do.ini", include_bytes!("../../ohmy3do.ini"))?;
+        }
+
+        let total_bytes = self
+            .entries
+            .iter()
+            .flat_map(|entry| &entry.files)
+            .map(|file| file.fingerprint.size)
+            .sum::<u64>()
+            .max(1);
+        let mut copied_bytes = 0u64;
+        job.report(0, total_bytes, "Importing and verifying discs");
+
+        let mut records = vec![];
+        for (index, entry) in self.entries.iter().enumerate() {
+            job.check()?;
+            job.say(format!(
+                "Importing {}/{}: {}",
+                index + 1,
+                self.entries.len(),
+                entry.title
+            ));
+            self.copy_files(journal, entry, &mut copied_bytes, total_bytes)?;
+
+            let is_cue = entry
+                .source
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("cue");
+            if is_cue {
+                rewrite_copied_cue(journal, self.root, entry)?;
+            }
+
+            let mut record = self.record(entry)?;
+            for (kind, index) in [("cover", &mut covers), ("preview", &mut previews)] {
+                let key = (entry.target.clone(), kind.to_owned());
+                if let Some(asset) = self.prepared.get(&key) {
+                    index.insert(f::fold(&entry.target), asset.name.clone());
+                    record[kind] = json!(asset.name);
+                    record[format!("{kind}_source")] = json!(asset.source);
+                }
+            }
+            records.push(record);
+        }
+
+        job.phase("Saving library metadata and indexes");
+        write_prepared_media(journal, self.root, self.prepared)?;
+        if !covers.is_empty() {
+            journal.write(".ohmy3do/covers/index.3di", &media_index(&covers)?)?;
+        }
+        if !previews.is_empty() {
+            journal.write(".ohmy3do/previews/index.3di", &media_index(&previews)?)?;
+        }
+        write_database(
+            journal,
+            database.take(),
+            records,
+            &self.plan.catalog.sources,
+        )?;
+        build_indexes(self.root, journal, job)?;
+        job.check()?;
+        journal.finish()?;
+        Ok(())
+    }
+
+    /// Copies an entry's files to their destinations, checking each against
+    /// the checksum taken when it was scanned. Progress counts bytes across
+    /// the whole import.
+    fn copy_files(
+        &self,
+        journal: &mut Journal,
+        entry: &Entry,
+        copied_bytes: &mut u64,
+        total_bytes: u64,
+    ) -> Result<()> {
+        let job = self.job;
+        for file in &entry.files {
+            job.say(format!("Copying and verifying {}", file.source.display()));
+            if f::stamp(&file.source)? != (file.fingerprint.size, file.fingerprint.mtime_ns) {
+                bail!("Source changed since scan: {}", file.source.display())
+            }
+            let file_job = job.progress_range(
+                *copied_bytes,
+                file.fingerprint.size,
+                total_bytes,
+                "Importing and verifying discs",
+            );
+            journal.copy(
+                &file.source,
+                &file.target,
+                Some(&file.fingerprint.sha256),
+                &file_job,
+            )?;
+            *copied_bytes += file.fingerprint.size;
+            job.report(*copied_bytes, total_bytes, "Importing and verifying discs");
+        }
+        Ok(())
+    }
+
+    /// The database record for an imported entry. Media are added by the
+    /// caller. An unverified entry also records each file's size, time and
+    /// SHA-1 as copied, so the registration can be checked later.
+    fn record(&self, entry: &Entry) -> Result<Value> {
+        let game = entry.game.map(|index| &self.plan.catalog.games[index]);
+        let metadata = game
+            .map(|game| game.metadata.clone())
+            .unwrap_or_else(|| json!({}));
+        let status = if entry.confidence == "unverified" {
+            "registered"
+        } else {
+            "organized"
+        };
+        let mut record = json!({
+            "path": entry.target,
+            "title": entry.title,
+            "region": entry.region,
+            "category": entry.category,
+            "category_review": false,
+            "category_reason": entry.category_reason,
+            "catalog_name": game.map(|game| &game.name),
+            "variant": game.and_then(|game| game.variant.as_ref()),
+            "edition_unresolved": false,
+            "disc": d::disc_number(&entry.title),
+            "identification": entry.confidence,
+            "status": status,
+            "metadata": metadata,
+            "cover": null,
+            "cover_source": null,
+            "preview": null,
+            "preview_source": null,
+            "suggestions": [],
+        });
+
+        if entry.confidence == "unverified" {
+            let mut proof = serde_json::Map::new();
+            for file in &entry.files {
+                let fingerprint = d::fingerprint(&self.root.join(&file.target), false, self.job)?;
+                proof.insert(
+                    file.target.clone(),
+                    json!({
+                        "size": fingerprint.size,
+                        "mtime_ns": fingerprint.mtime_ns,
+                        "sha1": fingerprint.sha1,
+                    }),
+                );
+            }
+            record["registration"] = Value::Object(proof);
+        }
+        Ok(record)
+    }
+}
+
+/// Rewrites an imported CUE sheet's FILE lines to name the tracks as they
+/// were renamed in the library. First checks the copy is exactly what was
+/// copied.
+fn rewrite_copied_cue(journal: &mut Journal, root: &Path, entry: &Entry) -> Result<()> {
+    let copied = fs::read(root.join(&entry.target))?;
+    let receipt = journal
+        .created
+        .iter()
+        .find(|file| file.path == entry.target)
+        .context("Missing copied CUE receipt")?;
+    if format!("{:x}", Sha256::digest(&copied)) != receipt.sha256 {
+        bail!("Copied CUE changed during import")
+    }
+    let text = d::decode_cue(&copied)?;
+
+    // Each source file's name (lowercase, as CUE names are matched) to its
+    // new name.
+    let new_names: HashMap<String, String> = entry
+        .files
+        .iter()
+        .map(|file| {
+            let old_name = file
+                .source
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_lowercase();
+            let new_name = Path::new(&file.target)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            (old_name, new_name)
+        })
+        .collect();
+
+    // FILE "name" TYPE, or FILE name TYPE: group 2 or 3 is the name.
+    let file_line = rx(r#"(?im)^(\s*FILE\s+)(?:"([^"\r\n]+)"|(\S+))(\s+\S+[^\r\n]*)"#);
+    let rewritten = file_line
+        .replace_all(&text, |captures: &regex::Captures<'_>| {
+            let old_name = captures
+                .get(2)
+                .or_else(|| captures.get(3))
+                .unwrap()
+                .as_str()
+                .to_lowercase();
+            format!(
+                "{}\"{}\"{}",
+                &captures[1],
+                new_names.get(&old_name).unwrap(),
+                &captures[4]
+            )
+        })
+        .into_owned();
+    journal.write(&entry.target, rewritten.as_bytes())
+}
+
+// ---- Preparing media for discs in the library ----
+
+/// Fills in missing covers, previews and descriptions for every disc in the
+/// library; or, with `provided` (a disc's path and a chosen cover and/or
+/// preview), sets that disc's media. Returns the journal's path.
 pub fn update_media(
     root: &Path,
     prefs: &Preferences,
@@ -2173,6 +2328,7 @@ pub fn update_media(
 ) -> Result<PathBuf> {
     update_media_mode(root, prefs, cache, provided, false, None, job)
 }
+
 /// One transaction for the chosen discs; unrelated records and media are retained.
 pub fn update_selected_media(
     root: &Path,
@@ -2181,21 +2337,38 @@ pub fn update_selected_media(
     discs: &[String],
     job: &Job,
 ) -> Result<PathBuf> {
-    let db = database(root)?;
-    let available: HashSet<_> = db["games"]
+    let database = database(root)?;
+    let in_library: HashSet<String> = database["games"]
         .as_array()
         .context("Invalid library")?
         .iter()
-        .filter_map(|r| r["path"].as_str().map(f::fold))
+        .filter_map(|record| record["path"].as_str().map(f::fold))
         .collect();
-    let selected: HashSet<_> = discs.iter().map(|p| f::fold(p)).collect();
+    let selected: HashSet<String> = discs.iter().map(|path| f::fold(path)).collect();
     anyhow::ensure!(
-        !selected.is_empty() && selected.iter().all(|p| available.contains(p)),
+        !selected.is_empty() && selected.iter().all(|path| in_library.contains(path)),
         "Select existing library games first"
     );
     update_media_mode(root, prefs, cache, None, false, Some(&selected), job)
 }
-type MediaWork = (Value, String, Entry, bool, bool);
+
+/// Re-converts every disc's cover and preview from the original files they
+/// were made from (when still available), keeping the existing media where
+/// an original is missing. Returns the journal's path.
+pub fn rebuild_media(root: &Path, prefs: &Preferences, cache: &Path, job: &Job) -> Result<PathBuf> {
+    update_media_mode(root, prefs, cache, None, true, None, job)
+}
+
+/// One disc's media work: its database record and path, the entry to
+/// prepare, and which media it wants.
+struct MediaWork {
+    record: Value,
+    path: String,
+    entry: Entry,
+    want_cover: bool,
+    want_preview: bool,
+}
+
 /// Prepares media for many discs at once, one disc per worker thread at a
 /// time. A preview takes about 100 seconds of one core to encode.
 fn prepare_parallel(
@@ -2206,68 +2379,174 @@ fn prepare_parallel(
     job: &Job,
 ) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-    let total = work.iter().filter(|w| w.3 || w.4).count();
+
+    let total = work
+        .iter()
+        .filter(|item| item.want_cover || item.want_preview)
+        .count();
     // Leave one core for the interface.
     let workers = std::thread::available_parallelism()
-        .map_or(1, |n| n.get().saturating_sub(1).max(1))
+        .map_or(1, |cores| cores.get().saturating_sub(1).max(1))
         .min(total.max(1));
     let queue = std::sync::Mutex::new(work.iter_mut());
-    let (done, failed) = (std::sync::Mutex::new(0usize), AtomicBool::new(false));
+    let finished = std::sync::Mutex::new(0usize);
+    let failed = AtomicBool::new(false);
     let worker_job = job.quiet_progress();
     job.report(0, total as u64, "Preparing media");
-    let results = std::thread::scope(|s| {
-        let handles = (0..workers)
+
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
             .map(|_| {
-                s.spawn(|| -> Result<media::Outputs> {
-                    let mut out = media::Outputs::new();
+                scope.spawn(|| -> Result<media::Outputs> {
+                    let mut prepared = media::Outputs::new();
+                    // Take discs from the shared queue until it is empty or
+                    // any worker fails.
                     while !failed.load(Relaxed) {
-                        let Some((_, path, entry, cover, preview)) = queue.lock().unwrap().next()
-                        else {
+                        let Some(item) = queue.lock().unwrap().next() else {
                             break;
                         };
-                        if !(*cover || *preview) {
+                        if !(item.want_cover || item.want_preview) {
                             continue;
                         }
                         let result = media::prepare_missing(
-                            entry,
+                            &mut item.entry,
                             prefs,
                             cache,
-                            &mut out,
-                            *cover,
-                            *preview,
+                            &mut prepared,
+                            item.want_cover,
+                            item.want_preview,
                             &worker_job,
                         );
                         if result.is_err() {
                             failed.store(true, Relaxed);
                             result?;
                         }
-                        let mut completed = done.lock().unwrap();
-                        *completed += 1;
-                        let n = *completed;
-                        job.report(n as u64, total as u64, "Preparing media");
-                        job.say(format!("Media {n} of {total} ready: {path}"));
+
+                        let mut count = finished.lock().unwrap();
+                        *count += 1;
+                        let done = *count;
+                        job.report(done as u64, total as u64, "Preparing media");
+                        job.say(format!("Media {done} of {total} ready: {}", item.path));
                     }
-                    Ok(out)
+                    Ok(prepared)
                 })
             })
-            .collect::<Vec<_>>();
+            .collect();
         handles
             .into_iter()
-            .map(|h| {
-                h.join()
+            .map(|handle| {
+                handle
+                    .join()
                     .unwrap_or_else(|_| bail!("Media worker stopped unexpectedly"))
             })
             .collect::<Vec<_>>()
     });
+
     for result in results {
         outputs.extend(result?);
     }
     job.phase("Saving prepared media");
     Ok(())
 }
-pub fn rebuild_media(root: &Path, prefs: &Preferences, cache: &Path, job: &Job) -> Result<PathBuf> {
-    update_media_mode(root, prefs, cache, None, true, None, job)
+
+/// The entry used to prepare media for a disc already in the library.
+fn library_entry(
+    record: &Value,
+    path: &str,
+    source: PathBuf,
+    provided: &Option<(&str, Option<PathBuf>, Option<PathBuf>)>,
+) -> Entry {
+    Entry {
+        source,
+        title: record["title"].as_str().unwrap_or(path).into(),
+        category: record["category"].as_str().unwrap_or("Games").into(),
+        region: record["region"].as_str().unwrap_or("Unknown").into(),
+        target: path.into(),
+        confidence: String::new(),
+        reason: String::new(),
+        selected: false,
+        files: vec![],
+        candidates: vec![],
+        game: None,
+        cover: provided.as_ref().and_then(|(_, cover, _)| cover.clone()),
+        preview: provided
+            .as_ref()
+            .and_then(|(_, _, preview)| preview.clone()),
+        category_reason: String::new(),
+        blocked: false,
+    }
 }
+
+/// For a rebuild: points an entry's cover and preview at the original files
+/// its record says they came from. Where an original is unavailable, says so
+/// and leaves that media alone.
+fn use_original_sources(
+    entry: &mut Entry,
+    record: &Value,
+    path: &str,
+    prefs: &Preferences,
+    cache: &Path,
+    job: &Job,
+) -> Result<()> {
+    for (kind, destination) in [("cover", &mut entry.cover), ("preview", &mut entry.preview)] {
+        let Some(origin) = record[format!("{kind}_source")]
+            .as_str()
+            .filter(|origin| !origin.is_empty())
+        else {
+            continue;
+        };
+        match media::original_source(kind, origin, prefs, cache, job) {
+            Ok(source) => {
+                if source.is_none() {
+                    job.say(format!(
+                        "Original {kind} unavailable; kept existing: {path}"
+                    ));
+                }
+                *destination = source;
+            }
+            Err(error) => {
+                job.check()?;
+                job.say(format!(
+                    "Original {kind} unavailable; kept existing: {path}: {error:#}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a disc already has a cover or preview (`kind`) file in the
+/// library, named in the media index or else in its record.
+fn has_media(
+    root: &Path,
+    kind: &str,
+    index: &BTreeMap<String, String>,
+    record: &Value,
+    path: &str,
+) -> Result<bool> {
+    let name = index
+        .get(&f::fold(path))
+        .map(String::as_str)
+        .or_else(|| record[kind].as_str());
+    match name {
+        Some(name) => {
+            let relative = format!(".ohmy3do/{}/{name}", media_folder(kind));
+            Ok(f::safe(root, &relative)?.is_file())
+        }
+        None => Ok(false),
+    }
+}
+
+/// The work behind [`update_media`], [`update_selected_media`] and
+/// [`rebuild_media`]:
+///
+/// 1. Unless setting chosen media or rebuilding, fills in missing
+///    descriptions from the downloaded game information.
+/// 2. Works out each disc's media: chosen files, originals (rebuild), or
+///    whatever is missing (update).
+/// 3. Prepares the media on every core.
+/// 4. Writes the media, description files, indexes and database through one
+///    journal.
 fn update_media_mode(
     root: &Path,
     prefs: &Preferences,
@@ -2279,21 +2558,25 @@ fn update_media_mode(
 ) -> Result<PathBuf> {
     let root = f::root(root)?;
     let _lock = lock_library(&root, cache)?;
-    let mut db = database(&root)?;
+    let mut database = database(&root)?;
+
     let include_info = provided.is_none() && !rebuild;
     let info_changed = if include_info {
-        crate::game_info::fill_missing(&mut db, prefs, cache, selected, job)?
+        crate::game_info::fill_missing(&mut database, prefs, cache, selected, job)?
     } else {
         0
     };
+
     let mut covers = read_media_index(&root, "covers")?;
     let mut previews = read_media_index(&root, "previews")?;
-    let mut outputs = media::Outputs::new();
-    let mut records = vec![];
+
     // Choose each disc's sources in library order, encode on every core, then
     // record the results in library order again.
     let mut work = vec![];
-    for record in db["games"].as_array().context("Invalid library records")? {
+    for record in database["games"]
+        .as_array()
+        .context("Invalid library records")?
+    {
         job.check()?;
         let path = record["path"].as_str().context("Missing disc path")?;
         if selected.is_some_and(|set| !set.contains(&f::fold(path))) {
@@ -2303,100 +2586,46 @@ fn update_media_mode(
         if !source.is_file() {
             bail!("Missing database disc: {path}")
         }
-        if let Some((selected, _, _)) = &provided {
-            if path != *selected {
+        if let Some((chosen_path, _, _)) = &provided {
+            if path != *chosen_path {
                 continue;
             }
         }
-        let mut entry = Entry {
-            source,
-            title: record["title"].as_str().unwrap_or(path).into(),
-            category: record["category"].as_str().unwrap_or("Games").into(),
-            region: record["region"].as_str().unwrap_or("Unknown").into(),
-            target: path.into(),
-            confidence: String::new(),
-            reason: String::new(),
-            selected: false,
-            files: vec![],
-            candidates: vec![],
-            game: None,
-            cover: provided.as_ref().and_then(|(_, c, _)| c.clone()),
-            preview: provided.as_ref().and_then(|(_, _, p)| p.clone()),
-            category_reason: String::new(),
-            blocked: false,
-        };
+
+        let mut entry = library_entry(record, path, source, &provided);
         if rebuild {
-            for (kind, destination) in
-                [("cover", &mut entry.cover), ("preview", &mut entry.preview)]
-            {
-                if let Some(origin) = record[format!("{kind}_source")]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                {
-                    match media::original_source(kind, origin, prefs, cache, job) {
-                        Ok(source) => {
-                            if source.is_none() {
-                                job.say(format!(
-                                    "Original {kind} unavailable; kept existing: {path}"
-                                ));
-                            }
-                            *destination = source;
-                        }
-                        Err(e) => {
-                            job.check()?;
-                            job.say(format!(
-                                "Original {kind} unavailable; kept existing: {path}: {e:#}"
-                            ));
-                        }
-                    }
-                }
-            }
+            use_original_sources(&mut entry, record, path, prefs, cache, job)?;
         }
-        let existing =
-            |kind: &str, map: &std::collections::BTreeMap<String, String>| -> Result<bool> {
-                let name = map
-                    .get(&f::fold(path))
-                    .map(String::as_str)
-                    .or_else(|| record[kind].as_str());
-                Ok(if let Some(name) = name {
-                    f::safe(
-                        &root,
-                        &format!(
-                            ".ohmy3do/{}/{name}",
-                            if kind == "cover" {
-                                "covers"
-                            } else {
-                                "previews"
-                            }
-                        ),
-                    )?
-                    .is_file()
-                } else {
-                    false
-                })
-            };
-        let want_cover = entry.cover.is_some() || (!rebuild && !existing("cover", &covers)?);
-        let want_preview =
-            entry.preview.is_some() || (!rebuild && !existing("preview", &previews)?);
-        work.push((
-            record.clone(),
-            path.to_owned(),
+        let want_cover = entry.cover.is_some()
+            || (!rebuild && !has_media(&root, "cover", &covers, record, path)?);
+        let want_preview = entry.preview.is_some()
+            || (!rebuild && !has_media(&root, "preview", &previews, record, path)?);
+        work.push(MediaWork {
+            record: record.clone(),
+            path: path.to_owned(),
             entry,
             want_cover,
             want_preview,
-        ));
+        });
     }
+
+    let mut outputs = media::Outputs::new();
     prepare_parallel(&mut work, prefs, cache, &mut outputs, job)?;
-    for (record, path, ..) in &work {
-        let path = path.as_str();
-        let mut changed = record.clone();
+
+    // Records for the discs whose media changed. A rebuild keeps the
+    // recorded origins; otherwise the new origins are recorded.
+    let mut records = vec![];
+    for item in &work {
+        let path = item.path.as_str();
+        let mut changed = item.record.clone();
         let mut dirty = false;
-        for (kind, map) in [("cover", &mut covers), ("preview", &mut previews)] {
+        for (kind, index) in [("cover", &mut covers), ("preview", &mut previews)] {
             if let Some(asset) = outputs.get(&(path.into(), kind.into())) {
-                map.insert(f::fold(path), asset.name.clone());
+                index.insert(f::fold(path), asset.name.clone());
                 changed[kind] = json!(asset.name);
-                changed[format!("{kind}_source")] = if rebuild {
-                    record[format!("{kind}_source")].clone()
+                let source_field = format!("{kind}_source");
+                changed[&source_field] = if rebuild {
+                    item.record[&source_field].clone()
                 } else {
                     json!(asset.source)
                 };
@@ -2404,47 +2633,29 @@ fn update_media_mode(
             }
         }
         if dirty {
-            records.push(changed)
+            records.push(changed);
         }
     }
+
     let description_files = if include_info {
-        crate::game_info::files_for(&db, selected)?
+        crate::game_info::files_for(&database, selected)?
     } else {
         BTreeMap::new()
     };
+    let metadata_missing = !root.join(".ohmy3do/metadata.3di").is_file();
     let metadata_file = if include_info
-        && (info_changed > 0
-            || (!description_files.is_empty() && !root.join(".ohmy3do/metadata.3di").is_file()))
+        && (info_changed > 0 || (!description_files.is_empty() && metadata_missing))
     {
-        Some(crate::game_info::console_metadata(&root, &db)?)
+        Some(crate::game_info::console_metadata(&root, &database)?)
     } else {
         None
     };
-    let mut tx = Journal::new(&root, cache)?;
+
+    let mut journal = Journal::new(&root, cache)?;
     let result = (|| -> Result<()> {
-        let mut written = HashSet::new();
-        for ((_, kind), asset) in &outputs {
-            let name = format!(
-                ".ohmy3do/{}/{}",
-                if kind == "cover" {
-                    "covers"
-                } else {
-                    "previews"
-                },
-                asset.name
-            );
-            if written.insert(name.clone()) {
-                write_asset(&mut tx, &root, &name, &asset.path)?;
-                if let Some(large) = &asset.large {
-                    write_asset(
-                        &mut tx,
-                        &root,
-                        &format!(".ohmy3do/covers/{}", media::large_name(&asset.name)),
-                        large,
-                    )?;
-                }
-            }
-        }
+        write_prepared_media(&mut journal, &root, &outputs)?;
+
+        // Only description files that are new or different.
         for (name, data) in &description_files {
             job.check()?;
             let path = f::safe(&root, name)?;
@@ -2452,35 +2663,41 @@ fn update_media_mode(
                 || fs::metadata(&path)?.len() != data.len() as u64
                 || fs::read(&path)? != *data
             {
-                tx.write(name, data)?;
+                journal.write(name, data)?;
             }
         }
         if let Some(bytes) = &metadata_file {
-            tx.write(".ohmy3do/metadata.3di", bytes)?;
+            journal.write(".ohmy3do/metadata.3di", bytes)?;
         }
+
         if !records.is_empty() || info_changed > 0 {
             if !covers.is_empty() {
-                tx.write(".ohmy3do/covers/index.3di", &media_index(&covers)?)?;
+                journal.write(".ohmy3do/covers/index.3di", &media_index(&covers)?)?;
             }
             if !previews.is_empty() {
-                tx.write(".ohmy3do/previews/index.3di", &media_index(&previews)?)?;
+                journal.write(".ohmy3do/previews/index.3di", &media_index(&previews)?)?;
             }
-            let sources = db["sources"].as_array().cloned().unwrap_or_default();
-            write_database(&mut tx, db.take(), records, &sources)?;
+            let sources = database["sources"].as_array().cloned().unwrap_or_default();
+            write_database(&mut journal, database.take(), records, &sources)?;
         }
         job.check()?;
-        tx.finish()
+        journal.finish()
     })();
+
     if let Err(error) = result {
-        tx.undo()?;
+        journal.undo()?;
         return Err(error);
     }
     job.say(format!(
-        "Media update complete: {} artwork associations prepared; {} missing descriptions found; {} description files ready; existing media retained",
-        outputs.len(),info_changed,description_files.len()
+        "Media update complete: {} artwork associations prepared; \
+         {info_changed} missing descriptions found; {} description files ready; \
+         existing media retained",
+        outputs.len(),
+        description_files.len()
     ));
-    Ok(tx.path)
+    Ok(journal.path)
 }
+
 /// Text with every whole-line path in `map` replaced; menu text ends at its first NUL.
 pub fn remap_lines(raw: &[u8], map: &HashMap<String, String>) -> Option<Vec<u8>> {
     let text = String::from_utf8_lossy(raw.split(|b| *b == 0).next().unwrap_or(&[])).into_owned();
