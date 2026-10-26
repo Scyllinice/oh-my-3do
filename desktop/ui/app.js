@@ -3214,57 +3214,68 @@ const handlers = {
   'game-info-restore': (button) => previewInformationRestore(button.dataset.field),
   'game-info-stage-restore': () => stageInformationRestore(),
   'information-refresh': async () => {
-    if (
-      !(await confirmAction(
-        'Get game information',
-        'Match library titles to descriptions and metadata from LaunchBox. The downloaded information stays available offline. Unmatched games keep their existing information.',
-        'Get information',
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Get game information',
+      'Match library titles to descriptions and metadata from LaunchBox. ' +
+        'The downloaded information stays available offline. Unmatched games keep their existing information.',
+      'Get information',
+    );
+    if (!confirmed) return;
     await call('game_information');
     await loadLibrary();
     toast('Game information updated. Copy selected games to transfer it to the console.');
   },
+
+  // -- Covers and previews --
   'media-selected': async () => {
     const discs = selectedDiscs(state.groups, state.selected);
     if (!discs.length) throw new Error('Select games first.');
-    if (
-      !(await confirmAction(
-        'Prepare selected media',
-        `Prepare missing covers, previews and descriptions for ${state.selected.size} selected games using your configured media folder and download preferences?`,
-        'Prepare media',
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Prepare selected media',
+      `Prepare missing covers, previews and descriptions for ${state.selected.size} selected games ` +
+        'using your configured media folder and download preferences?',
+      'Prepare media',
+    );
+    if (!confirmed) return;
     await call('media_selected', { discs });
     await loadLibrary();
     toast('Missing media and available descriptions prepared for the selected games.');
   },
+
+  // -- Naming drives --
   'drive-name': async () => {
     const root = $('#drive-destination').value;
     if (!root) throw new Error('Choose a USB / SD drive first.');
     state.driveInspection = await call('drive_inspect', { root });
-    const d = state.driveInspection;
+    const drive = state.driveInspection;
+    const mismatch = drive.mismatch
+      ? `<p class="notice warning">A different drive was previously remembered at this location: ${escapeHtml(drive.expected.name)}. Check the drive before remembering this one.</p>`
+      : '';
+    const identity = drive.identity
+      ? 'Drive ID: ' + escapeHtml(drive.identity.id)
+      : 'This drive has no identity yet. A small identity file will be created on it.';
     dialog(
       'Name and identify drive',
-      `<p>${pathLabel(d.root)}</p>${d.mismatch ? `<p class="notice warning">A different drive was previously remembered at this location: ${e(d.expected.name)}. Check the drive before remembering this one.</p>` : ''}<p>${d.identity ? 'Drive ID: ' + e(d.identity.id) : 'This drive has no identity yet. A small identity file will be created on it.'}</p>${field('Friendly name', 'drive-friendly-name', d.identity?.name || 'Console SD')}`,
+      `<p>${pathLabel(drive.root)}</p>${mismatch}<p>${identity}</p>` +
+        field('Friendly name', 'drive-friendly-name', drive.identity?.name || 'Console SD'),
       action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
         action('drive-name-save', 'Remember this drive', 'primary'),
     );
   },
   'drive-name-save': async () => {
-    const d = state.driveInspection;
+    const drive = state.driveInspection;
     const result = await call('drive_remember', {
-      root: d.root,
+      root: drive.root,
       name: $('#drive-friendly-name').value,
-      token: d.token,
+      token: drive.token,
     });
     state.prefs = result.prefs;
     closeDialog();
     render();
     toast('Drive remembered as ' + result.identity.name);
   },
+
+  // -- The Artwork & previews page --
   'media-folder': async () => {
     const path = await pick('folder', state.prefs.emumovies);
     if (path) {
@@ -3282,14 +3293,12 @@ const handlers = {
     toast('Missing media and available descriptions prepared.');
   },
   'media-rebuild': async () => {
-    if (
-      !(await confirmAction(
-        'Rebuild media',
-        'Reconvert existing media from its available source files? This can take a while.',
-        'Rebuild media',
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Rebuild media',
+      'Reconvert existing media from its available source files? This can take a while.',
+      'Rebuild media',
+    );
+    if (!confirmed) return;
     await call('media_rebuild');
     await loadLibrary();
     toast('Media rebuilt.');
@@ -3323,6 +3332,8 @@ const handlers = {
     render();
     toast('FFmpeg and ffprobe installed and verified.');
   },
+
+  // -- Drive setup, checks and support --
   'support-export': async () => {
     const root = $('#drive-destination').value;
     if (!root) throw new Error('Choose a USB / SD destination first.');
@@ -3331,20 +3342,22 @@ const handlers = {
     await call('support_export', { root, target, activity: state.logs });
     toast('Support report exported and verified. It includes drive paths and diagnostic text.');
   },
+
+  // -- Recovery copies --
   'recovery-open': async () => {
-    const start =
-      state.slotDirectory ||
-      (state.prefs.destination
-        ? `${state.prefs.destination.replace(/[\\/]$/, '')}/.ohmy3do/saves`
-        : state.prefs.library);
-    const directory = await pick('folder', start);
+    const driveSaves = state.prefs.destination
+      ? `${state.prefs.destination.replace(/[\\/]$/, '')}/.ohmy3do/saves`
+      : state.prefs.library;
+    const directory = await pick('folder', state.slotDirectory || driveSaves);
     if (!directory) return;
     state.cleanup = await call('recovery_scan', { directory });
     state.cleanupSelected.clear();
     recoveryDialog();
   },
+  // Selects every copy except the newest (and newest valid) of each save.
   'recovery-older': () => {
-    state.cleanupSelected = new Set(state.cleanup.copies.filter((c) => !c.keep).map((c) => c.name));
+    const older = state.cleanup.copies.filter((copy) => !copy.keep).map((copy) => copy.name);
+    state.cleanupSelected = new Set(older);
     recoveryDialog();
   },
   'recovery-clear': () => {
@@ -3355,21 +3368,25 @@ const handlers = {
     const selected = [...state.cleanupSelected];
     if (!selected.length) return;
     const total = state.cleanup.copies
-      .filter((c) => state.cleanupSelected.has(c.name))
-      .reduce((n, c) => n + c.bytes, 0);
-    if (
-      !(await confirmAction(
-        'Delete recovery copies',
-        `Permanently delete ${selected.length} selected recovery ${selected.length === 1 ? 'copy' : 'copies'} (${bytes(total)})? This cannot be undone. Current slots and console recovery archives are kept.`,
-        'Delete selected copies',
-        true,
-      ))
-    )
-      return;
+      .filter((copy) => state.cleanupSelected.has(copy.name))
+      .reduce((sum, copy) => sum + copy.bytes, 0);
+    const copies = selected.length === 1 ? 'copy' : 'copies';
+    const confirmed = await confirmAction(
+      'Delete recovery copies',
+      `Permanently delete ${selected.length} selected recovery ${copies} (${bytes(total)})? ` +
+        'This cannot be undone. Current slots and console recovery archives are kept.',
+      'Delete selected copies',
+      true,
+    );
+    if (!confirmed) return;
+
     const removed = await call('recovery_remove', { selected });
     const directory = state.cleanup.directory;
-    const summary = `${removed.names.length} recovery ${removed.names.length === 1 ? 'copy' : 'copies'} removed; ${bytes(removed.bytes)} reclaimed.${removed.errors.length ? ' ' + removed.errors.join(' ') : ''}`;
+    const removedCopies = removed.names.length === 1 ? 'copy' : 'copies';
+    const errors = removed.errors.length ? ' ' + removed.errors.join(' ') : '';
+    const summary = `${removed.names.length} recovery ${removedCopies} removed; ${bytes(removed.bytes)} reclaimed.${errors}`;
     state.cleanupSelected.clear();
+    // Show the folder again as it is now.
     try {
       state.cleanup = await call('recovery_scan', { directory });
       recoveryDialog();
@@ -3380,6 +3397,10 @@ const handlers = {
       toast(`${summary} Refresh failed: ${error}`, true);
     }
   },
+
+  // -- Ejecting and checking drives --
+  // Ejects a drive. Cover loading stops first, since it reads from the drive.
+  // If the library or open backup was on it, they are closed.
   'drive-eject': async (button) => {
     if (!(await resolveDirty())) return;
     const root = button.dataset.root || $('#drive-destination')?.value || state.prefs.destination;
@@ -3387,6 +3408,7 @@ const handlers = {
     await flushLibraryView();
     coverObserver?.disconnect();
     coverQueue.length = 0;
+
     let result;
     try {
       result = await call('drive_eject', { root });
@@ -3394,6 +3416,7 @@ const handlers = {
       loadCovers();
       throw error;
     }
+
     if (result.backup_closed) {
       state.backup = null;
       state.entry = null;
@@ -3425,7 +3448,8 @@ const handlers = {
     if (!root) throw new Error('Choose a USB / SD destination first.');
     state.prefs.destination = root;
     await preferences();
-    state.readiness = { ...(await call('drive_check', { root })), requested_root: root };
+    const report = await call('drive_check', { root });
+    state.readiness = { ...report, requested_root: root };
     render();
   },
   'drive-folder': async () => {
@@ -3436,6 +3460,8 @@ const handlers = {
       render();
     }
   },
+
+  // -- Installing the menu --
   'drive-library': () => setupDrive(`${state.prefs.library.replace(/[\\/]$/, '')}/boot.iso`),
   'drive-iso': async () => {
     const path = await pick('iso', state.prefs.library);
@@ -3449,20 +3475,22 @@ const handlers = {
   },
   'drive-cleanup-skip-saves': () => applyDriveCleanup({ skip_saves: true }),
   'drive-cleanup-apply': () => applyDriveCleanup({}),
-  'drive-repair': () =>
-    setupDrive(
-      `${($('#drive-destination').value || state.prefs.destination).replace(/[\\/]$/, '')}/boot.iso`,
-    ),
+  // Repairs a drive with the boot.iso already on it.
+  'drive-repair': () => {
+    const root = $('#drive-destination').value || state.prefs.destination;
+    return setupDrive(`${root.replace(/[\\/]$/, '')}/boot.iso`);
+  },
   'staging-setup': async () => {
     if (!state.prefs.library) throw new Error('Choose a library folder first.');
-    if (
-      !(await confirmAction(
-        'Set up staging library',
-        `${state.prefs.developer_mode ? 'Install local' : 'Download and install the released'} menu support in ${state.prefs.library}?`,
-        'Install menu support',
-      ))
-    )
-      return;
+    const source = state.prefs.developer_mode
+      ? 'Install local'
+      : 'Download and install the released';
+    const confirmed = await confirmAction(
+      'Set up staging library',
+      `${source} menu support in ${state.prefs.library}?`,
+      'Install menu support',
+    );
+    if (!confirmed) return;
     await call('drive_setup', {
       destination: state.prefs.library,
       release: true,
@@ -3470,20 +3498,22 @@ const handlers = {
     });
     toast('Staging library prepared. Add discs from Library.');
   },
+
+  // -- Categories --
   'categories-open': async () => {
     const root = state.prefs.library || state.prefs.destination || (await pick('folder'));
     if (root) await openCategories(root);
   },
   'categories-folder': async () => {
-    if (
-      JSON.stringify(state.categoryDraft) !== JSON.stringify(state.categoryOriginal) &&
-      !(await confirmAction(
+    const edited = JSON.stringify(state.categoryDraft) !== JSON.stringify(state.categoryOriginal);
+    if (edited) {
+      const confirmed = await confirmAction(
         'Discard category edits?',
         'Open another library or drive without saving these category changes?',
         'Discard changes',
-      ))
-    )
-      return;
+      );
+      if (!confirmed) return;
+    }
     const root = await pick('folder', state.categoryRoot);
     if (root) await openCategories(root);
   },
@@ -3495,26 +3525,25 @@ const handlers = {
     });
     categoriesDialog();
   },
+  // Removes a category; disc types imported into it go to the first one instead.
   'category-remove': (button) => {
     const list = state.categoryDraft.categories;
     if (list.length === 1) throw new Error('Keep at least one category.');
     const index = Number(button.dataset.index);
     const [removed] = list.splice(index, 1);
-    for (const role of Object.keys(state.categoryDraft.defaults))
-      if (state.categoryDraft.defaults[role] === removed.id)
-        state.categoryDraft.defaults[role] = list[0].id;
+    const destinations = state.categoryDraft.defaults;
+    for (const role of Object.keys(destinations))
+      if (destinations[role] === removed.id) destinations[role] = list[0].id;
     categoriesDialog();
   },
   'categories-save': async () => {
     if (!(await resolveDirty())) return;
-    if (
-      !(await confirmAction(
-        'Save categories',
-        'Apply category names, visibility and import destinations? Renamed folders and references will be updated.',
-        'Save categories',
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Save categories',
+      'Apply category names, visibility and import destinations? Renamed folders and references will be updated.',
+      'Save categories',
+    );
+    if (!confirmed) return;
     await call('categories_save', {
       root: state.categoryRoot,
       original: state.categoryOriginal,
@@ -3527,6 +3556,8 @@ const handlers = {
     await loadLibrary();
     toast('Categories saved. Undo is available in Settings & tools.');
   },
+
+  // -- Console settings and library tools --
   'config-folder': async () => {
     const folder = await pick('folder', $('#config-root').value);
     if (folder) $('#config-root').value = folder;
@@ -3552,36 +3583,35 @@ const handlers = {
     );
   },
   undo: async () => {
-    if (
-      !(await confirmAction(
-        'Undo last change',
-        'Restore the files from the last operation’s undo journal?',
-        'Undo change',
-        true,
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Undo last change',
+      'Restore the files from the last operation’s undo journal?',
+      'Undo change',
+      true,
+    );
+    if (!confirmed) return;
     await call('undo');
     await loadLibrary();
     toast('Last change undone.');
   },
+
+  // -- The cheat database editor --
   'cheats-open': async () => {
-    const db = await call('cheats_load');
-    state.cheats = JSON.stringify(db, null, 2);
+    const database = await call('cheats_load');
+    state.cheats = JSON.stringify(database, null, 2);
     state.cheatsDirty = false;
     cheatDialog();
   },
   'cheats-load': async () => {
-    if (
-      state.cheatsDirty &&
-      !(await confirmAction(
+    if (state.cheatsDirty) {
+      const confirmed = await confirmAction(
         'Discard database edits',
         'Discard unsaved cheat database edits?',
         'Discard edits',
         true,
-      ))
-    )
-      return;
+      );
+      if (!confirmed) return;
+    }
     const path = await pick('json');
     if (path) {
       state.cheats = JSON.stringify(await call('cheats_load', { path }), null, 2);
@@ -3589,6 +3619,7 @@ const handlers = {
       cheatDialog();
     }
   },
+  // Adds the official database's new profiles to the one being edited.
   'cheats-download': async () => {
     if (state.cheatsDirty)
       throw new Error('Save the current database edits before merging updates.');
@@ -3615,6 +3646,8 @@ const handlers = {
       toast('Validated database installed for the console.');
     }
   },
+
+  // -- Updates --
   'developer-folder': async () => {
     const folder = await pick('folder', state.prefs.developer_updates_directory);
     if (folder) {
@@ -3622,6 +3655,7 @@ const handlers = {
       await developerPreferences();
     }
   },
+  // On narrow windows, the selection buttons open in a dialog.
   'selection-actions': () => {
     if (state.selected.size)
       dialog(
@@ -3652,18 +3686,22 @@ const handlers = {
     await refreshInstalledVersions();
     render();
   },
+  // Hides the banner until something different is offered (see updateNotice).
   'update-notice-dismiss': () => {
     state.reportDismissed = true;
-    const u = state.updates;
-    if (u)
+    const updates = state.updates;
+    if (updates)
       state.noticeDismissed = JSON.stringify([
-        u.desktop && u.desktop_release.tag,
-        u.targets.map((t) => t.root),
-        u.menu_release?.tag,
+        updates.desktop && updates.desktop_release.tag,
+        updates.targets.map((target) => target.root),
+        updates.menu_release?.tag,
       ]);
     renderUpdateNotice();
   },
   'boot-update': installBootUpdate,
+
+  // -- Operations, Activity and dialogs --
+  // Asks the running operation to stop; it finishes its current step first.
   cancel: async () => {
     for (const button of document.querySelectorAll('[data-action="cancel"]')) {
       button.disabled = true;
@@ -3675,41 +3713,41 @@ const handlers = {
   logs: () =>
     dialog(
       'Activity',
-      `<div class="progress-log">${state.logs.map(e).join('\n') || 'No operations yet.'}</div>`,
+      `<div class="progress-log">${state.logs.map(escapeHtml).join('\n') || 'No operations yet.'}</div>`,
       action('close-dialog', 'Close', '', 'data-dialog="main-dialog"'),
     ),
+  // Closes a dialog, first asking about unsaved edits in the editors. A
+  // dialog whose operation is running stays open.
   'close-dialog': async (button) => {
     const id = button.dataset.dialog || 'main-dialog';
     if (document.getElementById(id)?.dataset.operationBusy === 'true') return;
     if (id === 'game-info-dialog') {
       if (state.busy) return;
-      if (
-        hasInformationChanges() &&
-        !(await confirmAction(
+      if (hasInformationChanges()) {
+        const confirmed = await confirmAction(
           'Unsaved game information',
           'Discard your unsaved information edits?',
           'Discard edits',
           true,
-        ))
-      )
-        return;
+        );
+        if (!confirmed) return;
+      }
       state.informationEditor = null;
     }
     if (id === 'cheats-dialog' && state.cheatsDirty) {
-      if (
-        !(await confirmAction(
-          'Discard database edits',
-          'Discard unsaved cheat database edits?',
-          'Discard edits',
-          true,
-        ))
-      )
-        return;
+      const confirmed = await confirmAction(
+        'Discard database edits',
+        'Discard unsaved cheat database edits?',
+        'Discard edits',
+        true,
+      );
+      if (!confirmed) return;
       state.cheatsDirty = false;
     }
     closeDialog(id);
   },
 };
+
 async function exportSave(raw) {
   await commitHex();
   const path = await pick(raw ? 'raw_save' : 'archive_save');
