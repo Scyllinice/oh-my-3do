@@ -527,6 +527,23 @@ pub fn plan_selected(
         .collect();
     plan_impl(source, target, cache, verify, Some(expanded), job)
 }
+/// What reviewing each file needs to know.
+struct Review<'a> {
+    source: &'a Path,
+    target: &'a Path,
+    /// Game folders that will move on the drive: (from, to).
+    moves: &'a [(String, String)],
+    /// The new path of every file under a moving folder, by old path.
+    remaps: &'a HashMap<String, String>,
+    /// The last copy's record of each file, by path.
+    previous: &'a HashMap<String, CopyItem>,
+    verify: bool,
+}
+
+/// Progress for each file reviewed is split into this many units, so the
+/// checksums of a large file can move the bar too.
+const REVIEW_UNITS: u64 = 1_000_000;
+
 /// `plan` and `plan_selected`.
 fn plan_impl(
     source: &Path,
@@ -550,8 +567,8 @@ fn plan_impl(
     let (mut files, games) = inventory_selected(&source, selected.as_ref(), job)?;
     let report = report_path(&source, &target, cache);
     let previous: HashMap<String, CopyItem> = read_report(&report)
-        .map(|p| {
-            p.files
+        .map(|plan| {
+            plan.files
                 .into_iter()
                 .map(|file| (file.path.clone(), file))
                 .collect()
@@ -561,20 +578,25 @@ fn plan_impl(
     let moves = folder_moves(&target, &files, &categories::load(&source)?)?;
     let selection = selected
         .as_ref()
-        .map(|s| s.iter().cloned().collect::<Vec<_>>());
-    let generated = if let Some(selected) = &selection {
-        crate::usb_selection::indexes(&source, &target, selected, &moves, job)?
-    } else {
-        BTreeMap::new()
+        .map(|set| set.iter().cloned().collect::<Vec<_>>());
+    let generated = match &selection {
+        Some(selected) => crate::usb_selection::indexes(&source, &target, selected, &moves, job)?,
+        None => BTreeMap::new(),
     };
     files.retain(|(name, _)| !generated.contains_key(name));
 
-    // Decide each file's status. Progress counts files, each split into
-    // REVIEW_UNITS for the checksums of large ones.
+    // Decide each file's status.
     let remaps = moved_paths(&target, &moves);
+    let review = Review {
+        source: &source,
+        target: &target,
+        moves: &moves,
+        remaps: &remaps,
+        previous: &previous,
+        verify,
+    };
     let mut items = vec![];
     let mut bytes = 0;
-    const REVIEW_UNITS: u64 = 1_000_000;
     let review_total = (files.len() + generated.len()).max(1) as u64 * REVIEW_UNITS;
     job.report(0, review_total, "Reviewing files");
     for (review_index, (name, source_name)) in files.into_iter().enumerate() {
@@ -585,129 +607,11 @@ fn plan_impl(
             "Reviewing files",
         );
         job.check()?;
-        let src = f::safe(&source, &source_name)?;
-        // A file in a folder that will move is compared where it is now.
-        let current = moves
-            .iter()
-            .find(|(_, new)| name.starts_with(&format!("{new}/")))
-            .map(|(old, new)| format!("{old}{}", &name[new.len()..]))
-            .unwrap_or_else(|| name.clone());
-        let dest = f::safe(&target, &current)?;
-        let (mut size, source_stamp) = f::stamp(&src)?;
-        let index = media_index(&name);
-        let generated = if index {
-            Some(library::beside_index(&fs::read(&src)?)?)
-        } else {
-            None
-        };
-        if let Some(content) = &generated {
-            size = content.len() as u64;
+        let item = review.file(name, source_name, &file_job)?;
+        if item.status == "copy" || item.status == "update" {
+            bytes += item.size;
         }
-        let destination_stamp = if dest.is_file() {
-            Some(f::stamp(&dest)?.1)
-        } else {
-            None
-        };
-        if dest.exists() && !dest.is_file() {
-            bail!("Destination is occupied by a directory: {name}")
-        }
-        if name == ".ohmy3do/ohmy3do.ini" && dest.is_file() {
-            config(&dest)?
-        }
-        // The person's files and cheat database already on the drive are
-        // kept (or remapped to moved folders). Otherwise compare with the
-        // drive's file.
-        let mut trusted = false;
-        let cheat_file = [
-            crate::save_cheats::JSON_PATH,
-            crate::save_cheats::BINARY_PATH,
-        ]
-        .contains(&name.as_str());
-        let preserve_cheats = cheat_file
-            && [
-                crate::save_cheats::JSON_PATH,
-                crate::save_cheats::BINARY_PATH,
-            ]
-            .iter()
-            .any(|path| plan_cheat_exists(&target, path));
-        let remapped = personal(&name)
-            && !cheat_file
-            && dest.is_file()
-            && !moves.is_empty()
-            && if name == ".ohmy3do/last-position.txt" {
-                let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
-                library::remap_position(&fs::read(&dest)?, &remaps, &old).is_some()
-            } else {
-                library::remap_lines(&fs::read(&dest)?, &remaps).is_some()
-            };
-        let status = if remapped {
-            "remap"
-        } else if preserve_cheats || (personal(&name) && dest.exists()) {
-            "preserve"
-        } else if !dest.exists() {
-            "copy"
-        } else if !dest.is_file() {
-            bail!("Destination is occupied: {name}")
-        } else if let Some(content) = &generated {
-            if fs::read(&dest)? == *content {
-                trusted = true;
-                "unchanged"
-            } else {
-                "update"
-            }
-        } else {
-            let ds = f::stamp(&dest)?;
-            let disc = !name.starts_with(".ohmy3do/")
-                && !name.contains("/.ohmy3do/")
-                && name != "boot.iso";
-            let receipt = previous
-                .get(&name)
-                .filter(|r| r.verified || r.status == "verified")
-                .is_some_and(|r| {
-                    r.size == size
-                        && r.source_stamp == source_stamp
-                        && r.destination_stamp == Some(ds.1)
-                        && ds.0 == size
-                });
-            // A receipt from the last verified copy spares rereading unchanged
-            // media too; previews alone can be gigabytes on a slow card.
-            if !verify && size == ds.0 && (receipt || (disc && f::same_time(source_stamp, ds.1))) {
-                trusted = receipt;
-                "unchanged"
-            } else if size == ds.0
-                && f::sha256(
-                    &src,
-                    &file_job.progress_range(0, size.max(1), size.max(1) * 2, "Checking source"),
-                )? == f::sha256(
-                    &dest,
-                    &file_job.progress_range(
-                        size.max(1),
-                        size.max(1),
-                        size.max(1) * 2,
-                        "Checking destination",
-                    ),
-                )?
-            {
-                trusted = true;
-                "unchanged"
-            } else if disc {
-                bail!("Different existing disc on destination: {name}")
-            } else {
-                "update"
-            }
-        };
-        if ["copy", "update"].contains(&status) {
-            bytes += size
-        }
-        items.push(CopyItem {
-            source_path: (source_name != name).then_some(source_name),
-            path: name,
-            status: status.into(),
-            size,
-            source_stamp,
-            destination_stamp,
-            verified: trusted,
-        });
+        items.push(item);
         job.report(
             (review_index as u64 + 1) * REVIEW_UNITS,
             review_total,
@@ -717,97 +621,23 @@ fn plan_impl(
 
     // The generated index files of a partial copy.
     for (generated_index, (name, content)) in generated.iter().enumerate() {
-        let dest = f::safe(&target, name)?;
-        if dest.exists() && !dest.is_file() {
-            bail!("Destination is occupied: {name}");
-        }
-        let destination_stamp = if dest.is_file() {
-            Some(f::stamp(&dest)?.1)
-        } else {
-            None
-        };
-        let status = if destination_stamp.is_none() {
-            "copy"
-        } else if fs::read(&dest)? == *content {
-            "unchanged"
-        } else {
-            "update"
-        };
-        if status != "unchanged" {
+        let item = review_generated(&target, name, content)?;
+        if item.status != "unchanged" {
             bytes += content.len() as u64;
         }
-        items.push(CopyItem {
-            path: name.clone(),
-            source_path: None,
-            status: status.into(),
-            size: content.len() as u64,
-            source_stamp: 0,
-            destination_stamp,
-            verified: status == "unchanged",
-        });
+        items.push(item);
+        let remaining = generated.len() as u64 - generated_index as u64 - 1;
         job.report(
-            review_total - (generated.len() as u64 - generated_index as u64 - 1) * REVIEW_UNITS,
+            review_total - remaining * REVIEW_UNITS,
             review_total,
             "Reviewing files",
         );
     }
-    // Descriptions now sit beside their discs; the menu no longer reads these.
-    let old_info = f::safe(&target, ".ohmy3do/info")?;
-    if old_info.is_dir() {
-        let mut names = fs::read_dir(&old_info)?
-            .map(|entry| Ok(entry?.file_name()))
-            .collect::<Result<Vec<_>>>()?;
-        names.sort();
-        for file_name in names {
-            let Some(file_name) = file_name.to_str() else {
-                continue;
-            };
-            if !crate::game_info::old_drive_file(file_name, &old_info.join(file_name))? {
-                continue;
-            }
-            let name = format!(".ohmy3do/info/{file_name}");
-            let (size, stamp) = f::stamp(&f::safe(&target, &name)?)?;
-            items.push(CopyItem {
-                path: name,
-                source_path: None,
-                status: "remove".into(),
-                size,
-                source_stamp: 0,
-                destination_stamp: Some(stamp),
-                verified: false,
-            });
-        }
-    }
-    // Menu-written lists on the drive follow moved folders even when staging has none.
-    let old: Vec<String> = moves.iter().map(|(o, _)| o.clone()).collect();
-    for name in [
-        ".ohmy3do/favorites.txt",
-        ".ohmy3do/recent.txt",
-        ".ohmy3do/last-position.txt",
-    ] {
-        let dest = f::safe(&target, name)?;
-        if moves.is_empty() || items.iter().any(|i| i.path == name) || !dest.is_file() {
-            continue;
-        }
-        let raw = fs::read(&dest)?;
-        let changed = if name.ends_with("last-position.txt") {
-            library::remap_position(&raw, &remaps, &old).is_some()
-        } else {
-            library::remap_lines(&raw, &remaps).is_some()
-        };
-        if changed {
-            let (size, stamp) = f::stamp(&dest)?;
-            items.push(CopyItem {
-                path: name.into(),
-                source_path: None,
-                status: "remap".into(),
-                size,
-                source_stamp: stamp,
-                destination_stamp: Some(stamp),
-                verified: false,
-            });
-        }
-    }
+
+    items.extend(old_descriptions_to_remove(&target)?);
+    let lists = drive_lists_to_remap(&target, &moves, &remaps, &items)?;
+    items.extend(lists);
+
     let plan = CopyPlan {
         source,
         destination: target,
@@ -827,6 +657,298 @@ fn plan_impl(
         bytes as f64 / 1024f64.powi(3)
     ));
     Ok(plan)
+}
+
+impl Review<'_> {
+    /// Reviews one library file (`source_name`) going to `name` on the
+    /// drive, and decides its status:
+    ///
+    /// - "remap": a list of the person's (favorites, recent games, saved
+    ///   position) on the drive that names discs in folders that will move;
+    /// - "preserve": the person's own file, or a cheat database, already on
+    ///   the drive (kept as it is);
+    /// - "copy": not on the drive yet;
+    /// - "unchanged": the drive's copy matches (by the last copy's record,
+    ///   by size and time for a disc, or by checksum);
+    /// - "update": the drive's copy differs.
+    ///
+    /// A different disc already at the same path is an error: discs are
+    /// never overwritten.
+    fn file(&self, name: String, source_name: String, file_job: &Job) -> Result<CopyItem> {
+        let source_file = f::safe(self.source, &source_name)?;
+        // A file in a folder that will move is compared where it is now.
+        let current_path = self
+            .moves
+            .iter()
+            .find(|(_, new)| name.starts_with(&format!("{new}/")))
+            .map(|(old, new)| format!("{old}{}", &name[new.len()..]))
+            .unwrap_or_else(|| name.clone());
+        let destination = f::safe(self.target, &current_path)?;
+
+        let (mut size, source_stamp) = f::stamp(&source_file)?;
+        // A media index goes to the drive in its "beside each disc" form.
+        let generated = if media_index(&name) {
+            Some(library::beside_index(&fs::read(&source_file)?)?)
+        } else {
+            None
+        };
+        if let Some(content) = &generated {
+            size = content.len() as u64;
+        }
+
+        let destination_stamp = if destination.is_file() {
+            Some(f::stamp(&destination)?.1)
+        } else {
+            None
+        };
+        if destination.exists() && !destination.is_file() {
+            bail!("Destination is occupied by a directory: {name}")
+        }
+        if name == ".ohmy3do/ohmy3do.ini" && destination.is_file() {
+            config(&destination)?
+        }
+
+        // The person's files and cheat database already on the drive are
+        // kept (or remapped to moved folders). Otherwise compare with the
+        // drive's file.
+        let cheat_paths = [
+            crate::save_cheats::JSON_PATH,
+            crate::save_cheats::BINARY_PATH,
+        ];
+        let is_cheat_file = cheat_paths.contains(&name.as_str());
+        let drive_has_cheats = cheat_paths
+            .iter()
+            .any(|path| plan_cheat_exists(self.target, path));
+        let preserve_cheats = is_cheat_file && drive_has_cheats;
+        let remapped = personal(&name)
+            && !is_cheat_file
+            && destination.is_file()
+            && !self.moves.is_empty()
+            && self.list_needs_remap(&name, &destination)?;
+
+        let mut verified = false;
+        let status = if remapped {
+            "remap"
+        } else if preserve_cheats || (personal(&name) && destination.exists()) {
+            "preserve"
+        } else if !destination.exists() {
+            "copy"
+        } else if !destination.is_file() {
+            bail!("Destination is occupied: {name}")
+        } else if let Some(content) = &generated {
+            if fs::read(&destination)? == *content {
+                verified = true;
+                "unchanged"
+            } else {
+                "update"
+            }
+        } else {
+            let (status, matched) = self.compare_existing(
+                &name,
+                &source_file,
+                &destination,
+                size,
+                source_stamp,
+                file_job,
+            )?;
+            verified = matched;
+            status
+        };
+
+        Ok(CopyItem {
+            source_path: (source_name != name).then_some(source_name),
+            path: name,
+            status: status.into(),
+            size,
+            source_stamp,
+            destination_stamp,
+            verified,
+        })
+    }
+
+    /// Whether a list on the drive (`name`: the saved position, or
+    /// favorites/recent) names anything in a folder that will move.
+    fn list_needs_remap(&self, name: &str, destination: &Path) -> Result<bool> {
+        let raw = fs::read(destination)?;
+        if name == ".ohmy3do/last-position.txt" {
+            let old_folders: Vec<String> = self.moves.iter().map(|(old, _)| old.clone()).collect();
+            Ok(library::remap_position(&raw, self.remaps, &old_folders).is_some())
+        } else {
+            Ok(library::remap_lines(&raw, self.remaps).is_some())
+        }
+    }
+
+    /// Compares a library file with the drive's existing copy. Returns its
+    /// status ("unchanged" or "update") and whether it is known to match.
+    ///
+    /// Without `verify`, a file of the same size is trusted as unchanged if
+    /// the last verified copy recorded these exact sizes and times, or if it
+    /// is a disc with the same modification time. Otherwise the two are
+    /// checksummed. A disc that differs is an error.
+    fn compare_existing(
+        &self,
+        name: &str,
+        source_file: &Path,
+        destination: &Path,
+        size: u64,
+        source_stamp: u128,
+        file_job: &Job,
+    ) -> Result<(&'static str, bool)> {
+        let (destination_size, destination_time) = f::stamp(destination)?;
+        let is_disc =
+            !name.starts_with(".ohmy3do/") && !name.contains("/.ohmy3do/") && name != "boot.iso";
+        let has_receipt = self
+            .previous
+            .get(name)
+            .filter(|record| record.verified || record.status == "verified")
+            .is_some_and(|record| {
+                record.size == size
+                    && record.source_stamp == source_stamp
+                    && record.destination_stamp == Some(destination_time)
+                    && destination_size == size
+            });
+
+        // A receipt from the last verified copy spares rereading unchanged
+        // media too; previews alone can be gigabytes on a slow card.
+        let same_disc_time = is_disc && f::same_time(source_stamp, destination_time);
+        if !self.verify && size == destination_size && (has_receipt || same_disc_time) {
+            return Ok(("unchanged", has_receipt));
+        }
+
+        if size == destination_size {
+            // Checking each side is half of this file's progress.
+            let half = size.max(1);
+            let source_hash = f::sha256(
+                source_file,
+                &file_job.progress_range(0, half, half * 2, "Checking source"),
+            )?;
+            let destination_hash = f::sha256(
+                destination,
+                &file_job.progress_range(half, half, half * 2, "Checking destination"),
+            )?;
+            if source_hash == destination_hash {
+                return Ok(("unchanged", true));
+            }
+        }
+
+        if is_disc {
+            bail!("Different existing disc on destination: {name}")
+        }
+        Ok(("update", false))
+    }
+}
+
+/// Reviews a generated index file of a partial copy: "copy" if the drive
+/// does not have it, "unchanged" if it already holds exactly `content`,
+/// otherwise "update".
+fn review_generated(target: &Path, name: &str, content: &[u8]) -> Result<CopyItem> {
+    let destination = f::safe(target, name)?;
+    if destination.exists() && !destination.is_file() {
+        bail!("Destination is occupied: {name}");
+    }
+    let destination_stamp = if destination.is_file() {
+        Some(f::stamp(&destination)?.1)
+    } else {
+        None
+    };
+    let status = if destination_stamp.is_none() {
+        "copy"
+    } else if fs::read(&destination)? == *content {
+        "unchanged"
+    } else {
+        "update"
+    };
+
+    Ok(CopyItem {
+        path: name.to_owned(),
+        source_path: None,
+        status: status.into(),
+        size: content.len() as u64,
+        source_stamp: 0,
+        destination_stamp,
+        verified: status == "unchanged",
+    })
+}
+
+/// Description files left in the drive's root `.ohmy3do/info` by an older
+/// desktop, to remove: descriptions now sit beside their discs, and the
+/// menu no longer reads these. Other files there are left alone.
+fn old_descriptions_to_remove(target: &Path) -> Result<Vec<CopyItem>> {
+    let old_info = f::safe(target, ".ohmy3do/info")?;
+    if !old_info.is_dir() {
+        return Ok(vec![]);
+    }
+
+    let mut names = fs::read_dir(&old_info)?
+        .map(|entry| Ok(entry?.file_name()))
+        .collect::<Result<Vec<_>>>()?;
+    names.sort();
+
+    let mut items = vec![];
+    for file_name in names {
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if !crate::game_info::old_drive_file(file_name, &old_info.join(file_name))? {
+            continue;
+        }
+        let name = format!(".ohmy3do/info/{file_name}");
+        let (size, stamp) = f::stamp(&f::safe(target, &name)?)?;
+        items.push(CopyItem {
+            path: name,
+            source_path: None,
+            status: "remove".into(),
+            size,
+            source_stamp: 0,
+            destination_stamp: Some(stamp),
+            verified: false,
+        });
+    }
+    Ok(items)
+}
+
+/// Menu-written lists on the drive follow moved folders even when staging has none.
+/// Lists already reviewed (in `items`) are skipped.
+fn drive_lists_to_remap(
+    target: &Path,
+    moves: &[(String, String)],
+    remaps: &HashMap<String, String>,
+    items: &[CopyItem],
+) -> Result<Vec<CopyItem>> {
+    let old_folders: Vec<String> = moves.iter().map(|(old, _)| old.clone()).collect();
+    let mut lists = vec![];
+
+    for name in [
+        ".ohmy3do/favorites.txt",
+        ".ohmy3do/recent.txt",
+        ".ohmy3do/last-position.txt",
+    ] {
+        let destination = f::safe(target, name)?;
+        let already_reviewed = items.iter().any(|item| item.path == name);
+        if moves.is_empty() || already_reviewed || !destination.is_file() {
+            continue;
+        }
+
+        let raw = fs::read(&destination)?;
+        let changed = if name.ends_with("last-position.txt") {
+            library::remap_position(&raw, remaps, &old_folders).is_some()
+        } else {
+            library::remap_lines(&raw, remaps).is_some()
+        };
+        if changed {
+            let (size, stamp) = f::stamp(&destination)?;
+            lists.push(CopyItem {
+                path: name.into(),
+                source_path: None,
+                status: "remap".into(),
+                size,
+                source_stamp: stamp,
+                destination_stamp: Some(stamp),
+                verified: false,
+            });
+        }
+    }
+    Ok(lists)
 }
 /// Carries out a reviewed copy: moves folders, remaps the person's lists,
 /// copies and checks files (discs first, then indexes, then boot.iso last,
