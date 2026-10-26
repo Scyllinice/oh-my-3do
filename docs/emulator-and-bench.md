@@ -48,10 +48,13 @@ tools/emulator/run.sh tools/emulator/scripts/roadrash-preview.txt rr
   previews of the same file name.
 - It copies the library's settings, changing `screen_margin=0` to 8; an existing
   nonzero margin is preserved. Use a valid current INI in the test library.
-- `BESIDE=1` builds the media-beside-each-disc layout used by desktop USB
-  preparation. Otherwise media uses the root `.ohmy3do/covers` and `previews`.
+- Media goes beside each disc, the layout desktop USB preparation makes. The
+  menu streams OM3DVID7 previews only from this layout. `BESIDE=0` keeps media
+  in the root `.ohmy3do/covers` and `previews` instead, where previews will not
+  stream.
 
-`run.sh` writes screenshots to `build/emu/shots/NAME/*.ppm`. Diagnostics that a
+`run.sh` writes screenshots to `build/emu/shots/NAME/*.ppm`, and everything
+the console played to `build/emu/shots/NAME/audio.wav` (16-bit stereo, 44100 Hz). Diagnostics that a
 script exports appear in `build/emu/usb/.ohmy3do/diagnostics.txt`, in the same
 format the user sends from the console. Emulation is deterministic: the same
 BIOS, drive contents, build and script give the same frames, so two builds can

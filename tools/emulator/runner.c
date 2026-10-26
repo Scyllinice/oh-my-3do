@@ -12,6 +12,9 @@
  *   shot NAME           save the current frame as OUT_DIR/NAME.ppm
  *   burst NAME N STEP   N screenshots, STEP frames apart: NAME-00.ppm ...
  * Buttons are the 3DO pad's: up down left right a b c p x l r.
+ *
+ * Everything the console plays is recorded to OUT_DIR/audio.wav (16-bit
+ * stereo), so two builds' sound can be compared sample for sample.
  */
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -26,6 +29,10 @@ static unsigned char *frame;
 static unsigned frame_width, frame_height;
 static unsigned buttons;
 static unsigned long frames_run;
+
+/* The sound recording: its file and the sample frames written so far. */
+static FILE *audio_file;
+static unsigned long audio_frames;
 
 static void log_cb(enum retro_log_level level, const char *fmt, ...)
 {
@@ -124,15 +131,63 @@ static void video(const void *data, unsigned width, unsigned height, size_t pitc
     }
 }
 
+/* Writes 16-bit little-endian samples, whatever the host's byte order. */
+static void write_samples(const int16_t *data, size_t count)
+{
+    size_t i;
+    for (i = 0; i < count; ++i) {
+        unsigned value = (unsigned)(uint16_t)data[i];
+        fputc((int)(value & 255), audio_file);
+        fputc((int)(value >> 8), audio_file);
+    }
+}
+
 static void audio_sample(int16_t left, int16_t right)
 {
-    (void)left;
-    (void)right;
+    int16_t pair[2];
+    pair[0] = left;
+    pair[1] = right;
+    write_samples(pair, 2);
+    ++audio_frames;
 }
+
 static size_t audio_batch(const int16_t *data, size_t frames)
 {
-    (void)data;
+    write_samples(data, frames * 2);
+    audio_frames += frames;
     return frames;
+}
+
+static void write_le32(unsigned long value)
+{
+    fputc((int)(value & 255), audio_file);
+    fputc((int)((value >> 8) & 255), audio_file);
+    fputc((int)((value >> 16) & 255), audio_file);
+    fputc((int)((value >> 24) & 255), audio_file);
+}
+
+static void write_le16(unsigned value)
+{
+    fputc((int)(value & 255), audio_file);
+    fputc((int)((value >> 8) & 255), audio_file);
+}
+
+/* The WAV header: 16-bit stereo PCM at `rate`, `frames` sample frames. */
+static void write_wav_header(unsigned long rate, unsigned long frames)
+{
+    unsigned long data_bytes = frames * 4;
+    fwrite("RIFF", 1, 4, audio_file);
+    write_le32(36 + data_bytes);
+    fwrite("WAVEfmt ", 1, 8, audio_file);
+    write_le32(16);
+    write_le16(1); /* PCM */
+    write_le16(2); /* channels */
+    write_le32(rate);
+    write_le32(rate * 4); /* bytes per second */
+    write_le16(4);        /* bytes per sample frame */
+    write_le16(16);       /* bits per sample */
+    fwrite("data", 1, 4, audio_file);
+    write_le32(data_bytes);
 }
 static void input_poll(void)
 {
@@ -234,8 +289,11 @@ int main(int argc, char **argv)
     void (*retro_unload_game_fn)(void);
     void (*retro_deinit_fn)(void);
     void (*retro_set_controller_port_device_fn)(unsigned, unsigned);
+    void (*retro_get_system_av_info_fn)(struct retro_system_av_info *);
     struct retro_game_info game;
-    char line[256];
+    struct retro_system_av_info av;
+    unsigned long audio_rate;
+    char line[256], audio_path[1024];
     FILE *script;
 
     if (argc != 6) {
@@ -261,6 +319,7 @@ int main(int argc, char **argv)
     LOAD(retro_unload_game);
     LOAD(retro_deinit);
     LOAD(retro_set_controller_port_device);
+    LOAD(retro_get_system_av_info);
     run = retro_run_fn;
     retro_set_environment_fn(environment);
     retro_set_video_refresh_fn(video);
@@ -276,6 +335,17 @@ int main(int argc, char **argv)
         return 1;
     }
     retro_set_controller_port_device_fn(0, RETRO_DEVICE_JOYPAD);
+
+    memset(&av, 0, sizeof(av));
+    retro_get_system_av_info_fn(&av);
+    audio_rate = (unsigned long)(av.timing.sample_rate + 0.5);
+    snprintf(audio_path, sizeof(audio_path), "%s/audio.wav", out_dir);
+    audio_file = fopen(audio_path, "wb");
+    if (!audio_file) {
+        perror(audio_path);
+        return 1;
+    }
+    write_wav_header(audio_rate, 0); /* rewritten with the length at the end */
 
     script = fopen(argv[4], "r");
     if (!script) {
@@ -323,6 +393,14 @@ int main(int argc, char **argv)
     }
     fclose(script);
     printf("ran %lu frames\n", frames_run);
+
+    rewind(audio_file);
+    write_wav_header(audio_rate, audio_frames);
+    if (fclose(audio_file) != 0) {
+        perror(audio_path);
+        return 1;
+    }
+    printf("recorded %lu sound frames at %lu Hz\n", audio_frames, audio_rate);
     retro_unload_game_fn();
     retro_deinit_fn();
     return 0;

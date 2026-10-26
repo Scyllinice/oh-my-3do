@@ -5,8 +5,10 @@
 #   make-usb.sh [BOOT.iso]     default: iso/boot.iso
 # LIBRARY=/mnt/d/3DO is the library; CLIPS=dir adds .3dv files that replace the
 # library's clips of the same name (default build/console-test/previews).
-# BESIDE=1 lays media out the new way: each disc's cover, preview and description in a
-# .ohmy3do folder beside it, with the indexes flagged accordingly.
+# Media goes beside each disc by default: its cover, preview and description in
+# a .ohmy3do folder next to it, with the indexes flagged accordingly. The menu
+# streams OM3DVID7 previews only from this layout. BESIDE=0 keeps the media in
+# the drive's root .ohmy3do/covers and previews instead (covers only, then).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -18,7 +20,7 @@ usb=$work/usb
 rm -rf "$usb"
 mkdir -p "$usb/.ohmy3do/previews" "$usb/.ohmy3do/saves"
 cp "$iso" "$usb/boot.iso"
-if [[ ${BESIDE:-0} == 1 ]]; then
+if [[ ${BESIDE:-1} == 1 ]]; then
     # Real folders (so .ohmy3do can be created inside them), linked disc files.
     (cd "$library" && find . -mindepth 1 -path ./.ohmy3do -prune -o -type d -print) | while read -r dir; do
         mkdir -p "$usb/$dir"
@@ -50,7 +52,7 @@ if [[ -d $clips ]]; then
         cp "$clip" "$usb/.ohmy3do/previews/"
     done
 fi
-if [[ ${BESIDE:-0} == 1 ]]; then
+if [[ ${BESIDE:-1} == 1 ]]; then
     python3 - "$usb" <<'PY'
 import os, shutil, struct, sys
 from pathlib import Path

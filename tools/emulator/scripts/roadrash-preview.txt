@@ -95,8 +95,6 @@ chord l+r 6
 wait 60
 press right 4
 wait 10
-press down 4
-wait 10
 press a 4
 wait 60
 shot diag
