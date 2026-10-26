@@ -29,7 +29,8 @@ fn read_inventory_preserves_path_validation_and_fresh_write_checks() {
         "Games/trailing.",
         "Games/bad\\name",
     ] {
-        let expected = safe(root, name);
+        // ReadPaths works from the canonical root (on Windows, the \\?\ form).
+        let expected = safe(&root.canonicalize().unwrap(), name);
         let actual = paths.path(name);
         assert_eq!(expected.is_ok(), actual.is_ok(), "{name}");
         if let Ok(path) = expected {

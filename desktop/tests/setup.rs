@@ -50,7 +50,8 @@ fn folder_only_chains_get_navigation_helpers_without_becoming_games() {
     let discs =
         oh_my_3do_library::disc::collect(&[root.path().to_owned()], None, &Job::default()).unwrap();
     assert_eq!(discs.len(), 1);
-    assert_eq!(discs[0].0, game);
+    // Collected paths are canonical (on Windows, the \\?\ long-path form).
+    assert_eq!(discs[0].0, game.canonicalize().unwrap());
     let helper = root
         .path()
         .join("Games/Oh My 3DO - Folder Navigation Helper (Keep).iso");
