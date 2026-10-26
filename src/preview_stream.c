@@ -79,16 +79,16 @@ static void release(void *data, unsigned long bytes)
 }
 
 /* Sizes of the decoder's buffers, in the order they are allocated. */
-#define MAP_BYTES    (PREVIEW7_BLOCKS * 2UL * sizeof(unsigned long))
-#define DICT4_BYTES  (PREVIEW7_MAX_ENTRIES4 * 32UL)
-#define THUMB4_BYTES (PREVIEW7_MAX_ENTRIES4 * 8UL)
-#define DICT2_BYTES  (PREVIEW7_MAX_ENTRIES2 * 8UL)
-#define THUMB2_BYTES (PREVIEW7_MAX_ENTRIES2 * sizeof(unsigned long))
+#define MAP_BYTES    (OM3DVID7_BLOCKS * 2UL * sizeof(unsigned long))
+#define DICT4_BYTES  (OM3DVID7_MAX_ENTRIES4 * 32UL)
+#define THUMB4_BYTES (OM3DVID7_MAX_ENTRIES4 * 8UL)
+#define DICT2_BYTES  (OM3DVID7_MAX_ENTRIES2 * 8UL)
+#define THUMB2_BYTES (OM3DVID7_MAX_ENTRIES2 * sizeof(unsigned long))
 
-unsigned long preview_stream_bytes(const Preview7Header *header, unsigned int slots)
+unsigned long preview_stream_bytes(const Om3dvid7Header *header, unsigned int slots)
 {
     return MAP_BYTES + DICT4_BYTES + THUMB4_BYTES + DICT2_BYTES + THUMB2_BYTES +
-           PREVIEW7_THUMB_BYTES + slots * (header->max_chunk + SLOT_SLACK) + PREVIEW_STREAM_RING;
+           OM3DVID7_THUMB_BYTES + slots * (header->max_chunk + SLOT_SLACK) + PREVIEW_STREAM_RING;
 }
 
 static void free_all(PreviewStream *stream)
@@ -101,7 +101,7 @@ static void free_all(PreviewStream *stream)
     release(stream->dec.thumb4, THUMB4_BYTES);
     release(stream->dec.dict2, DICT2_BYTES);
     release(stream->dec.thumb2, THUMB2_BYTES);
-    release(stream->thumb, PREVIEW7_THUMB_BYTES);
+    release(stream->thumb, OM3DVID7_THUMB_BYTES);
     release(stream->ring, PREVIEW_STREAM_RING);
 }
 
@@ -135,7 +135,7 @@ static unsigned int chunk_of(const PreviewStream *stream, unsigned long sequence
 
 static unsigned long chunk_bytes(const PreviewStream *stream, unsigned long sequence)
 {
-    return read_be16(stream->header.table + 2 * chunk_of(stream, sequence)) * PREVIEW7_BLOCK_BYTES;
+    return read_be16(stream->header.table + 2 * chunk_of(stream, sequence)) * OM3DVID7_BLOCK_BYTES;
 }
 
 /* The first frame (counted across loops) of a sequence's chunk. */
@@ -164,11 +164,11 @@ static int read_chunk_bytes(PreviewStream *stream, OdeReadBuffer reader, unsigne
 {
     unsigned int slot = (unsigned int)(sequence % stream->slots);
     unsigned long bytes = chunk_bytes(stream, sequence), at;
-    Preview7Sum sum;
+    Om3dvid7Sum sum;
 
     sum.a = sum.b = 0;
     stream->reading = 1;
-    for (at = 0; at < bytes; at += PREVIEW7_BLOCK_BYTES) {
+    for (at = 0; at < bytes; at += OM3DVID7_BLOCK_BYTES) {
         unsigned char *block = stream->slot[slot] + at;
         adjust_reader_priority(stream, sequence);
         if (usb_file_read_block(&stream->ode, reader, block) < 0) {
@@ -177,12 +177,12 @@ static int read_chunk_bytes(PreviewStream *stream, OdeReadBuffer reader, unsigne
         }
         /* The chunk's own check, its first word, is not part of the sum. */
         if (at == 0)
-            preview7_sum_add(&sum, block + 4, PREVIEW7_BLOCK_BYTES - 4);
+            om3dvid7_sum_add(&sum, block + 4, OM3DVID7_BLOCK_BYTES - 4);
         else
-            preview7_sum_add(&sum, block, PREVIEW7_BLOCK_BYTES);
+            om3dvid7_sum_add(&sum, block, OM3DVID7_BLOCK_BYTES);
     }
     stream->reading = 0;
-    stream->slot_sum[slot] = preview7_sum_value(&sum);
+    stream->slot_sum[slot] = om3dvid7_sum_value(&sum);
     return 0;
 }
 
@@ -191,11 +191,11 @@ static int finish_chunk(PreviewStream *stream, unsigned long sequence)
 {
     unsigned int slot = (unsigned int)(sequence % stream->slots);
 
-    if (preview7_chunk_summed(&stream->header, chunk_of(stream, sequence), stream->slot[slot],
+    if (om3dvid7_chunk_summed(&stream->header, chunk_of(stream, sequence), stream->slot[slot],
                               chunk_bytes(stream, sequence), stream->slot_sum[slot],
                               &stream->info[slot]))
         return -1;
-    preview7_define(&stream->dec, &stream->info[slot]);
+    om3dvid7_define(&stream->dec, &stream->info[slot]);
     ++stream->chunks_read;
     stream->ready[slot] = sequence + 1; /* last: this publishes the chunk to the player */
     return 0;
@@ -212,13 +212,13 @@ static int read_chunk(PreviewStream *stream, OdeReadBuffer reader, unsigned long
  * changed since the stream was opened. */
 static int open_file(PreviewStream *stream, OdeReadBuffer reader)
 {
-    static unsigned char block[PREVIEW7_BLOCK_BYTES]; /* static: too big for the stack */
+    static unsigned char block[OM3DVID7_BLOCK_BYTES]; /* static: too big for the stack */
 
     if (usb_file_open(&stream->ode, stream->name) < 0)
         return -1;
-    if (usb_file_read(&stream->ode, reader, block, PREVIEW7_BLOCK_BYTES, USB_FILE_CRC_CHECKED) <
+    if (usb_file_read(&stream->ode, reader, block, OM3DVID7_BLOCK_BYTES, USB_FILE_CRC_CHECKED) <
             0 ||
-        memcmp(block, stream->block, PREVIEW7_BLOCK_BYTES)) {
+        memcmp(block, stream->block, OM3DVID7_BLOCK_BYTES)) {
         usb_file_close(&stream->ode);
         return -1;
     }
@@ -411,7 +411,7 @@ static void read_if_needed(PreviewStream *stream)
 /* Audio samples from the start of the clip to frame `frame` (within one loop). */
 static unsigned long samples_to(unsigned long frame)
 {
-    return frame * PREVIEW7_AUDIO_RATE / PREVIEW7_FPS;
+    return frame * OM3DVID7_AUDIO_RATE / OM3DVID7_FPS;
 }
 
 /* Audio samples from the first start to frame `frame`, across loops. */
@@ -437,12 +437,12 @@ static unsigned long played_ms(const PreviewStream *stream, unsigned long now)
 /* Copies ready chunks' sound into the ring, in order, while there is room. */
 static void fill_ring(PreviewStream *stream, unsigned long now)
 {
-    unsigned long played = scale_ms(played_ms(stream, now), PREVIEW7_AUDIO_RATE);
+    unsigned long played = scale_ms(played_ms(stream, now), OM3DVID7_AUDIO_RATE);
 
     for (;;) {
         unsigned long sequence = stream->audio_written;
         unsigned long slot = sequence % stream->slots;
-        const Preview7Chunk *info;
+        const Om3dvid7Chunk *info;
         unsigned long start, count, i;
 
         if (sequence >= stream->released + stream->slots || stream->ready[slot] != sequence + 1)
@@ -525,7 +525,7 @@ void preview_stream_audio(PreviewStream *stream, unsigned long now, int waiting)
 
 unsigned long preview_stream_due(PreviewStream *stream, unsigned long now)
 {
-    return stream->playing ? scale_ms(played_ms(stream, now), PREVIEW7_FPS) : 0;
+    return stream->playing ? scale_ms(played_ms(stream, now), OM3DVID7_FPS) : 0;
 }
 
 void preview_stream_play(PreviewStream *stream, unsigned long now)
@@ -537,7 +537,7 @@ void preview_stream_play(PreviewStream *stream, unsigned long now)
     if (stream->sound) {
         fill_ring(stream, now);
         if (preview_audio_start_ring(&stream->audio, (unsigned char *)stream->ring,
-                                     PREVIEW_STREAM_RING, PREVIEW7_AUDIO_RATE) < 0)
+                                     PREVIEW_STREAM_RING, OM3DVID7_AUDIO_RATE) < 0)
             stream->sound = 0; /* play on silently */
     }
 }
@@ -585,13 +585,13 @@ static int must_wait(PreviewStream *stream, unsigned long frame)
 
 static int decode_to(PreviewStream *stream, unsigned long frame, int picture, unsigned char *screen)
 {
-    int picture_index = picture == PREVIEW7_TV;
+    int picture_index = picture == OM3DVID7_TV;
 
     if (stream->error)
         return -1;
     stream->dec.screen = screen;
     if (!stream->picture_valid[picture_index]) {
-        preview7_render(&stream->dec, picture);
+        om3dvid7_render(&stream->dec, picture);
         stream->picture_valid[picture_index] = 1;
     }
 
@@ -609,11 +609,11 @@ static int decode_to(PreviewStream *stream, unsigned long frame, int picture, un
 
         if (frame_in_loop == 0 && stream->frame) {
             /* Each loop decodes from black, as the encoder did. */
-            preview7_reset(&stream->dec);
-            preview7_render(&stream->dec, picture);
+            om3dvid7_reset(&stream->dec);
+            om3dvid7_render(&stream->dec, picture);
             stream->picture_valid[!picture_index] = 0;
         }
-        if (preview7_frame(&stream->dec, &stream->info[slot],
+        if (om3dvid7_frame(&stream->dec, &stream->info[slot],
                            (unsigned int)(frame_in_loop % stream->header.chunk_frames), picture)) {
             stream->error = 3;
             return -1;
@@ -638,7 +638,7 @@ int preview_stream_decode(PreviewStream *stream, unsigned long frame, int pictur
 
 void preview_stream_invalidate(PreviewStream *stream, int picture)
 {
-    stream->picture_valid[picture == PREVIEW7_TV] = 0;
+    stream->picture_valid[picture == OM3DVID7_TV] = 0;
 }
 
 void preview_stream_close(PreviewStream *stream)
@@ -701,14 +701,14 @@ static int allocate_decoder(PreviewStream *stream, PreviewStreamReclaim reclaim,
         (unsigned char *)allocate_with_fallback(DICT2_BYTES, MEM_DRAM, reclaim, reclaim_context, 0);
     stream->dec.thumb2 = (unsigned long *)allocate_with_fallback(THUMB2_BYTES, MEM_DRAM, reclaim,
                                                                  reclaim_context, 0);
-    stream->thumb = (unsigned char *)allocate_with_fallback(PREVIEW7_THUMB_BYTES, MEM_CEL, reclaim,
+    stream->thumb = (unsigned char *)allocate_with_fallback(OM3DVID7_THUMB_BYTES, MEM_CEL, reclaim,
                                                             reclaim_context, 0);
     if (stream->sound)
         stream->ring = (signed char *)allocate_with_fallback(PREVIEW_STREAM_RING, MEM_AUDIO,
                                                              reclaim, reclaim_context, 0);
     stream->dec.thumb = stream->thumb;
-    stream->dec.entries4 = PREVIEW7_MAX_ENTRIES4;
-    stream->dec.entries2 = PREVIEW7_MAX_ENTRIES2;
+    stream->dec.entries4 = OM3DVID7_MAX_ENTRIES4;
+    stream->dec.entries2 = OM3DVID7_MAX_ENTRIES2;
 
     if (!stream->dec.map || !stream->dec.dict4 || !stream->dec.thumb4 || !stream->dec.dict2 ||
         !stream->dec.thumb2 || !stream->thumb || (stream->sound && !stream->ring))
@@ -763,10 +763,10 @@ int preview_stream_open(PreviewStream *stream, const Ode *ode, OdeReadBuffer rea
         return -1;
 
     /* Keep our own copy of the header block (the table points into it). */
-    memcpy(stream->block, header_block, PREVIEW7_BLOCK_BYTES);
-    if (preview7_header(stream->block, &stream->header))
+    memcpy(stream->block, header_block, OM3DVID7_BLOCK_BYTES);
+    if (om3dvid7_header(stream->block, &stream->header))
         return -1;
-    stream->header.table = stream->block + PREVIEW7_HEADER_BYTES;
+    stream->header.table = stream->block + OM3DVID7_HEADER_BYTES;
     strcpy(stream->folder, game_folder);
     strcpy(stream->name, name);
 
@@ -785,7 +785,7 @@ int preview_stream_open(PreviewStream *stream, const Ode *ode, OdeReadBuffer rea
     result = -1;
     if (stream->ring)
         memset(stream->ring, 0, PREVIEW_STREAM_RING);
-    preview7_reset(&stream->dec);
+    om3dvid7_reset(&stream->dec);
 
 #ifdef OH3DO_SDK
     (void)reader;
@@ -820,7 +820,7 @@ int preview_stream_open(PreviewStream *stream, const Ode *ode, OdeReadBuffer rea
 #endif
     }
 
-    if (decode_to(stream, 0, PREVIEW7_TV, NULL))
+    if (decode_to(stream, 0, OM3DVID7_TV, NULL))
         goto failed;
     stream->open = 1;
     return 0;

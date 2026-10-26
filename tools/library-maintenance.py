@@ -678,7 +678,7 @@ STREAM_CHUNK_HEADER = 24
 
 
 def validate_stream(data):
-    """OM3DVID7 (src/preview_v7.h), as the menu checks it: the header block and
+    """OM3DVID7 (om3dvid/include/om3dvid7.h), as the menu checks it: the header block and
     its sum, the chunk table against the file, every chunk's sum, numbering,
     entries and frame table. Packets are checked by the decoder as they play."""
     if len(data) < STREAM_HEADER_BLOCK:

@@ -4,9 +4,9 @@
 Usage: build-preview-encoder.py [--output FOLDER] [--windows]
 
 Compiles the two shared libraries prepare-preview.py loads to encode game
-preview clips: preview-encoder (the full-load .3dv format) and
-preview7-encoder (the streamed format, which includes the menu's own
-decoder from src/). Output goes to build/media-native/ by default.
+preview clips: preview-encoder (the older full-load .3dv format) and
+om3dvid7 (the streamed format: the om3dvid/ library's encoder and decoder).
+Output goes to build/media-native/ by default.
 
 --windows cross-compiles x64 DLLs that need no C runtime, using clang and
 lld-link, so they load on any Windows PC without installing anything.
@@ -19,12 +19,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Each library: its name, source file, C standard, and the checkout folders
-# that hold its other includes.
+# Each library: its name, its source files, the C standard, the checkout
+# folders holding the sources and the headers, and the macro that marks a
+# Windows DLL build. In a media-tools package every file sits beside this script.
 LIBRARIES = (
-    ("preview-encoder", "preview-encoder.c", "c89", ()),
-    # The streamed-preview encoder includes the menu's decoder.
-    ("preview7-encoder", "preview7-encoder.c", "c99", ("src",)),
+    ("preview-encoder", ("preview-encoder.c",), "c89", ("tools",), (), "OH3DO_PREVIEW_DLL"),
+    (
+        "om3dvid7",
+        ("om3dvid7_encoder.c", "om3dvid7_decoder.c"),
+        "c99",
+        ("om3dvid/src",),
+        ("om3dvid/include",),
+        "OM3DVID7_DLL",
+    ),
 )
 
 
@@ -37,12 +44,15 @@ def library_name(windows=False, stem="preview-encoder"):
     return stem + ".so"
 
 
-def source_dir(name):
-    """Beside this script in a media-tools package; tools/ and src/ in a checkout."""
+def source_path(name, folders):
+    """Beside this script in a media-tools package; in `folders` in a checkout."""
     here = Path(__file__).resolve().parent
     if (here / name).is_file():
-        return here
-    return ROOT / "tools"
+        return here / name
+    for folder in folders:
+        if (ROOT / folder / name).is_file():
+            return ROOT / folder / name
+    raise ValueError("Missing encoder source: " + name)
 
 
 def include_flags(extra):
@@ -56,8 +66,8 @@ def include_flags(extra):
     return flags
 
 
-def build_windows(output, stem, source, target, standard, includes):
-    """Cross-compile `source` to a Windows x64 DLL at `target`.
+def build_windows(output, stem, sources, target, standard, includes, dll_macro):
+    """Cross-compile `sources` to a Windows x64 DLL at `target`.
 
     The DLL is freestanding: no C runtime, no entry point and no default
     libraries, so it depends on nothing. The timestamp is zeroed so the same
@@ -68,26 +78,31 @@ def build_windows(output, stem, source, target, standard, includes):
     if not clang or not linker:
         raise ValueError("Windows build requires clang and lld-link")
 
-    obj = output / (stem + "-win64.obj")
-    compile_command = [
-        clang,
-        "--target=x86_64-pc-windows-msvc",
-        "-O2",
-        "-ffreestanding",
-        "-fno-builtin",
-        "-fno-stack-protector",
-        "-std=" + standard,
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        "-DOH3DO_PREVIEW_DLL",
-        *includes,
-        "-c",
-        str(source),
-        "-o",
-        str(obj),
-    ]
-    subprocess.run(compile_command, check=True)
+    objects = []
+    for index, source in enumerate(sources):
+        # One object per source; the first keeps the old single-file name.
+        suffix = "" if index == 0 else "-" + source.stem
+        obj = output / (stem + suffix + "-win64.obj")
+        compile_command = [
+            clang,
+            "--target=x86_64-pc-windows-msvc",
+            "-O2",
+            "-ffreestanding",
+            "-fno-builtin",
+            "-fno-stack-protector",
+            "-std=" + standard,
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-D" + dll_macro,
+            *includes,
+            "-c",
+            str(source),
+            "-o",
+            str(obj),
+        ]
+        subprocess.run(compile_command, check=True)
+        objects.append(str(obj))
 
     link_command = [
         linker,
@@ -96,13 +111,13 @@ def build_windows(output, stem, source, target, standard, includes):
         "/nodefaultlib",
         "/timestamp:0",
         "/out:" + str(target),
-        str(obj),
+        *objects,
     ]
     subprocess.run(link_command, check=True)
 
 
-def build_native(source, target, standard, includes):
-    """Compile `source` to a shared library for this PC with the system cc."""
+def build_native(sources, target, standard, includes):
+    """Compile `sources` to a shared library for this PC with the system cc."""
     shared_flag = "-dynamiclib" if sys.platform == "darwin" else "-shared"
     command = [
         "cc",
@@ -115,22 +130,23 @@ def build_native(source, target, standard, includes):
         *includes,
         shared_flag,
         "-fPIC",
-        str(source),
+        *[str(source) for source in sources],
         "-o",
         str(target),
     ]
     subprocess.run(command, check=True)
 
 
-def build_one(output, stem, source_name, standard, extra, windows=False):
-    """Build one library into `output` and return its path."""
-    source = source_dir(source_name) / source_name
+def build_one(output, library, windows=False):
+    """Build one library (an entry of LIBRARIES) into `output` and return its path."""
+    stem, names, standard, source_folders, include_folders, dll_macro = library
+    sources = [source_path(name, source_folders) for name in names]
     target = output / library_name(windows, stem)
-    includes = include_flags(extra)
+    includes = include_flags(include_folders)
     if windows:
-        build_windows(output, stem, source, target, standard, includes)
+        build_windows(output, stem, sources, target, standard, includes, dll_macro)
     else:
-        build_native(source, target, standard, includes)
+        build_native(sources, target, standard, includes)
     print(target)
     return target
 
@@ -139,8 +155,8 @@ def build(output, windows=False):
     """Build every library into `output`; returns the preview-encoder path."""
     output.mkdir(parents=True, exist_ok=True)
     targets = []
-    for stem, source_name, standard, extra in LIBRARIES:
-        targets.append(build_one(output, stem, source_name, standard, extra, windows))
+    for library in LIBRARIES:
+        targets.append(build_one(output, library, windows))
     return targets[0]
 
 

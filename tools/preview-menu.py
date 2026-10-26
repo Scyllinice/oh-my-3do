@@ -48,7 +48,6 @@ MENU_SOURCES = [
     "cover_cache.c",
     "usb_media.c",
     "preview_v5.c",
-    "preview_v7.c",
     "preview_stream.c",
     "png_decode.c",
     "png_inflate.c",
@@ -206,9 +205,15 @@ def generated_program():
     )
 
 
+# The OM3DVID7 preview codec library.
+LIBRARY_SOURCES = ["om3dvid/src/om3dvid7_decoder.c"]
+
+
 def compile_program(code, binary):
-    command = [os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src"), str(code)]
+    command = [os.environ.get("CC", "cc"), "-std=c99", "-O1", "-I", str(ROOT / "src")]
+    command += ["-I", str(ROOT / "om3dvid/include"), str(code)]
     command += [str(ROOT / "src" / name) for name in MENU_SOURCES]
+    command += [str(ROOT / name) for name in LIBRARY_SOURCES]
     command += ["-o", str(binary)]
     subprocess.run(command, check=True)
 

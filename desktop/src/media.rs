@@ -7,7 +7,7 @@
 //!   ("OM3DCOV2", see [`prepared_cover`]).
 //! - Previews come from video clips (the person's own, or EmuMovies). FFmpeg
 //!   turns a clip into 320x240 frames at 30 fps and 11025 Hz sound, and the
-//!   C encoder compiled in from `tools/preview7-encoder.c` packs them into a
+//!   C encoder compiled in from `om3dvid/src/om3dvid7_encoder.c` packs them into a
 //!   streamed preview ("OM3DVID7"). The older in-memory format ("OM3DVID5",
 //!   160x120) can still be encoded and checked.
 //!
@@ -540,7 +540,7 @@ pub fn encode_preview(frames: &[u8], budget: usize, job: &Job) -> Result<Vec<u8>
 // ---- Streamed previews (OM3DVID7) ----
 
 /// OM3DVID7: streamed 320x240 at 30 fps, the whole clip up to a minute, at
-/// about 200 KB/s (see src/preview_v7.h). The settings match the console's
+/// about 200 KB/s (see om3dvid/include/om3dvid7.h). The settings match the console's
 /// reader and decoder: tools/prepare-preview.py uses the same ones.
 const STREAM_WIDTH: usize = 320;
 const STREAM_HEIGHT: usize = 240;
@@ -550,7 +550,7 @@ const STREAM_MAX_FRAMES: usize = 1800;
 
 /// The streamed encoder's settings (the C struct of the same layout).
 #[repr(C)]
-struct Preview7Params {
+struct Om3dvid7EncoderSettings {
     /// Target bytes per second.
     rate: u32,
     /// The drive's read speed the stream must keep within.
@@ -566,7 +566,7 @@ struct Preview7Params {
     cycle_cap: u32,
 }
 
-const STREAM_PARAMS: Preview7Params = Preview7Params {
+const STREAM_PARAMS: Om3dvid7EncoderSettings = Om3dvid7EncoderSettings {
     rate: 200 * 1024,
     read_rate: 275 * 1024,
     slot_bytes: 640 * 1024,
@@ -609,13 +609,13 @@ fn lead_frames(first: &[u8]) -> Vec<Vec<u8>> {
 }
 
 extern "C" {
-    // tools/preview7-encoder.c, compiled in by build.rs
-    fn oh3do_preview7_workspace(frames: u32) -> u64;
-    fn oh3do_preview7_begin(workspace: *mut u8, bytes: u64, frames: u32) -> i32;
-    fn oh3do_preview7_frame(workspace: *mut u8, rgb: *const u8) -> i32;
-    fn oh3do_preview7_encode(
+    // om3dvid/src/om3dvid7_encoder.c, compiled in by build.rs
+    fn om3dvid7_encoder_workspace_bytes(frames: u32) -> u64;
+    fn om3dvid7_encoder_begin(workspace: *mut u8, bytes: u64, frames: u32) -> i32;
+    fn om3dvid7_encoder_add_frame(workspace: *mut u8, rgb: *const u8) -> i32;
+    fn om3dvid7_encoder_finish(
         workspace: *mut u8,
-        params: *const Preview7Params,
+        params: *const Om3dvid7EncoderSettings,
         audio: *const i8,
         samples: u64,
         out: *mut u8,
@@ -751,7 +751,7 @@ fn encode_workspace(workspace: &mut [u8], count: usize, audio: Option<&[u8]>) ->
     // SAFETY: the workspace holds count frames; audio holds samples bytes;
     // out holds capacity writable bytes; stats has room for 8 words.
     let size = unsafe {
-        oh3do_preview7_encode(
+        om3dvid7_encoder_finish(
             workspace.as_mut_ptr(),
             &STREAM_PARAMS,
             audio_pointer,
@@ -786,11 +786,11 @@ pub fn encode_stream(frames: &[u8], audio: Option<&[u8]>) -> Result<Vec<u8>> {
 /// A streamed encoder's workspace with room for `frames` frames.
 fn new_workspace(frames: usize) -> Result<Vec<u8>> {
     // SAFETY: plain arithmetic in the encoder.
-    let bytes = unsafe { oh3do_preview7_workspace(frames as u32) } as usize;
+    let bytes = unsafe { om3dvid7_encoder_workspace_bytes(frames as u32) } as usize;
     let mut workspace = vec![0u8; bytes];
     // SAFETY: workspace holds bytes writable bytes.
     let status =
-        unsafe { oh3do_preview7_begin(workspace.as_mut_ptr(), bytes as u64, frames as u32) };
+        unsafe { om3dvid7_encoder_begin(workspace.as_mut_ptr(), bytes as u64, frames as u32) };
     if status != 0 {
         bail!("Preview encoder setup failed")
     }
@@ -801,7 +801,7 @@ fn new_workspace(frames: usize) -> Result<Vec<u8>> {
 fn add_frame(workspace: &mut [u8], frame: &[u8]) -> Result<()> {
     // SAFETY: frame is one whole picture; the workspace was begun with
     // room for the frames added to it.
-    if unsafe { oh3do_preview7_frame(workspace.as_mut_ptr(), frame.as_ptr()) } != 0 {
+    if unsafe { om3dvid7_encoder_add_frame(workspace.as_mut_ptr(), frame.as_ptr()) } != 0 {
         bail!("Preview encoder rejected a frame")
     }
     Ok(())
@@ -1660,7 +1660,7 @@ fn validate_preview_v5(data: &[u8]) -> Result<()> {
 /// measured in.
 const STREAM_BLOCK: usize = 2048;
 
-/// OM3DVID7, as the menu's preview7_header and preview7_chunk check it: the
+/// OM3DVID7, as the menu's om3dvid7_header and om3dvid7_chunk check it: the
 /// header block and its sum, the chunk table against the file, and every
 /// chunk's sum, numbering, entries and frame table. Packets are checked by
 /// the decoder as they play.

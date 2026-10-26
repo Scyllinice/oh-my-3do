@@ -11,7 +11,7 @@
 #include "usb_media.h"
 #include "usb_file.h"
 #include "preview_v5.h"
-#include "preview_v7.h"
+#include "om3dvid7.h"
 #include "../vendor/pngle/pngle.h"
 #include <stdlib.h>
 #include <string.h>
@@ -516,17 +516,17 @@ allocate_chunks:
 static int prepare_streamed_clip(Ode *ode, OdeReadBuffer reader, const unsigned char *header,
                                  UsbPreview *clip)
 {
-    Preview7Header parsed;
+    Om3dvid7Header parsed;
 
     memcpy(clip->stream_block, header, VID5_HEADER_BYTES);
     if (usb_file_read(ode, reader, clip->stream_block + VID5_HEADER_BYTES,
                       sizeof(clip->stream_block) - VID5_HEADER_BYTES, USB_FILE_CRC_CHECKED) < 0 ||
-        preview7_header(clip->stream_block, &parsed))
+        om3dvid7_header(clip->stream_block, &parsed))
         return -1;
     clip->format = 7;
-    clip->width = PREVIEW7_WIDTH;
-    clip->height = PREVIEW7_HEIGHT;
-    clip->fps = PREVIEW7_FPS;
+    clip->width = OM3DVID7_WIDTH;
+    clip->height = OM3DVID7_HEIGHT;
+    clip->fps = OM3DVID7_FPS;
     clip->frames = clip->source_frames = (unsigned int)parsed.frames;
     return 0;
 }

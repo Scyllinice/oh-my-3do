@@ -30,9 +30,10 @@ SOURCE_FILES = {
     "build-sector-codec.py": "tools/build-sector-codec.py",
     "prepare-preview.py": "tools/prepare-preview.py",
     "preview-encoder.c": "tools/preview-encoder.c",
-    "preview7-encoder.c": "tools/preview7-encoder.c",
-    "preview_v7.c": "src/preview_v7.c",
-    "preview_v7.h": "src/preview_v7.h",
+    "om3dvid7_encoder.c": "om3dvid/src/om3dvid7_encoder.c",
+    "om3dvid7_decoder.c": "om3dvid/src/om3dvid7_decoder.c",
+    "om3dvid7.h": "om3dvid/include/om3dvid7.h",
+    "om3dvid7_encoder.h": "om3dvid/include/om3dvid7_encoder.h",
     "build-preview-encoder.py": "tools/build-preview-encoder.py",
     "resize-covers.py": "tools/resize-covers.py",
     "prepare-audio-disc.py": "tools/prepare-audio-disc.py",
@@ -43,8 +44,8 @@ SOURCE_FILES = {
 # Prebuilt native helpers, included when present in --native-dir.
 #
 # The preview encoders have no Python fallback; without them, prepare-preview.py
-# builds them from preview-encoder.c and preview7-encoder.c (with the menu's
-# preview_v7.c beside it) when a C compiler is available. Release packages
+# builds them from preview-encoder.c and the om3dvid7 sources beside it
+# when a C compiler is available. Release packages
 # must carry the Windows and Linux builds; macOS builds are optional.
 NATIVE_LIBRARIES = (
     "sector-codec-win64.dll",
@@ -53,9 +54,9 @@ NATIVE_LIBRARIES = (
     "preview-encoder-win64.dll",
     "preview-encoder.so",
     "preview-encoder.dylib",
-    "preview7-encoder-win64.dll",
-    "preview7-encoder.so",
-    "preview7-encoder.dylib",
+    "om3dvid7-win64.dll",
+    "om3dvid7.so",
+    "om3dvid7.dylib",
 )
 
 DEMO_PREVIEW_NAME = "demo-preview.3dv"

@@ -1957,7 +1957,7 @@ static int decode_stream(Menu *menu, unsigned long now, int picture, unsigned ch
             s->idle_ms += spent;
             s->idle_frames += frames;
         }
-        if (picture == PREVIEW7_SCREEN) {
+        if (picture == OM3DVID7_SCREEN) {
             s->full_ms += spent;
             s->full_frames += frames;
         }
@@ -1978,7 +1978,7 @@ static void advance_stream(Menu *menu, unsigned long now)
         return;
     }
     started = now_ms(menu);
-    result = decode_stream(menu, now, PREVIEW7_TV, NULL);
+    result = decode_stream(menu, now, OM3DVID7_TV, NULL);
     /* A missing chunk pauses the sound too, so they stay in step. */
     preview_stream_audio(&menu->stream, now, result == PREVIEW_STREAM_NOT_READY);
     if (result < 0) {
@@ -2794,7 +2794,7 @@ static int copy_screen(Menu *menu)
         return 0;
     sport_wait(menu);
     return CopyVRAMPages(menu->sport, screen_pixels(menu, shown ^ 1), screen_pixels(menu, shown),
-                         PREVIEW7_FRAME_BYTES / GetPageSize(MEMTYPE_VRAM), 0xffffffffUL) >= 0;
+                         OM3DVID7_FRAME_BYTES / GetPageSize(MEMTYPE_VRAM), 0xffffffffUL) >= 0;
 #else
     (void)menu;
     return 0;
@@ -3693,7 +3693,7 @@ static void close_full_cover(Menu *menu)
     sport_wait(menu);
     /* The TV picture missed the full-screen frames: redraw it from the map. */
     if (menu->stream.open && menu->stream.frame && menu->full_view == 2 &&
-        preview_stream_decode(&menu->stream, menu->stream.frame - 1, PREVIEW7_TV, NULL) < 0)
+        preview_stream_decode(&menu->stream, menu->stream.frame - 1, OM3DVID7_TV, NULL) < 0)
         stop_preview(menu);
     if (menu->full_cover)
         UnloadCel(menu->full_cover);
@@ -3767,7 +3767,7 @@ static unsigned char *screen_pixels(Menu *menu, int screen)
 #ifndef UI_PREVIEW_GLASS
     return (unsigned char *)menu->screen.sc_Bitmaps[screen]->bm_Buffer;
 #else
-    static unsigned char pixels[2][PREVIEW7_FRAME_BYTES];
+    static unsigned char pixels[2][OM3DVID7_FRAME_BYTES];
     (void)menu;
     return pixels[screen];
 #endif
@@ -3787,9 +3787,9 @@ static void draw_full_stream(Menu *menu)
     }
     sport_wait(menu);
     if (!menu->full_cleared)
-        preview_stream_invalidate(&menu->stream, PREVIEW7_SCREEN);
+        preview_stream_invalidate(&menu->stream, OM3DVID7_SCREEN);
     started = now_ms(menu);
-    result = decode_stream(menu, now, PREVIEW7_SCREEN, screen_pixels(menu, back));
+    result = decode_stream(menu, now, OM3DVID7_SCREEN, screen_pixels(menu, back));
     preview_stream_audio(&menu->stream, now, result == PREVIEW_STREAM_NOT_READY);
     if (result < 0) {
         close_full_cover(menu);
@@ -3803,11 +3803,11 @@ static void draw_full_stream(Menu *menu)
 #ifdef OH3DO_SDK
     if (menu->sport >= 0 &&
         CopyVRAMPagesDefer(menu->sport, screen_pixels(menu, back ^ 1), screen_pixels(menu, back),
-                           PREVIEW7_FRAME_BYTES / GetPageSize(MEMTYPE_VRAM), 0xffffffffUL) >= 0)
+                           OM3DVID7_FRAME_BYTES / GetPageSize(MEMTYPE_VRAM), 0xffffffffUL) >= 0)
         menu->sport_pending = 1;
     else
 #endif
-        preview_stream_invalidate(&menu->stream, PREVIEW7_SCREEN);
+        preview_stream_invalidate(&menu->stream, OM3DVID7_SCREEN);
     menu->full_cleared = 1;
 }
 /* Draws the full-screen view: video (streamed or loaded) or a cover. */
@@ -4327,7 +4327,7 @@ static void update_preview(Menu *menu)
             if (menu->stream.open) {
                 unsigned int i;
                 menu->preview_frames = menu->preview_source_frames = menu->stream.header.frames;
-                menu->preview_fps = PREVIEW7_FPS;
+                menu->preview_fps = OM3DVID7_FPS;
                 menu->preview_chunks = menu->stream.slots;
                 for (i = 0; i < menu->stream.slots; ++i)
                     if (menu->stream.slot_vram[i])

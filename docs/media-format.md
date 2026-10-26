@@ -154,7 +154,7 @@ up to a minute (1,800 frames), with optional sound, about 200 KB per second.
 The menu streams it from the drive while it plays rather than loading it
 first, so it needs the media-beside-the-discs layout (`.ohmy3do` in each
 game's folder): the menu reopens the file by the same relative path on every
-loop. `src/preview_v7.h` is the reference.
+loop. `om3dvid/include/om3dvid7.h` is the reference.
 
 The file is read from the start in 2 KiB blocks and never seeks (the
 firmware's seek does nothing). It is a 2,048-byte header block, then chunks,
@@ -245,16 +245,16 @@ hardware copies that screen into the other buffer in the same vertical blank,
 so the next frame starts from it. Switching between the two redraws the
 picture from the map once.
 
-The console's decoder, `src/preview_v7_arm.s`, checks each op against the
+The console's decoder, `om3dvid/src/om3dvid7_decoder_arm.s`, checks each op against the
 blocks and bytes left, so a damaged packet cannot write outside the picture;
 entry numbers need no check, because the dictionaries always have room for
 every number the format can express (8,192 and 4,096). Every chunk's checksum
-is checked before use. `tests/test_preview_v7.py` runs the assembly against
-the C decoder, `src/preview_v7.c`.
+is checked before use. `om3dvid/tests/test_decoder_arm.py` runs the assembly against
+the C decoder, `om3dvid/src/om3dvid7_decoder.c`.
 
 ### Encoding
 
-`tools/preview7-encoder.c` trains the two dictionaries on the clip, finds
+`om3dvid/src/om3dvid7_encoder.c` trains the two dictionaries on the clip, finds
 each block's nearest 4×4 entry and its nearest four 2×2 entries, and chooses
 per block whatever costs least in error plus bytes plus decode time. Error is
 weighed as the eye sees it: brightness counts more than color, and blocks in
@@ -270,7 +270,7 @@ the last frame silently while the slots refill, so the clip's end never
 competes with reading. The encoder checks a model of a reader that manages
 275 KB/s alongside playback and 400 KB/s during that hold: it must keep ahead
 of playback within a loop, and a loop may hold for at most 2 seconds. It checks every file it
-writes by decoding it with `src/preview_v7.c`. The desktop app and
+writes by decoding it with `om3dvid/src/om3dvid7_decoder.c`. The desktop app and
 `tools/prepare-preview.py` use the same settings, and add a 0.4-second fade-in
 from the first frame to a source that does not start from black, which gives
 that first picture's entries a chunk to arrive in.

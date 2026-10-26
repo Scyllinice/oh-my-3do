@@ -1,6 +1,6 @@
 #include "usb_media.h"
 #include "preview_v5.h"
-#include "preview_v7.h"
+#include "om3dvid7.h"
 #include "library_index.h"
 #include <assert.h>
 #include <stdio.h>

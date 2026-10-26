@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""The console's OM3DVID7 decoder (src/preview_v7_arm.s) against the C
-decoder (src/preview_v7.c), and its ARM60 clock counts.
+"""The console's OM3DVID7 decoder (om3dvid/src/om3dvid7_decoder_arm.s) against the C
+decoder (om3dvid/src/om3dvid7_decoder.c), and its ARM60 clock counts.
 
-    test_preview_v7.py [CLIP.3dv ...] [--clocks]
+    test_decoder_arm.py [CLIP.3dv ...] [--clocks]
 
 Run in the development container: armasm/armlink build the real object and
 Unicorn runs it big-endian. Random packets (all valid: the assembly trusts
-packets preview7_chunk accepted) and every frame of the given clips, drawn
+packets om3dvid7_chunk accepted) and every frame of the given clips, drawn
 into the screen bitmap or the TV picture, must leave the same pixels and map
 as the C decoder, and so must full redraws from the map. (Full screen draws
 each frame into the back buffer after a hardware copy of the front one, so
@@ -26,7 +26,10 @@ import tempfile
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_MODE_BIG_ENDIAN, UC_HOOK_CODE
 from unicorn import arm_const as A
 
-ROOT = Path(__file__).resolve().parent.parent
+# The library (om3dvid/) and the repository around it, which has the ARM60
+# clock model (tools/arm60-bench).
+LIBRARY = Path(__file__).resolve().parents[1]
+ROOT = LIBRARY.parent
 spec = importlib.util.spec_from_file_location("arm60", ROOT / "tools/arm60-bench/arm60.py")
 arm60 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(arm60)
@@ -51,7 +54,7 @@ def build(temp):
             "3",
             "-apcs",
             "3/32/nofp/swst",
-            str(ROOT / "src/preview_v7_arm.s"),
+            str(LIBRARY / "src/om3dvid7_decoder_arm.s"),
             "-o",
             str(obj),
         ],
@@ -76,14 +79,14 @@ def build(temp):
     text = symbols.read_text()
     entry = {
         name: int(re.search(name + r"\s+(?:0x)?([0-9A-Fa-f]+)", text).group(1), 16)
-        for name in ("preview7_decode", "preview7_render_arm", "preview7_sum_arm")
+        for name in ("om3dvid7_decode_arm", "om3dvid7_render_arm", "om3dvid7_sum_arm")
     }
-    library = temp / "preview_v7.so"
+    library = temp / "om3dvid7_decoder.so"
     # The decoder's static packet loop, exposed for the damaged-packet test.
     wrapper = temp / "wrapper.c"
     wrapper.write_text(
-        '#include "preview_v7.c"\nint preview7_decode_for_test(Preview7 *s,const unsigned char *d,'
-        "unsigned long n,int p){return preview7_decode(s,d,n,p);}\n"
+        '#include "om3dvid7_decoder.c"\nint om3dvid7_decode_for_test(Om3dvid7Decoder *s,const unsigned char *d,'
+        "unsigned long n,int p){return om3dvid7_decode_arm(s,d,n,p);}\n"
     )
     subprocess.run(
         [
@@ -91,7 +94,8 @@ def build(temp):
             "-O1",
             "-shared",
             "-fPIC",
-            "-I" + str(ROOT / "src"),
+            "-I" + str(LIBRARY / "src"),
+            "-I" + str(LIBRARY / "include"),
             str(wrapper),
             "-o",
             str(library),
@@ -161,7 +165,7 @@ class Host:
             0,
             0,
         )
-        lib.preview7_reset(ctypes.byref(self.s))
+        lib.om3dvid7_reset(ctypes.byref(self.s))
 
 
 class Arm:
@@ -192,7 +196,7 @@ class Arm:
             self.clocks[2] += i
 
     def define(self, host):
-        """Entries are stored by the C code (preview7_define); copy them."""
+        """Entries are stored by the C code (om3dvid7_define); copy them."""
         self.uc.mem_write(DICT4, host.dict4.raw)
         self.uc.mem_write(THUMB4, host.thumb4.raw)
         self.uc.mem_write(DICT2, host.dict2.raw)
@@ -231,10 +235,10 @@ class Arm:
         return sum((self.clocks[k] - before[k]) * (1, 2, 1)[k] for k in range(3))
 
     def decode(self, address, size, picture):
-        return self.call("preview7_decode", STATE, address, size, picture)
+        return self.call("om3dvid7_decode_arm", STATE, address, size, picture)
 
     def render(self, picture):
-        return self.call("preview7_render_arm", STATE, picture)
+        return self.call("om3dvid7_render_arm", STATE, picture)
 
     def same(self, host, picture):
         arm_map = struct.unpack(">%dI" % (2 * BLOCKS), self.uc.mem_read(MAP, 8 * BLOCKS))
@@ -253,7 +257,7 @@ def run_clip(lib, arm, path, tv, clocks):
     data = Path(path).read_bytes()
     header = Header()
     block = ctypes.create_string_buffer(data[:2048], 2048)
-    assert lib.preview7_header(block, ctypes.byref(header)) == 0, "bad header"
+    assert lib.om3dvid7_header(block, ctypes.byref(header)) == 0, "bad header"
     host = Host(lib)
     at, counts = 2048, []
     for c in range(header.chunks):
@@ -261,15 +265,15 @@ def run_clip(lib, arm, path, tv, clocks):
         raw = ctypes.create_string_buffer(data[at : at + size] + bytes(4), size + 4)
         info = Chunk()
         assert (
-            lib.preview7_chunk(ctypes.byref(header), c, raw, size, ctypes.byref(info)) == 0
+            lib.om3dvid7_chunk(ctypes.byref(header), c, raw, size, ctypes.byref(info)) == 0
         ), f"chunk {c} rejected"
-        lib.preview7_define(ctypes.byref(host.s), ctypes.byref(info))
+        lib.om3dvid7_define(ctypes.byref(host.s), ctypes.byref(info))
         arm.define(host)
         arm.uc.mem_write(PACKETS, data[at : at + size] + bytes(4))
         table = info.offsets - ctypes.addressof(raw)
         for k in range(info.frames):
             first, last = struct.unpack_from(">II", data, at + table + 4 * k)
-            assert lib.preview7_frame(ctypes.byref(host.s), ctypes.byref(info), k, tv) == 0
+            assert lib.om3dvid7_frame(ctypes.byref(host.s), ctypes.byref(info), k, tv) == 0
             counts.append(arm.decode(PACKETS + table + first, last - first, tv))
             arm.same(host, tv)
         at += size
@@ -348,15 +352,15 @@ def random_test(lib, image, entry, rng, rounds):
             table = (ctypes.c_ubyte * (6))(*b"".join(struct.pack(">H", total) for _ in range(3)))
             header.table = ctypes.addressof(table)
             raw = ctypes.create_string_buffer(data, len(data) + 4)
-            check = lib.preview7_sum(ctypes.byref(raw, 4), len(data) - 4) & 0xFFFFFFFF
+            check = lib.om3dvid7_sum(ctypes.byref(raw, 4), len(data) - 4) & 0xFFFFFFFF
             ctypes.memmove(raw, struct.pack(">I", check), 4)
             data = raw.raw[: len(data)]
             info = Chunk()
             assert (
-                lib.preview7_chunk(ctypes.byref(header), number, raw, len(data), ctypes.byref(info))
+                lib.om3dvid7_chunk(ctypes.byref(header), number, raw, len(data), ctypes.byref(info))
                 == 0
             ), "random chunk rejected"
-            lib.preview7_define(ctypes.byref(host.s), ctypes.byref(info))
+            lib.om3dvid7_define(ctypes.byref(host.s), ctypes.byref(info))
             arm.define(host)
             # Odd placement: packets may start on either half of a word.
             base = PACKETS + rng.choice([0, 4, 8])
@@ -365,12 +369,12 @@ def random_test(lib, image, entry, rng, rounds):
             for k in range(frames):
                 first, last = struct.unpack_from(">II", data, tableat + 4 * k)
                 picture = rng.randrange(2)
-                assert lib.preview7_frame(ctypes.byref(host.s), ctypes.byref(info), k, picture) == 0
+                assert lib.om3dvid7_frame(ctypes.byref(host.s), ctypes.byref(info), k, picture) == 0
                 arm.decode(base + tableat + first, last - first, picture)
                 arm.same(host, picture)
                 if rng.randrange(3) == 0:
                     picture ^= 1
-                    lib.preview7_render(ctypes.byref(host.s), picture)
+                    lib.om3dvid7_render(ctypes.byref(host.s), picture)
                     arm.render(picture)
                     arm.same(host, picture)
             first4 += count4
@@ -396,10 +400,10 @@ def damaged_test(lib, image, entry, rng, rounds):
             packet += struct.pack(">H", rng.randrange(0x10000))
         picture = rng.randrange(2)
         arm.uc.mem_write(PACKETS, bytes(packet) + bytes(4))
-        result = arm.call("preview7_decode", STATE, PACKETS, len(packet), picture)
+        result = arm.call("om3dvid7_decode_arm", STATE, PACKETS, len(packet), picture)
         result = arm.uc.reg_read(A.UC_ARM_REG_R0)
         host.s.limit4, host.s.limit2 = 8192, 4096
-        c = lib.preview7_decode_for_test(ctypes.byref(host.s), bytes(packet), len(packet), picture)
+        c = lib.om3dvid7_decode_for_test(ctypes.byref(host.s), bytes(packet), len(packet), picture)
         if c == 0:
             assert result == 0, "the assembly rejected a packet the C decoder accepted"
         elif result != 0:
@@ -420,8 +424,8 @@ def sum_test(image, entry, rng):
         arm.uc.mem_write(STATE, bytes(8))
         cut = 4 * rng.randrange(0, words + 1)
         arm.uc.mem_write(PACKETS, data)
-        arm.call("preview7_sum_arm", STATE, PACKETS, cut)
-        arm.call("preview7_sum_arm", STATE, PACKETS + cut, len(data) - cut)
+        arm.call("om3dvid7_sum_arm", STATE, PACKETS, cut)
+        arm.call("om3dvid7_sum_arm", STATE, PACKETS + cut, len(data) - cut)
         assert struct.unpack(">II", arm.uc.mem_read(STATE, 8)) == (a, b), "word sum differs"
 
 
@@ -430,8 +434,8 @@ def main():
     clocks = "--clocks" in sys.argv
     with tempfile.TemporaryDirectory() as temp:
         image, entry, lib = build(Path(temp))
-        lib.preview7_sum.restype = ctypes.c_ulong
-        lib.preview7_sum.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
+        lib.om3dvid7_sum.restype = ctypes.c_ulong
+        lib.om3dvid7_sum.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
         random_test(lib, image, entry, random.Random(7), 6)
         print("random packets: ARM matches C")
         sum_test(image, entry, random.Random(11))

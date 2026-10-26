@@ -21,7 +21,7 @@
  * entry, 2x2 entry count (BE16 each), audio samples, video bytes (BE32 each);
  * signed 8-bit audio padded to a word; the new 4x4 entries and 2x2 entries,
  * in the decoder's own layout so storing them is a copy (see
- * preview7_entry4/2); frames+1 BE32 offsets from the start of the offset
+ * om3dvid7_entry4/2); frames+1 BE32 offsets from the start of the offset
  * table; the packets.
  *
  * A 4x4 entry is 40 bytes: two screen line pairs of four BE32 words (the
@@ -42,29 +42,29 @@
  *                  12-bit 2x2 entry numbers, top-left, top-right,
  *                  bottom-left, bottom-right, packed most significant first
  * Other words are invalid. Frames start black and persist until changed. */
-#define PREVIEW7_WIDTH            320
-#define PREVIEW7_HEIGHT           240
-#define PREVIEW7_FPS              30
-#define PREVIEW7_COLUMNS          80
-#define PREVIEW7_BLOCKS           4800
-#define PREVIEW7_FRAME_BYTES      (320UL * 240UL * 2UL)
-#define PREVIEW7_THUMB_BYTES      (160UL * 120UL * 2UL)
-#define PREVIEW7_BLOCK_BYTES      2048UL
-#define PREVIEW7_HEADER_BYTES     64
-#define PREVIEW7_MAX_CHUNKS       ((2048 - 64) / 2)
-#define PREVIEW7_MAX_ENTRIES4     8192
-#define PREVIEW7_MAX_ENTRIES2     4096
-#define PREVIEW7_MAX_FRAMES       1800
-#define PREVIEW7_MAX_CHUNK_FRAMES 30
-#define PREVIEW7_CHUNK_HEADER     24
-#define PREVIEW7_AUDIO_RATE       11025UL
-#define PREVIEW7_ENTRY4           40UL
-#define PREVIEW7_ENTRY2           12UL
+#define OM3DVID7_WIDTH            320
+#define OM3DVID7_HEIGHT           240
+#define OM3DVID7_FPS              30
+#define OM3DVID7_COLUMNS          80
+#define OM3DVID7_BLOCKS           4800
+#define OM3DVID7_FRAME_BYTES      (320UL * 240UL * 2UL)
+#define OM3DVID7_THUMB_BYTES      (160UL * 120UL * 2UL)
+#define OM3DVID7_BLOCK_BYTES      2048UL
+#define OM3DVID7_HEADER_BYTES     64
+#define OM3DVID7_MAX_CHUNKS       ((2048 - 64) / 2)
+#define OM3DVID7_MAX_ENTRIES4     8192
+#define OM3DVID7_MAX_ENTRIES2     4096
+#define OM3DVID7_MAX_FRAMES       1800
+#define OM3DVID7_MAX_CHUNK_FRAMES 30
+#define OM3DVID7_CHUNK_HEADER     24
+#define OM3DVID7_AUDIO_RATE       11025UL
+#define OM3DVID7_ENTRY4           40UL
+#define OM3DVID7_ENTRY2           12UL
 /* The map value of a block nobody has drawn yet. */
-#define PREVIEW7_BLACK 0x7fffffffUL
+#define OM3DVID7_BLACK 0x7fffffffUL
 
 /* A checked header block (see the layout above). */
-typedef struct Preview7Header {
+typedef struct Om3dvid7Header {
     unsigned int chunk_frames; /* frames per chunk (the last may have fewer) */
     unsigned int chunks;
     unsigned int preroll;  /* chunks to read before playing starts */
@@ -76,10 +76,10 @@ typedef struct Preview7Header {
     unsigned long max_chunk;    /* the largest chunk, in bytes */
     unsigned long rate;         /* nominal bytes per second */
     const unsigned char *table; /* chunk lengths, BE16 in 2 KiB blocks */
-} Preview7Header;
+} Om3dvid7Header;
 
 /* A checked chunk: where its parts lie in the chunk's data. */
-typedef struct Preview7Chunk {
+typedef struct Om3dvid7Chunk {
     unsigned int number, frames;
     unsigned int first4, count4; /* the 4x4 entries it defines */
     unsigned int first2, count2; /* the 2x2 entries it defines */
@@ -87,15 +87,15 @@ typedef struct Preview7Chunk {
     const signed char *audio;
     const unsigned char *entries4, *entries2;
     const unsigned char *offsets; /* frames+1 BE32 offsets; packets follow */
-} Preview7Chunk;
+} Om3dvid7Chunk;
 
 /* Decoder state. Decoding a packet draws the blocks it changes into one
  * picture and records in the map what every block shows, so the other
  * picture can be redrawn whole after switching:
- *   PREVIEW7_SCREEN  a 320x240 screen bitmap, drawn 1:1. Screen bitmaps hold
+ *   OM3DVID7_SCREEN  a 320x240 screen bitmap, drawn 1:1. Screen bitmaps hold
  *                    two lines per 32-bit word, the upper line in the high
  *                    half: pixel (x,y) is halfword (y&1) of word (y>>1)*320+x.
- *   PREVIEW7_TV      the 160x120 TV picture of 2x2 averages, in rows.
+ *   OM3DVID7_TV      the 160x120 TV picture of 2x2 averages, in rows.
  * The caller provides all memory:
  *   thumb   160x120 RGB555, 4-byte aligned
  *   map     2*4800 words
@@ -105,54 +105,55 @@ typedef struct Preview7Chunk {
  *   thumb2  4096 words (average << 16)
  * Every entry number a packet can express has room, so the console's
  * decoder does not check them (the C decoder does). The caller also sets
- * `screen` to the bitmap PREVIEW7_SCREEN draws into.
+ * `screen` to the bitmap OM3DVID7_SCREEN draws into.
  *
  * The assembly decoder relies on this structure's field offsets: do not
  * reorder them. */
-#define PREVIEW7_SCREEN 0
-#define PREVIEW7_TV     1
-typedef struct Preview7 {
+#define OM3DVID7_SCREEN 0
+#define OM3DVID7_TV     1
+typedef struct Om3dvid7Decoder {
     unsigned char *screen, *thumb;
     unsigned long *map;
     unsigned char *dict4, *thumb4, *dict2;
     unsigned long *thumb2;
     unsigned int entries4, entries2;
-    unsigned int limit4, limit2; /* set by preview7_frame for the decoder */
-} Preview7;
+    unsigned int limit4, limit2; /* set by om3dvid7_frame for the decoder */
+} Om3dvid7Decoder;
 
 /* Bytes the map and dictionaries need. */
-unsigned long preview7_state_bytes(void);
+unsigned long om3dvid7_state_bytes(void);
 /* Parse and check the 2048-byte header block. 0 or -1. */
-int preview7_header(const unsigned char *block, Preview7Header *header);
+int om3dvid7_header(const unsigned char *block, Om3dvid7Header *header);
 /* Check a whole padded chunk read for chunk `number` of a clip with this
  * header (its sum, header fields and frame table, not the packets) and fill
  * info. Does not touch the state. 0 or -1. */
-int preview7_chunk(const Preview7Header *header, unsigned int number, const unsigned char *data,
-                   unsigned long bytes, Preview7Chunk *info);
+int om3dvid7_chunk(const Om3dvid7Header *header, unsigned int number, const unsigned char *data,
+                   unsigned long bytes, Om3dvid7Chunk *info);
 /* The same, given the word sum of the chunk after its first 4 bytes. */
-int preview7_chunk_summed(const Preview7Header *header, unsigned int number,
+int om3dvid7_chunk_summed(const Om3dvid7Header *header, unsigned int number,
                           const unsigned char *data, unsigned long bytes, unsigned long sum,
-                          Preview7Chunk *info);
+                          Om3dvid7Chunk *info);
 /* A file's entries from 16 (4x4) or 4 (2x2) BE RGB555 pixels in rows. */
-void preview7_entry4(const unsigned char *rows, unsigned char *entry);
-void preview7_entry2(const unsigned char *rows, unsigned char *entry);
+void om3dvid7_entry4(const unsigned char *rows, unsigned char *entry);
+void om3dvid7_entry2(const unsigned char *rows, unsigned char *entry);
 /* Store a checked chunk's entries (copies). */
-void preview7_define(Preview7 *state, const Preview7Chunk *info);
+void om3dvid7_define(Om3dvid7Decoder *state, const Om3dvid7Chunk *info);
 /* Every block black (the pictures are not drawn). */
-void preview7_reset(Preview7 *state);
+void om3dvid7_reset(Om3dvid7Decoder *state);
 /* Decode packet `frame` of a checked chunk, drawing the blocks it changes
  * into `picture`. 0, or -1 for a malformed packet, which may leave the
  * picture and map partly updated. The C decoder also rejects entry numbers
  * the chunk has not defined; the console's assembly does not. */
-int preview7_frame(Preview7 *state, const Preview7Chunk *info, unsigned int frame, int picture);
+int om3dvid7_frame(Om3dvid7Decoder *state, const Om3dvid7Chunk *info, unsigned int frame,
+                   int picture);
 /* Draw every block of `picture` from the map, e.g. after switching. */
-void preview7_render(Preview7 *state, int picture);
+void om3dvid7_render(Om3dvid7Decoder *state, int picture);
 /* The preview word sum (see usb_media.c) of whole words, all at once or a
  * piece at a time (start from zero; add pieces of whole words in order). */
-typedef struct Preview7Sum {
+typedef struct Om3dvid7Sum {
     unsigned long a, b;
-} Preview7Sum;
-unsigned long preview7_sum(const unsigned char *data, unsigned long bytes);
-void preview7_sum_add(Preview7Sum *sum, const unsigned char *data, unsigned long bytes);
-unsigned long preview7_sum_value(const Preview7Sum *sum);
+} Om3dvid7Sum;
+unsigned long om3dvid7_sum(const unsigned char *data, unsigned long bytes);
+void om3dvid7_sum_add(Om3dvid7Sum *sum, const unsigned char *data, unsigned long bytes);
+unsigned long om3dvid7_sum_value(const Om3dvid7Sum *sum);
 #endif

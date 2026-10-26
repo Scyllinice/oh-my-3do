@@ -1,15 +1,15 @@
-; OM3DVID7 decoding for the ARM60 (see preview_v7.h for the format, and
-; preview_v7.c for the C version this matches bit for bit on valid
+; OM3DVID7 decoding for the ARM60 (see om3dvid7.h for the format, and
+; om3dvid7_decoder.c for the C version this matches bit for bit on valid
 ; packets). r10 (the APCS stack limit register) is never touched.
 ;
-; int preview7_decode(Preview7 *state, const unsigned char *data,
+; int om3dvid7_decode_arm(Om3dvid7Decoder *state, const unsigned char *data,
 ;                     unsigned long bytes, int picture)
 ;   Draws each block the packet changes into the screen bitmap (picture 0)
 ;   or the TV picture (1) and records it in the map. Returns 0, or -1 for an
 ;   op that would pass the last block or the packet's end.
-; void preview7_render_arm(Preview7 *state, int picture)
+; void om3dvid7_render_arm(Om3dvid7Decoder *state, int picture)
 ;   Draws every block from the map.
-; void preview7_sum_arm(Preview7Sum *sum, const unsigned char *data,
+; void om3dvid7_sum_arm(Om3dvid7Sum *sum, const unsigned char *data,
 ;                       unsigned long bytes)
 ;   Adds whole, word-aligned words to the preview word sum: a += w; b += a.
 ;
@@ -34,11 +34,11 @@
 ; because the dictionaries hold every number the format can express.
 
         AREA    |C$$code|, CODE, READONLY
-        EXPORT  preview7_decode
-        EXPORT  preview7_render_arm
-        EXPORT  preview7_sum_arm
+        EXPORT  om3dvid7_decode_arm
+        EXPORT  om3dvid7_render_arm
+        EXPORT  om3dvid7_sum_arm
 
-; Preview7 field offsets (keep in step with preview_v7.h)
+; Om3dvid7Decoder field offsets (keep in step with om3dvid7.h)
 S_SCREEN EQU    0
 S_THUMB  EQU    4
 S_MAP    EQU    8
@@ -359,7 +359,7 @@ $p.next
         STR     r9, [sp, #8]
         MEND
 
-preview7_decode
+om3dvid7_decode_arm
         ADD     r12, r1, r2             ; the packet's end (SETUP reuses r2)
         SETUP
         STR     r12, [sp, #12]
@@ -375,7 +375,7 @@ tv_decode
         LDRNE   r3, [r0, #-2]
         OPS     t, 1
 
-preview7_render_arm
+om3dvid7_render_arm
         MOV     r3, r1                  ; SETUP takes the picture in r3
         SETUP
         CMP     r3, #0
@@ -392,7 +392,7 @@ tv_render
         ADD     r12, r12, r3
         MEND
 
-preview7_sum_arm
+om3dvid7_sum_arm
         STMFD   sp!, {r4-r9, r11, lr}
         LDMIA   r0, {r3, r12}           ; a and b so far
         SUBS    r2, r2, #32

@@ -7,7 +7,7 @@ Usage: prepare-preview.py SOURCE OUTPUT.3dv [--format 5|7] [--duration SECONDS]
                           [--start SECONDS] [--silent] [--budget-kib KIB]
 
 FFmpeg decodes the source into raw frames and mono 8-bit sound, and a native
-encoder library (built from preview7-encoder.c or preview-encoder.c by
+encoder library (om3dvid7, from the om3dvid/ library, or preview-encoder by
 build-preview-encoder.py) compresses them in the menu's own formats. The
 picture is scaled to fit and centered on the menu's dark blue.
 """
@@ -36,7 +36,7 @@ MAX_START_SECONDS = 86400
 BACKGROUND = "0x081021"
 
 
-# OM3DVID7 (src/preview_v7.h): the whole clip up to a minute, streamed at
+# OM3DVID7 (om3dvid/include/om3dvid7.h): the whole clip up to a minute, streamed at
 # about 200 KB/s. The same settings as the desktop app (desktop/src/media.rs).
 STREAM_WIDTH, STREAM_HEIGHT = 320, 240
 STREAM_MAX_SECONDS = 60
@@ -58,7 +58,7 @@ STREAM_PARAMS = dict(
 
 
 class StreamParams(ctypes.Structure):
-    """STREAM_PARAMS as the C struct preview7-encoder.c expects."""
+    """STREAM_PARAMS as the C struct om3dvid7_encoder.c expects."""
 
     _fields_ = [(name, ctypes.c_uint32) for name in STREAM_PARAMS]
 
@@ -91,20 +91,20 @@ def library_path(stem, directory=None):
 
 
 def stream_encoder(directory=None):
-    """Load the streamed-preview encoder (tools/preview7-encoder.c), or None."""
-    path = library_path("preview7-encoder", directory)
+    """Load the streamed-preview encoder (om3dvid/src/om3dvid7_encoder.c), or None."""
+    path = library_path("om3dvid7", directory)
     if not path:
         return None
     library = ctypes.CDLL(str(path.resolve()))
-    library.oh3do_preview7_abi.restype = ctypes.c_uint32
-    if library.oh3do_preview7_abi() != 1:
+    library.om3dvid7_encoder_abi.restype = ctypes.c_uint32
+    if library.om3dvid7_encoder_abi() != 2:
         raise ValueError("Unsupported streamed preview encoder ABI: " + str(path))
-    library.oh3do_preview7_workspace.restype = ctypes.c_uint64
-    library.oh3do_preview7_workspace.argtypes = (ctypes.c_uint32,)
-    library.oh3do_preview7_begin.argtypes = (ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-    library.oh3do_preview7_frame.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
-    library.oh3do_preview7_encode.restype = ctypes.c_int64
-    library.oh3do_preview7_encode.argtypes = (
+    library.om3dvid7_encoder_workspace_bytes.restype = ctypes.c_uint64
+    library.om3dvid7_encoder_workspace_bytes.argtypes = (ctypes.c_uint32,)
+    library.om3dvid7_encoder_begin.argtypes = (ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+    library.om3dvid7_encoder_add_frame.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
+    library.om3dvid7_encoder_finish.restype = ctypes.c_int64
+    library.om3dvid7_encoder_finish.argtypes = (
         ctypes.c_void_p,  # workspace
         ctypes.POINTER(StreamParams),
         ctypes.c_void_p,  # audio
@@ -120,13 +120,13 @@ def encode_stream(library, frames, reserve, audio=None):
     """An OM3DVID7 file from 320x240 RGB24 frames (any iterable of frames, up
     to reserve of them) and signed 8-bit 11025 Hz sound for exactly those
     frames, or None. Returns (file bytes, frame count)."""
-    workspace = ctypes.create_string_buffer(library.oh3do_preview7_workspace(reserve))
-    if library.oh3do_preview7_begin(workspace, len(workspace), reserve):
+    workspace = ctypes.create_string_buffer(library.om3dvid7_encoder_workspace_bytes(reserve))
+    if library.om3dvid7_encoder_begin(workspace, len(workspace), reserve):
         raise ValueError("Preview encoder setup failed")
 
     count = 0
     for frame in frames:
-        if count == reserve or library.oh3do_preview7_frame(workspace, frame):
+        if count == reserve or library.om3dvid7_encoder_add_frame(workspace, frame):
             raise ValueError("Too many or invalid preview frames")
         count += 1
     if not count:
@@ -140,7 +140,7 @@ def encode_stream(library, frames, reserve, audio=None):
     capacity = STREAM_PARAMS["rate"] * count // FPS * 11 // 10 + (2 << 20)
     output = ctypes.create_string_buffer(capacity)
     stats = (ctypes.c_uint32 * 8)()
-    length = library.oh3do_preview7_encode(
+    length = library.om3dvid7_encoder_finish(
         workspace,
         ctypes.byref(StreamParams(**STREAM_PARAMS)),
         audio,

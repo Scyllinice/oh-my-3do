@@ -110,32 +110,32 @@ static unsigned char *load(const char *name, size_t *size)
 
 /* The reference: decode the whole file in order into rows of 320x240. */
 typedef struct Reference {
-    Preview7 dec;
+    Om3dvid7Decoder dec;
     unsigned char *screen, *frames;
 } Reference;
-static unsigned char *reference(const unsigned char *data, const Preview7Header *h, int tv)
+static unsigned char *reference(const unsigned char *data, const Om3dvid7Header *h, int tv)
 {
-    Preview7 d;
-    unsigned long frame = 0, at = PREVIEW7_BLOCK_BYTES,
-                  bytes = tv ? PREVIEW7_THUMB_BYTES : PREVIEW7_FRAME_BYTES;
+    Om3dvid7Decoder d;
+    unsigned long frame = 0, at = OM3DVID7_BLOCK_BYTES,
+                  bytes = tv ? OM3DVID7_THUMB_BYTES : OM3DVID7_FRAME_BYTES;
     unsigned char *out = (unsigned char *)malloc(h->frames * bytes);
     unsigned int c, k;
     memset(&d, 0, sizeof(d));
-    d.screen = (unsigned char *)calloc(1, PREVIEW7_FRAME_BYTES);
-    d.thumb = (unsigned char *)calloc(1, PREVIEW7_THUMB_BYTES);
-    d.map = (unsigned long *)malloc(PREVIEW7_BLOCKS * 2 * sizeof(unsigned long));
+    d.screen = (unsigned char *)calloc(1, OM3DVID7_FRAME_BYTES);
+    d.thumb = (unsigned char *)calloc(1, OM3DVID7_THUMB_BYTES);
+    d.map = (unsigned long *)malloc(OM3DVID7_BLOCKS * 2 * sizeof(unsigned long));
     d.dict4 = (unsigned char *)calloc(8192, 32);
     d.thumb4 = (unsigned char *)calloc(8192, 8);
     d.dict2 = (unsigned char *)calloc(4096, 8);
     d.thumb2 = (unsigned long *)calloc(4096, sizeof(unsigned long));
-    preview7_reset(&d);
+    om3dvid7_reset(&d);
     for (c = 0; c < h->chunks; ++c) {
-        Preview7Chunk info;
+        Om3dvid7Chunk info;
         unsigned long n = ((unsigned long)h->table[2 * c] << 8 | h->table[2 * c + 1]) * 2048UL;
-        assert(!preview7_chunk(h, c, data + at, n, &info));
-        preview7_define(&d, &info);
+        assert(!om3dvid7_chunk(h, c, data + at, n, &info));
+        om3dvid7_define(&d, &info);
         for (k = 0; k < info.frames; ++k, ++frame) {
-            assert(!preview7_frame(&d, &info, k, tv ? PREVIEW7_TV : PREVIEW7_SCREEN));
+            assert(!om3dvid7_frame(&d, &info, k, tv ? OM3DVID7_TV : OM3DVID7_SCREEN));
             memcpy(out + frame * bytes, tv ? d.thumb : d.screen, bytes);
         }
         at += n;
@@ -153,16 +153,16 @@ static unsigned char *reference(const unsigned char *data, const Preview7Header 
 int main(int argc, char **argv)
 {
     size_t size;
-    unsigned char *data, *screen = (unsigned char *)calloc(1, PREVIEW7_FRAME_BYTES), *full, *tv;
-    Preview7Header h;
+    unsigned char *data, *screen = (unsigned char *)calloc(1, OM3DVID7_FRAME_BYTES), *full, *tv;
+    Om3dvid7Header h;
     PreviewStream s;
     Fake f;
     Ode ode;
     unsigned long frame, loops = 2, now = 1000;
-    int picture = PREVIEW7_TV;
+    int picture = OM3DVID7_TV;
     assert(argc == 2);
     data = load(argv[1], &size);
-    assert(!preview7_header(data, &h));
+    assert(!om3dvid7_header(data, &h));
     full = reference(data, &h, 0);
     tv = reference(data, &h, 1);
     memset(&f, 0, sizeof(f));
@@ -181,16 +181,16 @@ int main(int argc, char **argv)
     assert(!strcmp(f.path, "Road Rash (USA)/.ohmy3do/preview-x.3dv") && f.opens == 1 &&
            audio_started == (h.audio_rate != 0));
     assert(s.slots == h.slots && s.slots >= h.preroll && (!h.audio_rate || s.audio_written >= 1));
-    assert(!memcmp(s.thumb, tv, PREVIEW7_THUMB_BYTES));
+    assert(!memcmp(s.thumb, tv, OM3DVID7_THUMB_BYTES));
     for (frame = 1; frame < loops * h.frames; ++frame) {
         unsigned long local = frame % h.frames;
         if (frame % 37 == 0)
-            picture = picture == PREVIEW7_TV ? PREVIEW7_SCREEN : PREVIEW7_TV;
+            picture = picture == OM3DVID7_TV ? OM3DVID7_SCREEN : OM3DVID7_TV;
         assert(preview_stream_decode(&s, frame, picture, screen) == 0);
-        if (picture == PREVIEW7_TV)
-            assert(!memcmp(s.thumb, tv + local * PREVIEW7_THUMB_BYTES, PREVIEW7_THUMB_BYTES));
+        if (picture == OM3DVID7_TV)
+            assert(!memcmp(s.thumb, tv + local * OM3DVID7_THUMB_BYTES, OM3DVID7_THUMB_BYTES));
         else
-            assert(!memcmp(screen, full + local * PREVIEW7_FRAME_BYTES, PREVIEW7_FRAME_BYTES));
+            assert(!memcmp(screen, full + local * OM3DVID7_FRAME_BYTES, OM3DVID7_FRAME_BYTES));
         /* The sound clock runs ahead with the frames. */
         now = 1000 + (frame * 1000UL + 29) / 30;
         assert(preview_stream_due(&s, now) == frame);

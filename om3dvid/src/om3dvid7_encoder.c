@@ -1,7 +1,7 @@
-/* Encoder for OM3DVID7 streamed previews (see src/preview_v7.h), 320x240 at
+/* Encoder for OM3DVID7 streamed previews (see om3dvid/include/om3dvid7.h), 320x240 at
  * 30 fps. Original MIT-licensed code, C99.
  *
- * The caller provides all memory as one workspace (oh3do_preview7_workspace
+ * The caller provides all memory as one workspace (om3dvid7_encoder_workspace_bytes
  * says how much), so the Windows DLL needs no C runtime and the desktop app
  * can encode several clips at once on different threads.
  *
@@ -23,19 +23,10 @@
  *    frame must match the encoder's model of it. */
 #include <stddef.h>
 #include <stdint.h>
-/* The menu's decoder: built with src/ (or wherever preview_v7.c sits) on the
- * include path. */
-#include "preview_v7.c"
+#include "om3dvid7.h"
+#include "om3dvid7_encoder.h"
 
-#if defined(_WIN32) && defined(OH3DO_PREVIEW_DLL)
-#define EXPORT __declspec(dllexport)
-#elif defined(__GNUC__)
-#define EXPORT __attribute__((visibility("default")))
-#else
-#define EXPORT
-#endif
-
-#if defined(_WIN32) && defined(OH3DO_PREVIEW_DLL)
+#if defined(_WIN32) && defined(OM3DVID7_DLL)
 /* No CRT: the compiler may still call these. */
 int _fltused = 0;
 void *memcpy(void *d, const void *s, size_t n)
@@ -55,10 +46,10 @@ void *memset(void *d, int c, size_t n)
 }
 #endif
 
-#define W      PREVIEW7_WIDTH
-#define H      PREVIEW7_HEIGHT
-#define BLOCKS PREVIEW7_BLOCKS
-#define COLS   PREVIEW7_COLUMNS
+#define W      OM3DVID7_WIDTH
+#define H      OM3DVID7_HEIGHT
+#define BLOCKS OM3DVID7_BLOCKS
+#define COLS   OM3DVID7_COLUMNS
 #define DIM4   48
 #define DIM2   12
 #ifndef SAMPLES
@@ -68,9 +59,9 @@ void *memset(void *d, int c, size_t n)
 #define LLOYD_ROUNDS 4
 #endif
 #define SCRATCH_FRAME (BLOCKS * 8 + 64)
-#define SCRATCH_BYTES ((uint64_t)PREVIEW7_MAX_CHUNK_FRAMES * SCRATCH_FRAME * 2 + 4096)
-/* ARM60 clocks of preview_v7_arm.s decoding a frame into the full-screen
- * bitmap, fitted to tests/test_preview_v7.py --clocks counts (within 300
+#define SCRATCH_BYTES ((uint64_t)OM3DVID7_MAX_CHUNK_FRAMES * SCRATCH_FRAME * 2 + 4096)
+/* ARM60 clocks of om3dvid7_decoder_arm.s decoding a frame into the full-screen
+ * bitmap, fitted to om3dvid/tests/test_decoder_arm.py --clocks counts (within 300
  * clocks a frame): per frame, per op and per block of a run. The browser's
  * TV picture costs less per block. */
 #define CYC_FRAME 721
@@ -80,16 +71,6 @@ void *memset(void *d, int c, size_t n)
 #define CYC_FOUR  44
 #define CYC_RUNQ  56
 #define CYC_QUAD  68
-
-typedef struct Preview7Params {
-    uint32_t rate;       /* bytes per second the file should average */
-    uint32_t read_rate;  /* bytes per second the console's reader is assumed to manage */
-    uint32_t slot_bytes; /* memory the player is assumed to have for chunks */
-    uint32_t max_chunk;  /* largest padded chunk, a multiple of 2048 */
-    uint32_t chunk_frames;
-    uint32_t entries4, entries2;
-    uint32_t cycle_cap; /* modelled decode clocks per frame */
-} Preview7Params;
 
 typedef struct Book {
     int dim, k;
@@ -192,26 +173,38 @@ static uint64_t layout(Work *w, uint8_t *base, uint32_t frames)
     w->wanted4 = carve(&p, 8192 * 2);
     w->wanted2 = carve(&p, 4096 * 2);
     w->mode = carve(&p, BLOCKS);
-    w->expected = carve(&p, (PREVIEW7_MAX_CHUNK_FRAMES + 1) * PREVIEW7_FRAME_BYTES);
-    w->dec_screen = carve(&p, PREVIEW7_FRAME_BYTES);
-    w->dec_thumb = carve(&p, PREVIEW7_THUMB_BYTES);
-    w->dec_state = carve(&p, preview7_state_bytes() + 64);
-    w->chunk_bytes = carve(&p, PREVIEW7_MAX_CHUNKS * 4);
-    w->read_done = carve(&p, 2 * PREVIEW7_MAX_CHUNKS * sizeof(double));
-    w->play_at = carve(&p, 2 * PREVIEW7_MAX_CHUNKS * sizeof(double));
+    w->expected = carve(&p, (OM3DVID7_MAX_CHUNK_FRAMES + 1) * OM3DVID7_FRAME_BYTES);
+    w->dec_screen = carve(&p, OM3DVID7_FRAME_BYTES);
+    w->dec_thumb = carve(&p, OM3DVID7_THUMB_BYTES);
+    w->dec_state = carve(&p, om3dvid7_state_bytes() + 64);
+    w->chunk_bytes = carve(&p, OM3DVID7_MAX_CHUNKS * 4);
+    w->read_done = carve(&p, 2 * OM3DVID7_MAX_CHUNKS * sizeof(double));
+    w->play_at = carve(&p, 2 * OM3DVID7_MAX_CHUNKS * sizeof(double));
     return (uint64_t)(p - base) + sizeof(Work) + 64;
 }
 
-EXPORT uint32_t oh3do_preview7_abi(void)
+OM3DVID7_EXPORT uint32_t om3dvid7_encoder_abi(void)
 {
-    return 1;
+    return OM3DVID7_ENCODER_ABI;
+}
+
+OM3DVID7_EXPORT void om3dvid7_encoder_default_settings(Om3dvid7EncoderSettings *settings)
+{
+    settings->rate = 200 * 1024;
+    settings->read_rate = 275 * 1024;
+    settings->slot_bytes = 640 * 1024;
+    settings->max_chunk = 160 * 1024;
+    settings->chunk_frames = 10;
+    settings->entries4 = 8192;
+    settings->entries2 = 4096;
+    settings->cycle_cap = 230000;
 }
 
 /* Workspace bytes for a clip of this many frames. */
-EXPORT uint64_t oh3do_preview7_workspace(uint32_t frames)
+OM3DVID7_EXPORT uint64_t om3dvid7_encoder_workspace_bytes(uint32_t frames)
 {
     Work w;
-    if (!frames || frames > PREVIEW7_MAX_FRAMES)
+    if (!frames || frames > OM3DVID7_MAX_FRAMES)
         return 0;
     return layout(&w, (uint8_t *)(uintptr_t)64, frames); /* only sizes matter here */
 }
@@ -222,11 +215,11 @@ static Work *work_of(void *workspace)
 }
 
 /* Start a clip of up to `frames` frames. 0, or -1 for bad arguments. */
-EXPORT int32_t oh3do_preview7_begin(void *workspace, uint64_t bytes, uint32_t frames)
+OM3DVID7_EXPORT int32_t om3dvid7_encoder_begin(void *workspace, uint64_t bytes, uint32_t frames)
 {
     Work *w;
-    if (!workspace || !frames || frames > PREVIEW7_MAX_FRAMES ||
-        bytes < oh3do_preview7_workspace(frames))
+    if (!workspace || !frames || frames > OM3DVID7_MAX_FRAMES ||
+        bytes < om3dvid7_encoder_workspace_bytes(frames))
         return -1;
     w = work_of(workspace);
     w->bytes = bytes;
@@ -263,7 +256,7 @@ static uint8_t visibility(const uint8_t *q)
 }
 
 /* Add the next frame: 320x240 RGB24. */
-EXPORT int32_t oh3do_preview7_frame(void *workspace, const uint8_t *rgb)
+OM3DVID7_EXPORT int32_t om3dvid7_encoder_add_frame(void *workspace, const uint8_t *rgb)
 {
     Work *w = work_of(workspace);
     uint8_t *out;
@@ -569,7 +562,7 @@ static uint64_t pick(uint64_t *seed, uint64_t n)
     return (*seed >> 33) % n;
 }
 
-static void dictionaries(Work *w, const Preview7Params *p)
+static void dictionaries(Work *w, const Om3dvid7EncoderSettings *p)
 {
     uint64_t total = (uint64_t)w->frames * BLOCKS, seed = 1, n, count;
     count = total < SAMPLES ? total : SAMPLES;
@@ -857,18 +850,18 @@ static void send_costs(Work *w)
 
 static uint64_t samples_at(uint64_t f)
 {
-    return f * PREVIEW7_AUDIO_RATE / PREVIEW7_FPS;
+    return f * OM3DVID7_AUDIO_RATE / OM3DVID7_FPS;
 }
 
 typedef struct Pass {
-    const Preview7Params *p;
+    const Om3dvid7EncoderSettings *p;
     const int8_t *audio; /* NULL: silent */
     uint8_t *out;        /* NULL: only measure */
     uint64_t capacity, used;
     int verify, full;
-    Preview7 dec;
-    Preview7Header header;
-    uint8_t table[2 * PREVIEW7_MAX_CHUNKS];
+    Om3dvid7Decoder dec;
+    Om3dvid7Header header;
+    uint8_t table[2 * OM3DVID7_MAX_CHUNKS];
 } Pass;
 
 static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda);
@@ -884,7 +877,7 @@ static void presend(Work *w, Pass *ps, uint32_t c, double lambda, uint32_t raw)
     double mu = w->mu;
     uint32_t max_cycles = w->max_cycles;
     Pass trial;
-    if (c + 1 >= chunks || raw + PREVIEW7_ENTRY2 > ps->p->max_chunk)
+    if (c + 1 >= chunks || raw + OM3DVID7_ENTRY2 > ps->p->max_chunk)
         return;
     room = ps->p->max_chunk - raw;
     copy_bytes(w->kept_scratch, w->scratch, SCRATCH_BYTES);
@@ -920,7 +913,7 @@ static void presend(Work *w, Pass *ps, uint32_t c, double lambda, uint32_t raw)
     /* The two kinds interleaved by how far through their lists they are. */
     for (i = 0, j = 0; i < k4 || j < k2;) {
         int four = j >= k2 || (i < k4 && (uint64_t)i * k2 <= (uint64_t)j * k4);
-        uint32_t bytes = four ? PREVIEW7_ENTRY4 : PREVIEW7_ENTRY2;
+        uint32_t bytes = four ? OM3DVID7_ENTRY4 : OM3DVID7_ENTRY2;
         if (bytes > room)
             break;
         if (four ? send4(w, w->wanted4[i++]) : send2(w, w->wanted2[j++]))
@@ -931,13 +924,13 @@ static void presend(Work *w, Pass *ps, uint32_t c, double lambda, uint32_t raw)
 /* Encode chunk c at lambda; returns its padded size, or 0 if it cannot fit. */
 static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
 {
-    const Preview7Params *p = ps->p;
+    const Om3dvid7EncoderSettings *p = ps->p;
     uint32_t first = c * p->chunk_frames,
              frames = w->frames - first < p->chunk_frames ? w->frames - first : p->chunk_frames;
     uint32_t audio = ps->audio ? (uint32_t)(samples_at(first + frames) - samples_at(first)) : 0;
     uint32_t tries, k, f;
     for (tries = 0; tries < 40; ++tries, lambda *= 1.4) {
-        uint32_t packets = 0, at, size, offsets[PREVIEW7_MAX_CHUNK_FRAMES + 1];
+        uint32_t packets = 0, at, size, offsets[OM3DVID7_MAX_CHUNK_FRAMES + 1];
         uint32_t n4, n2;
         copy_bytes(&w->chunk_start, &w->cur, sizeof(Snapshot));
         w->new4n = w->new2n = 0;
@@ -967,10 +960,10 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
             offsets[k] = packets;
             packets += emit(w, w->scratch + packets);
             if (ps->verify) {
-                uint8_t *was = w->expected + (size_t)k * PREVIEW7_FRAME_BYTES,
-                        *now = was + PREVIEW7_FRAME_BYTES;
+                uint8_t *was = w->expected + (size_t)k * OM3DVID7_FRAME_BYTES,
+                        *now = was + OM3DVID7_FRAME_BYTES;
                 int b;
-                copy_bytes(now, was, PREVIEW7_FRAME_BYTES);
+                copy_bytes(now, was, OM3DVID7_FRAME_BYTES);
                 for (b = 0; b < BLOCKS; ++b)
                     if (w->mode[b])
                         paint(w, &w->cur, b, now);
@@ -979,9 +972,9 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
         offsets[frames] = packets;
         n4 = w->new4n;
         n2 = w->new2n;
-        size = PREVIEW7_CHUNK_HEADER + ((audio + 3) & ~3u) + n4 * PREVIEW7_ENTRY4 +
-               n2 * PREVIEW7_ENTRY2 + (frames + 1) * 4 + packets;
-        size = (size + PREVIEW7_BLOCK_BYTES - 1) / PREVIEW7_BLOCK_BYTES * PREVIEW7_BLOCK_BYTES;
+        size = OM3DVID7_CHUNK_HEADER + ((audio + 3) & ~3u) + n4 * OM3DVID7_ENTRY4 +
+               n2 * OM3DVID7_ENTRY2 + (frames + 1) * 4 + packets;
+        size = (size + OM3DVID7_BLOCK_BYTES - 1) / OM3DVID7_BLOCK_BYTES * OM3DVID7_BLOCK_BYTES;
         if (size > p->max_chunk) {
             /* Too big: forget this chunk's entries and decisions, raise lambda. */
             while (w->new4n)
@@ -994,13 +987,13 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
         w->tries = tries;
         if (!w->trying) {
             presend(w, ps, c, lambda,
-                    PREVIEW7_CHUNK_HEADER + ((audio + 3) & ~3u) + n4 * PREVIEW7_ENTRY4 +
-                        n2 * PREVIEW7_ENTRY2 + (frames + 1) * 4 + packets);
+                    OM3DVID7_CHUNK_HEADER + ((audio + 3) & ~3u) + n4 * OM3DVID7_ENTRY4 +
+                        n2 * OM3DVID7_ENTRY2 + (frames + 1) * 4 + packets);
             n4 = w->new4n;
             n2 = w->new2n;
-            size = PREVIEW7_CHUNK_HEADER + ((audio + 3) & ~3u) + n4 * PREVIEW7_ENTRY4 +
-                   n2 * PREVIEW7_ENTRY2 + (frames + 1) * 4 + packets;
-            size = (size + PREVIEW7_BLOCK_BYTES - 1) / PREVIEW7_BLOCK_BYTES * PREVIEW7_BLOCK_BYTES;
+            size = OM3DVID7_CHUNK_HEADER + ((audio + 3) & ~3u) + n4 * OM3DVID7_ENTRY4 +
+                   n2 * OM3DVID7_ENTRY2 + (frames + 1) * 4 + packets;
+            size = (size + OM3DVID7_BLOCK_BYTES - 1) / OM3DVID7_BLOCK_BYTES * OM3DVID7_BLOCK_BYTES;
         }
         if (ps->out) {
             uint8_t *o;
@@ -1019,11 +1012,11 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
             put16(o + 12, w->chunk_start.next2);
             put16(o + 14, n2);
             put32_(o + 16, audio);
-            at = PREVIEW7_CHUNK_HEADER;
+            at = OM3DVID7_CHUNK_HEADER;
             for (i = 0; i < audio; ++i)
                 o[at + i] = (uint8_t)ps->audio[samples_at(first) + i];
             at += (audio + 3) & ~3u;
-            for (i = 0; i < n4; ++i, at += PREVIEW7_ENTRY4) {
+            for (i = 0; i < n4; ++i, at += OM3DVID7_ENTRY4) {
                 const uint8_t *v = w->b4.byid + (size_t)w->new4[i] * DIM4;
                 uint8_t rows[32];
                 int x;
@@ -1031,9 +1024,9 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
                     put16(rows + x * 2, ((uint32_t)(v[x * 3] >> 3) << 10) |
                                             ((uint32_t)(v[x * 3 + 1] >> 3) << 5) |
                                             (v[x * 3 + 2] >> 3));
-                preview7_entry4(rows, o + at);
+                om3dvid7_entry4(rows, o + at);
             }
-            for (i = 0; i < n2; ++i, at += PREVIEW7_ENTRY2) {
+            for (i = 0; i < n2; ++i, at += OM3DVID7_ENTRY2) {
                 const uint8_t *v = w->b2.byid + (size_t)w->new2[i] * DIM2;
                 uint8_t rows[8];
                 int x;
@@ -1041,34 +1034,34 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
                     put16(rows + x * 2, ((uint32_t)(v[x * 3] >> 3) << 10) |
                                             ((uint32_t)(v[x * 3 + 1] >> 3) << 5) |
                                             (v[x * 3 + 2] >> 3));
-                preview7_entry2(rows, o + at);
+                om3dvid7_entry2(rows, o + at);
             }
             put32_(o + 20, (frames + 1) * 4 + packets);
             for (i = 0; i <= frames; ++i)
                 put32_(o + at + i * 4, (frames + 1) * 4 + offsets[i]);
             copy_bytes(o + at + (frames + 1) * 4, w->scratch, packets);
-            put32_(o, (uint32_t)preview7_sum(o + 4, size - 4));
-            put16(ps->table + 2 * c, size / PREVIEW7_BLOCK_BYTES);
+            put32_(o, (uint32_t)om3dvid7_sum(o + 4, size - 4));
+            put16(ps->table + 2 * c, size / OM3DVID7_BLOCK_BYTES);
             if (ps->verify) {
-                Preview7Chunk info;
-                if (preview7_chunk(&ps->header, c, o, size, &info))
+                Om3dvid7Chunk info;
+                if (om3dvid7_chunk(&ps->header, c, o, size, &info))
                     return 0;
-                preview7_define(&ps->dec, &info);
+                om3dvid7_define(&ps->dec, &info);
                 for (k = 0; k < frames; ++k) {
                     uint32_t i2;
-                    const uint8_t *want = w->expected + (size_t)(k + 1) * PREVIEW7_FRAME_BYTES;
-                    if (preview7_frame(&ps->dec, &info, k, PREVIEW7_SCREEN))
+                    const uint8_t *want = w->expected + (size_t)(k + 1) * OM3DVID7_FRAME_BYTES;
+                    if (om3dvid7_frame(&ps->dec, &info, k, OM3DVID7_SCREEN))
                         return 0;
                     /* The screen holds two lines per word, the upper in the high half. */
-                    for (i2 = 0; i2 < PREVIEW7_FRAME_BYTES; i2 += 2) {
+                    for (i2 = 0; i2 < OM3DVID7_FRAME_BYTES; i2 += 2) {
                         uint32_t x = (i2 / 2) % W, y = (i2 / 2) / W,
                                  at = ((y >> 1) * W + x) * 4 + (y & 1) * 2;
                         if (w->dec_screen[at] != want[i2] || w->dec_screen[at + 1] != want[i2 + 1])
                             return 0;
                     }
                 }
-                copy_bytes(w->expected, w->expected + (size_t)frames * PREVIEW7_FRAME_BYTES,
-                           PREVIEW7_FRAME_BYTES);
+                copy_bytes(w->expected, w->expected + (size_t)frames * OM3DVID7_FRAME_BYTES,
+                           OM3DVID7_FRAME_BYTES);
             }
             ps->used += size;
         }
@@ -1082,7 +1075,7 @@ static uint32_t chunk(Work *w, Pass *ps, uint32_t c, double lambda)
 static uint64_t pass(Work *w, Pass *ps, double lambda)
 {
     uint32_t chunks = (w->frames + ps->p->chunk_frames - 1) / ps->p->chunk_frames, c, b;
-    uint64_t total = PREVIEW7_BLOCK_BYTES;
+    uint64_t total = OM3DVID7_BLOCK_BYTES;
     for (b = 0; b < BLOCKS; ++b)
         w->cur.type[b] = 0;
     w->cur.next4 = w->cur.next2 = 0;
@@ -1113,9 +1106,10 @@ static uint64_t pass(Work *w, Pass *ps, double lambda)
  * seconds. */
 #define LOOP_WAIT      2.0
 #define HOLD_READ_RATE (400.0 * 1024)
-static uint32_t preroll(const Work *w, const Preview7Params *p, uint32_t chunks, uint32_t slots)
+static uint32_t preroll(const Work *w, const Om3dvid7EncoderSettings *p, uint32_t chunks,
+                        uint32_t slots)
 {
-    const double t = (double)p->chunk_frames / PREVIEW7_FPS, margin = 0.1;
+    const double t = (double)p->chunk_frames / OM3DVID7_FPS, margin = 0.1;
     double *done = w->read_done, *play = w->play_at, reader = 0;
     uint32_t k, j, fill = slots < chunks ? slots : chunks;
     for (k = 0; k < 2 * chunks; ++k) {
@@ -1147,17 +1141,17 @@ static uint32_t preroll(const Work *w, const Preview7Params *p, uint32_t chunks,
     return fill;
 }
 
-static void header_block(uint8_t *o, const Preview7Params *p, const Work *w, uint32_t chunks,
-                         uint32_t pre, uint32_t slots, uint32_t audio_rate, uint32_t max_chunk,
-                         const uint8_t *table)
+static void header_block(uint8_t *o, const Om3dvid7EncoderSettings *p, const Work *w,
+                         uint32_t chunks, uint32_t pre, uint32_t slots, uint32_t audio_rate,
+                         uint32_t max_chunk, const uint8_t *table)
 {
     uint32_t i, a = 0, b = 0;
-    for (i = 0; i < PREVIEW7_BLOCK_BYTES; ++i)
+    for (i = 0; i < OM3DVID7_BLOCK_BYTES; ++i)
         o[i] = 0;
     copy_bytes(o, "OM3DVID7", 8);
     put16(o + 8, W);
     put16(o + 10, H);
-    put16(o + 12, PREVIEW7_FPS);
+    put16(o + 12, OM3DVID7_FPS);
     put16(o + 14, p->chunk_frames);
     put32_(o + 16, w->frames);
     put16(o + 20, chunks);
@@ -1168,8 +1162,8 @@ static void header_block(uint8_t *o, const Preview7Params *p, const Work *w, uin
     put32_(o + 32, max_chunk);
     put32_(o + 36, p->rate);
     put16(o + 44, slots);
-    copy_bytes(o + PREVIEW7_HEADER_BYTES, table, 2 * chunks);
-    for (i = 0; i < PREVIEW7_BLOCK_BYTES; i += 4) {
+    copy_bytes(o + OM3DVID7_HEADER_BYTES, table, 2 * chunks);
+    for (i = 0; i < OM3DVID7_BLOCK_BYTES; i += 4) {
         a += ((uint32_t)o[i] << 24) | ((uint32_t)o[i + 1] << 16) | ((uint32_t)o[i + 2] << 8) |
              o[i + 3];
         b += a;
@@ -1184,9 +1178,9 @@ static void header_block(uint8_t *o, const Preview7Params *p, const Work *w, uin
  * Returns the file length, -1 for bad arguments, -2 if out is too small,
  * -3 if the decoder disagrees with the encoder (a bug), -4 if no setting
  * meets the rate and the reader model. */
-EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, const int8_t *audio,
-                                     uint64_t audio_samples, uint8_t *out, uint64_t capacity,
-                                     uint32_t *stats)
+OM3DVID7_EXPORT int64_t om3dvid7_encoder_finish(void *workspace, const Om3dvid7EncoderSettings *p,
+                                                const int8_t *audio, uint64_t audio_samples,
+                                                uint8_t *out, uint64_t capacity, uint32_t *stats)
 {
     Work *w = work_of(workspace);
     Pass ps;
@@ -1197,14 +1191,14 @@ EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, c
     if (!w->added)
         return -1;
     w->frames = w->added; /* the buffers were laid out for at least this many */
-    if (!p || !p->chunk_frames || p->chunk_frames > PREVIEW7_MAX_CHUNK_FRAMES || !p->rate ||
+    if (!p || !p->chunk_frames || p->chunk_frames > OM3DVID7_MAX_CHUNK_FRAMES || !p->rate ||
         !p->read_rate || !p->entries4 || p->entries4 > 8192 || !p->entries2 || p->entries2 > 4096 ||
-        !p->max_chunk || p->max_chunk % PREVIEW7_BLOCK_BYTES ||
-        p->max_chunk > 65535UL * PREVIEW7_BLOCK_BYTES || !p->cycle_cap ||
+        !p->max_chunk || p->max_chunk % OM3DVID7_BLOCK_BYTES ||
+        p->max_chunk > 65535UL * OM3DVID7_BLOCK_BYTES || !p->cycle_cap ||
         (audio && audio_samples != samples_at(w->frames)) || !out)
         return -1;
     chunks = (w->frames + p->chunk_frames - 1) / p->chunk_frames;
-    if (chunks > PREVIEW7_MAX_CHUNKS)
+    if (chunks > OM3DVID7_MAX_CHUNKS)
         return -1;
     slots = p->slot_bytes / p->max_chunk;
     if (slots < 1)
@@ -1218,7 +1212,7 @@ EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, c
         ((uint8_t *)&ps)[i] = 0;
     ps.p = p;
     ps.audio = audio;
-    target = (uint64_t)p->rate * w->frames / PREVIEW7_FPS;
+    target = (uint64_t)p->rate * w->frames / OM3DVID7_FPS;
     /* The smallest lambda (best picture) that meets the rate and the reader. */
     total = pass(w, &ps, hi);
     if (!total || total > target || !preroll(w, p, chunks, slots))
@@ -1236,7 +1230,7 @@ EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, c
     {
         uint8_t *m = w->dec_state;
         ps.dec.map = (unsigned long *)(void *)m;
-        m += PREVIEW7_BLOCKS * 2 * sizeof(unsigned long);
+        m += OM3DVID7_BLOCKS * 2 * sizeof(unsigned long);
         ps.dec.dict4 = m;
         m += 8192 * 32;
         ps.dec.thumb4 = m;
@@ -1248,27 +1242,27 @@ EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, c
         ps.dec.entries2 = 4096;
         ps.dec.thumb = w->dec_thumb;
         ps.dec.screen = w->dec_screen;
-        for (i = 0; i < (int)PREVIEW7_FRAME_BYTES; ++i)
+        for (i = 0; i < (int)OM3DVID7_FRAME_BYTES; ++i)
             w->dec_screen[i] = 0;
-        preview7_reset(&ps.dec);
+        om3dvid7_reset(&ps.dec);
     }
     ps.header.chunk_frames = p->chunk_frames;
     ps.header.chunks = chunks;
     ps.header.frames = w->frames;
     ps.header.entries4 = 8192;
     ps.header.entries2 = 4096;
-    ps.header.audio_rate = audio ? PREVIEW7_AUDIO_RATE : 0;
+    ps.header.audio_rate = audio ? OM3DVID7_AUDIO_RATE : 0;
     ps.header.max_chunk = p->max_chunk;
     ps.header.table = ps.table;
     ps.header.preroll = 1;
     ps.header.slots = slots;
-    for (i = 0; i < (int)PREVIEW7_FRAME_BYTES; ++i)
+    for (i = 0; i < (int)OM3DVID7_FRAME_BYTES; ++i)
         w->expected[i] = 0;
-    if (capacity < PREVIEW7_BLOCK_BYTES)
+    if (capacity < OM3DVID7_BLOCK_BYTES)
         return -2;
     ps.out = out;
     ps.capacity = capacity;
-    ps.used = PREVIEW7_BLOCK_BYTES;
+    ps.used = OM3DVID7_BLOCK_BYTES;
     ps.verify = 1;
     total = pass(w, &ps, lambda);
     if (!total)
@@ -1279,11 +1273,11 @@ EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, c
     pre = preroll(w, p, chunks, slots);
     if (!pre)
         return -4;
-    header_block(out, p, w, chunks, pre, slots, audio ? PREVIEW7_AUDIO_RATE : 0, max_chunk,
+    header_block(out, p, w, chunks, pre, slots, audio ? OM3DVID7_AUDIO_RATE : 0, max_chunk,
                  ps.table);
     {
-        Preview7Header check;
-        if (preview7_header(out, &check))
+        Om3dvid7Header check;
+        if (om3dvid7_header(out, &check))
             return -3;
     }
     if (stats) {
@@ -1301,7 +1295,7 @@ EXPORT int64_t oh3do_preview7_encode(void *workspace, const Preview7Params *p, c
 
 /* Mean nearest-entry error per block of the last encode (x8 scale squared):
  * out[0] 4x4, out[1] quads. For tuning the dictionaries. */
-EXPORT void oh3do_preview7_debug(void *workspace, double *out)
+OM3DVID7_EXPORT void om3dvid7_encoder_debug(void *workspace, double *out)
 {
     Work *w = work_of(workspace);
     uint64_t i, n = (uint64_t)w->frames * BLOCKS;

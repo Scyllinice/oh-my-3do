@@ -1,7 +1,7 @@
 /*
  * Playing an OM3DVID7 preview while it streams from the USB drive.
  *
- * A clip is split into chunks of about a second each (see preview_v7.h).
+ * A clip is split into chunks of about a second each (see om3dvid7.h).
  * On the console, a reader thread with its own XBUS requests reads the
  * chunks in order into a few fixed-size memory "slots", checks each one,
  * stores its dictionary entries, and starts over from the top of the file
@@ -25,7 +25,7 @@
 #ifndef OH3DO_PREVIEW_STREAM_H
 #define OH3DO_PREVIEW_STREAM_H
 #include "menu_config.h"
-#include "preview_v7.h"
+#include "om3dvid7.h"
 #include "preview_audio.h"
 
 /* The most chunk slots; the clip's header says how many the encoder assumed. */
@@ -45,9 +45,9 @@ typedef int (*PreviewStreamReclaim)(void *context);
 typedef struct PreviewStream {
     int open;    /* the first frame is drawn */
     int playing; /* the clock and sound have started */
-    Preview7Header header;
-    unsigned char block[PREVIEW7_BLOCK_BYTES]; /* the file's header block */
-    Preview7 dec;                              /* the decoder's state */
+    Om3dvid7Header header;
+    unsigned char block[OM3DVID7_BLOCK_BYTES]; /* the file's header block */
+    Om3dvid7Decoder dec;                       /* the decoder's state */
     unsigned char *state, *thumb;              /* thumb: the TV picture */
 
     /* Chunk slots: sequence N goes in slot N % slots. */
@@ -62,7 +62,7 @@ typedef struct PreviewStream {
      * entries are stored (0: nothing yet). Sequences below `released` are
      * finished with, so their slots may be refilled.
      */
-    Preview7Chunk info[PREVIEW_STREAM_SLOTS];
+    Om3dvid7Chunk info[PREVIEW_STREAM_SLOTS];
     volatile unsigned long ready[PREVIEW_STREAM_SLOTS];
     volatile unsigned long released;
     volatile int stop;    /* the player asks the reader to stop */
@@ -109,11 +109,11 @@ typedef struct PreviewStream {
 } PreviewStream;
 
 /* Bytes a stream allocates for a clip with this header and slot count. */
-unsigned long preview_stream_bytes(const Preview7Header *header, unsigned int slots);
+unsigned long preview_stream_bytes(const Om3dvid7Header *header, unsigned int slots);
 
 /*
  * Starts streaming the clip whose header block the caller has read and
- * checked (with preview7_header). `game_folder` is the collapsed game folder
+ * checked (with om3dvid7_header). `game_folder` is the collapsed game folder
  * the file sits in, or "" for the current folder; `name` is the file's name
  * in .ohmy3do. Allocates memory (calling `reclaim` for more room), starts
  * the reader, waits until every slot holds a chunk (asking `cancel` while it
@@ -133,7 +133,7 @@ void preview_stream_play(PreviewStream *stream, unsigned long now_ms);
 
 /*
  * Decodes up to and including frame `frame` (counted across loops) into the
- * picture (PREVIEW7_SCREEN into `screen`, or PREVIEW7_TV), first redrawing
+ * picture (OM3DVID7_SCREEN into `screen`, or OM3DVID7_TV), first redrawing
  * it whole if it does not show the map yet. Returns 0,
  * PREVIEW_STREAM_NOT_READY if a chunk has not arrived (nothing past it was
  * decoded), or -1 on an error.
