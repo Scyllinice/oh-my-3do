@@ -1,4 +1,5 @@
-/* Streamed OM3DVID7 playback (src/preview_stream.c) on the host, where the
+/* Streamed OM3DVID7 playback through the menu's FCare glue
+ * (src/preview_stream.c and the om3dvid player) on the host, where the
  * reader runs synchronously: test_preview_stream CLIP.3dv
  *
  * The clip plays through a fake ODE for two loops, switching between the
@@ -15,22 +16,36 @@
 
 /* Sound stubs: the ring is checked directly. */
 static int audio_started, audio_paused;
-int preview_audio_start_ring(PreviewAudio *audio, unsigned char *data, unsigned long frames,
-                             unsigned long rate)
+int om3dvid7_sound_start_ring(Om3dvid7Sound *audio, unsigned char *data, unsigned long frames,
+                              unsigned long rate)
 {
-    assert(data && frames == PREVIEW_STREAM_RING && rate == 11025);
+    assert(data && frames == OM3DVID7_PLAYER_RING && rate == 11025);
     audio->status = 1;
     ++audio_started;
     return 0;
 }
-void preview_audio_pause(PreviewAudio *audio, int pause)
+void om3dvid7_sound_pause(Om3dvid7Sound *audio, int pause)
 {
     if (audio->status == 1)
         audio_paused = pause;
 }
-void preview_audio_close(PreviewAudio *audio)
+void om3dvid7_sound_close(Om3dvid7Sound *audio)
 {
     memset(audio, 0, sizeof(*audio));
+}
+/* The player's sound callbacks, as om3dvid7_sound.c defines them. */
+int om3dvid7_sound_player_start(void *sound, signed char *ring, unsigned long samples,
+                                unsigned long rate)
+{
+    return om3dvid7_sound_start_ring((Om3dvid7Sound *)sound, (unsigned char *)ring, samples, rate);
+}
+void om3dvid7_sound_player_pause(void *sound, int pause)
+{
+    om3dvid7_sound_pause((Om3dvid7Sound *)sound, pause);
+}
+void om3dvid7_sound_player_stop(void *sound)
+{
+    om3dvid7_sound_close((Om3dvid7Sound *)sound);
 }
 
 typedef struct Fake {
@@ -176,41 +191,43 @@ int main(int argc, char **argv)
     /* A clean run over two loops, switching pictures every 37 frames. */
     assert(!preview_stream_open(&s, &ode, reader, "Road Rash (USA)", "preview-x.3dv", data, 1,
                                 cancel, NULL, NULL, NULL));
-    assert(preview_stream_due(&s, now + 5000) == 0 && !audio_started);
-    preview_stream_play(&s, now);
+    assert(om3dvid7_player_due(&s.player, now + 5000) == 0 && !audio_started);
+    om3dvid7_player_play(&s.player, now);
     assert(!strcmp(f.path, "Road Rash (USA)/.ohmy3do/preview-x.3dv") && f.opens == 1 &&
            audio_started == (h.audio_rate != 0));
-    assert(s.slots == h.slots && s.slots >= h.preroll && (!h.audio_rate || s.audio_written >= 1));
-    assert(!memcmp(s.thumb, tv, OM3DVID7_THUMB_BYTES));
+    assert(s.player.slots == h.slots && s.player.slots >= h.preroll &&
+           (!h.audio_rate || s.player.audio_written >= 1));
+    assert(!memcmp(s.player.thumb, tv, OM3DVID7_THUMB_BYTES));
     for (frame = 1; frame < loops * h.frames; ++frame) {
         unsigned long local = frame % h.frames;
         if (frame % 37 == 0)
             picture = picture == OM3DVID7_TV ? OM3DVID7_SCREEN : OM3DVID7_TV;
-        assert(preview_stream_decode(&s, frame, picture, screen) == 0);
+        assert(om3dvid7_player_decode(&s.player, frame, picture, screen) == 0);
         if (picture == OM3DVID7_TV)
-            assert(!memcmp(s.thumb, tv + local * OM3DVID7_THUMB_BYTES, OM3DVID7_THUMB_BYTES));
+            assert(
+                !memcmp(s.player.thumb, tv + local * OM3DVID7_THUMB_BYTES, OM3DVID7_THUMB_BYTES));
         else
             assert(!memcmp(screen, full + local * OM3DVID7_FRAME_BYTES, OM3DVID7_FRAME_BYTES));
         /* The sound clock runs ahead with the frames. */
         now = 1000 + (frame * 1000UL + 29) / 30;
-        assert(preview_stream_due(&s, now) == frame);
-        preview_stream_audio(&s, now, 0);
-        assert(s.released + s.slots >= s.audio_written);
+        assert(om3dvid7_player_due(&s.player, now) == frame);
+        om3dvid7_player_update(&s.player, now, 0);
+        assert(s.player.released + s.player.slots >= s.player.audio_written);
     }
-    assert(f.opens >= 2 && !s.error);
+    assert(f.opens >= 2 && !s.player.error);
     /* Sound copied in order: the ring holds the clip's samples at their place. */
     {
-        unsigned long seq = s.released, k = seq % s.slots;
-        if (s.ready[k] == seq + 1 && seq < s.audio_written) {
+        unsigned long seq = s.player.released, k = seq % s.player.slots;
+        if (s.player.ready[k] == seq + 1 && seq < s.player.audio_written) {
             unsigned long first = (seq / h.chunks) * h.frames + (seq % h.chunks) * h.chunk_frames;
             unsigned long at =
                 (first / h.frames) * (h.frames * 11025UL / 30) + (first % h.frames) * 11025UL / 30;
-            assert(s.info[k].audio_samples == 0 ||
-                   !memcmp(s.ring + at % PREVIEW_STREAM_RING, s.info[k].audio, 1));
+            assert(s.player.info[k].audio_samples == 0 ||
+                   !memcmp(s.player.ring + at % OM3DVID7_PLAYER_RING, s.player.info[k].audio, 1));
         }
     }
     preview_stream_close(&s);
-    assert(!s.open && !s.dec.map && s.chunks_read >= 2 * h.chunks - 1);
+    assert(!s.player.open && !s.player.dec.map && s.player.chunks_read >= 2 * h.chunks - 1);
 
     /* Pausing while waiting stops the clock. */
     memset(&f, 0, sizeof(f));
@@ -218,12 +235,12 @@ int main(int argc, char **argv)
     f.size = size;
     assert(!preview_stream_open(&s, &ode, reader, "", "preview-x.3dv", data, 1, NULL, NULL, NULL,
                                 NULL));
-    preview_stream_play(&s, 5000);
-    preview_stream_audio(&s, 5100, 1);
-    assert(s.stalls == 1 && (audio_paused || !h.audio_rate));
-    preview_stream_audio(&s, 5600, 0);
-    assert(!audio_paused && s.stall_ms == 500);
-    assert(preview_stream_due(&s, 5600) == (100UL * 30) / 1000);
+    om3dvid7_player_play(&s.player, 5000);
+    om3dvid7_player_update(&s.player, 5100, 1);
+    assert(s.player.stalls == 1 && (audio_paused || !h.audio_rate));
+    om3dvid7_player_update(&s.player, 5600, 0);
+    assert(!audio_paused && s.player.stall_ms == 500);
+    assert(om3dvid7_player_due(&s.player, 5600) == (100UL * 30) / 1000);
     preview_stream_close(&s);
 
     /* Canceled while buffering. */
@@ -234,7 +251,7 @@ int main(int argc, char **argv)
     cancel_calls = 0;
     assert(preview_stream_open(&s, &ode, reader, "", "preview-x.3dv", data, 0, cancel, NULL, NULL,
                                NULL) == -5 &&
-           !s.open);
+           !s.player.open);
     cancel_after = 0;
 
     /* A damaged chunk stops playback with an error. */
@@ -244,7 +261,7 @@ int main(int argc, char **argv)
     f.corrupt_read = 3;
     assert(preview_stream_open(&s, &ode, reader, "", "preview-x.3dv", data, 0, NULL, NULL, NULL,
                                NULL) < 0 &&
-           !s.open);
+           !s.player.open);
 
     free(data);
     free(full);

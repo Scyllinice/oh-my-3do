@@ -3,9 +3,10 @@ CFLAGS = -O2 -std=c89 -pedantic -Wall -Wextra -Werror
 # The OM3DVID7 preview codec library (om3dvid/).
 OM3DVID_INCLUDE = -Iom3dvid/include
 OM3DVID_DECODER = om3dvid/src/om3dvid7_decoder.c
+OM3DVID_PLAYER = om3dvid/src/om3dvid7_player.c
 
 .PHONY: test test-firmware test-covers test-sdk test-media clean
-test: build/test_game_info build/test_menu_help build/test_menu_categories build/test_save_catalog build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names build/test_om3dvid7_encoder build/test_preview_stream
+test: build/test_game_info build/test_menu_help build/test_menu_categories build/test_save_catalog build/test_save_cheats build/test_cover_cache build/test_om3dvid7_sound build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names build/test_om3dvid7_encoder build/test_om3dvid7_player build/test_preview_stream
 	python3 tools/build-save-names.py --check
 	./build/test_game_info tests/fixtures/game-info.txt
 	./build/test_menu_help
@@ -46,8 +47,9 @@ test: build/test_game_info build/test_menu_help build/test_menu_categories build
 	./build/test_menu_ui
 	./build/test_cover_cache
 	./build/test_ui_font
-	./build/test_preview_audio
+	./build/test_om3dvid7_sound
 	./build/test_om3dvid7_encoder build/test-om3dvid7.3dv
+	./build/test_om3dvid7_player build/test-om3dvid7.3dv
 	./build/test_preview_stream build/test-om3dvid7.3dv
 	./build/test_usb_media streamvideo build/test-om3dvid7.3dv
 	./build/test_usb_media_sdk streamvideo build/test-om3dvid7.3dv
@@ -80,7 +82,7 @@ build/test_usb_art: src/usb_art.c src/usb_file.c src/usb_art.h src/menu_config.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(OM3DVID_INCLUDE) src/usb_art.c src/usb_file.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c tests/test_usb_art.c $(LDFLAGS) -o $@
 
 clean:
-	rm -f build/test_om3dvid7_encoder build/test_preview_stream build/test-om3dvid7.3dv build/test_game_info build/test_menu_help build/test_save_cheats build/test_cover_cache build/test_preview_audio build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
+	rm -f build/test_om3dvid7_encoder build/test_om3dvid7_player build/test_preview_stream build/test-om3dvid7.3dv build/test_game_info build/test_menu_help build/test_save_cheats build/test_cover_cache build/test_om3dvid7_sound build/test_ui_font build/test_usb_media build/test_usb_media_sdk build/test_menu_position build/test_library_navigation build/test_library_features build/test_bus_diagnostics build/test_nvram build/test_saves build/test_menu_sort build/test_ode build/test_menu_config build/test_menu_ui build/test_usb_art build/test_save_names
 
 build/test_saves: src/save_archive.c src/save_archive.h src/save_usb.c src/save_usb.h src/usb_art.c src/usb_file.c src/usb_file.h src/menu_ui.c src/menu_categories.c src/menu_ui.h src/cover_catalog.c src/menu_settings.c src/menu_settings.h src/menu_config.c tests/test_saves.c
 	mkdir -p build
@@ -130,9 +132,13 @@ build/test_om3dvid7_encoder: om3dvid/src/om3dvid7_encoder.c $(OM3DVID_DECODER) o
 	mkdir -p build
 	$(CC) $(CPPFLAGS) -O2 -std=c99 -pedantic -Wall -Wextra -Werror $(OM3DVID_INCLUDE) om3dvid/tests/test_encoder.c om3dvid/src/om3dvid7_encoder.c $(OM3DVID_DECODER) $(LDFLAGS) -lm -o $@
 
-build/test_preview_stream: src/preview_stream.c src/preview_stream.h $(OM3DVID_DECODER) om3dvid/include/om3dvid7.h tests/test_preview_stream.c src/usb_art.c src/usb_file.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c
+build/test_om3dvid7_player: $(OM3DVID_PLAYER) $(OM3DVID_DECODER) om3dvid/include/om3dvid7.h om3dvid/include/om3dvid7_player.h om3dvid/tests/test_player.c
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(OM3DVID_INCLUDE) tests/test_preview_stream.c src/preview_stream.c $(OM3DVID_DECODER) src/usb_art.c src/usb_file.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OM3DVID_INCLUDE) om3dvid/tests/test_player.c $(OM3DVID_PLAYER) $(OM3DVID_DECODER) $(LDFLAGS) -o $@
+
+build/test_preview_stream: src/preview_stream.c src/preview_stream.h $(OM3DVID_DECODER) $(OM3DVID_PLAYER) om3dvid/include/om3dvid7.h om3dvid/include/om3dvid7_player.h tests/test_preview_stream.c src/usb_art.c src/usb_file.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(OM3DVID_INCLUDE) tests/test_preview_stream.c src/preview_stream.c $(OM3DVID_DECODER) $(OM3DVID_PLAYER) src/usb_art.c src/usb_file.c src/menu_ui.c src/menu_categories.c src/cover_catalog.c src/library_index.c src/library_navigation.c src/library_features.c src/ode.c src/menu_sort.c $(LDFLAGS) -o $@
 
 test-media: build/test_usb_media build/test_usb_media_sdk
 	python3 tests/test_media_tools.py
@@ -145,9 +151,9 @@ build/test_ui_font: src/ui_font.c src/ui_font.h src/ui_font_data.h tests/test_ui
 test-cover-resize: build/test_usb_media
 	python3 tests/test_resize_covers.py
 
-build/test_preview_audio: src/preview_audio.c src/preview_audio.h tests/audio_sdk/audio.h tests/audio_sdk/mem.h tests/test_preview_audio.c
+build/test_om3dvid7_sound: om3dvid/src/om3dvid7_sound.c om3dvid/include/om3dvid7_sound.h om3dvid/tests/audio_sdk/audio.h om3dvid/tests/audio_sdk/mem.h om3dvid/tests/test_sound.c
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Itests/audio_sdk -Isrc $(OM3DVID_INCLUDE) src/preview_audio.c tests/test_preview_audio.c $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iom3dvid/tests/audio_sdk $(OM3DVID_INCLUDE) om3dvid/src/om3dvid7_sound.c om3dvid/tests/test_sound.c $(LDFLAGS) -o $@
 
 
 

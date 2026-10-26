@@ -39,9 +39,14 @@ stage_project() {
     sh "$TDO_DEVKIT_PATH/bin/buildtools/linux/bootstrap-3do-project" "$stage"
     python3 "$project_dir/tools/prepare-runtime.py" "$stage/takeme" "$stage/runtime-audit.json"
     cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$project_dir"/src/*.s "$stage/src/"
-    # The preview decoder from the om3dvid/ library (the encoder is PC-only).
+    # The preview decoder, player and sound from the om3dvid/ library (the
+    # encoder is PC-only).
     cp "$project_dir"/om3dvid/src/om3dvid7_decoder.c "$project_dir"/om3dvid/src/om3dvid7_decoder_arm.s \
-        "$project_dir"/om3dvid/include/om3dvid7.h "$stage/src/"
+        "$project_dir"/om3dvid/src/om3dvid7_player.c "$project_dir"/om3dvid/src/om3dvid7_portfolio.c \
+        "$project_dir"/om3dvid/src/om3dvid7_sound.c \
+        "$project_dir"/om3dvid/include/om3dvid7.h "$project_dir"/om3dvid/include/om3dvid7_player.h \
+        "$project_dir"/om3dvid/include/om3dvid7_portfolio.h "$project_dir"/om3dvid/include/om3dvid7_sound.h \
+        "$stage/src/"
     cp -r "$project_dir/vendor" "$stage/vendor"
     cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
     cp "$project_dir/assets/startup.cel" "$stage/takeme/startup.cel"
@@ -163,7 +168,10 @@ record_build() {
     cp /opt/3do-devkit.revision "$record_dir/devkit.revision"
     sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
         "$project_dir"/om3dvid/src/om3dvid7_decoder.c "$project_dir"/om3dvid/src/om3dvid7_decoder_arm.s \
-        "$project_dir"/om3dvid/include/om3dvid7.h \
+        "$project_dir"/om3dvid/src/om3dvid7_player.c "$project_dir"/om3dvid/src/om3dvid7_portfolio.c \
+        "$project_dir"/om3dvid/src/om3dvid7_sound.c \
+        "$project_dir"/om3dvid/include/om3dvid7.h "$project_dir"/om3dvid/include/om3dvid7_player.h \
+        "$project_dir"/om3dvid/include/om3dvid7_portfolio.h "$project_dir"/om3dvid/include/om3dvid7_sound.h \
         "$project_dir/data/save-cheats.json" "$project_dir/tools/build-save-cheats.py" \
         "$project_dir/tools/build-menu" "$project_dir/tools/verify-aif.py" \
         "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \

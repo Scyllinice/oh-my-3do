@@ -1,4 +1,6 @@
-#include "preview_audio.h"
+/* The clip sound player (om3dvid7_sound.c) against a stand-in audio folio:
+ * every call it makes, every failure, and the player adapters. */
+#include "om3dvid7_sound.h"
 #include "audio.h"
 #include <assert.h>
 #include <stdio.h>
@@ -113,45 +115,55 @@ long StartInstrument(long item, TagArg *tags)
 }
 int main(void)
 {
-    PreviewAudio audio;
+    Om3dvid7Sound audio;
     int count, i;
     memset(&audio, 0, sizeof(audio));
     memset(pcm, 0xa5, sizeof(pcm));
-    assert(!preview_audio_start(&audio, pcm, 32, 11025) && audio.status == 1 && resources == 30);
+    assert(!om3dvid7_sound_start(&audio, pcm, 32, 11025) && audio.status == 1 && resources == 30);
     count = calls;
-    assert(!preview_audio_restart(&audio));
-    preview_audio_close(&audio);
-    preview_audio_close(&audio);
+    assert(!om3dvid7_sound_restart(&audio));
+    om3dvid7_sound_close(&audio);
+    om3dvid7_sound_close(&audio);
     assert(!opened && !resources && pcm[0] == 0xa5);
     for (i = 1; i <= count; ++i) {
         calls = 0;
         fail_at = i;
-        assert(preview_audio_start(&audio, pcm, 32, 11025) < 0 && audio.status == -1);
+        assert(om3dvid7_sound_start(&audio, pcm, 32, 11025) < 0 && audio.status == -1);
         assert(!opened && !resources && pcm[0] == 0xa5);
-        preview_audio_close(&audio);
+        om3dvid7_sound_close(&audio);
     }
     fail_at = 0;
     calls = 0;
-    assert(preview_audio_start(&audio, NULL, 32, 11025) < 0 && !calls);
-    assert(preview_audio_start(&audio, pcm, 31, 11025) < 0 && !calls);
-    assert(preview_audio_start(&audio, pcm, 32, 22050) < 0 && !calls);
-    assert(!preview_audio_start(&audio, pcm, 32, 11025));
+    assert(om3dvid7_sound_start(&audio, NULL, 32, 11025) < 0 && !calls);
+    assert(om3dvid7_sound_start(&audio, pcm, 31, 11025) < 0 && !calls);
+    assert(om3dvid7_sound_start(&audio, pcm, 32, 22050) < 0 && !calls);
+    assert(!om3dvid7_sound_start(&audio, pcm, 32, 11025));
     fail_at = calls + 1;
-    assert(preview_audio_restart(&audio) < 0 && !resources && !opened);
-    preview_audio_close(&audio);
+    assert(om3dvid7_sound_restart(&audio) < 0 && !resources && !opened);
+    om3dvid7_sound_close(&audio);
     /* The streaming ring loops; pausing reaches the player only while it plays. */
     ring = 1;
     fail_at = 0;
     calls = 0;
-    assert(!preview_audio_start_ring(&audio, pcm, 32, 11025) && audio.status == 1);
-    preview_audio_pause(&audio, 1);
+    assert(!om3dvid7_sound_start_ring(&audio, pcm, 32, 11025) && audio.status == 1);
+    om3dvid7_sound_pause(&audio, 1);
     assert(paused);
-    preview_audio_pause(&audio, 0);
+    om3dvid7_sound_pause(&audio, 0);
     assert(!paused);
-    preview_audio_close(&audio);
-    preview_audio_pause(&audio, 1);
+    om3dvid7_sound_close(&audio);
+    om3dvid7_sound_pause(&audio, 1);
     assert(!paused && !resources && !opened);
-    puts("Preview audio: looping ring and pause, signed PCM, stereo routing, synchronized restart, "
-         "every startup failure and borrowed-buffer cleanup passed");
+    /* The same through the player's callbacks. */
+    calls = 0;
+    assert(!om3dvid7_sound_player_start(&audio, (signed char *)pcm, 32, 11025) &&
+           audio.status == 1);
+    om3dvid7_sound_player_pause(&audio, 1);
+    assert(paused);
+    om3dvid7_sound_player_pause(&audio, 0);
+    assert(!paused);
+    om3dvid7_sound_player_stop(&audio);
+    assert(!resources && !opened && audio.status == 0);
+    puts("om3dvid7 sound: looping ring and pause, signed PCM, stereo routing, synchronized "
+         "restart, every startup failure, borrowed-buffer cleanup and the player callbacks passed");
     return 0;
 }

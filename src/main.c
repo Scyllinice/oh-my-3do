@@ -32,7 +32,7 @@
 #include "menu_help.h"
 #include "game_info.h"
 #include "ui_font.h"
-#include "preview_audio.h"
+#include "om3dvid7_sound.h"
 #include "usb_art.h"
 #include "cover_cache.h"
 #include "usb_media.h"
@@ -363,7 +363,7 @@ typedef struct Menu {
     const char *cover_file, *cover_folder;
 
     /* ---- Previews ---- */
-    PreviewAudio preview_audio;
+    Om3dvid7Sound preview_audio;
     UsbPreview preview;
     /* An OM3DVID7 preview streams instead (stream.open). Full screen draws it
      * straight into the back screen; sport then copies that screen into the
@@ -668,7 +668,7 @@ static void stop_preview(Menu *menu)
     menu->preview_priming = 0;
     sport_wait(menu);
     preview_stream_close(&menu->stream);
-    preview_audio_close(&menu->preview_audio);
+    om3dvid7_sound_close(&menu->preview_audio);
     if (menu->preview_cel)
         UnloadCel(menu->preview_cel);
     menu->preview_cel = NULL;
@@ -1923,7 +1923,7 @@ static void media_placeholder(Menu *menu, int folder)
  * diagnostics. */
 static void stream_shown(Menu *menu, unsigned long spent)
 {
-    unsigned long frames = menu->stream.frame;
+    unsigned long frames = menu->stream.player.frame;
     if (frames == menu->stream_shown)
         return;
     if (frames > menu->stream_shown + 1) {
@@ -1945,15 +1945,17 @@ static void stream_shown(Menu *menu, unsigned long spent)
 static int decode_stream(Menu *menu, unsigned long now, int picture, unsigned char *screen)
 {
     PreviewStream *s = &menu->stream;
-    unsigned long started = now_ms(menu), before = s->frame, chunks = s->chunks_read, spent, frames;
-    int idle = !s->reading, result;
-    result = preview_stream_decode(s, preview_stream_due(s, now), picture, screen);
+    Om3dvid7Player *player = &s->player;
+    unsigned long started = now_ms(menu), before = player->frame, chunks = player->chunks_read;
+    unsigned long spent, frames;
+    int idle = !player->reading, result;
+    result = om3dvid7_player_decode(player, om3dvid7_player_due(player, now), picture, screen);
     spent = now_ms(menu) - started;
-    frames = s->frame - before;
+    frames = player->frame - before;
     if (frames) {
         s->decode_ms += spent;
         s->decode_frames += frames;
-        if (idle && !s->reading && chunks == s->chunks_read) {
+        if (idle && !player->reading && chunks == player->chunks_read) {
             s->idle_ms += spent;
             s->idle_frames += frames;
         }
@@ -1973,14 +1975,14 @@ static void advance_stream(Menu *menu, unsigned long now)
     if (menu->preview_priming || menu->full_view)
         return;
     /* Not due yet: just keep the sound fed. */
-    if (preview_stream_due(&menu->stream, now) < menu->stream.frame) {
-        preview_stream_audio(&menu->stream, now, 0);
+    if (om3dvid7_player_due(&menu->stream.player, now) < menu->stream.player.frame) {
+        om3dvid7_player_update(&menu->stream.player, now, 0);
         return;
     }
     started = now_ms(menu);
     result = decode_stream(menu, now, OM3DVID7_TV, NULL);
     /* A missing chunk pauses the sound too, so they stay in step. */
-    preview_stream_audio(&menu->stream, now, result == PREVIEW_STREAM_NOT_READY);
+    om3dvid7_player_update(&menu->stream.player, now, result == OM3DVID7_PLAYER_NOT_READY);
     if (result < 0) {
         stop_preview(menu);
         menu->preview_result = -3;
@@ -1994,7 +1996,7 @@ static void advance_preview(Menu *menu, unsigned long now)
 {
     unsigned long elapsed, tick;
     unsigned int frame;
-    if (menu->stream.open) {
+    if (menu->stream.player.open) {
         advance_stream(menu, now);
         return;
     }
@@ -2008,7 +2010,7 @@ static void advance_preview(Menu *menu, unsigned long now)
         menu->preview_since = now;
         tick = 0;
         if (menu->preview_audio.status == 1)
-            preview_audio_restart(&menu->preview_audio);
+            om3dvid7_sound_restart(&menu->preview_audio);
     }
     frame = (unsigned int)tick;
     /* Decode it if it is a new frame, counting any passed over. */
@@ -3692,8 +3694,9 @@ static void close_full_cover(Menu *menu)
         set_smoothing(menu, 0);
     sport_wait(menu);
     /* The TV picture missed the full-screen frames: redraw it from the map. */
-    if (menu->stream.open && menu->stream.frame && menu->full_view == 2 &&
-        preview_stream_decode(&menu->stream, menu->stream.frame - 1, OM3DVID7_TV, NULL) < 0)
+    if (menu->stream.player.open && menu->stream.player.frame && menu->full_view == 2 &&
+        om3dvid7_player_decode(&menu->stream.player, menu->stream.player.frame - 1, OM3DVID7_TV,
+                               NULL) < 0)
         stop_preview(menu);
     if (menu->full_cover)
         UnloadCel(menu->full_cover);
@@ -3781,16 +3784,17 @@ static void draw_full_stream(Menu *menu)
 {
     unsigned long now = now_ms(menu), started;
     int back = menu->screen.sc_curScreen ^ 1, result;
-    if (menu->full_cleared && preview_stream_due(&menu->stream, now) < menu->stream.frame) {
-        preview_stream_audio(&menu->stream, now, 0);
+    if (menu->full_cleared &&
+        om3dvid7_player_due(&menu->stream.player, now) < menu->stream.player.frame) {
+        om3dvid7_player_update(&menu->stream.player, now, 0);
         return;
     }
     sport_wait(menu);
     if (!menu->full_cleared)
-        preview_stream_invalidate(&menu->stream, OM3DVID7_SCREEN);
+        om3dvid7_player_invalidate(&menu->stream.player, OM3DVID7_SCREEN);
     started = now_ms(menu);
     result = decode_stream(menu, now, OM3DVID7_SCREEN, screen_pixels(menu, back));
-    preview_stream_audio(&menu->stream, now, result == PREVIEW_STREAM_NOT_READY);
+    om3dvid7_player_update(&menu->stream.player, now, result == OM3DVID7_PLAYER_NOT_READY);
     if (result < 0) {
         close_full_cover(menu);
         stop_preview(menu);
@@ -3807,14 +3811,14 @@ static void draw_full_stream(Menu *menu)
         menu->sport_pending = 1;
     else
 #endif
-        preview_stream_invalidate(&menu->stream, OM3DVID7_SCREEN);
+        om3dvid7_player_invalidate(&menu->stream.player, OM3DVID7_SCREEN);
     menu->full_cleared = 1;
 }
 /* Draws the full-screen view: video (streamed or loaded) or a cover. */
 static void draw_full_cover(Menu *menu)
 {
     CCB copy;
-    if (menu->full_view == 2 && menu->stream.open) {
+    if (menu->full_view == 2 && menu->stream.player.open) {
         draw_full_stream(menu);
         return;
     }
@@ -4308,9 +4312,10 @@ static void update_preview(Menu *menu)
     /* Loaded: wrap the first frame in a cel for the TV and start playing. */
     if (!result) {
         /* A stream shows its 160x120 TV picture in the browser. */
-        unsigned char *pixels = menu->stream.open ? menu->stream.thumb : menu->preview.frame_buffer;
-        unsigned int width = menu->stream.open ? 160 : menu->preview.width,
-                     height = menu->stream.open ? 120 : menu->preview.height;
+        unsigned char *pixels =
+            menu->stream.player.open ? menu->stream.player.thumb : menu->preview.frame_buffer;
+        unsigned int width = menu->stream.player.open ? 160 : menu->preview.width,
+                     height = menu->stream.player.open ? 120 : menu->preview.height;
         menu->preview_cel = CreateCel(width, height, 16, CREATECEL_UNCODED, pixels);
         if (!menu->preview_cel && reclaim_preview_covers(menu))
             menu->preview_cel = CreateCel(width, height, 16, CREATECEL_UNCODED, pixels);
@@ -4324,14 +4329,15 @@ static void update_preview(Menu *menu)
             menu->preview_chunks = menu->preview.chunk_count;
             menu->preview_source_frames = menu->preview.source_frames;
             menu->preview_vram_bytes = menu->preview.vram_bytes;
-            if (menu->stream.open) {
+            if (menu->stream.player.open) {
                 unsigned int i;
-                menu->preview_frames = menu->preview_source_frames = menu->stream.header.frames;
+                menu->preview_frames = menu->preview_source_frames =
+                    menu->stream.player.header.frames;
                 menu->preview_fps = OM3DVID7_FPS;
-                menu->preview_chunks = menu->stream.slots;
-                for (i = 0; i < menu->stream.slots; ++i)
-                    if (menu->stream.slot_vram[i])
-                        menu->preview_vram_bytes += menu->stream.slot_bytes;
+                menu->preview_chunks = menu->stream.player.slots;
+                for (i = 0; i < menu->stream.player.slots; ++i)
+                    if (menu->stream.player.slot_vram[i])
+                        menu->preview_vram_bytes += menu->stream.player.slot_bytes;
             }
             /* Prepare both list panels with frame zero before starting either
              * timeline. Playback then begins on the light picture-only path. */
@@ -4340,12 +4346,12 @@ static void update_preview(Menu *menu)
             draw(menu);
             draw(menu);
             menu->preview_priming = 0;
-            if (menu->config.preview_sound && menu->preview.audio && !menu->stream.open)
-                preview_audio_start(&menu->preview_audio, menu->preview.audio,
-                                    menu->preview.audio_frames, menu->preview.audio_rate);
-            menu->stream_shown = menu->stream.frame;
+            if (menu->config.preview_sound && menu->preview.audio && !menu->stream.player.open)
+                om3dvid7_sound_start(&menu->preview_audio, menu->preview.audio,
+                                     menu->preview.audio_frames, menu->preview.audio_rate);
+            menu->stream_shown = menu->stream.player.frame;
             menu->preview_since = now_ms(menu);
-            preview_stream_play(&menu->stream, menu->preview_since);
+            om3dvid7_player_play(&menu->stream.player, menu->preview_since);
         } else {
             preview_stream_close(&menu->stream);
             usb_preview_free(&menu->preview);
@@ -5487,10 +5493,11 @@ static void export_diagnostics(Menu *menu)
                   "stream_read_max_ms=%lu\n"
                   "stream_stalls=%lu\n"
                   "stream_stall_ms=%lu\n",
-                  menu->stream.chunks_read, menu->stream.read_ms, menu->stream.read_max_ms,
-                  menu->stream.stalls, menu->stream.stall_ms);
+                  menu->stream.player.chunks_read, menu->stream.player.read_ms,
+                  menu->stream.player.read_max_ms, menu->stream.player.stalls,
+                  menu->stream.player.stall_ms);
     append_format(data, "stream_slots=%u\nstream_error=%d\nstream_reader_error=%08lx\n",
-                  menu->stream.slots, menu->stream.error,
+                  menu->stream.player.slots, menu->stream.player.error,
                   (unsigned long)menu->stream.reader_error_code & 0xffffffffUL);
     append_format(data,
                   "stream_decode_ms=%lu\n"
@@ -5502,11 +5509,12 @@ static void export_diagnostics(Menu *menu)
     append_format(data, "stream_full_ms=%lu\nstream_full_frames=%lu\n", menu->stream.full_ms,
                   menu->stream.full_frames);
     append_format(data, "stream_loop_holds=%lu\nstream_loop_hold_ms=%lu\nstream_spare_blocks=%lu\n",
-                  menu->stream.loop_holds, menu->stream.loop_hold_ms, menu->stream.spare_blocks);
-    for (i = 0; i < 4 && i < menu->stream.stalls; ++i)
+                  menu->stream.player.loop_holds, menu->stream.player.loop_hold_ms,
+                  menu->stream.player.spare_blocks);
+    for (i = 0; i < 4 && i < menu->stream.player.stalls; ++i)
         append_format(data, "stream_stall%d=%lu %lu %08lx %lu\n", (int)i,
-                      menu->stream.stall_log[i][0], menu->stream.stall_log[i][1],
-                      menu->stream.stall_log[i][2], menu->stream.stall_log[i][3]);
+                      menu->stream.player.stall_log[i][0], menu->stream.player.stall_log[i][1],
+                      menu->stream.player.stall_log[i][2], menu->stream.player.stall_log[i][3]);
     append_format(data, "preview_free_bytes=%lu\npreview_largest_bytes=%lu\n",
                   menu->preview_free_bytes, menu->preview_largest_bytes);
     append_format(data, "preview_vram_free_bytes=%lu\npreview_vram_largest_bytes=%lu\n",

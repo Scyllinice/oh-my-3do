@@ -19,7 +19,7 @@ stubs = r"""
 #include "menu_position.h"
 #include "usb_art.h"
 #include "cover_cache.h"
-#include "preview_audio.h"
+#include "om3dvid7_sound.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -27,7 +27,7 @@ stubs = r"""
 #define NULL_SPLASH ((void *)1)
 typedef struct { unsigned int cped_ButtonBits; } ControlPadEventData;
 typedef struct Menu {
-    Ode ode; OdeListing listing; OdePlaylist playlist; PreviewAudio preview_audio;
+    Ode ode; OdeListing listing; OdePlaylist playlist; Om3dvid7Sound preview_audio;
     MenuConfig config,saved_config; MenuPosition last_position; MenuFavorites recent;
     CoverCache cover_cache; LibraryCatalog catalog; UsbArtIndex usb_art,usb_previews;
     struct { int request,timed_out; } bus;
@@ -110,6 +110,7 @@ with tempfile.TemporaryDirectory(prefix="oh3do-startup-") as directory:
             "-Wextra",
             "-Werror",
             "-Isrc",
+            "-Iom3dvid/include",
             str(code),
             "-o",
             str(binary),

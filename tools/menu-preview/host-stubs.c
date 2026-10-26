@@ -39,7 +39,7 @@
 #include "menu_settings.h"
 #include "menu_position.h"
 #include "ui_font.h"
-#include "preview_audio.h"
+#include "om3dvid7_sound.h"
 #include "preview_stream.h"
 #include "channel_gecko_data.h"
 /* Text width measurements are counted to check the width cache. */
@@ -53,7 +53,7 @@ static int preview_font_width(const char *value, int style)
 /* Preview sound: counts starts and can be made to fail. */
 static int audio_starts, audio_restarts, audio_fail, display_count, audio_start_displays;
 static unsigned long preview_now, preview_load_delay, preview_display_delay;
-int preview_audio_start(PreviewAudio *a, unsigned char *p, unsigned long n, unsigned long rate)
+int om3dvid7_sound_start(Om3dvid7Sound *a, unsigned char *p, unsigned long n, unsigned long rate)
 {
     (void)p;
     (void)n;
@@ -63,16 +63,17 @@ int preview_audio_start(PreviewAudio *a, unsigned char *p, unsigned long n, unsi
     a->status = audio_fail ? -1 : 1;
     return audio_fail ? -1 : 0;
 }
-int preview_audio_restart(PreviewAudio *a)
+int om3dvid7_sound_restart(Om3dvid7Sound *a)
 {
     ++audio_restarts;
     return a->status == 1 ? 0 : -1;
 }
-void preview_audio_close(PreviewAudio *a)
+void om3dvid7_sound_close(Om3dvid7Sound *a)
 {
     a->status = 0;
 }
-int preview_audio_start_ring(PreviewAudio *a, unsigned char *p, unsigned long n, unsigned long rate)
+int om3dvid7_sound_start_ring(Om3dvid7Sound *a, unsigned char *p, unsigned long n,
+                              unsigned long rate)
 {
     (void)p;
     (void)n;
@@ -80,10 +81,24 @@ int preview_audio_start_ring(PreviewAudio *a, unsigned char *p, unsigned long n,
     a->status = 1;
     return 0;
 }
-void preview_audio_pause(PreviewAudio *a, int pause)
+void om3dvid7_sound_pause(Om3dvid7Sound *a, int pause)
 {
     (void)a;
     (void)pause;
+}
+/* The player's sound callbacks, as om3dvid7_sound.c defines them. */
+int om3dvid7_sound_player_start(void *sound, signed char *ring, unsigned long samples,
+                                unsigned long rate)
+{
+    return om3dvid7_sound_start_ring((Om3dvid7Sound *)sound, (unsigned char *)ring, samples, rate);
+}
+void om3dvid7_sound_player_pause(void *sound, int pause)
+{
+    om3dvid7_sound_pause((Om3dvid7Sound *)sound, pause);
+}
+void om3dvid7_sound_player_stop(void *sound)
+{
+    om3dvid7_sound_close((Om3dvid7Sound *)sound);
 }
 #define UI_PREVIEW_TEXT(s) printf("L %s\n", s)
 /* Glass: screen*keep/8 + color*(8-keep)/8, placed exactly as rectangle() places fills. */

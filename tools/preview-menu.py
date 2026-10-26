@@ -206,7 +206,7 @@ def generated_program():
 
 
 # The OM3DVID7 preview codec library.
-LIBRARY_SOURCES = ["om3dvid/src/om3dvid7_decoder.c"]
+LIBRARY_SOURCES = ["om3dvid/src/om3dvid7_decoder.c", "om3dvid/src/om3dvid7_player.c"]
 
 
 def compile_program(code, binary):
