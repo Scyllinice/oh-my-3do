@@ -4784,12 +4784,74 @@ static int queue_file_action(void *context, const MenuEntry *entry, const char *
     Menu *menu = (Menu *)context;
     return ode_playlist_add(&menu->ode, &menu->group, entry, directory);
 }
+
+/* The same for discs found together in one folder (library_visit_folder):
+ * the first one, once every disc is known to be there, also clears the
+ * ODE's queue. */
+typedef struct FolderQueue {
+    Menu *menu;
+    int cleared; /* the ODE's queue was (or was being) cleared */
+} FolderQueue;
+static int queue_folder_action(void *context, const MenuEntry *entry, const char *directory)
+{
+    FolderQueue *queue = (FolderQueue *)context;
+    Menu *menu = queue->menu;
+    if (!queue->cleared) {
+        queue->cleared = 1;
+        if (ode_playlist_clear(&menu->ode, &menu->group) < 0)
+            return -1;
+    }
+    return ode_playlist_add(&menu->ode, &menu->group, entry, directory);
+}
+
+/*
+ * Sends a queue whose discs are all inside `folder`, a folder in the current
+ * one (a folder acting as its game): enters it once to find every disc and
+ * queue them, instead of two trips to the top of the drive per disc. Returns
+ * 0, or -1 with menu->ode.error saying why; the queue is marked
+ * unsynchronized if it failed after the ODE's queue was cleared.
+ */
+static int apply_folder_queue(Menu *menu, const MenuEntry *folder, const char *directory)
+{
+    char *folder_path = (char *)malloc(FOLDER_PATH_BYTES);
+    FolderQueue queue;
+    int result;
+    if (!folder_path) {
+        menu->ode.error = "Not enough queue memory";
+        return -1;
+    }
+    if (strlen(directory) + strlen(folder->name) + 2 > FOLDER_PATH_BYTES) {
+        free(folder_path);
+        menu->ode.error = "Folder path too long for disc queue";
+        return -1;
+    }
+    strcpy(folder_path, directory);
+    strcat(folder_path, "/");
+    strcat(folder_path, folder->name);
+
+    ode_playlist_dispose(&menu->group);
+    menu->message = "Applying disc queue...";
+    draw(menu);
+    queue.menu = menu;
+    queue.cleared = 0;
+    result = library_visit_folder(&menu->ode, &menu->listing, folder, folder_workaround(menu),
+                                  folder_path, menu->playlist.paths, menu->playlist.count,
+                                  queue_folder_action, &queue);
+    if (result == 0)
+        menu->playlist.dirty = 0;
+    else if (queue.cleared)
+        menu->playlist.synchronized = 0; /* the ODE's queue is unknown now */
+    ode_playlist_dispose(&menu->group);
+    free(folder_path);
+    return result ? -1 : 0;
+}
 /*
  * Sends the menu's queue to the ODE, replacing the ODE's own. The ODE
  * queues by directory entry, so each queued path is found first: from the
- * current folder's listing when every disc is in it (the usual case: one
- * re-read, no trips to the root), otherwise by walking to each one
- * (library_visit). Nothing is sent until every path is found. Returns 0, or
+ * current folder's listing when every disc is in it (one re-read, no trips
+ * to the root), from one visit to a folder in it when every disc is there
+ * (a folder acting as its game: apply_folder_queue), otherwise by walking to
+ * each one (library_visit). Nothing is sent until every path is found. Returns 0, or
  * -1 with menu->ode.error saying why; if it failed partway through sending,
  * the queue is marked unsynchronized, as the ODE's queue is then unknown.
  */
@@ -4809,6 +4871,18 @@ static int apply_queue(Menu *menu)
     if (!directory) {
         menu->ode.error = "Not enough queue memory";
         return -1;
+    }
+
+    /* Discs all in one folder here (a folder acting as its game) are found
+     * and queued in a single visit to that folder. */
+    if (!directory_path(menu, directory, FOLDER_PATH_BYTES)) {
+        const MenuEntry *folder = library_files_folder(&menu->listing, directory,
+                                                       menu->playlist.paths, menu->playlist.count);
+        if (folder) {
+            result = apply_folder_queue(menu, folder, directory);
+            free(directory);
+            return result;
+        }
     }
 
     /* Check every queued disc is still there. */

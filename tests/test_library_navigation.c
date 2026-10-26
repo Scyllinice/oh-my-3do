@@ -19,7 +19,11 @@ static const Node tree[] = {{-1, 1, 0, "root"},
                             {3, 0, 0x01000002UL, "D (Disc 1).iso"},
                             {2, 0, 0x02000001UL, "Other.iso"},
                             {1, 1, 0x01000002UL, ".ohmy3do"},
-                            {1, 0, 0x01000003UL, "boot.iso"}};
+                            {1, 0, 0x01000003UL, "boot.iso"},
+                            /* Listed only with second_disc: a two-disc set in Games. */
+                            {3, 0, 0x01000003UL, "D (Disc 2).iso"}};
+#define SECOND_DISC_NODE 9
+static int second_disc;
 static int cancel_after, scan_ticks;
 static int scan_progress(void *context, size_t games)
 {
@@ -60,7 +64,7 @@ int ode_read_directory(Ode *ode, OdeListing *l)
     l->has_parent = current != 0;
     l->parent_id = (tree[current].id & 0xff000000UL) | 0xffffffUL;
     for (i = 1; i < sizeof(tree) / sizeof(tree[0]); ++i)
-        if (tree[i].parent == current) {
+        if (tree[i].parent == current && (i != SECOND_DISC_NODE || second_disc)) {
             MenuEntry *e = (MenuEntry *)malloc(sizeof(*e));
             assert(e);
             e->name = tree[i].name;
@@ -114,6 +118,29 @@ static int action(void *context, const MenuEntry *e, const char *directory)
     ++callback_count;
     assert(current == 2 && !strcmp(e->name, "Other.iso") && !strcmp(directory, "/Storage/USB B"));
     return 0;
+}
+/* library_visit_folder's action: records the discs it is given, which must
+ * be found inside Games. */
+static const char *visited[4];
+static int visited_count, fail_visit;
+static int folder_action(void *context, const MenuEntry *e, const char *directory)
+{
+    (void)context;
+    assert(current == 3 && !strcmp(directory, "/Storage/USB A/Games"));
+    if (fail_visit && visited_count + 1 == fail_visit)
+        return -7;
+    visited[visited_count++] = e->name;
+    return 0;
+}
+static void setup_at(Ode *ode, OdeListing *snapshot, int folder)
+{
+    memset(ode, 0, sizeof(*ode));
+    calls = fail_at = callback_count = mutate_on_callback = 0;
+    visited_count = fail_visit = 0;
+    current = folder;
+    ode_listing_init(snapshot);
+    assert(!ode_read_directory(ode, snapshot));
+    calls = 0;
 }
 static void setup(Ode *ode, OdeListing *snapshot)
 {
@@ -270,6 +297,71 @@ int main(void)
                1);
         assert(current == 4 && !ode.navigation_failed && catalog.count == 2);
         ode_listing_free(&snapshot);
+    }
+    /* Discs in one folder of the open one (a folder acting as its game). */
+    {
+        static char d1[] = "/Storage/USB A/Games/D (Disc 1).iso",
+                    d2[] = "/Storage/USB A/Games/D (Disc 2).iso",
+                    loose[] = "/Storage/USB A/boot.iso",
+                    deeper[] = "/Storage/USB A/Games/Nested/X.iso",
+                    missing[] = "/Storage/USB A/Games/D (Disc 3).iso",
+                    other[] = "/Storage/USB A/Nowhere/D (Disc 1).iso";
+        char *set[] = {d1, d2}, *mixed[] = {d1, loose}, *nested[] = {deeper},
+             *gap[] = {d1, missing}, *elsewhere[] = {other};
+        const MenuEntry *folder;
+        int visit_calls, old_calls;
+        second_disc = 1;
+        setup_at(&ode, &snapshot, 1); /* the open folder is USB A */
+        folder = library_files_folder(&snapshot, "/Storage/USB A", set, 2);
+        assert(folder && !strcmp(folder->name, "Games"));
+        assert(!library_files_folder(&snapshot, "/Storage/USB A", mixed, 2));
+        assert(!library_files_folder(&snapshot, "/Storage/USB A", nested, 1));
+        assert(!library_files_folder(&snapshot, "/Storage/USB A", elsewhere, 1));
+        assert(!library_files_folder(&snapshot, "/Storage/USB A/Games", set, 2));
+        assert(!library_files_folder(&snapshot, "/Storage/USB A", set, 0));
+
+        /* Both discs, in order, from one visit; then back in USB A. */
+        assert(!library_visit_folder(&ode, &snapshot, folder, 1, "/Storage/USB A/Games", set, 2,
+                                     folder_action, NULL));
+        assert(current == 1 && visited_count == 2 && !ode.navigation_failed);
+        assert(!strcmp(visited[0], "D (Disc 1).iso") && !strcmp(visited[1], "D (Disc 2).iso"));
+        visit_calls = calls;
+
+        /* The old way: library_visit checks each disc, then visits it again
+         * to queue it. */
+        calls = 0;
+        for (i = 0; i < 4; ++i)
+            assert(!library_visit(&ode, route, 1, &snapshot, 1, set[i % 2], NULL, NULL));
+        old_calls = calls;
+        printf("Queueing a two-disc folder: %d USB steps, down from %d\n", visit_calls, old_calls);
+        assert(visit_calls * 2 < old_calls);
+
+        /* A missing disc: no action at all, and back in USB A. */
+        setup_at(&ode, &snapshot, 1);
+        assert(library_visit_folder(&ode, &snapshot, folder, 1, "/Storage/USB A/Games", gap, 2,
+                                    folder_action, NULL) == -1);
+        assert(current == 1 && !visited_count && !ode.navigation_failed);
+
+        /* An action's failure stops the rest and is passed back. */
+        setup_at(&ode, &snapshot, 1);
+        folder = library_files_folder(&snapshot, "/Storage/USB A", set, 2);
+        fail_visit = 2;
+        assert(library_visit_folder(&ode, &snapshot, folder, 1, "/Storage/USB A/Games", set, 2,
+                                    folder_action, NULL) == -7);
+        assert(current == 1 && visited_count == 1 && !ode.navigation_failed);
+
+        /* Every USB step failing in turn leaves navigation failed. */
+        for (i = 1; i <= visit_calls; ++i) {
+            ode_listing_free(&snapshot);
+            setup_at(&ode, &snapshot, 1);
+            folder = library_files_folder(&snapshot, "/Storage/USB A", set, 2);
+            fail_at = i;
+            assert(library_visit_folder(&ode, &snapshot, folder, 1, "/Storage/USB A/Games", set, 2,
+                                        folder_action, NULL) == -2);
+            assert(ode.navigation_failed);
+        }
+        ode_listing_free(&snapshot);
+        second_disc = 0;
     }
     bulk_mode = 1;
     cancel_after = 0;

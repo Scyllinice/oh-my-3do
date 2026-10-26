@@ -75,6 +75,31 @@ int library_select_directory(Ode *ode, const ArtRouteStep *route, unsigned int d
 int library_current_files(const OdeListing *listing, const char *directory, char *const *paths,
                           size_t count, const MenuEntry **entries);
 
+/*
+ * The folder in the open folder's `listing` that holds all of `paths` (full
+ * paths of files), when they are all directly inside one subfolder of
+ * `directory` (the open folder's full path): a folder acting as its game,
+ * say. Returns that folder's entry, or NULL if they are anywhere else.
+ */
+const MenuEntry *library_files_folder(const OdeListing *listing, const char *directory,
+                                      char *const *paths, size_t count);
+
+/*
+ * Enters `folder` (an entry of the open folder, whose listing is `current`)
+ * once, finds every file of `paths` in it, then calls `action` on each in
+ * order, with `folder_path` (the folder's full path) as the directory, and
+ * returns to the open folder and checks it. No action runs unless every file
+ * is there. This is library_visit for files in one subfolder, without a trip
+ * to the top of the drive and back for each file.
+ *
+ * Returns 0, the first nonzero result of `action`, -1 if a file is missing
+ * or the folder cannot be entered, or -2 if the open folder could not be
+ * restored.
+ */
+int library_visit_folder(Ode *ode, const OdeListing *current, const MenuEntry *folder,
+                         int workaround, const char *folder_path, char *const *paths, size_t count,
+                         LibraryFileAction action, void *context);
+
 /* Limits on the Find list: entries, and total bytes of path text. */
 #define LIBRARY_CATALOG_MAX   2048
 #define LIBRARY_CATALOG_BYTES (128UL * 1024UL)

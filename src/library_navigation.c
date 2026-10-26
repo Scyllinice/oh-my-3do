@@ -591,6 +591,74 @@ done:
     return result;
 }
 
+int library_visit_folder(Ode *ode, const OdeListing *current, const MenuEntry *folder,
+                         int workaround, const char *folder_path, char *const *paths, size_t count,
+                         LibraryFileAction action, void *context)
+{
+    OdeListing listing;
+    const MenuEntry **entries;
+    OdeProgress progress = ode->progress;
+    unsigned long way_back;
+    size_t i, j;
+    int result = -1;
+
+    if (ode->navigation_failed || !count)
+        return -1;
+    entries = (const MenuEntry **)malloc(count * sizeof(*entries));
+    if (!entries) {
+        ode->error = "Not enough navigation memory";
+        return -1;
+    }
+    ode_listing_init(&listing);
+    ode->progress = NULL;
+
+    if (ode_enter_directory(ode, current, folder, workaround) < 0) {
+        if (ode->navigation_failed)
+            goto fatal;
+        goto done; /* refused before any command: still in the open folder */
+    }
+    if (ode_read_directory(ode, &listing) < 0)
+        goto fatal;
+    way_back = listing.has_parent ? listing.parent_id : parent_of(folder->toc_id);
+
+    /* Find every file before acting on any. */
+    for (i = 0; i < count; ++i) {
+        const char *name = strrchr(paths[i], '/') + 1;
+        for (j = 0; j < listing.count; ++j) {
+            if (!listing.entries[j]->is_directory &&
+                !menu_path_compare(listing.entries[j]->name, name))
+                break;
+        }
+        if (j == listing.count) {
+            ode->error = "Queued/favorite path is missing";
+            goto restore;
+        }
+        entries[i] = listing.entries[j];
+    }
+    result = 0;
+    for (i = 0; i < count && !result; ++i)
+        result = action ? action(context, entries[i], folder_path) : 0;
+
+restore:
+    /* Back to the open folder, and check it really is. */
+    ode_listing_free(&listing);
+    if (ode->navigation_failed || ode_change_directory(ode, way_back) < 0 ||
+        ode_read_directory(ode, &listing) < 0 || !same_listing(&listing, current))
+        goto fatal;
+    goto done;
+
+fatal:
+    ode->navigation_failed = 1;
+    ode->error = "Library folder restore failed";
+    result = -2;
+
+done:
+    ode_listing_free(&listing);
+    free(entries);
+    ode->progress = progress;
+    return result;
+}
+
 int library_current_files(const OdeListing *listing, const char *directory, char *const *paths,
                           size_t count, const MenuEntry **entries)
 {
@@ -621,4 +689,42 @@ int library_current_files(const OdeListing *listing, const char *directory, char
         entries[i] = listing->entries[j];
     }
     return 1;
+}
+
+const MenuEntry *library_files_folder(const OdeListing *listing, const char *directory,
+                                      char *const *paths, size_t count)
+{
+    size_t directory_length = strlen(directory), folder_length, i;
+    const char *folder_name, *last_slash;
+
+    if (!count)
+        return NULL;
+    /* The first path names the folder: directory/FOLDER/file. */
+    last_slash = strrchr(paths[0], '/');
+    if (!last_slash)
+        return NULL;
+    folder_length = (size_t)(last_slash - paths[0]);
+    if (folder_length <= directory_length + 1 || strncmp(paths[0], directory, directory_length) ||
+        paths[0][directory_length] != '/')
+        return NULL;
+    folder_name = paths[0] + directory_length + 1;
+    if (memchr(folder_name, '/', folder_length - directory_length - 1))
+        return NULL; /* deeper than one folder down */
+
+    /* Every path must be in that same folder. */
+    for (i = 1; i < count; ++i) {
+        last_slash = strrchr(paths[i], '/');
+        if (!last_slash || (size_t)(last_slash - paths[i]) != folder_length ||
+            strncmp(paths[i], paths[0], folder_length))
+            return NULL;
+    }
+
+    /* And the folder must be in the open folder. */
+    for (i = 0; i < listing->count; ++i) {
+        const MenuEntry *entry = listing->entries[i];
+        if (entry->is_directory && strlen(entry->name) == folder_length - directory_length - 1 &&
+            !strncmp(entry->name, folder_name, folder_length - directory_length - 1))
+            return entry;
+    }
+    return NULL;
 }
