@@ -1,8 +1,28 @@
+// The desktop app's interface.
+//
+// How it works:
+//
+// - `state` holds everything shown: the current page, the library's
+//   records, the selection, open reviews and dialogs, and the preferences.
+// - `render()` redraws the current page from `state` by building its HTML
+//   (each page has a `...View()` function returning a string). Dialogs are
+//   drawn the same way with `dialog()`.
+// - Buttons carry a `data-action` name. One click listener looks the name up
+//   in `handlers` and runs it, so each button's behavior is in one place.
+// - `call(action, args)` asks the native backend (desktop/shell/src/bridge.rs)
+//   to do something. Only one call runs at a time; its progress shows in the
+//   status bar or in the open dialog.
+//
+// Small pure helpers (grouping discs into games, filtering, formatting) are
+// in model.mjs; keyboard focus and screen reader support in
+// accessibility.mjs; dialog progress panels in dialog-progress.mjs.
+
 import {
   categories,
   groupGames,
   visibleGames,
   selectedDiscs,
+  escapeHtml,
   escapeHtml as e,
   formatBytes as bytes,
   slotMatches,
@@ -20,22 +40,34 @@ import {
   trapDialogTab,
   textScale,
 } from './accessibility.mjs';
+
 const dialogProgress = new DialogProgress(document);
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
-const $ = (q) => document.querySelector(q);
+
+/** The first element matching a CSS selector. */
+const $ = (selector) => document.querySelector(selector);
+
+/** Everything the interface shows. */
 const state = {
+  // The page shown (a key of `titles`).
   page: 'library',
   prefs: {},
   version: '1.0.0',
+  // The library's (or drive's) disc records, and the same discs grouped
+  // into games (a multi-disc game is one group).
   records: [],
   groups: [],
+  // The keys of the selected games.
   selected: new Set(),
   libraryRoot: null,
+  // The drive being browsed, or '' for the PC library.
   browseRoot: '',
+  // Each saved drive's connection status, by path.
   driveStatus: {},
   browser: null,
   browserError: '',
+  // Recovery copies found for cleanup, and those chosen.
   cleanup: null,
   cleanupSelected: new Set(),
   filter: {
@@ -46,17 +78,23 @@ const state = {
     information: '',
     searchScope: 'title',
   },
+  // Files and folders chosen for import, and the scanned import plan.
   paths: [],
   plan: null,
+  // The copy review, and the drive readiness check.
   copy: null,
   readiness: null,
+  // The open save backup, the save shown, and whether its hex is edited.
   backup: null,
   entry: null,
   entryIndex: null,
   hexDirty: false,
   slots: [],
   slotQuery: '',
+  // Console settings being edited.
   config: null,
+  // The last update check, a downloaded update waiting for exit, and the
+  // last update's outcome.
   updates: null,
   pendingUpdate: null,
   updateReport: null,
@@ -64,14 +102,20 @@ const state = {
   versionTarget: '',
   noticeDismissed: '',
   reportDismissed: false,
+  // The cheat database editor's text, and whether it has unsaved edits.
   cheats: '',
   cheatsDirty: false,
+  // Activity messages, newest last.
   logs: [],
   busy: false,
+  // The game a Shift+click selection range starts from.
   anchor: null,
+  // Cover thumbnails already loaded, by name.
   coverCache: new Map(),
   mediaDisc: '',
 };
+
+/** Each page's icon in the sidebar. */
 const icons = {
   library: '▦',
   import: '＋',
@@ -81,6 +125,8 @@ const icons = {
   settings: '⚙',
   updates: '↻',
 };
+
+/** Each page's title. */
 const titles = {
   library: 'Library',
   import: 'Add discs',
@@ -90,22 +136,46 @@ const titles = {
   settings: 'Settings & tools',
   updates: 'Updates',
 };
+
+// ---- Small HTML builders ----
+
+/** A button that runs the handler named `id` (see `handlers`). */
 const action = (id, label, cls = '', extra = '') =>
   `<button data-action="${id}" class="${cls}" ${extra}>${label}</button>`;
-const pathLabel = (value) => e(displayPath(value));
-const option = (v, label, selected) =>
-  `<option value="${e(v)}" ${selected ? 'selected' : ''}>${e(label)}</option>`;
+
+/** A path as shown to the person, escaped for HTML. */
+const pathLabel = (value) => escapeHtml(displayPath(value));
+
+const option = (value, label, selected) =>
+  `<option value="${escapeHtml(value)}" ${selected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+
+/** A labeled text (or other `type`) input. */
 const field = (label, id, value, type = 'text') =>
-  `<label class="field">${e(label)}<input id="${id}" type="${type}" value="${e(value)}"></label>`;
+  `<label class="field">${escapeHtml(label)}<input id="${id}" type="${type}" value="${escapeHtml(value)}"></label>`;
+
 const checkbox = (id, label, checked) =>
-  `<label><input id="${id}" type="checkbox" ${checked ? 'checked' : ''}>${e(label)}</label>`;
+  `<label><input id="${id}" type="checkbox" ${checked ? 'checked' : ''}>${escapeHtml(label)}</label>`;
+
+/** A page's title and description, with its buttons on the right. */
 const heading = (title, note, actions = '') =>
-  `<div class="page-heading row spread"><div><h1 id="page-title">${e(title)}</h1><p>${e(note)}</p></div><div class="row">${actions}</div></div>`;
-const quantity = (n, unit) => `${Number(n).toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
+  [
+    '<div class="page-heading row spread">',
+    `<div><h1 id="page-title">${escapeHtml(title)}</h1><p>${escapeHtml(note)}</p></div>`,
+    `<div class="row">${actions}</div>`,
+    '</div>',
+  ].join('');
+
+/** "1 game", "1,234 games". */
+const quantity = (count, unit) =>
+  `${Number(count).toLocaleString('en-US')} ${unit}${count === 1 ? '' : 's'}`;
+
+/** The last part of a path. */
 const basename = (path) =>
   String(path || '')
     .split(/[\\/]/)
     .at(-1);
+
+/** The console settings a new drive starts with (see console_config.rs). */
 const defaults = {
   folder_workaround: 0,
   usb_covers: true,
@@ -117,6 +187,10 @@ const defaults = {
   preview_sound: true,
   hide_adult: false,
 };
+
+// ---- Status, messages and backend calls ----
+
+/** Shows a message in the status bar (and the open dialog's progress). */
 function setStatus(message) {
   dialogProgress.update(message);
   const status = $('#status-message');
@@ -125,32 +199,43 @@ function setStatus(message) {
     status.title = message;
   }
 }
+
+/**
+ * Shows a short message that disappears by itself (errors stay longer),
+ * and announces it to screen readers. With a dialog open it appears inside
+ * the dialog; if the dialog's progress panel already shows the result, the
+ * panel shows the message instead.
+ */
 function toast(message, error = false) {
+  const text = String(message);
   announce(message, error);
   document.querySelectorAll('.toast,.dialog-toast').forEach((node) => node.remove());
   const front = [...document.querySelectorAll('dialog[open]')].at(-1);
-  const n = document.createElement('div');
-  n.className = `${front ? 'dialog-toast' : 'toast'}${error ? ' error' : ''}`;
-  n.textContent = String(message);
+  const node = document.createElement('div');
+  node.className = `${front ? 'dialog-toast' : 'toast'}${error ? ' error' : ''}`;
+  node.textContent = text;
+
   const panel = front?.querySelector('.dialog-progress');
   if (panel?.dataset.state === 'complete') {
-    panel.querySelector('[role="status"]').textContent = String(message);
+    panel.querySelector('[role="status"]').textContent = text;
     if (error) panel.dataset.state = 'error';
-    setStatus(String(message));
+    setStatus(text);
     return;
   }
-  if (
-    panel?.dataset.state === 'error' &&
-    panel.querySelector('[role="status"]').textContent === String(message)
-  ) {
-    setStatus(String(message));
+  const panelShowsError =
+    panel?.dataset.state === 'error' && panel.querySelector('[role="status"]').textContent === text;
+  if (panelShowsError) {
+    setStatus(text);
     return;
   }
-  if (front) front.querySelector('.dialog-head').after(n);
-  else document.body.append(n);
-  setTimeout(() => n.remove(), error ? 15000 : 5500);
-  setStatus(String(message));
+
+  if (front) front.querySelector('.dialog-head').after(node);
+  else document.body.append(node);
+  setTimeout(() => node.remove(), error ? 15000 : 5500);
+  setStatus(text);
 }
+
+/** What the status bar says while each backend action runs, and after. */
 const operationMessages = {
   titles_remove_review: ['Reviewing selected title files…', 'Title removal ready to review.'],
   titles_remove: ['Removing selected titles…', 'Selected titles removed.'],
@@ -200,22 +285,36 @@ const operationMessages = {
   video_tools: ['Downloading and verifying video tools…', 'Video tools installed.'],
   support_export: ['Writing the support report…', 'Support report exported.'],
 };
+
+/** Backend actions too quick or quiet to show progress for. */
+const quietActions = ['pick', 'preferences', 'init', 'ready', 'quit', 'drive_status'];
+
+/** Adds a line to Activity (keeping the last 500). */
 function recordActivity(message) {
   state.logs.push(String(message));
   if (state.logs.length > 500) state.logs.shift();
 }
+
+/** Whether an error means the person canceled the operation. */
 function wasCanceled(error) {
   return /\boperation cancel(?:led|ed)\b/i.test(String(error));
 }
+
+/**
+ * Asks the backend to run `action` with `args` and returns its result.
+ * Shows progress while it runs and the outcome after (also in Activity).
+ * Errors are thrown on to the caller.
+ */
 async function call(action, args = {}) {
   const messages = operationMessages[action];
-  const job = ['pick', 'preferences', 'init', 'ready', 'quit', 'drive_status'].includes(action)
+  const job = quietActions.includes(action)
     ? null
     : dialogProgress.start(messages?.[0] || 'Working…');
   if (messages && !state.busy) {
     recordActivity(messages[0]);
     setStatus(messages[0]);
   } else if (job && !messages) setStatus('Working…');
+
   try {
     const result = await invoke('request', { action, args, requestId: job?.id || null });
     dialogProgress.finish(job, messages?.[1] || 'Operation complete.');
@@ -225,40 +324,54 @@ async function call(action, args = {}) {
     } else if (job) setStatus('Ready');
     return result;
   } catch (error) {
-    dialogProgress.finish(job, String(error), wasCanceled(error) ? 'canceled' : 'error');
+    const canceled = wasCanceled(error);
+    dialogProgress.finish(job, String(error), canceled ? 'canceled' : 'error');
     recordActivity(String(error));
     if (!state.busy)
       setStatus(
-        wasCanceled(error)
+        canceled
           ? 'Operation canceled.'
           : 'Could not complete the operation. Open Activity for details.',
       );
     throw error;
   }
 }
-async function perform(fn) {
+
+/** Runs `work`, showing any error as a message instead of throwing it. */
+async function perform(work) {
   try {
-    return await fn();
-  } catch (err) {
-    toast(wasCanceled(err) ? 'Operation canceled.' : err, !wasCanceled(err));
+    return await work();
+  } catch (error) {
+    const canceled = wasCanceled(error);
+    toast(canceled ? 'Operation canceled.' : error, !canceled);
     return null;
   }
 }
+
+/** Shows a file or folder chooser (`kind`: see `pick` in bridge.rs). */
 async function pick(kind, start = '') {
   return call('pick', { kind, start });
 }
+
+// ---- Theme and text size ----
+
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+
+/** Applies the chosen theme (or the system's) and text size. */
 function applyTheme() {
   const mode = state.prefs.theme || 'system';
-  document.documentElement.dataset.textScale = String(textScale(state.prefs.text_scale));
-  document.documentElement.style.fontSize = textScale(state.prefs.text_scale) + '%';
+  const scale = textScale(state.prefs.text_scale);
+  document.documentElement.dataset.textScale = String(scale);
+  document.documentElement.style.fontSize = scale + '%';
   document.documentElement.dataset.theme =
     mode === 'system' ? (systemTheme.matches ? 'dark' : 'light') : mode;
   if ($('#content')) resizeSelectionBar();
 }
+
 systemTheme.addEventListener('change', () => {
   if (!state.prefs.theme || state.prefs.theme === 'system') applyTheme();
 });
+
 const narrowLayout = window.matchMedia('(max-width:760px)');
 narrowLayout.addEventListener('change', () => {
   if ($('#content')) {
@@ -266,59 +379,106 @@ narrowLayout.addEventListener('change', () => {
     loadCovers();
   }
 });
+
+// ---- Preferences ----
+
+/** Saves the preferences. */
 async function preferences() {
   rememberRoots();
   await call('preferences', state.prefs);
   updateLocation();
 }
+
+/** Saves developer update settings, which makes the last update check stale. */
 async function developerPreferences() {
   await preferences();
   state.updates = null;
   state.noticeDismissed = '';
   render();
 }
+
 function developerSettingsView() {
-  return `<div class="card"><h3>Developer updates</h3>${checkbox('pref-developer', 'Use local builds instead of GitHub releases', state.prefs.developer_mode)}<label class="field">Build output directory<div class="row"><input class="grow" id="developer-directory" value="${e(state.prefs.developer_updates_directory || '')}" placeholder="Choose the repository’s iso folder">${action('developer-folder', 'Browse…', '', 'aria-label="Choose developer build folder"')}</div></label><p class="note">Builds write update manifests into the iso folder automatically. Local updates work offline and detect rebuilt desktop apps even at the same version. Check for updates after building. Missing local builds never fall back to GitHub.</p></div>`;
+  const directory = escapeHtml(state.prefs.developer_updates_directory || '');
+  return [
+    '<div class="card"><h3>Developer updates</h3>',
+    checkbox(
+      'pref-developer',
+      'Use local builds instead of GitHub releases',
+      state.prefs.developer_mode,
+    ),
+    '<label class="field">Build output directory<div class="row">',
+    `<input class="grow" id="developer-directory" value="${directory}" placeholder="Choose the repository’s iso folder">`,
+    action('developer-folder', 'Browse…', '', 'aria-label="Choose developer build folder"'),
+    '</div></label>',
+    '<p class="note">Builds write update manifests into the iso folder automatically. ',
+    'Local updates work offline and detect rebuilt desktop apps even at the same version. ',
+    'Check for updates after building. Missing local builds never fall back to GitHub.</p>',
+    '</div>',
+  ].join('');
 }
-let viewTimer = null,
-  viewDirty = false,
-  viewRevision = 0;
+
+// Each library's filters and selection are saved (see rememberLibraryView),
+// a moment after the last change, without blocking the interface.
+let viewTimer = null;
+let viewDirty = false;
+let viewRevision = 0;
+
+/** How long to wait after a change before saving the library view. */
+const VIEW_SAVE_DELAY = 400;
+
+/** Remembers the current library's filters and selection, saving soon. */
 function rememberLibraryView() {
   if (!state.libraryRoot) return;
   state.prefs.library_views ??= {};
   const next = { ...state.filter, selected: [...state.selected] };
-  if (JSON.stringify(state.prefs.library_views[state.libraryRoot]) === JSON.stringify(next)) return;
+  const saved = state.prefs.library_views[state.libraryRoot];
+  if (JSON.stringify(saved) === JSON.stringify(next)) return;
+
   state.prefs.library_views[state.libraryRoot] = next;
   viewDirty = true;
   ++viewRevision;
   clearTimeout(viewTimer);
-  viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+  viewTimer = setTimeout(() => perform(flushLibraryView), VIEW_SAVE_DELAY);
 }
+
+/**
+ * Saves remembered library views now. While a backend operation runs (or
+ * the views change during the save), tries again shortly.
+ */
 async function flushLibraryView() {
   clearTimeout(viewTimer);
   if (!viewDirty) return;
+  const retrySoon = () => {
+    viewTimer = setTimeout(() => perform(flushLibraryView), VIEW_SAVE_DELAY);
+  };
   if (state.busy) {
-    viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+    retrySoon();
     return;
   }
+
   const revision = viewRevision;
   try {
     await invoke('save_library_views', { views: state.prefs.library_views });
     viewDirty = revision !== viewRevision;
-    if (viewDirty) viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+    if (viewDirty) retrySoon();
   } catch (error) {
     if (String(error).includes('Another operation')) {
-      viewTimer = setTimeout(() => perform(flushLibraryView), 400);
+      retrySoon();
       return;
     }
     throw error;
   }
 }
+
+// ---- PC libraries and drives ----
+
+/** Updates the top bar's library and drive choosers and the eject button. */
 function updateLocation() {
   const library = $('#pc-library');
   if (library) library.innerHTML = pcLibraryOptions();
   const drive = $('#usb-drive');
   if (drive) drive.innerHTML = driveOptions();
+
   const eject = $('#top-eject');
   if (eject) {
     const root = state.prefs.destination;
@@ -328,96 +488,139 @@ function updateLocation() {
     eject.title = removable ? 'Safely eject ' + displayPath(root) : '';
   }
 }
+
+/** A folder's own name (the last part of its path). */
 function rootName(path) {
   const parts = String(path)
     .replace(/[\\/]+$/, '')
     .split(/[\\/]/);
   return parts[parts.length - 1] || String(path);
 }
+
+/** The name the person gave a drive, or "USB / SD". */
 function driveName(path) {
   return state.prefs.drives?.[path]?.name || 'USB / SD';
 }
+
+/** The PC library chooser's options. */
 function pcLibraryOptions() {
+  const none = state.prefs.library ? '' : option('', 'Choose a PC library', true);
+  const libraries = (state.prefs.libraries || [])
+    .map((path) =>
+      option(path, `${rootName(path)} — ${displayPath(path)}`, path === state.prefs.library),
+    )
+    .join('');
   return (
-    (state.prefs.library ? '' : option('', 'Choose a PC library', true)) +
-    (state.prefs.libraries || [])
-      .map((path) =>
-        option(path, `${rootName(path)} — ${displayPath(path)}`, path === state.prefs.library),
-      )
-      .join('') +
+    none +
+    libraries +
     option('add', 'Add a PC library…', false) +
     option('manage', 'Manage libraries…', false)
   );
 }
+
+/** The drive chooser's options. */
 function driveOptions() {
+  const none = state.prefs.destination ? '' : option('', 'Choose a USB / SD drive', true);
+  const drives = (state.prefs.browser_drives || [])
+    .map((path) => {
+      const disconnected = state.driveStatus[path]?.connected === false;
+      const label = `${driveName(path)} — ${displayPath(path)}${disconnected ? ' (not connected)' : ''}`;
+      return option(path, label, path === state.prefs.destination);
+    })
+    .join('');
   return (
-    (state.prefs.destination ? '' : option('', 'Choose a USB / SD drive', true)) +
-    (state.prefs.browser_drives || [])
-      .map((path) =>
-        option(
-          path,
-          `${driveName(path)} — ${displayPath(path)}${state.driveStatus[path]?.connected === false ? ' (not connected)' : ''}`,
-          path === state.prefs.destination,
-        ),
-      )
-      .join('') +
-    option('add', 'Add a drive…', false) +
-    option('manage', 'Manage drives…', false)
+    none + drives + option('add', 'Add a drive…', false) + option('manage', 'Manage drives…', false)
   );
 }
+
+/** Adds the current library and drive to the saved lists. */
 function rememberRoots() {
-  const p = state.prefs;
-  p.libraries = [...(p.libraries || [])];
-  p.browser_drives = [...(p.browser_drives || [])];
-  if (p.library && !p.libraries.includes(p.library)) p.libraries.push(p.library);
-  if (p.destination && !p.browser_drives.includes(p.destination))
-    p.browser_drives.push(p.destination);
+  const prefs = state.prefs;
+  prefs.libraries = [...(prefs.libraries || [])];
+  prefs.browser_drives = [...(prefs.browser_drives || [])];
+  if (prefs.library && !prefs.libraries.includes(prefs.library))
+    prefs.libraries.push(prefs.library);
+  if (prefs.destination && !prefs.browser_drives.includes(prefs.destination))
+    prefs.browser_drives.push(prefs.destination);
 }
+
+/** Checks which saved drives are connected and can be ejected. */
 async function refreshDriveStatus() {
   const roots = state.prefs.browser_drives || [];
   const list = roots.length ? await call('drive_status', { roots }) : [];
-  state.driveStatus = Object.fromEntries(list.map((s) => [s.root, s]));
+  state.driveStatus = Object.fromEntries(list.map((status) => [status.root, status]));
   updateLocation();
 }
+
+/** The PC library / drive switch above the library. */
 function viewSwitch() {
-  return `<div class="view-switch" role="group" aria-label="Show">${action('view-pc', 'PC library', '', `aria-pressed="${!state.browseRoot}"`)}${action('view-drive', 'USB / SD drive', '', `aria-pressed="${!!state.browseRoot}"${state.prefs.destination ? '' : ' disabled'}`)}</div>`;
+  const onDrive = !!state.browseRoot;
+  const driveDisabled = state.prefs.destination ? '' : ' disabled';
+  return [
+    '<div class="view-switch" role="group" aria-label="Show">',
+    action('view-pc', 'PC library', '', `aria-pressed="${!onDrive}"`),
+    action('view-drive', 'USB / SD drive', '', `aria-pressed="${onDrive}"${driveDisabled}`),
+    '</div>',
+  ].join('');
 }
+
+/** A saved drive's status for the Manage drives list. */
+function driveStatusText(status) {
+  if (status?.connected === false) return 'not connected';
+  if (status?.removable) return 'removable';
+  if (status) return 'can’t be ejected here';
+  return '';
+}
+
+/** Shows the Manage PC libraries or Manage drives (`kind` "drives") dialog. */
 async function manageRoots(kind) {
   const drives = kind === 'drives';
   if (drives) await refreshDriveStatus();
   const roots = drives ? state.prefs.browser_drives || [] : state.prefs.libraries || [];
   const current = drives ? state.prefs.destination : state.prefs.library;
+
+  const rows = roots.map((root) => {
+    const status = state.driveStatus[root];
+    const detail = [
+      displayPath(root),
+      root === current ? 'selected' : '',
+      drives ? driveStatusText(status) : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const name = drives ? driveName(root) : rootName(root);
+    const eject =
+      drives && status?.removable
+        ? action('drive-eject', 'Safely eject', 'small', `data-root="${escapeHtml(root)}"`)
+        : '';
+    const forget = action(
+      'forget-root',
+      'Remove from list',
+      'small danger',
+      `data-kind="${kind}" data-root="${escapeHtml(root)}"`,
+    );
+    return [
+      '<div class="root-row"><div class="grow">',
+      `<strong>${escapeHtml(name)}</strong><div class="note">${escapeHtml(detail)}</div>`,
+      `</div>${eject}${forget}</div>`,
+    ].join('');
+  });
+  const list = roots.length
+    ? rows.join('')
+    : `<p>No ${drives ? 'drives' : 'PC libraries'} yet.</p>`;
+  const notice =
+    `<div class="notice">Removing ${drives ? 'a drive' : 'a library'} only takes it off this list. ` +
+    'Nothing on it is changed, and you can add it again any time.</div>';
+
   dialog(
     drives ? 'Manage drives' : 'Manage PC libraries',
-    `${
-      roots.length
-        ? roots
-            .map((root) => {
-              const s = state.driveStatus[root];
-              const detail = [
-                displayPath(root),
-                root === current ? 'selected' : '',
-                drives
-                  ? s?.connected === false
-                    ? 'not connected'
-                    : s?.removable
-                      ? 'removable'
-                      : s
-                        ? 'can’t be ejected here'
-                        : ''
-                  : '',
-              ]
-                .filter(Boolean)
-                .join(' · ');
-              return `<div class="root-row"><div class="grow"><strong>${e(drives ? driveName(root) : rootName(root))}</strong><div class="note">${e(detail)}</div></div>${drives && s?.removable ? action('drive-eject', 'Safely eject', 'small', `data-root="${e(root)}"`) : ''}${action('forget-root', 'Remove from list', 'small danger', `data-kind="${kind}" data-root="${e(root)}"`)}</div>`;
-            })
-            .join('')
-        : `<p>No ${drives ? 'drives' : 'PC libraries'} yet.</p>`
-    }<div class="notice">Removing ${drives ? 'a drive' : 'a library'} only takes it off this list. Nothing on it is changed, and you can add it again any time.</div>`,
+    list + notice,
     action('manage-add', drives ? 'Add a drive…' : 'Add a PC library…', '', `data-kind="${kind}"`) +
       action('close-dialog', 'Done', 'primary', 'data-dialog="main-dialog"'),
   );
 }
+
+/** Shows the PC library (`root` '') or a drive's games. */
 async function switchLibrary(root) {
   rememberLibraryView();
   await flushLibraryView();
@@ -427,42 +630,113 @@ async function switchLibrary(root) {
   updateLocation();
   await loadLibrary();
 }
+
+// ---- The window and its pages ----
+
+/** A sidebar button for a page. */
+function navButton(page) {
+  return `<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`;
+}
+
+/** Draws the window's frame (sidebar, top bar, status bar), then the page. */
 function shell() {
-  document.querySelector('#app').innerHTML =
-    `<a class="skip-link" href="#content">Skip to content</a><div class="shell"><nav class="sidebar" aria-label="Main navigation"><img class="brand" src="assets/logo.png" alt="Oh My 3DO">${['library', 'saves', 'media', 'drive'].map((page) => `<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`).join('')}<div class="nav-bottom"><div class="nav-divider"></div>${['updates', 'settings'].map((page) => `<button class="nav" data-page="${page}"><span aria-hidden="true">${icons[page]}</span>${titles[page]}</button>`).join('')}<div class="version">Oh My 3DO · ${e(state.version)}</div></div></nav><section class="workspace"><header class="topbar"><div class="library-location"><label for="pc-library">PC LIBRARY</label><select id="pc-library"></select></div><div class="library-location"><label for="usb-drive">USB / SD DRIVE</label><select id="usb-drive"></select>${action('drive-eject', 'Safely eject', 'small', 'id="top-eject" hidden')}</div><div class="row">${action('library-refresh', 'Refresh', 'small')}</div></header><div data-announcer="polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div><div data-announcer="alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div><div id="update-notice" hidden></div><main id="content" class="content" tabindex="-1" aria-labelledby="page-title"></main></section><footer class="statusbar"><span id="busy-dot" class="busy-dot hidden"></span><progress id="operation-meter" aria-label="Operation progress" max="1" hidden></progress><span id="operation-percent" hidden></span><span id="status-message" class="message" role="status" aria-live="polite" aria-atomic="true">Ready</span>${action('cancel', 'Cancel', 'small hidden', 'id="cancel-job"')}${action('logs', 'Activity', 'quiet small')}</footer></div>`;
+  const sidebar = [
+    '<nav class="sidebar" aria-label="Main navigation">',
+    '<img class="brand" src="assets/logo.png" alt="Oh My 3DO">',
+    ['library', 'saves', 'media', 'drive'].map(navButton).join(''),
+    '<div class="nav-bottom"><div class="nav-divider"></div>',
+    ['updates', 'settings'].map(navButton).join(''),
+    `<div class="version">Oh My 3DO · ${escapeHtml(state.version)}</div>`,
+    '</div></nav>',
+  ].join('');
+  const topbar = [
+    '<header class="topbar">',
+    '<div class="library-location"><label for="pc-library">PC LIBRARY</label><select id="pc-library"></select></div>',
+    '<div class="library-location"><label for="usb-drive">USB / SD DRIVE</label><select id="usb-drive"></select>',
+    action('drive-eject', 'Safely eject', 'small', 'id="top-eject" hidden'),
+    '</div>',
+    `<div class="row">${action('library-refresh', 'Refresh', 'small')}</div>`,
+    '</header>',
+  ].join('');
+  // Hidden regions that screen readers announce (see accessibility.mjs).
+  const announcers = [
+    '<div data-announcer="polite" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>',
+    '<div data-announcer="alert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>',
+  ].join('');
+  const statusbar = [
+    '<footer class="statusbar">',
+    '<span id="busy-dot" class="busy-dot hidden"></span>',
+    '<progress id="operation-meter" aria-label="Operation progress" max="1" hidden></progress>',
+    '<span id="operation-percent" hidden></span>',
+    '<span id="status-message" class="message" role="status" aria-live="polite" aria-atomic="true">Ready</span>',
+    action('cancel', 'Cancel', 'small hidden', 'id="cancel-job"'),
+    action('logs', 'Activity', 'quiet small'),
+    '</footer>',
+  ].join('');
+
+  document.querySelector('#app').innerHTML = [
+    '<a class="skip-link" href="#content">Skip to content</a>',
+    '<div class="shell">',
+    sidebar,
+    '<section class="workspace">',
+    topbar,
+    announcers,
+    '<div id="update-notice" hidden></div>',
+    '<main id="content" class="content" tabindex="-1" aria-labelledby="page-title"></main>',
+    '</section>',
+    statusbar,
+    '</div>',
+  ].join('');
   updateLocation();
   render();
 }
+
+/** Each page's view function. */
+const pageViews = {
+  library: () => libraryView(),
+  import: () => importView(),
+  saves: () => savesView(),
+  media: () => mediaView(),
+  drive: () => driveView(),
+  settings: () => settingsView(),
+  updates: () => updatesView(),
+};
+
+/**
+ * Redraws the current page. Keeps keyboard focus where it was if that
+ * element still exists; on a new page, focuses its heading.
+ */
 function render() {
-  const content = $('#content'),
-    focus = captureFocus(content),
-    changed = state.renderedPage !== state.page;
+  const content = $('#content');
+  const focus = captureFocus(content);
+  const pageChanged = state.renderedPage !== state.page;
   updateLocation();
   renderUpdateNotice();
-  document.querySelectorAll('[data-page]').forEach((n) => {
-    const current = n.dataset.page === (state.page === 'import' ? 'library' : state.page);
-    n.classList.toggle('active', current);
-    if (current) n.setAttribute('aria-current', 'page');
-    else n.removeAttribute('aria-current');
+
+  // The Add discs page belongs to the Library in the sidebar.
+  const navPage = state.page === 'import' ? 'library' : state.page;
+  document.querySelectorAll('[data-page]').forEach((button) => {
+    const current = button.dataset.page === navPage;
+    button.classList.toggle('active', current);
+    if (current) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
-  content.innerHTML = (
-    {
-      library: libraryView,
-      import: importView,
-      saves: savesView,
-      media: mediaView,
-      drive: driveView,
-      settings: settingsView,
-      updates: updatesView,
-    }[state.page] || libraryView
-  )();
+
+  content.innerHTML = (pageViews[state.page] || pageViews.library)();
   loadCovers();
   resizeSelectionBar();
-  if (changed || (focus && !restoreFocus(focus, content))) focusHeading(content);
+  if (pageChanged || (focus && !restoreFocus(focus, content))) focusHeading(content);
   state.renderedPage = state.page;
 }
+
+/** A page's placeholder when it has nothing to show yet. */
 function empty(title, note, buttons = '') {
-  return `<div class="empty"><div class="empty-mark">◉</div><h2>${e(title)}</h2><p>${e(note)}</p><div class="row empty-actions">${buttons}</div></div>`;
+  return [
+    '<div class="empty"><div class="empty-mark">◉</div>',
+    `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(note)}</p>`,
+    `<div class="row empty-actions">${buttons}</div>`,
+    '</div>',
+  ].join('');
 }
 function selectionButtonsView() {
   const count = state.selected.size;

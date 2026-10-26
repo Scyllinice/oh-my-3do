@@ -21,6 +21,7 @@ function functionSource(name) {
 function view(name, context = {}) {
   return runInNewContext(`${functionSource(name)}; ${name}`, {
     e,
+    escapeHtml: e,
     bytes,
     pathLabel: (p) => e(displayPath(p)),
     action: (id, label, cls = '', extra = '') =>
