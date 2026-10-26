@@ -738,119 +738,266 @@ function empty(title, note, buttons = '') {
     '</div>',
   ].join('');
 }
+// ---- The library page ----
+
+/** The buttons for the selected games (in the selection bar). */
 function selectionButtonsView() {
   const count = state.selected.size;
-  return `${action('game-details', 'Game details', 'quiet', count !== 1 ? 'disabled' : '')}${action('remove-titles', 'Remove…', 'danger')}${state.browseRoot ? '' : action('game-info-bulk', 'Edit information…', 'quiet')}${state.browseRoot ? '' : action('media-selected', 'Prepare missing media', 'quiet')}${state.browseRoot ? '' : action('move-games', 'Move category…', 'quiet', state.groups.some((g) => state.selected.has(g.key) && !g.movable) ? 'disabled' : '')}${state.browseRoot ? '' : action('copy-open', 'Copy selected to USB…', 'primary')}`;
+  const onDrive = !!state.browseRoot;
+  const someNotMovable = state.groups.some(
+    (group) => state.selected.has(group.key) && !group.movable,
+  );
+  return [
+    action('game-details', 'Game details', 'quiet', count !== 1 ? 'disabled' : ''),
+    action('remove-titles', 'Remove…', 'danger'),
+    // The rest only apply to the PC library.
+    onDrive ? '' : action('game-info-bulk', 'Edit information…', 'quiet'),
+    onDrive ? '' : action('media-selected', 'Prepare missing media', 'quiet'),
+    onDrive
+      ? ''
+      : action('move-games', 'Move category…', 'quiet', someNotMovable ? 'disabled' : ''),
+    onDrive ? '' : action('copy-open', 'Copy selected to USB…', 'primary'),
+  ].join('');
 }
+
+/** The media filter's choices. */
+const mediaFilters = [
+  ['', 'All media'],
+  ['cover', 'Missing covers'],
+  ['preview', 'Missing previews'],
+  ['either', 'Missing covers or previews'],
+];
+
+/** The game information filter's choices. */
+const informationFilters = [
+  ['', 'All information'],
+  ['any', 'Missing any information'],
+  ['description', 'Missing descriptions'],
+  ['released', 'Missing release dates / years'],
+  ['genre', 'Missing genres'],
+  ['developer', 'Missing developers'],
+  ['publisher', 'Missing publishers'],
+  ['players', 'Missing player counts'],
+  ['edited', 'Manually edited'],
+];
+
+/** The library page: heading, search and filters, the games, and the selection bar. */
 function libraryView() {
   const visible = visibleGames(state.groups, state.filter);
-  const regions = [...new Set(state.groups.map((g) => g.region).filter(Boolean))].sort();
   const count = state.selected.size;
-  const visibleKeys = new Set(visible.map((g) => g.key));
-  const hiddenSelected = state.groups.filter(
-    (g) => state.selected.has(g.key) && !visibleKeys.has(g.key),
-  ).length;
-  const focusedGame = visible.find((g) => g.key === state.focusedGame)?.key || visible[0]?.key;
   return (
     viewSwitch() +
-    heading(
-      state.browseRoot ? 'On your USB / SD drive' : 'Your PC library',
-      `${visible.length === state.groups.length ? quantity(state.groups.length, 'game') : visible.length + ' of ' + state.groups.length + ' games shown'} · ${quantity(state.records.length, 'disc')} in library`,
-      state.browseRoot
-        ? action(
-            'drive-media-update',
-            'Update media & information…',
-            'primary',
-            !state.groups.length || !state.prefs.library ? 'disabled' : '',
-          ) + action('browse-drive-setup', 'Drive setup…', 'small')
-        : action(
-            'information-tools',
-            'Metadata…',
-            'quiet small',
-            !state.groups.length ? 'disabled' : '',
-          ) +
-            action(
-              'information-refresh',
-              'Get game information…',
-              'quiet small',
-              !state.groups.length ? 'disabled' : '',
-            ) +
-            action('add-discs', '+ Add discs', 'orange', !state.prefs.library ? 'disabled' : ''),
-    ) +
+    libraryHeading(visible) +
     browserSummary() +
-    `<div class="row spread toolbar library-toolbar"><div class="library-search-controls"><input type="search" id="library-search" aria-label="Find a game" placeholder="Find a game…" value="${e(state.filter.search)}"><select id="library-search-scope" aria-label="Search in">${option('title', 'Titles only', state.filter.searchScope !== 'information')}${option('information', 'Titles & information', state.filter.searchScope === 'information')}</select><select id="library-region" aria-label="Region">${option('', 'All regions', !state.filter.region)}${regions.map((r) => option(r, r, state.filter.region === r)).join('')}</select><select id="library-media" aria-label="Missing artwork">${[
-      ['', 'All media'],
-      ['cover', 'Missing covers'],
-      ['preview', 'Missing previews'],
-      ['either', 'Missing covers or previews'],
-    ]
-      .map(([v, label]) => option(v, label, (state.filter.media || '') === v))
-      .join('')}</select><select id="library-information" aria-label="Game information filter">${[
-      ['', 'All information'],
-      ['any', 'Missing any information'],
-      ['description', 'Missing descriptions'],
-      ['released', 'Missing release dates / years'],
-      ['genre', 'Missing genres'],
-      ['developer', 'Missing developers'],
-      ['publisher', 'Missing publishers'],
-      ['players', 'Missing player counts'],
-      ['edited', 'Manually edited'],
-    ]
-      .map(([v, label]) => option(v, label, (state.filter.information || '') === v))
-      .join(
-        '',
-      )}</select></div><div class="row">${Object.entries(state.filter).some(([k, v]) => k !== 'searchScope' && v) ? action('filters-clear', 'Clear filters', 'quiet small') : ''}${action('select-shown', 'Select all shown', 'small', !visible.length ? 'disabled' : '')}${count ? action('clear-selection', 'Clear selection', 'quiet small') : ''}</div></div>
- <div class="row filters">${['', ...categories.filter((c) => state.groups.some((g) => g.category === c))].map((c) => action('filter-category', e(c || 'All'), `chip${state.filter.category === c ? ' active' : ''}`, `data-category="${e(c)}" aria-pressed="${state.filter.category === c}"`)).join('')}</div>` +
-    (state.browserError
-      ? empty(
-          'Could not read this library',
-          state.browserError,
-          action('library-refresh', 'Try again', 'primary'),
-        )
-      : !state.browseRoot && !state.prefs.library
-        ? empty(
-            'A home for your 3DO library',
-            'Choose the folder containing your games, or create a staging library to import discs into.',
-            action('choose-library', 'Choose library folder', 'primary'),
-          )
-        : !state.groups.length
-          ? state.browseRoot
-            ? empty(
-                'No games on this drive',
-                'Choose your PC library and copy selected games to this drive.',
-              )
-            : empty(
-                'Your library is ready for games',
-                'Add ISO or CUE files to identify and organize your collection. Your original files stay in place.',
-                action('add-discs', 'Add discs', 'primary'),
-              )
-          : !visible.length
-            ? empty(
-                'No matching games',
-                'Try another search, category, region or information filter.',
-                action('filters-clear', 'Clear filters', 'primary'),
-              )
-            : `<p class="note" id="game-keyboard">Arrow keys move between games; Space selects.</p><div class="grid" role="group" aria-label="Games" aria-describedby="game-keyboard">${visible.map((g, i) => `<button class="game${state.selected.has(g.key) ? ' selected' : ''}" data-game="${e(g.key)}" tabindex="${g.key === focusedGame ? 0 : -1}" aria-label="${e(g.title)}" aria-describedby="game-detail-${i} game-status-${i}" aria-pressed="${state.selected.has(g.key)}" title="${e(g.title + '\n' + g.key)}"><div class="cover">${g.cover ? `<img data-cover="${e(g.cover)}" alt="" loading="lazy">` : '<span class="placeholder" aria-hidden="true">◉</span>'}<span class="selection-check" aria-hidden="true">${state.selected.has(g.key) ? '✓' : ''}</span></div><div class="game-title">${e(g.title)}</div><div class="game-detail" id="game-detail-${i}">${e([g.region, g.genre.split(';')[0]].filter(Boolean).join(' · '))}${g.discs.length > 1 ? ` · ${quantity(g.discs.length, 'disc')}` : ''}${g.edited ? ' · Edited' : ''}</div><div class="game-detail game-status" id="game-status-${i}">${state.browseRoot ? `${bytes(g.bytes)} · ${g.missingCover ? 'Cover missing' : 'Cover available'} · ${g.missingPreview ? 'Preview missing' : 'Preview available'}` : g.presenceKnown ? (g.presentDiscs === g.discs.length ? 'Already on drive' : g.presentDiscs ? `${g.presentDiscs} of ${g.discs.length} discs on drive` : 'Not on drive') : ''}</div></button>`).join('')}</div>`) +
-    (count
-      ? `<div class="selection-bar row spread" id="selection-actions"><div><strong>${count} game${count === 1 ? '' : 's'} selected</strong><small> · ${quantity(selectedDiscs(state.groups, state.selected).length, 'disc')}${hiddenSelected ? ' · ' + hiddenSelected + ' selected outside this view' : ''}</small></div>${action('selection-actions', 'Actions…', 'selection-more')}<div class="row selection-buttons">${selectionButtonsView()}</div></div>`
-      : '')
+    libraryToolbar(visible) +
+    libraryContent(visible) +
+    (count ? selectionBar(visible) : '')
   );
 }
+
+/** The library heading: how many games are shown, and the page's buttons. */
+function libraryHeading(visible) {
+  const total = state.groups.length;
+  const shown =
+    visible.length === total
+      ? quantity(total, 'game')
+      : visible.length + ' of ' + total + ' games shown';
+  const note = `${shown} · ${quantity(state.records.length, 'disc')} in library`;
+  const noGames = !state.groups.length ? 'disabled' : '';
+
+  const buttons = state.browseRoot
+    ? action(
+        'drive-media-update',
+        'Update media & information…',
+        'primary',
+        !state.groups.length || !state.prefs.library ? 'disabled' : '',
+      ) + action('browse-drive-setup', 'Drive setup…', 'small')
+    : action('information-tools', 'Metadata…', 'quiet small', noGames) +
+      action('information-refresh', 'Get game information…', 'quiet small', noGames) +
+      action('add-discs', '+ Add discs', 'orange', !state.prefs.library ? 'disabled' : '');
+
+  return heading(state.browseRoot ? 'On your USB / SD drive' : 'Your PC library', note, buttons);
+}
+
+/** The search box, filters, selection buttons and category chips. */
+function libraryToolbar(visible) {
+  const filter = state.filter;
+  const regions = [...new Set(state.groups.map((group) => group.region).filter(Boolean))].sort();
+  const anyFilter = Object.entries(filter).some(([key, value]) => key !== 'searchScope' && value);
+  const usedCategories = categories.filter((category) =>
+    state.groups.some((group) => group.category === category),
+  );
+
+  const search = [
+    '<div class="library-search-controls">',
+    `<input type="search" id="library-search" aria-label="Find a game" placeholder="Find a game…" value="${escapeHtml(filter.search)}">`,
+    '<select id="library-search-scope" aria-label="Search in">',
+    option('title', 'Titles only', filter.searchScope !== 'information'),
+    option('information', 'Titles & information', filter.searchScope === 'information'),
+    '</select>',
+    '<select id="library-region" aria-label="Region">',
+    option('', 'All regions', !filter.region),
+    regions.map((region) => option(region, region, filter.region === region)).join(''),
+    '</select>',
+    '<select id="library-media" aria-label="Missing artwork">',
+    mediaFilters
+      .map(([value, label]) => option(value, label, (filter.media || '') === value))
+      .join(''),
+    '</select>',
+    '<select id="library-information" aria-label="Game information filter">',
+    informationFilters
+      .map(([value, label]) => option(value, label, (filter.information || '') === value))
+      .join(''),
+    '</select>',
+    '</div>',
+  ].join('');
+  const buttons = [
+    '<div class="row">',
+    anyFilter ? action('filters-clear', 'Clear filters', 'quiet small') : '',
+    action('select-shown', 'Select all shown', 'small', !visible.length ? 'disabled' : ''),
+    state.selected.size ? action('clear-selection', 'Clear selection', 'quiet small') : '',
+    '</div>',
+  ].join('');
+  const chips = ['', ...usedCategories]
+    .map((category) => {
+      const active = filter.category === category;
+      return action(
+        'filter-category',
+        escapeHtml(category || 'All'),
+        `chip${active ? ' active' : ''}`,
+        `data-category="${escapeHtml(category)}" aria-pressed="${active}"`,
+      );
+    })
+    .join('');
+
+  return [
+    `<div class="row spread toolbar library-toolbar">${search}${buttons}</div>`,
+    '\n ',
+    `<div class="row filters">${chips}</div>`,
+  ].join('');
+}
+
+/** The games, or a message saying why there are none to show. */
+function libraryContent(visible) {
+  if (state.browserError)
+    return empty(
+      'Could not read this library',
+      state.browserError,
+      action('library-refresh', 'Try again', 'primary'),
+    );
+  if (!state.browseRoot && !state.prefs.library)
+    return empty(
+      'A home for your 3DO library',
+      'Choose the folder containing your games, or create a staging library to import discs into.',
+      action('choose-library', 'Choose library folder', 'primary'),
+    );
+  if (!state.groups.length)
+    return state.browseRoot
+      ? empty(
+          'No games on this drive',
+          'Choose your PC library and copy selected games to this drive.',
+        )
+      : empty(
+          'Your library is ready for games',
+          'Add ISO or CUE files to identify and organize your collection. Your original files stay in place.',
+          action('add-discs', 'Add discs', 'primary'),
+        );
+  if (!visible.length)
+    return empty(
+      'No matching games',
+      'Try another search, category, region or information filter.',
+      action('filters-clear', 'Clear filters', 'primary'),
+    );
+
+  // The grid is one Tab stop: only the focused game is in the tab order,
+  // and the arrow keys move between games (see moveGameFocus).
+  const focusedGame =
+    visible.find((group) => group.key === state.focusedGame)?.key || visible[0]?.key;
+  const cards = visible.map((group, index) => gameCard(group, index, focusedGame)).join('');
+  return [
+    '<p class="note" id="game-keyboard">Arrow keys move between games; Space selects.</p>',
+    '<div class="grid" role="group" aria-label="Games" aria-describedby="game-keyboard">',
+    cards,
+    '</div>',
+  ].join('');
+}
+
+/** One game in the grid: cover, title, details and where it is. */
+function gameCard(group, index, focusedGame) {
+  const selected = state.selected.has(group.key);
+  const cover = group.cover
+    ? `<img data-cover="${escapeHtml(group.cover)}" alt="" loading="lazy">`
+    : '<span class="placeholder" aria-hidden="true">◉</span>';
+  const details =
+    escapeHtml([group.region, group.genre.split(';')[0]].filter(Boolean).join(' · ')) +
+    (group.discs.length > 1 ? ` · ${quantity(group.discs.length, 'disc')}` : '') +
+    (group.edited ? ' · Edited' : '');
+
+  return [
+    `<button class="game${selected ? ' selected' : ''}" data-game="${escapeHtml(group.key)}"`,
+    ` tabindex="${group.key === focusedGame ? 0 : -1}" aria-label="${escapeHtml(group.title)}"`,
+    ` aria-describedby="game-detail-${index} game-status-${index}" aria-pressed="${selected}"`,
+    ` title="${escapeHtml(group.title + '\n' + group.key)}">`,
+    `<div class="cover">${cover}<span class="selection-check" aria-hidden="true">${selected ? '✓' : ''}</span></div>`,
+    `<div class="game-title">${escapeHtml(group.title)}</div>`,
+    `<div class="game-detail" id="game-detail-${index}">${details}</div>`,
+    `<div class="game-detail game-status" id="game-status-${index}">${gameStatus(group)}</div>`,
+    '</button>',
+  ].join('');
+}
+
+/** A game's status line: on a drive, its size and media; in the library, whether it is on the drive. */
+function gameStatus(group) {
+  if (state.browseRoot) {
+    const cover = group.missingCover ? 'Cover missing' : 'Cover available';
+    const preview = group.missingPreview ? 'Preview missing' : 'Preview available';
+    return `${bytes(group.bytes)} · ${cover} · ${preview}`;
+  }
+  if (!group.presenceKnown) return '';
+  if (group.presentDiscs === group.discs.length) return 'Already on drive';
+  if (group.presentDiscs) return `${group.presentDiscs} of ${group.discs.length} discs on drive`;
+  return 'Not on drive';
+}
+
+/** The bar at the bottom while games are selected. */
+function selectionBar(visible) {
+  const count = state.selected.size;
+  const visibleKeys = new Set(visible.map((group) => group.key));
+  const hiddenSelected = state.groups.filter(
+    (group) => state.selected.has(group.key) && !visibleKeys.has(group.key),
+  ).length;
+  const discs = quantity(selectedDiscs(state.groups, state.selected).length, 'disc');
+  const hidden = hiddenSelected ? ' · ' + hiddenSelected + ' selected outside this view' : '';
+  return [
+    '<div class="selection-bar row spread" id="selection-actions">',
+    `<div><strong>${count} game${count === 1 ? '' : 's'} selected</strong><small> · ${discs}${hidden}</small></div>`,
+    action('selection-actions', 'Actions…', 'selection-more'),
+    `<div class="row selection-buttons">${selectionButtonsView()}</div>`,
+    '</div>',
+  ].join('');
+}
+
 let coverObserver;
 let selectionObserver;
+
+/**
+ * Keeps room at the bottom of the page for the selection bar (and a fixed
+ * status bar), so they never cover the last games.
+ */
 function resizeSelectionBar() {
   selectionObserver?.disconnect();
-  const content = $('#content'),
-    bar = $('.selection-bar');
+  const content = $('#content');
+  const bar = $('.selection-bar');
   if (!content) return;
+
   const size = () => {
     const height = bar ? Math.ceil(bar.getBoundingClientRect().height) : 0;
     content.style.setProperty('--selection-space', height ? `${height + 24}px` : '0px');
-    const footer = $('.statusbar'),
-      fixedFooter =
-        footer && getComputedStyle(footer).position === 'fixed'
-          ? footer.getBoundingClientRect().height
-          : 0;
+    const footer = $('.statusbar');
+    const fixedFooter =
+      footer && getComputedStyle(footer).position === 'fixed'
+        ? footer.getBoundingClientRect().height
+        : 0;
     document.documentElement.style.setProperty(
       '--fixed-ui-space',
       `${height + fixedFooter + 16}px`,
@@ -862,8 +1009,16 @@ function resizeSelectionBar() {
     selectionObserver.observe(bar);
   }
 }
+
+/**
+ * Loads cover thumbnails as their games scroll into view (or come within
+ * 200 pixels), from the cache or the backend.
+ */
 function loadCovers() {
   coverObserver?.disconnect();
+  const content = $('#content');
+  const scrollsItself = getComputedStyle(content).overflowY !== 'visible';
+
   coverObserver = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -882,17 +1037,25 @@ function loadCovers() {
         pumpCovers();
       }
     },
-    {
-      root: getComputedStyle($('#content')).overflowY === 'visible' ? null : $('#content'),
-      rootMargin: '200px',
-    },
+    { root: scrollsItself ? content : null, rootMargin: '200px' },
   );
   document.querySelectorAll('img[data-cover]').forEach((img) => coverObserver.observe(img));
 }
+
+// Covers waiting to load, and how many are loading now.
 let coverRunning = 0;
 const coverQueue = [];
+
+/** The most covers loaded at once. */
+const MAX_COVER_LOADS = 3;
+
+/**
+ * Starts loading queued covers, a few at a time. A cover from before the
+ * library was reloaded (an older `coverGeneration`) is not kept; one that
+ * fails to load is removed, leaving the placeholder look.
+ */
 function pumpCovers() {
-  while (coverRunning < 3 && coverQueue.length) {
+  while (coverRunning < MAX_COVER_LOADS && coverQueue.length) {
     const item = coverQueue.shift();
     if (!item.img.isConnected) continue;
     coverRunning++;
@@ -912,64 +1075,137 @@ function pumpCovers() {
       });
   }
 }
+
+/**
+ * Starts updating the browsed drive's media and information from the PC
+ * library: for the selected games (or all), matched to library discs by
+ * path. Shows what will happen before anything is changed.
+ */
 async function driveMediaUpdate() {
   if (!state.browseRoot || !state.browser) throw new Error('Refresh the drive browser first.');
   const source = await call('library');
-  const wanted = new Set(
-    (state.selected.size
-      ? selectedDiscs(state.groups, state.selected)
-      : state.records.map((r) => r.path)
-    ).map((p) => p.toLowerCase()),
-  );
-  const discs = source.records.map((r) => r.path).filter((p) => wanted.has(p.toLowerCase()));
+  const wantedPaths = state.selected.size
+    ? selectedDiscs(state.groups, state.selected)
+    : state.records.map((record) => record.path);
+  const wanted = new Set(wantedPaths.map((path) => path.toLowerCase()));
+  const discs = source.records
+    .map((record) => record.path)
+    .filter((path) => wanted.has(path.toLowerCase()));
   state.driveUpdate = {
     root: state.browser.root,
     token: state.browser.identity.token,
     source: state.prefs.library,
     discs,
   };
-  const skipped = [...wanted].filter((p) => !discs.some((d) => d.toLowerCase() === p));
+
+  const skipped = [...wanted].filter((path) => !discs.some((disc) => disc.toLowerCase() === path));
+  const skippedNotice = skipped.length
+    ? [
+        '<details class="notice warning">',
+        `<summary>${quantity(skipped.length, 'disc')} have no matching PC library entry and will be skipped</summary>`,
+        skipped.map((path) => `<p class="path">${pathLabel(path)}</p>`).join(''),
+        '</details>',
+      ].join('')
+    : '';
+  const body = [
+    `<p>Drive: ${pathLabel(state.driveUpdate.root)}<br>Source: ${pathLabel(state.prefs.library)}</p>`,
+    `<p>${quantity(discs.length, 'disc')} matched by file path`,
+    state.selected.size ? ' from the selected games' : ' across this drive',
+    '. Existing PC artwork, previews, descriptions and metadata will be transferred with console support files. ',
+    'Game disc files will stay in place.</p>',
+    skippedNotice,
+    '<p class="note">Edit game information or assign replacement artwork in the PC library first. ',
+    'The option below finds missing media and descriptions using your configured sources; it keeps existing information.</p>',
+    checkbox(
+      'drive-update-prepare',
+      'Find missing media and descriptions in the PC library first',
+      false,
+    ),
+  ].join('');
   dialog(
     'Update drive media & information',
-    `<p>Drive: ${pathLabel(state.driveUpdate.root)}<br>Source: ${pathLabel(state.prefs.library)}</p><p>${quantity(discs.length, 'disc')} matched by file path${state.selected.size ? ' from the selected games' : ' across this drive'}. Existing PC artwork, previews, descriptions and metadata will be transferred with console support files. Game disc files will stay in place.</p>${skipped.length ? `<details class="notice warning"><summary>${quantity(skipped.length, 'disc')} have no matching PC library entry and will be skipped</summary>${skipped.map((p) => `<p class="path">${pathLabel(p)}</p>`).join('')}</details>` : ''}<p class="note">Edit game information or assign replacement artwork in the PC library first. The option below finds missing media and descriptions using your configured sources; it keeps existing information.</p>${checkbox('drive-update-prepare', 'Find missing media and descriptions in the PC library first', false)}`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
       action('drive-media-review', 'Review update', 'primary', discs.length ? '' : 'disabled'),
   );
 }
+
+/**
+ * Reviews the drive media update: checks the drive is the same one,
+ * optionally fills in missing media first, then reviews the copy (support
+ * files only; game files must already be there).
+ */
 async function reviewDriveMedia() {
-  const u = state.driveUpdate;
-  if (!u || u.source !== state.prefs.library)
+  const update = state.driveUpdate;
+  if (!update || update.source !== state.prefs.library)
     throw new Error('PC library changed. Start the update again.');
-  const drive = await call('drive_inspect', { root: u.root });
-  if (drive.token !== u.token) throw new Error('Drive changed. Refresh and start again.');
-  if ($('#drive-update-prepare').checked) await call('media_selected', { discs: u.discs });
+  const drive = await call('drive_inspect', { root: update.root });
+  if (drive.token !== update.token) throw new Error('Drive changed. Refresh and start again.');
+  if ($('#drive-update-prepare').checked) await call('media_selected', { discs: update.discs });
+
   const plan = await call('copy_preview', {
-    destination: u.root,
-    discs: u.discs,
+    destination: update.root,
+    discs: update.discs,
     verify: false,
     existing_only: true,
-    drive_token: u.token,
+    drive_token: update.token,
   });
-  u.plan = plan;
+  update.plan = plan;
+
+  const changes =
+    plan.files
+      .filter((file) => file.status !== 'unchanged')
+      .map((file) => `${escapeHtml(file.status)} ${pathLabel(file.path)}`)
+      .join('\n') || 'No changed files.';
+  const body = [
+    `<p>Destination: ${pathLabel(update.root)}</p>`,
+    '<p>Game disc files will not be copied or replaced. ',
+    'Media, information and console support will be updated; existing settings and saves are preserved.</p>',
+    storageView(plan.storage),
+    `<details><summary>File changes</summary><div class="progress-log">${changes}</div></details>`,
+  ].join('');
   dialog(
     'Review drive media update',
-    `<p>Destination: ${pathLabel(u.root)}</p><p>Game disc files will not be copied or replaced. Media, information and console support will be updated; existing settings and saves are preserved.</p>${storageView(plan.storage)}<details><summary>File changes</summary><div class="progress-log">${
-      plan.files
-        .filter((f) => f.status !== 'unchanged')
-        .map((f) => `${e(f.status)} ${pathLabel(f.path)}`)
-        .join('\n') || 'No changed files.'
-    }</div></details>`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
       action('drive-media-apply', 'Update drive', 'primary', plan.storage.fits ? '' : 'disabled'),
   );
 }
+
+/**
+ * The line under the heading: for a drive, its game size, free space,
+ * name and warnings; for the PC library, the copy destination.
+ */
 function browserSummary() {
-  if (state.browseRoot && state.browser)
-    return `<div class="notice"><strong>Drive browser</strong> · ${bytes(state.browser.game_bytes)} of games${state.browser.available !== null ? ' · ' + bytes(state.browser.available) + ' free of ' + bytes(state.browser.capacity) : ''}<br>${state.browser.identity?.identity ? e(state.browser.identity.identity.name) + ' · ' : ''}Copy destination: ${pathLabel(state.prefs.destination || 'Not selected')}${state.browser.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>`;
-  return state.prefs.destination
-    ? `<p class="note">Copy destination: ${pathLabel(state.prefs.destination)} ${state.browser?.destination_available === false ? ' · Drive unavailable — connect it and refresh.' : ' · “Already on drive” compares disc paths and sizes, including CUE tracks.'} Refresh after changing drives.</p>`
-    : '';
+  const browser = state.browser;
+  if (state.browseRoot && browser) {
+    const space =
+      browser.available !== null
+        ? ' · ' + bytes(browser.available) + ' free of ' + bytes(browser.capacity)
+        : '';
+    const name = browser.identity?.identity
+      ? escapeHtml(browser.identity.identity.name) + ' · '
+      : '';
+    const warnings = browser.warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join('');
+    return [
+      `<div class="notice"><strong>Drive browser</strong> · ${bytes(browser.game_bytes)} of games${space}<br>`,
+      `${name}Copy destination: ${pathLabel(state.prefs.destination || 'Not selected')}${warnings}`,
+      '</div>',
+    ].join('');
+  }
+  if (!state.prefs.destination) return '';
+
+  const availability =
+    browser?.destination_available === false
+      ? ' · Drive unavailable — connect it and refresh.'
+      : ' · “Already on drive” compares disc paths and sizes, including CUE tracks.';
+  return `<p class="note">Copy destination: ${pathLabel(state.prefs.destination)} ${availability} Refresh after changing drives.</p>`;
 }
+
+/**
+ * Loads the PC library or the browsed drive, restores that library's saved
+ * filters and selection, and draws it.
+ */
 async function loadLibrary() {
   state.coverGeneration = (state.coverGeneration || 0) + 1;
   state.coverCache.clear();
@@ -983,6 +1219,7 @@ async function loadLibrary() {
     render();
     return;
   }
+
   let result;
   try {
     result = await call(
@@ -999,17 +1236,21 @@ async function loadLibrary() {
     render();
     throw error;
   }
+
   state.browserError = '';
   state.browser = result;
   state.records = result.records || [];
   categories.splice(0, categories.length, ...result.categories);
   state.groups = groupGames(state.records);
+
+  // A drive's view is remembered by its identity as well as its path.
   const key = state.browseRoot
     ? `drive:${result.identity?.token || 'unnamed'}:${result.root}`
     : result.root;
-  const saved = state.prefs.library_views?.[key];
+  const current =
+    state.libraryRoot === key ? { ...state.filter, selected: [...state.selected] } : null;
   const view = restoreLibraryView(
-    state.libraryRoot === key ? { ...state.filter, selected: [...state.selected] } : saved,
+    current || state.prefs.library_views?.[key],
     state.groups,
     categories,
   );
@@ -1028,6 +1269,7 @@ async function loadLibrary() {
   render();
   setStatus(`${state.groups.length} games ${state.browseRoot ? 'on drive' : 'in the PC library'}`);
 }
+
 function dialog(title, body, footer = '', id = 'main-dialog') {
   const previous = document.getElementById(id),
     focus = previous ? captureFocus(previous) : null;
