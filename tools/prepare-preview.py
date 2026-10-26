@@ -13,6 +13,7 @@ picture is scaled to fit and centered on the menu's dark blue.
 """
 import argparse
 import ctypes
+import importlib.util
 import json
 import math
 import os
@@ -36,31 +37,32 @@ MAX_START_SECONDS = 86400
 BACKGROUND = "0x081021"
 
 
+def load_om3dvid7():
+    """The om3dvid library's Python module: beside this script in a
+    media-tools package, or in om3dvid/python in a checkout."""
+    here = Path(__file__).resolve().parent
+    for folder in (here, here.parent / "om3dvid/python"):
+        path = folder / "om3dvid7.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("om3dvid7", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ImportError("om3dvid7.py is missing; it belongs beside this script")
+
+
+om3dvid7 = load_om3dvid7()
+
 # OM3DVID7 (om3dvid/include/om3dvid7.h): the whole clip up to a minute, streamed at
-# about 200 KB/s. The same settings as the desktop app (desktop/src/media.rs).
-STREAM_WIDTH, STREAM_HEIGHT = 320, 240
+# about 200 KB/s, with the encoder's default settings (the desktop app's too,
+# desktop/src/media.rs).
+STREAM_WIDTH, STREAM_HEIGHT = om3dvid7.WIDTH, om3dvid7.HEIGHT
 STREAM_MAX_SECONDS = 60
 STREAM_MAX_FRAMES = STREAM_MAX_SECONDS * FPS
 # A source that does not open from black gets this many frames fading in
 # from black to its first frame. While they play, the encoder sends the
 # first picture's dictionary entries, which one chunk cannot hold.
 STREAM_LEAD_FRAMES = 12
-STREAM_PARAMS = dict(
-    rate=200 * 1024,
-    read_rate=275 * 1024,
-    slot_bytes=640 * 1024,
-    max_chunk=160 * 1024,
-    chunk_frames=10,
-    entries4=8192,
-    entries2=4096,
-    cycle_cap=230000,
-)
-
-
-class StreamParams(ctypes.Structure):
-    """STREAM_PARAMS as the C struct om3dvid7_encoder.c expects."""
-
-    _fields_ = [(name, ctypes.c_uint32) for name in STREAM_PARAMS]
 
 
 def library_file_name(stem):
@@ -95,63 +97,7 @@ def stream_encoder(directory=None):
     path = library_path("om3dvid7", directory)
     if not path:
         return None
-    library = ctypes.CDLL(str(path.resolve()))
-    library.om3dvid7_encoder_abi.restype = ctypes.c_uint32
-    if library.om3dvid7_encoder_abi() != 2:
-        raise ValueError("Unsupported streamed preview encoder ABI: " + str(path))
-    library.om3dvid7_encoder_workspace_bytes.restype = ctypes.c_uint64
-    library.om3dvid7_encoder_workspace_bytes.argtypes = (ctypes.c_uint32,)
-    library.om3dvid7_encoder_begin.argtypes = (ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-    library.om3dvid7_encoder_add_frame.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
-    library.om3dvid7_encoder_finish.restype = ctypes.c_int64
-    library.om3dvid7_encoder_finish.argtypes = (
-        ctypes.c_void_p,  # workspace
-        ctypes.POINTER(StreamParams),
-        ctypes.c_void_p,  # audio
-        ctypes.c_uint64,  # audio samples
-        ctypes.c_void_p,  # output
-        ctypes.c_uint64,  # output capacity
-        ctypes.POINTER(ctypes.c_uint32),  # statistics
-    )
-    return library
-
-
-def encode_stream(library, frames, reserve, audio=None):
-    """An OM3DVID7 file from 320x240 RGB24 frames (any iterable of frames, up
-    to reserve of them) and signed 8-bit 11025 Hz sound for exactly those
-    frames, or None. Returns (file bytes, frame count)."""
-    workspace = ctypes.create_string_buffer(library.om3dvid7_encoder_workspace_bytes(reserve))
-    if library.om3dvid7_encoder_begin(workspace, len(workspace), reserve):
-        raise ValueError("Preview encoder setup failed")
-
-    count = 0
-    for frame in frames:
-        if count == reserve or library.om3dvid7_encoder_add_frame(workspace, frame):
-            raise ValueError("Too many or invalid preview frames")
-        count += 1
-    if not count:
-        raise ValueError("Video did not produce complete frames")
-
-    samples = count * AUDIO_RATE // FPS
-    if audio is not None and len(audio) != samples:
-        raise ValueError("Preview sound does not match its frames")
-
-    # Room for the target data rate plus 10%, and 2 MiB for headers.
-    capacity = STREAM_PARAMS["rate"] * count // FPS * 11 // 10 + (2 << 20)
-    output = ctypes.create_string_buffer(capacity)
-    stats = (ctypes.c_uint32 * 8)()
-    length = library.om3dvid7_encoder_finish(
-        workspace,
-        ctypes.byref(StreamParams(**STREAM_PARAMS)),
-        audio,
-        samples if audio else 0,
-        output,
-        capacity,
-        stats,
-    )
-    if length < 0:
-        raise ValueError(f"Preview encoder failed (error {length})")
-    return output.raw[:length], count
+    return om3dvid7.load_library(path)
 
 
 # A first frame darker than this mean value (of 255) already opens from black.
@@ -351,9 +297,13 @@ def convert_stream(source, target, start=0, duration=None, sound=True, encoder=N
             total = (count + len(lead)) * AUDIO_RATE // FPS
             audio = bytes(total - len(audio)) + audio
 
-        data, count = encode_stream(
-            library, lead + kept, min(STREAM_MAX_FRAMES, reserve + len(lead)), audio
+        clip = om3dvid7.encode(
+            lead + kept,
+            audio,
+            library=library,
+            max_frames=min(STREAM_MAX_FRAMES, reserve + len(lead)),
         )
+        data, count = clip.data, clip.frames
     finally:
         reader.stdout.close()
         if reader.wait():

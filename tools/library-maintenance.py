@@ -50,6 +50,24 @@ o = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(o)
 FOLD = o.index_tools.fold
 
+
+def load_om3dvid7():
+    """The om3dvid library's Python module: beside this script in a
+    media-tools package, or in om3dvid/python in a checkout."""
+    here = Path(__file__).resolve().parent
+    for folder in (here, here.parent / "om3dvid/python"):
+        path = folder / "om3dvid7.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("om3dvid7", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ImportError("om3dvid7.py is missing; it belongs beside this script")
+
+
+# Streamed previews are checked by the om3dvid library's own Python module.
+om3dvid7 = load_om3dvid7()
+
 # Each kind of media: its folder under .ohmy3do/ and its prepared file type.
 KINDS = {"cover": ("covers", ".3dc"), "preview": ("previews", ".3dv")}
 
@@ -666,127 +684,15 @@ def validate_media(path):
         validate_native_cover(path, data)
         return
     if suffix == ".3dv" and data[:8] == b"OM3DVID7":
-        return validate_stream(data)
+        om3dvid7.check(data)
+        return
     if suffix != ".3dv" or data[:8] != b"OM3DVID5":
         raise ValueError("Invalid preview signature")
     validate_v5_preview(data)
 
 
-STREAM_HEADER_BLOCK = 2048
-STREAM_CHUNK_TABLE = 64
-STREAM_CHUNK_HEADER = 24
-
-
-def validate_stream(data):
-    """OM3DVID7 (om3dvid/include/om3dvid7.h), as the menu checks it: the header block and
-    its sum, the chunk table against the file, every chunk's sum, numbering,
-    entries and frame table. Packets are checked by the decoder as they play."""
-    if len(data) < STREAM_HEADER_BLOCK:
-        raise ValueError("Truncated streamed preview")
-    (
-        width,
-        height,
-        fps,
-        frames_per_chunk,
-        frames,
-        chunks,
-        preroll_chunks,
-        max_entries4,
-        max_entries2,
-        audio_rate,
-        largest_chunk,
-        _,
-        header_sum,
-        slots,
-    ) = struct.unpack_from(">HHHHIHHHHIIIIH", data, 8)
-    max_chunks = (STREAM_HEADER_BLOCK - STREAM_CHUNK_TABLE) // 2
-    chunk_table_end = STREAM_CHUNK_TABLE + 2 * chunks
-    if (
-        (width, height, fps) != (320, 240, 30)
-        or not 1 <= frames_per_chunk <= 30
-        or not 1 <= frames <= 1800
-        or chunks != -(-frames // frames_per_chunk)  # frames / per chunk, rounded up
-        or chunks > max_chunks
-        or not 1 <= preroll_chunks <= chunks
-        or slots < preroll_chunks
-        or max_entries4 > 8192
-        or max_entries2 > 4096
-        or audio_rate not in (0, 11025)
-        or not largest_chunk
-        or largest_chunk % 2048
-        or any(data[46:STREAM_CHUNK_TABLE])
-        or any(data[chunk_table_end:STREAM_HEADER_BLOCK])
-    ):
-        raise ValueError("Invalid streamed preview header")
-    # The sum covers the header block with its own field (bytes 40-43) as zero.
-    if word_sum(data[:40] + bytes(4) + data[44:STREAM_HEADER_BLOCK]) != header_sum:
-        raise ValueError("Streamed preview header checksum mismatch")
-
-    # Walk the chunks the table lists; each must agree with its position.
-    position = STREAM_HEADER_BLOCK
-    first4 = 0
-    first2 = 0
-    table = data[STREAM_CHUNK_TABLE:chunk_table_end]
-    for number, (blocks,) in enumerate(struct.iter_unpack(">H", table)):
-        size = blocks * 2048
-        if not size or size > largest_chunk or position + size > len(data):
-            raise ValueError("Invalid streamed preview chunk table")
-        chunk = data[position : position + size]
-        (
-            chunk_sum,
-            chunk_number,
-            count,
-            chunk_first4,
-            new4,
-            chunk_first2,
-            new2,
-            audio,
-            video,
-        ) = struct.unpack_from(">IHHHHHHII", chunk)
-
-        first_frame = number * frames_per_chunk
-        if audio_rate:
-            # The samples for this chunk's frames, rounded as a running total.
-            expected_audio = (first_frame + count) * 11025 // 30 - first_frame * 11025 // 30
-        else:
-            expected_audio = 0
-        # The frame table follows the header, the sound (padded to a word) and
-        # the new dictionary entries (40 bytes for 4x4, 12 for 2x2).
-        frame_table = STREAM_CHUNK_HEADER + ((audio + 3) & ~3) + new4 * 40 + new2 * 12
-        if (
-            word_sum(chunk[4:]) != chunk_sum
-            or chunk_number != number
-            or count != min(frames_per_chunk, frames - first_frame)
-            or (chunk_first4, chunk_first2) != (first4, first2)
-            or first4 + new4 > max_entries4
-            or first2 + new2 > max_entries2
-            or audio != expected_audio
-            or frame_table + video > size
-            or video < (count + 1) * 4
-            or struct.unpack_from(">I", chunk, frame_table)[0] != (count + 1) * 4
-            or struct.unpack_from(">I", chunk, frame_table + count * 4)[0] != video
-        ):
-            raise ValueError("Invalid streamed preview chunk " + str(number))
-        first4 += new4
-        first2 += new2
-        position += size
-
-    if position != len(data):
-        raise ValueError("Streamed preview has trailing data")
-
-
-def word_sum(data):
-    """Preview payload check, as in src/usb_media.c and prepare-preview.py.
-
-    Returns None when `data` isn't a whole number of 32-bit words.
-    """
-    a = b = 0
-    if len(data) % 4:
-        return None
-    for (word,) in struct.iter_unpack(">I", data):
-        a = (a + word) & 0xFFFFFFFF
-        b = (b + a) & 0xFFFFFFFF
-    return a ^ (((b << 16) | (b >> 16)) & 0xFFFFFFFF)
+# The preview payload check (OM3DVID5 and OM3DVID7 use the same one).
+word_sum = om3dvid7.word_sum
 
 
 # Checking the library is ready for the console

@@ -50,6 +50,7 @@ test: build/test_game_info build/test_menu_help build/test_menu_categories build
 	./build/test_om3dvid7_sound
 	./build/test_om3dvid7_encoder build/test-om3dvid7.3dv
 	./build/test_om3dvid7_player build/test-om3dvid7.3dv
+	python3 om3dvid/tests/test_python.py build/media-native build/test-om3dvid7.3dv
 	./build/test_preview_stream build/test-om3dvid7.3dv
 	./build/test_usb_media streamvideo build/test-om3dvid7.3dv
 	./build/test_usb_media_sdk streamvideo build/test-om3dvid7.3dv

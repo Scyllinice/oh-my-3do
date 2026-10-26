@@ -34,6 +34,7 @@ SOURCE_FILES = {
     "om3dvid7_decoder.c": "om3dvid/src/om3dvid7_decoder.c",
     "om3dvid7.h": "om3dvid/include/om3dvid7.h",
     "om3dvid7_encoder.h": "om3dvid/include/om3dvid7_encoder.h",
+    "om3dvid7.py": "om3dvid/python/om3dvid7.py",
     "build-preview-encoder.py": "tools/build-preview-encoder.py",
     "resize-covers.py": "tools/resize-covers.py",
     "prepare-audio-disc.py": "tools/prepare-audio-disc.py",
