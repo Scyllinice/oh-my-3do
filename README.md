@@ -67,6 +67,7 @@ boot; existing settings are preserved.
 | Tested setups and hardware quirks | [Confirmed working setups](docs/compatibility.md) |
 | Building, tests and emulator setup | [Build guide](docs/building.md) · [Emulator and timing](docs/emulator-and-bench.md) |
 | Binary media layouts | [Format reference](docs/media-format.md) |
+| The video codec, for other 3DO programs | [om3dvid library](om3dvid/README.md) · [OM3DVID7 format](om3dvid/FORMAT.md) |
 
 To report a problem or share a working setup, use the
 [issue forms](https://github.com/Scyllinice/oh-my-3do/issues/new/choose).

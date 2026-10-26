@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """The Python module (om3dvid/python/om3dvid7.py): encoding through the
-native library, with and without sound, and checking files.
+native library, with and without sound, checking files, and decoding them.
 
 Usage: test_python.py [LIBRARY] [CLIP.3dv]
-LIBRARY is the native library or its folder (default build/media-native);
-CLIP is a clip the C encoder test made, which must check out too.
+LIBRARY is the native library or its folder (default om3dvid/build, where
+the library's own Makefile puts it); CLIP is a clip the C encoder test made,
+which must check out too.
 """
 
 import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "om3dvid/python"))
+# The library's folder (om3dvid/), wherever it is.
+LIBRARY_FOLDER = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(LIBRARY_FOLDER / "python"))
 import om3dvid7
 
-LIBRARY = ROOT / "build/media-native"
+LIBRARY = LIBRARY_FOLDER / "build"
 CLIP = None
 
 FRAMES = 12
@@ -118,7 +120,7 @@ class Om3dvid7Test(unittest.TestCase):
         with self.assertRaises(ValueError):
             om3dvid7.Encoder(om3dvid7.MAX_FRAMES + 1, self.library)
         with self.assertRaises(FileNotFoundError):
-            om3dvid7.load_library(ROOT / "no-such-folder")
+            om3dvid7.load_library(LIBRARY_FOLDER / "no-such-folder")
 
     def test_damage_is_rejected(self):
         data = self.clip.data

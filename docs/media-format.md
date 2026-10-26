@@ -156,70 +156,10 @@ first, so it needs the media-beside-the-discs layout (`.ohmy3do` in each
 game's folder): the menu reopens the file by the same relative path on every
 loop. `om3dvid/include/om3dvid7.h` is the reference.
 
-The file is read from the start in 2 KiB blocks and never seeks (the
-firmware's seek does nothing). It is a 2,048-byte header block, then chunks,
-each padded with zeros to a multiple of 2,048 bytes.
-
-| Offset | Bytes | Meaning |
-| --- | --- | --- |
-| 0 | 8 | `OM3DVID7` |
-| 8 | 2 | Width, 320 |
-| 10 | 2 | Height, 240 |
-| 12 | 2 | Frames per second, 30 |
-| 14 | 2 | Frames per chunk, 1–30 (10) |
-| 16 | 4 | Frames, 1–1800 |
-| 20 | 2 | Chunks: frames ÷ frames per chunk, rounded up |
-| 22 | 2 | Preroll: chunks to read before playing |
-| 24 | 2 | 4×4 entries the clip defines, at most 8,192 |
-| 26 | 2 | 2×2 entries the clip defines, at most 4,096 |
-| 28 | 4 | Sound rate, 11025 or zero when silent |
-| 32 | 4 | Largest chunk in bytes, a multiple of 2,048 |
-| 36 | 4 | Nominal bytes per second |
-| 40 | 4 | Word checksum of the whole header block, with this field zero |
-| 44 | 2 | Chunk slots the encoder assumed the player has, at least the preroll |
-| 46 | 18 | Zero |
-| 64 | 2 × chunks | Each chunk's length in 2 KiB blocks |
-
-The rest of the block is zero. The word checksum is the preview checksum
-described above.
-
-A chunk holds its frames' sound, the dictionary entries first used in it, and
-its frames' packets:
-
-| Offset | Bytes | Meaning |
-| --- | --- | --- |
-| 0 | 4 | Word checksum of the rest of the padded chunk |
-| 4 | 2 | Chunk number |
-| 6 | 2 | Frames in this chunk (the last may hold fewer) |
-| 8 | 2 | First 4×4 entry it defines |
-| 10 | 2 | 4×4 entries it defines |
-| 12 | 2 | First 2×2 entry it defines |
-| 14 | 2 | 2×2 entries it defines |
-| 16 | 4 | Sound samples, `floor(end × 11025 / 30) − floor(start × 11025 / 30)` for its frames, or zero |
-| 20 | 4 | Video bytes: the frame table and packets |
-| 24 | | Signed 8-bit sound, padded with zeros to a word |
-| | 40 each | 4×4 entries, ready to copy: two screen line pairs of four words (the upper line's pixel in each word's high half), then the TV picture's two rows of two pixels, each the rounded average of a 2×2 square |
-| | 12 each | 2×2 entries: one line pair of two words, then the average of the four pixels in the high half of a word |
-| | 4 × (frames + 1) | Packet offsets from the start of this table |
-| | | Packets, then zero padding |
-
-Entries are numbered in the order the chunks define them and never change.
-A packet may use the entries its chunk or earlier chunks define. On every
-loop the numbering starts again from zero, and the same entries are defined
-again with the same pixels.
-
-A packet is big-endian 16-bit words covering the 4,800 blocks of 4×4 pixels
-in raster order (80 across, 60 down):
-
-| Word | Meaning |
-| --- | --- |
-| `0x0000`–`0x1fff` | The block shows that 4×4 entry. |
-| `0x2000`–`0x3fff` | `(word & 0x1fff) + 1` blocks stay as they are. |
-| `0x4000`–`0x5fff` | `(word & 0x1fff) + 1` 4×4 entry numbers follow, one word each, below `0x2000`. |
-| `0x6000`–`0x7fff` | `(word & 0x1fff) + 1` quad blocks follow, 3 words each: four 12-bit 2×2 entry numbers (top-left, top-right, bottom-left, bottom-right), most significant first. |
-
-Other words are invalid, and a packet must cover exactly 4,800 blocks. Each
-loop starts from a black picture.
+The format belongs to the om3dvid library: [its specification](../om3dvid/FORMAT.md)
+gives the header, chunks, dictionary entries and packets, and the
+[library's guide](../om3dvid/README.md) its encoder, decoder, player and
+bindings. Below is how the menu plays it and how Oh My 3DO's tools make it.
 
 ### Playing
 
@@ -254,26 +194,12 @@ the C decoder, `om3dvid/src/om3dvid7_decoder.c`.
 
 ### Encoding
 
-`om3dvid/src/om3dvid7_encoder.c` trains the two dictionaries on the clip, finds
-each block's nearest 4×4 entry and its nearest four 2×2 entries, and chooses
-per block whatever costs least in error plus bytes plus decode time. Error is
-weighed as the eye sees it: brightness counts more than color, and blocks in
-flat areas (skies, water, skin) count more than busy ones, which hide
-blockiness. It searches for the setting that averages the requested rate,
-keeps every frame within about 230,000 ARM60 clocks of decoding, and keeps
-chunks within the slot size. When a chunk could only fit by giving up
-quality, as after a scene change, the encoder first sends the entries it
-needs in the previous chunk's spare room; the decoder only needs an entry
-before its first use. The preroll is every slot: the menu fills them all
-before playing, and reads the next loop only once a loop has played, holding
-the last frame silently while the slots refill, so the clip's end never
-competes with reading. The encoder checks a model of a reader that manages
-275 KB/s alongside playback and 400 KB/s during that hold: it must keep ahead
-of playback within a loop, and a loop may hold for at most 2 seconds. It checks every file it
-writes by decoding it with `om3dvid/src/om3dvid7_decoder.c`. The desktop app and
-`tools/prepare-preview.py` use the same settings, and add a 0.4-second fade-in
-from the first frame to a source that does not start from black, which gives
-that first picture's entries a chunk to arrive in.
+The desktop app and `tools/prepare-preview.py` both use the library's encoder
+with its default settings: about 200 KB/s, 10-frame chunks, 640 KiB of slots
+and frames the ARM60 decodes in under 230,000 clocks (see
+[how it encodes](../om3dvid/FORMAT.md#encoding)). Both add a 0.4-second
+fade-in from the first frame to a source that does not start from black,
+which gives that first picture's entries a chunk to arrive in.
 
 ## Save names
 

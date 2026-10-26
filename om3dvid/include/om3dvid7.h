@@ -1,6 +1,6 @@
-#ifndef OH3DO_PREVIEW_V7_H
-#define OH3DO_PREVIEW_V7_H
-/* OM3DVID7: streamed 320x240 previews at 30 fps (see docs/media-format.md).
+#ifndef OM3DVID7_H
+#define OM3DVID7_H
+/* OM3DVID7: streamed 320x240 previews at 30 fps (see FORMAT.md).
  *
  * The file is read from the start in 2 KiB blocks and never seeks:
  *   header block   2048 bytes: header, then one BE16 per chunk giving its

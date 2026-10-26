@@ -3,7 +3,8 @@
 /*
  * Playing an OM3DVID7 clip while it streams in from slow storage.
  *
- * A clip is split into chunks of about a second each (see om3dvid7.h). A
+ * A clip is split into chunks of a few frames each (a third of a second by
+ * default; see om3dvid7.h). A
  * "reader" reads the chunks in order into a few fixed-size memory "slots",
  * checks each one, stores its dictionary entries, and starts over from the
  * top of the file after the last chunk, so the clip loops. Meanwhile the

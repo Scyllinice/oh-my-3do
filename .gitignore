@@ -87,5 +87,6 @@ Thumbs.db
 /desktop/shell/target/
 /desktop/shell/gen/
 
-# The om3dvid library's Rust crate builds
+# The om3dvid library's own builds (its Makefile and Rust crate)
+/om3dvid/build/
 /om3dvid/rust/target/
