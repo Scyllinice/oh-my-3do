@@ -2,7 +2,6 @@
 """Preview converter and the menu's C loader: encoding, duration, PCM, bounds and damage."""
 import importlib.util
 import json
-import os
 from pathlib import Path
 import shutil
 import struct

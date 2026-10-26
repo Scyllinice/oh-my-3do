@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """Incremental import and USB copy safety, using synthetic discs and artwork."""
-import binascii
-import copy
 import importlib.util
 import json
 import os

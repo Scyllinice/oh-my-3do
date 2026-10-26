@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-import hashlib, importlib.util, json, tempfile, unittest, zipfile
+import hashlib
+import importlib.util
+import json
+import tempfile
+import unittest
+import zipfile
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(

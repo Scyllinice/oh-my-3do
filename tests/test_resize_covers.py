@@ -88,7 +88,6 @@ with tempfile.TemporaryDirectory(prefix="oh3do-resize-") as temporary:
     with Image.open(output / "Still.png") as image:
         assert image.getpixel((48, 60)) == (255, 0, 255)
     # Prepared RGB555 covers must render exactly like the PNG console path.
-    import binascii, zlib
 
     for name in ("Wide", "Alpha", "Rotate", "Photo", "Still"):
         png = output / (name + ".png")

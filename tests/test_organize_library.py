@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Organizer integration tests use tiny synthetic discs, never commercial images."""
-import base64
 import contextlib
 import copy
 import hashlib
@@ -162,7 +161,7 @@ class OrganizerTest(unittest.TestCase):
     def test_converted_iso_identifies_contents_over_incorrect_name_and_region(self):
         data, raw = self.converted_game()
         source = "Japan/Entirely Wrong - Disc 9.iso"
-        path = self.put(source, data)
+        self.put(source, data)
         before = snapshot(self.root)
         plan = self.scan()
         row = plan["entries"][0]
@@ -666,7 +665,6 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         return path
 
     def test_local_cover_resize_matching_multidisc_database_and_undo(self):
-        from PIL import Image
 
         images = self.preview_fixture(discs=2)
         original = self.cover_image(images / "Box - Front" / "Example (USA).jpg")
@@ -999,9 +997,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.put(source, payload)
         self.put("boot.iso", b"menu")
         self.put(".ohmy3do/ohmy3do.ini", b"folder_workaround=1\r\n")
-        self.put(
-            ".ohmy3do/favorites.txt", b"\xef\xbb\xbf# Favorites\r\n  Unsorted/random.iso \r\n"
-        )
+        self.put(".ohmy3do/favorites.txt", b"\xef\xbb\xbf# Favorites\r\n  Unsorted/random.iso \r\n")
         self.put(".ohmy3do/recent.txt", b"Unsorted/random.iso\n")
         self.put(".ohmy3do/last-position.txt", b"OH3DO_POSITION1\n/Storage/Unsorted\nrandom.iso\n")
         self.catalog["games"] = [game("Example (USA)", [payload])]
@@ -1335,7 +1331,7 @@ releaseButton.click();downloaded.text().then(text=>assert.deepEqual(JSON.parse(t
         self.assertEqual([r["status"] for r in plan["entries"]], ["ready"])
         tx = self.apply(plan)
         cue = next((self.root / "Games/USA").rglob("*.cue"))
-        lines = [l for l in cue.read_bytes().split(b"\r\n") if l.startswith(b"FILE")]
+        lines = [line for line in cue.read_bytes().split(b"\r\n") if line.startswith(b"FILE")]
         self.assertTrue(lines[0].endswith(b'" BINARY') and lines[1].endswith(b'" WAVE'), lines)
         refs, *_ = organizer.cue_files(self.root, cue.relative_to(self.root).as_posix())
         self.assertEqual(len(refs), 2)

@@ -116,7 +116,10 @@ def main():
         )
         # All row filters, nonuniform pixels and Adam7 exercise scaling as well.
         w, h = 73, 91
-        sample = lambda x, y: bytes(((x * 9) % 256, (y * 7) % 256, (x + y) % 256))
+
+        def sample(x, y):
+            return bytes(((x * 9) % 256, (y * 7) % 256, (x + y) % 256))
+
         for mode in range(5):
             rows = bytearray()
             previous = bytes(w * 3)
@@ -169,7 +172,10 @@ def main():
         # Native covers keep every pixel; smaller art is smoothed up to fit.
         native = folder / "native.png"
         expected_native = folder / "native.rgb555"
-        sample_native = lambda x, y: ((x * 3) % 256, (y * 2) % 256, (x + y) % 256)
+
+        def sample_native(x, y):
+            return ((x * 3) % 256, (y * 2) % 256, (x + y) % 256)
+
         native.write_bytes(
             png(
                 96,
