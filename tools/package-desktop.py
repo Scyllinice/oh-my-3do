@@ -36,8 +36,9 @@ TARGET_TRIPLES = {
     "macOS-x64": "x86_64-apple-darwin",
 }
 
-# The project's own crates, which are covered by LICENSE.
-OWN_CRATES = ("oh-my-3do-library", "oh-my-3do-desktop")
+# The project's own crates, which are covered by LICENSE (om3dvid7 is the
+# om3dvid library's, om3dvid/rust).
+OWN_CRATES = ("oh-my-3do-library", "oh-my-3do-desktop", "om3dvid7")
 
 FONT_LICENSES = ("ark-pixel-OFL.txt", "atkinson-hyperlegible-OFL.txt")
 
