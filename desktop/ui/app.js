@@ -1939,44 +1939,124 @@ async function saveBackup(saveAs = false) {
   return true;
 }
 
+// ---- The Artwork & previews page ----
+
+/** Media sources, assigning media to one game, and the video tools. */
 function mediaView() {
-  const game = state.groups.find((g) => g.discs.includes(state.mediaDisc));
+  const game = state.groups.find((group) => group.discs.includes(state.mediaDisc));
+  const sources = [
+    '<div class="card"><h3>Media sources</h3>',
+    '<div class="row"><label class="field grow">EmuMovies / media folder',
+    `<input id="media-source" value="${escapeHtml(state.prefs.emumovies)}" placeholder="Optional local artwork and video folder"></label>`,
+    action('media-folder', 'Browse…', '', 'aria-label="Choose media source folder"'),
+    '</div>',
+    '<p class="note">Media is matched to game titles and converted for the console. ',
+    'Prepare missing media also finds missing descriptions and creates their console files.</p>',
+    '<div class="row">',
+    action(
+      'media-prepare',
+      'Prepare missing media',
+      'primary',
+      !state.groups.length ? 'disabled' : '',
+    ),
+    action('media-rebuild', 'Rebuild existing media…'),
+    '</div></div>',
+  ].join('');
+  const chosenGame = game
+    ? [
+        '<div class="row section"><div class="grow">',
+        `<strong>${escapeHtml(game.title)}</strong><p class="note">${escapeHtml(game.discs.join('\n'))}</p>`,
+        '</div><div class="row">',
+        action('media-cover', 'Choose cover…'),
+        action('media-preview', 'Choose preview video…'),
+        '</div></div>',
+      ].join('')
+    : '';
+  const assign = [
+    '<div class="card"><h3>Assign media to a game</h3>',
+    '<select id="media-game" aria-label="Game to assign media" class="grow">',
+    option('', 'Choose a game', !state.mediaDisc),
+    state.groups
+      .map((group) => option(group.discs[0], group.title, group.discs.includes(state.mediaDisc)))
+      .join(''),
+    '</select>',
+    chosenGame,
+    '</div>',
+  ].join('');
+  const videoTools = [
+    '<div class="card"><h3>Video tools</h3><div class="row">',
+    `<input id="media-video-tools" aria-label="Video tools folder" class="grow" value="${escapeHtml(state.prefs.video_tools)}" placeholder="Folder containing FFmpeg and ffprobe">`,
+    action('video-folder', 'Browse…', '', 'aria-label="Choose video tools folder"'),
+    action('video-tools', 'Download tools', '', state.prefs.offline ? 'disabled' : ''),
+    '</div>',
+    '<p class="note">FFmpeg is downloaded separately and verified against its published checksum.</p>',
+    '</div>',
+  ].join('');
+
   return (
     heading(
       'Artwork & previews',
       'Prepare covers, video previews and game descriptions for the console menu.',
     ) +
-    `<div class="card"><h3>Media sources</h3><div class="row"><label class="field grow">EmuMovies / media folder<input id="media-source" value="${e(state.prefs.emumovies)}" placeholder="Optional local artwork and video folder"></label>${action('media-folder', 'Browse…', '', 'aria-label="Choose media source folder"')}</div><p class="note">Media is matched to game titles and converted for the console. Prepare missing media also finds missing descriptions and creates their console files.</p><div class="row">${action('media-prepare', 'Prepare missing media', 'primary', !state.groups.length ? 'disabled' : '')}${action('media-rebuild', 'Rebuild existing media…')}</div></div><div class="card"><h3>Assign media to a game</h3><select id="media-game" aria-label="Game to assign media" class="grow">${option('', 'Choose a game', !state.mediaDisc)}${state.groups.map((g) => option(g.discs[0], g.title, g.discs.includes(state.mediaDisc))).join('')}</select>${game ? `<div class="row section"><div class="grow"><strong>${e(game.title)}</strong><p class="note">${e(game.discs.join('\n'))}</p></div><div class="row">${action('media-cover', 'Choose cover…')}${action('media-preview', 'Choose preview video…')}</div></div>` : ''}</div><div class="card"><h3>Video tools</h3><div class="row"><input id="media-video-tools" aria-label="Video tools folder" class="grow" value="${e(state.prefs.video_tools)}" placeholder="Folder containing FFmpeg and ffprobe">${action('video-folder', 'Browse…', '', 'aria-label="Choose video tools folder"')}${action('video-tools', 'Download tools', '', state.prefs.offline ? 'disabled' : '')}</div><p class="note">FFmpeg is downloaded separately and verified against its published checksum.</p></div>`
+    sources +
+    assign +
+    videoTools
   );
 }
+
+// ---- Console settings ----
+
+/** The console menu's on/off settings, and their labels. */
+const consoleSwitches = [
+  ['usb_covers', 'Show covers'],
+  ['video_previews', 'Play video previews'],
+  ['preview_sound', 'Preview sound'],
+  ['remember_position', 'Remember menu position'],
+  ['recent_games', 'Show recent games'],
+  ['large_titles', 'Large titles'],
+];
+
+/** The folder workaround's choices (see console_config.rs). */
+const folderWorkarounds = [
+  ['0', 'Automatic'],
+  ['1', 'Always'],
+  ['2', 'Off'],
+];
+
+/** The console settings form; its controls' ids start with `prefix`. */
 function settingsForm(settings, prefix = 'config') {
-  return `<div class="form-grid">${[
-    ['usb_covers', 'Show covers'],
-    ['video_previews', 'Play video previews'],
-    ['preview_sound', 'Preview sound'],
-    ['remember_position', 'Remember menu position'],
-    ['recent_games', 'Show recent games'],
-    ['large_titles', 'Large titles'],
-  ]
+  const switches = consoleSwitches
     .map(([key, label]) => checkbox(`${prefix}-${key}`, label, settings[key]))
-    .join(
-      '',
-    )}<label class="field">Screen margin<input type="number" min="0" max="12" id="${prefix}-screen_margin" value="${settings.screen_margin}"></label><label class="field">Folder workaround<select id="${prefix}-folder_workaround">${[
-    ['0', 'Automatic'],
-    ['1', 'Always'],
-    ['2', 'Off'],
-  ]
-    .map(([v, l]) => option(v, l, String(settings.folder_workaround) === v))
-    .join('')}</select></label></div>`;
+    .join('');
+  const workarounds = folderWorkarounds
+    .map(([value, label]) => option(value, label, String(settings.folder_workaround) === value))
+    .join('');
+  return [
+    '<div class="form-grid">',
+    switches,
+    `<label class="field">Screen margin<input type="number" min="0" max="12" id="${prefix}-screen_margin" value="${settings.screen_margin}"></label>`,
+    `<label class="field">Folder workaround<select id="${prefix}-folder_workaround">${workarounds}</select></label>`,
+    '</div>',
+  ].join('');
 }
+
+/**
+ * Reads the console settings form (`prefix` as in settingsForm). Settings
+ * not on the form keep their loaded (or default) values.
+ */
 function readSettings(prefix = 'config') {
-  const out = { ...defaults, ...(prefix === 'config' ? state.config?.settings : {}) };
-  for (const key of Object.keys(out)) {
-    const n = document.getElementById(`${prefix}-${key}`);
-    if (n) out[key] = n.type === 'checkbox' ? n.checked : Number(n.value);
+  const loaded = prefix === 'config' ? state.config?.settings : {};
+  const settings = { ...defaults, ...loaded };
+  for (const key of Object.keys(settings)) {
+    const control = document.getElementById(`${prefix}-${key}`);
+    if (control)
+      settings[key] = control.type === 'checkbox' ? control.checked : Number(control.value);
   }
-  return out;
+  return settings;
 }
+
+// ---- The Drive setup page ----
+
 // Removing Oh My 3DO from a drive: review what would go, then confirm. When
 // the drive holds save backups, the person picks a PC folder for them or
 // explicitly chooses to delete them.
@@ -1988,7 +2068,7 @@ async function reviewDriveCleanup() {
     .map((file) => `<li>${pathLabel(file.path)} · ${bytes(file.bytes)}</li>`)
     .join('');
   const kept = plan.kept.length
-    ? `<p>Kept because they belong to something else: ${plan.kept.map(e).join(', ')}.</p>`
+    ? `<p>Kept because they belong to something else: ${plan.kept.map(escapeHtml).join(', ')}.</p>`
     : '';
   const savesNote = plan.saves.length
     ? `<div class="notice">This drive holds ${quantity(plan.saves.length, 'save backup file')}. Copy them to a folder on the PC first, or remove them with everything else.</div>`
@@ -2006,6 +2086,11 @@ async function reviewDriveCleanup() {
     action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') + buttons,
   );
 }
+
+/**
+ * Carries out the reviewed drive cleanup (`choice`: where to keep the
+ * saves, or to skip them), then reloads and reports what was removed.
+ */
 async function applyDriveCleanup(choice) {
   const result = await call('drive_cleanup', choice);
   if (result.backup_closed) {
@@ -2019,28 +2104,162 @@ async function applyDriveCleanup(choice) {
   state.coverCache.clear();
   closeDialog();
   await perform(loadLibrary);
+
   const cleaned = result.cleaned;
   const saved = cleaned.saves_copied_to ? ` Save backups are in ${cleaned.saves_copied_to}.` : '';
+  const warnings = cleaned.warnings.length ? ' ' + cleaned.warnings.join(' ') : '';
   toast(
-    `${quantity(cleaned.files, 'file')} removed.${saved}${cleaned.warnings.length ? ' ' + cleaned.warnings.join(' ') : ''}`,
+    `${quantity(cleaned.files, 'file')} removed.${saved}${warnings}`,
     cleaned.warnings.length > 0,
   );
 }
+
+/** Drive setup: installing the menu, repairing, checking, and removing it. */
 function driveView() {
+  const developer = state.prefs.developer_mode;
+  const install = [
+    '<div class="card">',
+    '<label class="field">USB / SD destination<div class="row">',
+    `<input class="grow" id="drive-destination" value="${escapeHtml(state.prefs.destination)}" placeholder="Choose the drive root">`,
+    action('drive-folder', 'Browse…', '', 'aria-label="Choose USB or SD destination"'),
+    '</div></label>',
+    `<div class="row">${action('drive-name', 'Name / identify drive…')}</div>`,
+    '<div class="notice">Existing games, media, settings and save backups are preserved. Missing support files are created automatically.</div>',
+    '<div class="row">',
+    action(
+      'drive-library',
+      'Use library boot.iso',
+      'primary',
+      !state.prefs.library ? 'disabled' : '',
+    ),
+    action('drive-iso', 'Choose boot.iso…'),
+    action(
+      'drive-download',
+      developer ? 'Install local menu' : 'Download released menu',
+      '',
+      state.prefs.offline && !developer ? 'disabled' : '',
+    ),
+    '</div>',
+    `<details><summary>Initial menu settings</summary>${settingsForm(defaults, 'drive')}`,
+    '<p class="note">Used only when creating new settings.</p></details>',
+    '</div>',
+  ].join('');
+  const repair = [
+    '<div class="card"><h3>Repair a drive</h3>',
+    '<p>Already have boot.iso? Create missing settings, save folders and search support using the installed image.</p>',
+    action('drive-repair', 'Repair installed support'),
+    '</div>',
+  ].join('');
+  const readiness = [
+    '<div class="card"><h3>Drive readiness</h3>',
+    '<p>Check the installed menu, settings, game indexes, navigation helpers, saves and media before ejecting. ',
+    'This check does not change any files.</p>',
+    '<div class="row">',
+    action('drive-check', 'Check drive', 'primary'),
+    action('drive-eject', 'Safely eject drive'),
+    action('support-export', 'Export support report…'),
+    '</div>',
+    '<p class="note">Support reports include drive paths, readiness results, console diagnostics and recent desktop activity. ',
+    'They exclude game and save contents.</p>',
+    readinessView(),
+    '</div>',
+  ].join('');
+  const cleanup = [
+    '<div class="card"><h3>Stop using Oh My 3DO on this drive</h3>',
+    '<p>Remove the menu, its settings, media, descriptions and save backups from the drive. ',
+    'Your games stay where they are. You can copy the save backups to the PC first.</p>',
+    action('drive-cleanup', 'Review cleanup…', 'danger'),
+    '</div>',
+  ].join('');
+
   return (
     heading(
       'Set up your drive',
       'Install or repair the menu and Save Manager support without copying games.',
     ) +
-    `<div class="card"><label class="field">USB / SD destination<div class="row"><input class="grow" id="drive-destination" value="${e(state.prefs.destination)}" placeholder="Choose the drive root">${action('drive-folder', 'Browse…', '', 'aria-label="Choose USB or SD destination"')}</div></label><div class="row">${action('drive-name', 'Name / identify drive…')}</div><div class="notice">Existing games, media, settings and save backups are preserved. Missing support files are created automatically.</div><div class="row">${action('drive-library', 'Use library boot.iso', 'primary', !state.prefs.library ? 'disabled' : '')}${action('drive-iso', 'Choose boot.iso…')}${action('drive-download', state.prefs.developer_mode ? 'Install local menu' : 'Download released menu', '', state.prefs.offline && !state.prefs.developer_mode ? 'disabled' : '')}</div><details><summary>Initial menu settings</summary>${settingsForm(defaults, 'drive')}<p class="note">Used only when creating new settings.</p></details></div><div class="card"><h3>Repair a drive</h3><p>Already have boot.iso? Create missing settings, save folders and search support using the installed image.</p>${action('drive-repair', 'Repair installed support')}</div><div class="card"><h3>Drive readiness</h3><p>Check the installed menu, settings, game indexes, navigation helpers, saves and media before ejecting. This check does not change any files.</p><div class="row">${action('drive-check', 'Check drive', 'primary')}${action('drive-eject', 'Safely eject drive')}${action('support-export', 'Export support report…')}</div><p class="note">Support reports include drive paths, readiness results, console diagnostics and recent desktop activity. They exclude game and save contents.</p>${readinessView()}</div><div class="card"><h3>Stop using Oh My 3DO on this drive</h3><p>Remove the menu, its settings, media, descriptions and save backups from the drive. Your games stay where they are. You can copy the save backups to the PC first.</p>${action('drive-cleanup', 'Review cleanup…', 'danger')}</div><p class="note">To add games, select them in Library and choose Copy selected to USB. Install this drive in the console with the power off.</p>`
+    install +
+    repair +
+    readiness +
+    cleanup +
+    '<p class="note">To add games, select them in Library and choose Copy selected to USB. Install this drive in the console with the power off.</p>'
   );
 }
+
+// ---- The Settings & tools page ----
+
+/** Desktop preferences, console settings, categories, library tools and more. */
 function settingsView() {
+  const prefs = state.prefs;
+  const themeName = (mode) =>
+    mode === 'system' ? 'System (follow device theme)' : mode[0].toUpperCase() + mode.slice(1);
+  const desktop = [
+    '<div class="card"><h3>Desktop preferences</h3><div class="stack">',
+    '<label class="field">Appearance<select id="pref-theme">',
+    ['system', 'light', 'dark']
+      .map((mode) => option(mode, themeName(mode), (prefs.theme || 'system') === mode))
+      .join(''),
+    '</select></label>',
+    '<label class="field">Text size<select id="pref-text-scale">',
+    [100, 125, 150, 175, 200]
+      .map((size) => option(size, `${size}%`, textScale(prefs.text_scale) === size))
+      .join(''),
+    '</select></label>',
+    checkbox('pref-offline', 'Offline mode — use cached catalog and local media', prefs.offline),
+    checkbox('pref-software', 'Software graphics (restart required)', prefs.software_rendering),
+    checkbox('pref-updates', 'Check for updates at startup', !prefs.disable_update_checks),
+    checkbox(
+      'pref-update-notices',
+      'Notify when updates are available',
+      !prefs.hide_update_notifications,
+    ),
+    '</div></div>',
+  ].join('');
+  const configRoot = state.config?.root || prefs.destination || prefs.library;
+  const consoleSettings = [
+    '<div class="card"><h3>Console menu settings</h3><div class="row">',
+    `<input id="config-root" aria-label="Console settings library or drive root" class="grow" value="${escapeHtml(configRoot)}" placeholder="Library or drive root">`,
+    action('config-folder', 'Browse…', '', 'aria-label="Choose console settings location"'),
+    action('config-load', 'Load settings'),
+    '</div>',
+    state.config
+      ? `<div class="section">${settingsForm(state.config.settings)}</div>${action('config-save', 'Save console settings', 'primary')}`
+      : '<p class="note">Load ohmy3do.ini to edit settings for the console menu.</p>',
+    '</div>',
+  ].join('');
+  const cards = [
+    '<div class="card"><h3>Categories</h3>',
+    '<p>Add or rename category folders, choose import destinations, and control which categories appear on the console. ',
+    'The desktop always shows hidden categories.</p>',
+    action('categories-open', 'Manage categories…'),
+    '</div>',
+    '<div class="card"><h3>Library tools</h3><div class="row">',
+    action('indexes', 'Rebuild search indexes'),
+    action('library-review', 'Create library review'),
+    action('undo', 'Undo last change', 'danger'),
+    '</div></div>',
+    '<div class="card"><h3>Cheat database</h3>',
+    '<p>Edit the known save layouts, field addresses and presets shared by the desktop and console.</p>',
+    action('cheats-open', 'Open database editor…'),
+    '</div>',
+    '<div class="card"><h3>Set up a PC staging library</h3>',
+    '<p>Choose the library folder at the top of the window, then install its menu support before importing discs.</p>',
+    action(
+      'staging-setup',
+      prefs.developer_mode ? 'Install local menu into library…' : 'Download menu into library…',
+    ),
+    '</div>',
+  ].join('');
+
   return (
     heading('Settings & tools', 'Desktop preferences, console settings and library maintenance.') +
-    `<div class="card"><h3>Desktop preferences</h3><div class="stack"><label class="field">Appearance<select id="pref-theme">${['system', 'light', 'dark'].map((mode) => option(mode, mode === 'system' ? 'System (follow device theme)' : mode[0].toUpperCase() + mode.slice(1), (state.prefs.theme || 'system') === mode)).join('')}</select></label><label class="field">Text size<select id="pref-text-scale">${[100, 125, 150, 175, 200].map((size) => option(size, `${size}%`, textScale(state.prefs.text_scale) === size)).join('')}</select></label>${checkbox('pref-offline', 'Offline mode — use cached catalog and local media', state.prefs.offline)}${checkbox('pref-software', 'Software graphics (restart required)', state.prefs.software_rendering)}${checkbox('pref-updates', 'Check for updates at startup', !state.prefs.disable_update_checks)}${checkbox('pref-update-notices', 'Notify when updates are available', !state.prefs.hide_update_notifications)}</div></div>${developerSettingsView()}<div class="card"><h3>Console menu settings</h3><div class="row"><input id="config-root" aria-label="Console settings library or drive root" class="grow" value="${e(state.config?.root || state.prefs.destination || state.prefs.library)}" placeholder="Library or drive root">${action('config-folder', 'Browse…', '', 'aria-label="Choose console settings location"')}${action('config-load', 'Load settings')}</div>${state.config ? `<div class="section">${settingsForm(state.config.settings)}</div>${action('config-save', 'Save console settings', 'primary')}` : '<p class="note">Load ohmy3do.ini to edit settings for the console menu.</p>'}</div><div class="card"><h3>Categories</h3><p>Add or rename category folders, choose import destinations, and control which categories appear on the console. The desktop always shows hidden categories.</p>${action('categories-open', 'Manage categories…')}</div><div class="card"><h3>Library tools</h3><div class="row">${action('indexes', 'Rebuild search indexes')}${action('library-review', 'Create library review')}${action('undo', 'Undo last change', 'danger')}</div></div><div class="card"><h3>Cheat database</h3><p>Edit the known save layouts, field addresses and presets shared by the desktop and console.</p>${action('cheats-open', 'Open database editor…')}</div><div class="card"><h3>Set up a PC staging library</h3><p>Choose the library folder at the top of the window, then install its menu support before importing discs.</p>${action('staging-setup', state.prefs.developer_mode ? 'Install local menu into library…' : 'Download menu into library…')}</div>`
+    desktop +
+    developerSettingsView() +
+    consoleSettings +
+    cards
   );
 }
+
+/** Opens the categories editor for a library or drive. */
 async function openCategories(root) {
   const result = await call('categories_read', { root });
   state.categoryRoot = result.root;
@@ -2048,59 +2267,146 @@ async function openCategories(root) {
   state.categoryDraft = structuredClone(result.config);
   categoriesDialog();
 }
+
+/** The most categories a library can have. */
+const MAX_CATEGORIES = 32;
+
+/** The categories editor: names, console visibility, and import destinations. */
 function categoriesDialog() {
   const config = state.categoryDraft;
+  const rows = config.categories
+    .map((category, index) =>
+      [
+        '<div class="row">',
+        `<input class="grow" data-category-name="${index}" value="${escapeHtml(category.name)}" maxlength="48" aria-label="Category name">`,
+        `<label><input type="checkbox" data-category-hidden="${index}" ${category.hidden ? 'checked' : ''}>Hide on console</label>`,
+        action('category-remove', 'Remove', 'danger small', `data-index="${index}"`),
+        '</div>',
+      ].join(''),
+    )
+    .join('');
+  const destinations = Object.entries(config.defaults)
+    .map(([role, id]) => {
+      const choices = config.categories
+        .map((category) => option(category.id, category.name, category.id === id))
+        .join('');
+      return `<label class="field">${escapeHtml(role)}<select data-category-role="${escapeHtml(role)}">${choices}</select></label>`;
+    })
+    .join('');
+  const body = [
+    '<div class="row spread">',
+    `<p>${pathLabel(state.categoryRoot)}</p>`,
+    action('categories-folder', 'Choose library / drive…', 'small'),
+    '</div>',
+    '<p>Hidden categories stay available here. Saving renames their folders and updates library references; ',
+    'Undo restores the previous state. Remove a category only after moving its games elsewhere.</p>',
+    `<div class="stack">${rows}</div>`,
+    '<div class="section">',
+    action(
+      'category-add',
+      'Add category',
+      'small',
+      config.categories.length >= MAX_CATEGORIES ? 'disabled' : '',
+    ),
+    '</div>',
+    '<h3>Import destinations</h3><p>Choose where each detected disc type is imported.</p>',
+    `<div class="form-grid">${destinations}</div>`,
+  ].join('');
+
   dialog(
     'Library categories',
-    `<div class="row spread"><p>${pathLabel(state.categoryRoot)}</p>${action('categories-folder', 'Choose library / drive…', 'small')}</div><p>Hidden categories stay available here. Saving renames their folders and updates library references; Undo restores the previous state. Remove a category only after moving its games elsewhere.</p><div class="stack">${config.categories.map((c, i) => `<div class="row"><input class="grow" data-category-name="${i}" value="${e(c.name)}" maxlength="48" aria-label="Category name"><label><input type="checkbox" data-category-hidden="${i}" ${c.hidden ? 'checked' : ''}>Hide on console</label>${action('category-remove', 'Remove', 'danger small', `data-index="${i}"`)}</div>`).join('')}</div><div class="section">${action('category-add', 'Add category', 'small', config.categories.length >= 32 ? 'disabled' : '')}</div><h3>Import destinations</h3><p>Choose where each detected disc type is imported.</p><div class="form-grid">${Object.entries(
-      config.defaults,
-    )
-      .map(
-        ([role, id]) =>
-          `<label class="field">${e(role)}<select data-category-role="${e(role)}">${config.categories.map((c) => option(c.id, c.name, c.id === id)).join('')}</select></label>`,
-      )
-      .join('')}</div>`,
+    body,
     action('close-dialog', 'Cancel', '', 'data-dialog="categories-dialog"') +
       action('categories-save', 'Save categories', 'primary'),
     'categories-dialog',
   );
 }
+
+// ---- The Updates page ----
+
+/** The available updates, one card each, with their release notes. */
 function updateCards() {
-  const u = state.updates;
-  if (!u)
+  const updates = state.updates;
+  if (!updates)
     return state.prefs?.developer_mode
       ? '<p>Check the local build directory for desktop and menu updates.</p>'
       : '<p>Check GitHub for desktop and menu updates.</p>';
+
+  const notes = (release) =>
+    [
+      `<details><summary>${release.local ? 'Local build' : 'Release notes'} — ${escapeHtml(release.tag)}</summary>`,
+      `<pre class="progress-log">${escapeHtml(release.notes)}</pre></details>`,
+    ].join('');
   const cards = [];
-  const notes = (r) =>
-    `<details><summary>${r.local ? 'Local build' : 'Release notes'} — ${e(r.tag)}</summary><pre class="progress-log">${e(r.notes)}</pre></details>`;
-  if (u.desktop && !state.pendingUpdate)
+
+  if (updates.desktop && !state.pendingUpdate) {
+    const source = updates.local
+      ? 'Read the verified local package'
+      : 'Download the verified release';
+    const buttons = state.pendingUpdate
+      ? '<p class="notice">Update downloaded and verified. It will install when you close the app.</p>' +
+        action('self-update-apply', 'Restart now', 'primary') +
+        action('self-update-cancel', 'Cancel scheduled update')
+      : action('self-update', 'Update and restart', 'primary') +
+        action('self-update-exit', 'Update on exit');
     cards.push(
-      `<div class="card update-card"><h3>Desktop app <span class="badge">${e(u.desktop_release.tag)}</span></h3><p>${u.local ? 'Read the verified local package' : 'Download the verified release'}, install it and restart automatically. Your settings and game library are preserved.</p>${state.pendingUpdate ? '<p class="notice">Update downloaded and verified. It will install when you close the app.</p>' + action('self-update-apply', 'Restart now', 'primary') + action('self-update-cancel', 'Cancel scheduled update') : action('self-update', 'Update and restart', 'primary') + action('self-update-exit', 'Update on exit')}${notes(u.desktop_release)}</div>`,
+      [
+        `<div class="card update-card"><h3>Desktop app <span class="badge">${escapeHtml(updates.desktop_release.tag)}</span></h3>`,
+        `<p>${source}, install it and restart automatically. Your settings and game library are preserved.</p>`,
+        buttons,
+        notes(updates.desktop_release),
+        '</div>',
+      ].join(''),
     );
-  for (const target of u.targets)
+  }
+
+  for (const target of updates.targets) {
+    const difference = target.installed
+      ? updates.local
+        ? 'The installed menu differs from this local build.'
+        : 'The menu image differs from this release.'
+      : 'No menu image is installed here.';
     cards.push(
-      `<div class="card update-card"><h3>${target.installed ? 'Boot ISO update' : 'Install boot ISO'} <span class="badge">${e(u.menu_release.tag)}</span></h3><p>${pathLabel(target.root)}</p><p class="note">${target.installed ? (u.local ? 'The installed menu differs from this local build.' : 'The menu image differs from this release.') : 'No menu image is installed here.'} Games and saves are preserved.</p>${action('boot-update', 'Update boot ISO', 'primary', `data-root="${e(target.root)}"`)}${notes(u.menu_release)}</div>`,
+      [
+        `<div class="card update-card"><h3>${target.installed ? 'Boot ISO update' : 'Install boot ISO'} `,
+        `<span class="badge">${escapeHtml(updates.menu_release.tag)}</span></h3>`,
+        `<p>${pathLabel(target.root)}</p>`,
+        `<p class="note">${difference} Games and saves are preserved.</p>`,
+        action(
+          'boot-update',
+          'Update boot ISO',
+          'primary',
+          `data-root="${escapeHtml(target.root)}"`,
+        ),
+        notes(updates.menu_release),
+        '</div>',
+      ].join(''),
     );
+  }
+
+  const warnings = updates.warnings.length
+    ? `<details><summary>Drive check details</summary><p>${updates.warnings.map(escapeHtml).join('<br>')}</p></details>`
+    : '';
   return (
-    (cards.join('') || '<div class="notice">Everything checked is up to date.</div>') +
-    (u.warnings.length
-      ? `<details><summary>Drive check details</summary><p>${u.warnings.map(e).join('<br>')}</p></details>`
-      : '')
+    (cards.join('') || '<div class="notice">Everything checked is up to date.</div>') + warnings
   );
 }
+
+/** The Updates page. */
 function updatesView() {
+  const prefs = state.prefs;
+  const source = prefs.developer_mode
+    ? `Developer mode — local builds from ${prefs.developer_updates_directory || 'no directory selected'}`
+    : 'Verified downloads from the Oh My 3DO GitHub releases.';
   return (
     heading(
       'Updates',
-      state.prefs.developer_mode
-        ? `Developer mode — local builds from ${state.prefs.developer_updates_directory || 'no directory selected'}`
-        : 'Verified downloads from the Oh My 3DO GitHub releases.',
+      source,
       action(
         'check-updates',
         'Check for updates',
         'primary',
-        state.prefs.offline && !state.prefs.developer_mode ? 'disabled' : '',
+        prefs.offline && !prefs.developer_mode ? 'disabled' : '',
       ),
     ) +
     installedVersionsView() +
@@ -2109,23 +2415,31 @@ function updatesView() {
     updateCards()
   );
 }
+
+/** Installs the offered menu on a drive, after checking the drive and asking. */
 async function installBootUpdate(button) {
-  const d = await inspectWriteDrive(button.dataset.root);
-  if (
-    !(await confirmAction(
-      'Update boot ISO',
-      `Replace boot.iso on ${d.identity?.name || 'unnamed drive'} at ${displayPath(d.root)} with ${state.updates.local ? 'local build ' : ''}${state.updates.menu_release.tag}? Games, saves and settings are preserved.`,
-      'Update boot ISO',
-    ))
-  )
-    return;
-  await call('boot_update', { root: button.dataset.root, drive_token: d.token });
+  const drive = await inspectWriteDrive(button.dataset.root);
+  const build = state.updates.local ? 'local build ' : '';
+  const confirmed = await confirmAction(
+    'Update boot ISO',
+    `Replace boot.iso on ${drive.identity?.name || 'unnamed drive'} at ${displayPath(drive.root)} ` +
+      `with ${build}${state.updates.menu_release.tag}? Games, saves and settings are preserved.`,
+    'Update boot ISO',
+  );
+  if (!confirmed) return;
+
+  await call('boot_update', { root: button.dataset.root, drive_token: drive.token });
   closeDialog();
   state.page = 'updates';
   render();
   await checkUpdates();
   toast('Boot ISO updated and verified.');
 }
+
+/**
+ * Checks for updates. An `automatic` check (at startup) only records a
+ * failure in Activity, and stays quiet when everything is up to date.
+ */
 async function checkUpdates(automatic = false) {
   try {
     state.updates = await call('updates_check', { root: versionRoot() });
@@ -2139,11 +2453,15 @@ async function checkUpdates(automatic = false) {
     recordActivity(`Automatic update check failed: ${error}`);
   }
 }
+
+/** The library or drive whose installed menu version is shown. */
 function versionRoot() {
   return (
     state.versionTarget || state.browseRoot || state.prefs.destination || state.prefs.library || ''
   );
 }
+
+/** Finds the installed menu version on the chosen library or drive. */
 async function refreshInstalledVersions() {
   const root = versionRoot();
   state.installedMenu = null;
@@ -2154,70 +2472,122 @@ async function refreshInstalledVersions() {
     state.installedMenu = { root, error: String(error) };
   }
 }
+
+/** The installed desktop and menu versions, with a chooser of libraries and drives. */
 function installedVersionsView() {
   const menu = state.installedMenu;
+  const prefs = state.prefs;
   const roots = [
     ...new Set(
       [
         versionRoot(),
-        state.prefs.library,
-        ...(state.prefs.libraries || []),
-        state.prefs.destination,
-        ...(state.prefs.browser_drives || []),
+        prefs.library,
+        ...(prefs.libraries || []),
+        prefs.destination,
+        ...(prefs.browser_drives || []),
       ].filter(Boolean),
     ),
   ];
-  const label = !versionRoot()
-    ? 'Choose a library or drive'
-    : menu?.error
-      ? 'Drive unavailable'
-      : !menu
-        ? 'Not checked'
-        : !menu.installed
-          ? 'Not installed'
-          : menu.version
-            ? `v${menu.version}`
-            : 'Version unknown — check for updates to identify it';
-  return `<div class="card installed-versions"><h3>Installed versions</h3><p><strong>Desktop app</strong> · v${e(state.version)}</p><label class="field">Menu on library / drive<select id="version-root">${roots.map((root) => option(root, displayPath(root), root === versionRoot())).join('')}</select></label><p><strong>Console menu</strong> · ${e(label)}</p>${menu?.error ? `<p class="note">${e(menu.error)}</p>` : ''}${action('versions-refresh', 'Refresh installed versions', 'small', !versionRoot() ? 'disabled' : '')}</div>`;
+  let label;
+  if (!versionRoot()) label = 'Choose a library or drive';
+  else if (menu?.error) label = 'Drive unavailable';
+  else if (!menu) label = 'Not checked';
+  else if (!menu.installed) label = 'Not installed';
+  else if (menu.version) label = `v${menu.version}`;
+  else label = 'Version unknown — check for updates to identify it';
+
+  return [
+    '<div class="card installed-versions"><h3>Installed versions</h3>',
+    `<p><strong>Desktop app</strong> · v${escapeHtml(state.version)}</p>`,
+    '<label class="field">Menu on library / drive<select id="version-root">',
+    roots.map((root) => option(root, displayPath(root), root === versionRoot())).join(''),
+    '</select></label>',
+    `<p><strong>Console menu</strong> · ${escapeHtml(label)}</p>`,
+    menu?.error ? `<p class="note">${escapeHtml(menu.error)}</p>` : '',
+    action(
+      'versions-refresh',
+      'Refresh installed versions',
+      'small',
+      !versionRoot() ? 'disabled' : '',
+    ),
+    '</div>',
+  ].join('');
 }
+
+/** How the last desktop update went, if the app has just been updated. */
 function updateResultView() {
-  const r = state.updateReport;
-  if (!r) return '';
-  return `<div class="card ${r.success ? '' : 'update-failure'}"><h3>${r.success ? 'Last desktop update completed' : 'Last desktop update failed'}</h3><p>${r.success ? 'The updated app passed its startup check.' : r.previous_intact ? 'The previous version is intact. You can continue using it and try again later.' : 'Recovery could not be confirmed. Keep the update recovery files.'}</p><details ${r.success ? '' : 'open'}><summary>Update details</summary><pre class="progress-log">${e(r.detail)}</pre><p class="note">Log: ${pathLabel(r.log)}</p></details></div>`;
+  const report = state.updateReport;
+  if (!report) return '';
+  let outcome;
+  if (report.success) outcome = 'The updated app passed its startup check.';
+  else if (report.previous_intact)
+    outcome = 'The previous version is intact. You can continue using it and try again later.';
+  else outcome = 'Recovery could not be confirmed. Keep the update recovery files.';
+  return [
+    `<div class="card ${report.success ? '' : 'update-failure'}">`,
+    `<h3>${report.success ? 'Last desktop update completed' : 'Last desktop update failed'}</h3>`,
+    `<p>${outcome}</p>`,
+    `<details ${report.success ? '' : 'open'}><summary>Update details</summary>`,
+    `<pre class="progress-log">${escapeHtml(report.detail)}</pre>`,
+    `<p class="note">Log: ${pathLabel(report.log)}</p></details>`,
+    '</div>',
+  ].join('');
 }
+
+/** A downloaded update waiting to install when the app closes. */
 function pendingUpdateView() {
-  return state.pendingUpdate
-    ? `<div class="card"><h3>Desktop v${e(state.pendingUpdate.version)} is ready</h3><p>It will install when you close the app. A hidden startup check runs afterward; the app stays closed.</p>${action('self-update-apply', 'Restart now', 'primary')}${action('self-update-cancel', 'Cancel scheduled update')}</div>`
-    : '';
+  if (!state.pendingUpdate) return '';
+  return [
+    `<div class="card"><h3>Desktop v${escapeHtml(state.pendingUpdate.version)} is ready</h3>`,
+    '<p>It will install when you close the app. A hidden startup check runs afterward; the app stays closed.</p>',
+    action('self-update-apply', 'Restart now', 'primary'),
+    action('self-update-cancel', 'Cancel scheduled update'),
+    '</div>',
+  ].join('');
 }
+
+/**
+ * The banner above every page: a failed update, an update waiting for
+ * exit, or available updates (until dismissed, or if notices are off).
+ */
 function updateNotice() {
-  if (state.updateReport && !state.updateReport.success && !state.reportDismissed)
-    return `<strong>The last desktop update failed.</strong> ${state.updateReport.previous_intact ? 'The previous version is intact.' : 'Recovery needs attention.'} ${action('updates-review', 'View details', 'small')}${action('update-notice-dismiss', 'Dismiss', 'quiet small')}`;
+  const report = state.updateReport;
+  if (report && !report.success && !state.reportDismissed) {
+    const recovery = report.previous_intact
+      ? 'The previous version is intact.'
+      : 'Recovery needs attention.';
+    return `<strong>The last desktop update failed.</strong> ${recovery} ${action('updates-review', 'View details', 'small')}${action('update-notice-dismiss', 'Dismiss', 'quiet small')}`;
+  }
   if (state.pendingUpdate)
-    return `<strong>Desktop v${e(state.pendingUpdate.version)} is ready to install on exit.</strong> ${action('updates-review', 'Review', 'small')}`;
+    return `<strong>Desktop v${escapeHtml(state.pendingUpdate.version)} is ready to install on exit.</strong> ${action('updates-review', 'Review', 'small')}`;
   if (state.prefs.hide_update_notifications) return '';
-  const u = state.updates;
-  if (!u || (!u.desktop && !u.targets.length)) return '';
+
+  const updates = state.updates;
+  if (!updates || (!updates.desktop && !updates.targets.length)) return '';
+  // A dismissed notice stays hidden until something different is offered.
   const key = JSON.stringify([
-    u.desktop && u.desktop_release.tag,
-    u.targets.map((t) => t.root),
-    u.menu_release?.tag,
+    updates.desktop && updates.desktop_release.tag,
+    updates.targets.map((target) => target.root),
+    updates.menu_release?.tag,
   ]);
   if (state.noticeDismissed === key) return '';
-  const label =
-    u.desktop && u.targets.length
-      ? 'Desktop and boot ISO updates are available.'
-      : u.desktop
-        ? 'A desktop update is available.'
-        : 'A boot ISO update is available.';
-  return `<strong>${u.local ? 'Local build: ' : ''}${label}</strong> ${action('updates-review', 'Review updates', 'small')}${action('update-notice-dismiss', 'Dismiss', 'quiet small')}`;
+
+  let label;
+  if (updates.desktop && updates.targets.length)
+    label = 'Desktop and boot ISO updates are available.';
+  else if (updates.desktop) label = 'A desktop update is available.';
+  else label = 'A boot ISO update is available.';
+  return `<strong>${updates.local ? 'Local build: ' : ''}${label}</strong> ${action('updates-review', 'Review updates', 'small')}${action('update-notice-dismiss', 'Dismiss', 'quiet small')}`;
 }
+
+/** Shows the update banner, and the number of updates on the Updates button. */
 function renderUpdateNotice() {
   const panel = $('#update-notice');
   if (!panel) return;
   const html = updateNotice();
   panel.innerHTML = html;
   panel.hidden = !html;
+
   const nav = document.querySelector('[data-page="updates"]');
   const count = state.prefs.hide_update_notifications
     ? 0
@@ -2228,20 +2598,31 @@ function renderUpdateNotice() {
     nav.setAttribute('aria-label', count ? `Updates, ${count} available` : 'Updates');
   }
 }
+
+/**
+ * Downloads the offered desktop update, after asking. Installs it now
+ * (closing and restarting the app, once open edits are dealt with) or, with
+ * `onExit`, when the app closes.
+ */
 async function prepareDesktopUpdate(onExit) {
   if (!onExit && !(await prepareClose())) return;
-  if (
-    !(await confirmAction(
-      onExit ? 'Update on exit' : 'Update and restart',
-      state.updates.local
-        ? `Install local ${state.updates.desktop_release.tag} from ${displayPath(state.prefs.developer_updates_directory)}${onExit ? ' when you close the app' : ' and restart'}? Local builds can replace the same or a newer version.`
-        : onExit
-          ? `Download ${state.updates.desktop_release.tag} now and install it when you close Oh My 3DO? You can keep working until then.`
-          : `Install ${state.updates.desktop_release.tag} and restart Oh My 3DO? Your settings and library stay in place.`,
-      onExit ? 'Download update' : 'Update and restart',
-    ))
-  )
-    return;
+  const release = state.updates.desktop_release;
+  let question;
+  if (state.updates.local)
+    question =
+      `Install local ${release.tag} from ${displayPath(state.prefs.developer_updates_directory)}` +
+      `${onExit ? ' when you close the app' : ' and restart'}? Local builds can replace the same or a newer version.`;
+  else if (onExit)
+    question = `Download ${release.tag} now and install it when you close Oh My 3DO? You can keep working until then.`;
+  else
+    question = `Install ${release.tag} and restart Oh My 3DO? Your settings and library stay in place.`;
+  const confirmed = await confirmAction(
+    onExit ? 'Update on exit' : 'Update and restart',
+    question,
+    onExit ? 'Download update' : 'Update and restart',
+  );
+  if (!confirmed) return;
+
   const result = await call('self_update', { on_exit: onExit });
   if (onExit) {
     state.pendingUpdate = result;
@@ -2250,6 +2631,7 @@ async function prepareDesktopUpdate(onExit) {
     toast('Update downloaded and verified. It will install when you close the app.');
   }
 }
+
 const handlers = {
   'drive-media-update': () => driveMediaUpdate(),
   'drive-media-review': () => reviewDriveMedia(),
