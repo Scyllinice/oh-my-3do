@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# Build the menu's bootable disc image inside the SDK container.
+#
+# Usage: tools/dev-container menu   (or demo), which runs: tools/build-menu [menu|demo]
+#
+#   menu  iso/boot.iso: the menu people boot from the USB drive
+#   demo  iso/menu-demo.iso: an offline demo with sample games built in
+#
+# Steps:
+#   1. Check the generated save tables are current.
+#   2. Stage a 3DO project: the SDK's template, the trimmed OS runtime
+#      (prepare-runtime.py), the menu's sources, artwork and covers.
+#   3. Compile and sign the menu executable (LaunchMe).
+#   4. Pack the disc image and check it: 3dt's signature check, every packed
+#      file against the staged one, and the executable's format.
+#   5. Copy the image to iso/ and record what went into it in
+#      build/console-MODE/ (the release check reads source.sha256 there).
 set -euo pipefail
 
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -10,31 +26,38 @@ case "$mode" in
 esac
 : "${TDO_DEVKIT_PATH:?Run this through tools/dev-container}"
 
-python3 "$project_dir/tools/build-save-cheats.py" --check
-python3 "$project_dir/tools/build-save-names.py" --check
-
 stage=$(mktemp -d /tmp/oh-my-3do-menu.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
-sh "$TDO_DEVKIT_PATH/bin/buildtools/linux/bootstrap-3do-project" "$stage"
-python3 "$project_dir/tools/prepare-runtime.py" "$stage/takeme" "$stage/runtime-audit.json"
-cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$project_dir"/src/*.s "$stage/src/"
-cp -r "$project_dir/vendor" "$stage/vendor"
-cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
-cp "$project_dir/assets/startup.cel" "$stage/takeme/startup.cel"
-cp "$project_dir/assets/loading.banner" "$stage/takeme/BannerScreen"
-cp "$project_dir/THIRD_PARTY.md" "$stage/takeme/ThirdParty.txt"
-cp "$project_dir/LICENSE" "$stage/takeme/License.txt"
-python3 "$project_dir/tools/build-covers.py" "$stage" "$mode"
-if [[ "$mode" == menu ]]; then
-    python3 "$project_dir/tools/export-covers.py"
-fi
+record_dir="$project_dir/build/console-$mode"
 
-# Keep the upstream build rules and ARM ABI settings. This application owns
-# privileged XBUS IORequests, so its signed executable must request privilege.
+check_generated_tables() {
+    python3 "$project_dir/tools/build-save-cheats.py" --check
+    python3 "$project_dir/tools/build-save-names.py" --check
+}
+
+stage_project() {
+    sh "$TDO_DEVKIT_PATH/bin/buildtools/linux/bootstrap-3do-project" "$stage"
+    python3 "$project_dir/tools/prepare-runtime.py" "$stage/takeme" "$stage/runtime-audit.json"
+    cp "$project_dir"/src/*.c "$project_dir"/src/*.h "$project_dir"/src/*.s "$stage/src/"
+    cp -r "$project_dir/vendor" "$stage/vendor"
+    cp "$project_dir/assets/logo-menu.cel" "$stage/takeme/logo.cel"
+    cp "$project_dir/assets/startup.cel" "$stage/takeme/startup.cel"
+    cp "$project_dir/assets/loading.banner" "$stage/takeme/BannerScreen"
+    cp "$project_dir/THIRD_PARTY.md" "$stage/takeme/ThirdParty.txt"
+    cp "$project_dir/LICENSE" "$stage/takeme/License.txt"
+    python3 "$project_dir/tools/build-covers.py" "$stage" "$mode"
+    if [[ "$mode" == menu ]]; then
+        python3 "$project_dir/tools/export-covers.py"
+    fi
+}
+
+# Record the SDK libraries the link uses (with hashes) in the runtime audit.
 # Read the original SDK library list for the audit; do not override its link.
-read -r -a libraries <<< "$(make --no-print-directory -s -C "$stage" \
-    --eval='oh3do-print-libs:;@echo $(LIBS)' oh3do-print-libs)"
-python3 - "$stage/runtime-audit.json" "$TDO_DEVKIT_PATH/lib/3do/cstartup.o" "${libraries[@]}" <<'PYLIBS'
+record_link_inputs() {
+    local libraries
+    read -r -a libraries <<< "$(make --no-print-directory -s -C "$stage" \
+        --eval='oh3do-print-libs:;@echo $(LIBS)' oh3do-print-libs)"
+    python3 - "$stage/runtime-audit.json" "$TDO_DEVKIT_PATH/lib/3do/cstartup.o" "${libraries[@]}" <<'PYLIBS'
 import hashlib, json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -43,34 +66,50 @@ audit["link_inputs"] = [{"path": name, "sha256": hashlib.sha256(Path(name).read_
                          "redistribution_permission": "unresolved"} for name in sys.argv[2:]]
 path.write_text(json.dumps(audit, indent=2) + "\n")
 PYLIBS
-make -C "$stage" NAME="$name" STACKSIZE=32768 \
-    "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
-modbin --name="Oh My 3DO" --pri=150 --flags=2 --stack=32768 --sign=3do \
-    "$stage/takeme/LaunchMe" "$stage/takeme/LaunchMe"
+}
 
-# Restore the retail-signature handling used before runtime trimming.
-for module in System/Devices/ns.privdevice System/Folios/debugger.privfolio System/Programs/what; do
-    modbin --sign=3do "$stage/takeme/$module" "$stage/takeme/$module"
-done
+# Keep the upstream build rules and ARM ABI settings. This application owns
+# privileged XBUS IORequests, so its signed executable must request privilege.
+build_executable() {
+    record_link_inputs
+    make -C "$stage" NAME="$name" STACKSIZE=32768 \
+        "DEFFLAGS=-DNDEBUG=1 -DOH3DO_SDK=1 $extra_flags" launchme
+    modbin --name="Oh My 3DO" --pri=150 --flags=2 --stack=32768 --sign=3do \
+        "$stage/takeme/LaunchMe" "$stage/takeme/LaunchMe"
 
-mkdir -p "$project_dir/iso/saves"
-if [[ ! -e "$project_dir/iso/favorites.txt" ]]; then
-    cp "$project_dir/favorites.example.txt" "$project_dir/iso/favorites.txt"
-fi
-cp "$project_dir/assets/saves-README.txt" "$project_dir/iso/saves/README.txt"
-mkdir -p "$project_dir/iso" "$project_dir/build/console-$mode"
-3dt pack "$stage/takeme" -o "$stage/$name.iso"
-# The FCare ODE reads an image whose size is a multiple of 2352 bytes as raw
-# CD sectors (third_party/SataTo3DO/src/interfaces/MSC.c), so the console
-# hangs after the 3DO logo. That happens whenever the block count is a
-# multiple of 147; a blank block past the filesystem's end avoids it.
-if (( $(stat -c %s "$stage/$name.iso") % 2352 == 0 )); then
-    head -c 2048 /dev/zero >> "$stage/$name.iso"
-fi
-3dt verify "$stage/$name.iso"
-3dt unpack "$stage/$name.iso" -o "$stage/unpacked" > "$stage/unpack.log"
-# Check the complete packed runtime, rather than only the menu and artwork.
-python3 - "$stage/takeme" "$stage/unpacked" <<'PYFILES'
+    # Restore the retail-signature handling used before runtime trimming.
+    local module
+    for module in System/Devices/ns.privdevice System/Folios/debugger.privfolio System/Programs/what; do
+        modbin --sign=3do "$stage/takeme/$module" "$stage/takeme/$module"
+    done
+}
+
+# The files that go beside the image on the USB drive.
+prepare_iso_folder() {
+    mkdir -p "$project_dir/iso/saves"
+    if [[ ! -e "$project_dir/iso/favorites.txt" ]]; then
+        cp "$project_dir/favorites.example.txt" "$project_dir/iso/favorites.txt"
+    fi
+    cp "$project_dir/assets/saves-README.txt" "$project_dir/iso/saves/README.txt"
+    mkdir -p "$project_dir/iso" "$record_dir"
+}
+
+pack_image() {
+    3dt pack "$stage/takeme" -o "$stage/$name.iso"
+    # The FCare ODE reads an image whose size is a multiple of 2352 bytes as raw
+    # CD sectors (third_party/SataTo3DO/src/interfaces/MSC.c), so the console
+    # hangs after the 3DO logo. That happens whenever the block count is a
+    # multiple of 147; a blank block past the filesystem's end avoids it.
+    if (( $(stat -c %s "$stage/$name.iso") % 2352 == 0 )); then
+        head -c 2048 /dev/zero >> "$stage/$name.iso"
+    fi
+}
+
+verify_image() {
+    3dt verify "$stage/$name.iso"
+    3dt unpack "$stage/$name.iso" -o "$stage/unpacked" > "$stage/unpack.log"
+    # Check the complete packed runtime, rather than only the menu and artwork.
+    python3 - "$stage/takeme" "$stage/unpacked" <<'PYFILES'
 from pathlib import Path
 import sys
 source, unpacked = map(Path, sys.argv[1:])
@@ -90,52 +129,74 @@ for path in source.rglob("*"):
     count += 1
 print(f"Verified all {count} packed payloads against the staging directory")
 PYFILES
-cmp "$stage/takeme/LaunchMe" "$stage/unpacked/LaunchMe"
-cmp "$project_dir/assets/logo-menu.cel" "$stage/unpacked/logo.cel"
-# BannerScreen receives a retail signature trailer during packing. Compare
-# its complete source payload, then let 3dt verify check the signed image.
-cmp -n "$(wc -c < "$project_dir/assets/loading.banner")" \
-    "$project_dir/assets/loading.banner" "$stage/unpacked/BannerScreen"
-if [[ -d "$stage/takeme/covers" ]]; then
-    diff -r "$stage/takeme/covers" "$stage/unpacked/covers"
-fi
-python3 "$project_dir/tools/verify-aif.py" "$stage/unpacked/LaunchMe"
-cp "$stage/$name.iso" "$project_dir/iso/$name.iso"
-# Keep a user's edited output config when rebuilding an image.
-if [[ ! -e "$project_dir/iso/ohmy3do.ini" ]]; then
-    cp "$project_dir/ohmy3do.ini" "$project_dir/iso/ohmy3do.ini"
-fi
-cp "$stage/takeme/LaunchMe" "$project_dir/build/console-$mode/LaunchMe"
-cp "$stage/src/cover_catalog.c" "$project_dir/build/console-$mode/cover_catalog.c"
-cp "$stage/runtime-audit.json" "$project_dir/build/console-$mode/runtime-audit.json"
-find "$stage/unpacked" -type f -printf '%P\n' | sort > "$project_dir/build/console-$mode/disc-files.txt"
-cp /opt/3do-devkit.revision "$project_dir/build/console-$mode/devkit.revision"
-sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
-    "$project_dir/data/save-cheats.json" "$project_dir/tools/build-save-cheats.py" \
-    "$project_dir/tools/build-menu" "$project_dir/tools/verify-aif.py" \
-    "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
-    "$project_dir/tools/prepare-channel-gecko.py" "$project_dir/assets/channel-gecko-source.png" \
-    "$project_dir/assets/channel-gecko-prompt.txt" \
-    "$project_dir/tools/export-covers.py" \
-    "$project_dir/tools/prepare-runtime.py" \
-    "$project_dir"/vendor/pngle/* "$project_dir"/vendor/fonts/* \
-    "$project_dir/assets/logo-menu.cel" \
-    "$project_dir/assets/loading.banner" \
-    "$project_dir/assets/startup.cel" \
-    "$project_dir/ohmy3do.ini" \
-    "$project_dir/THIRD_PARTY.md" "$project_dir/LICENSE" \
-    > "$project_dir/build/console-$mode/source.sha256"
-sha256sum "$project_dir/build/console-$mode/cover_catalog.c" \
-    >> "$project_dir/build/console-$mode/source.sha256"
-if [[ -d "$stage/takeme/covers" ]]; then
-    (cd "$stage/takeme" && sha256sum covers/*) \
-        > "$project_dir/build/console-$mode/covers.sha256"
-else
-    rm -f "$project_dir/build/console-$mode/covers.sha256"
-fi
-(cd "$project_dir/iso" && sha256sum "$name.iso" > "$name.iso.sha256")
-cat "$project_dir/iso/$name.iso.sha256"
-if [[ "$mode" == menu ]]; then
-    python3 "$project_dir/tools/write-update-manifest.py" menu --artifact "$project_dir/iso/boot.iso"
-fi
+    cmp "$stage/takeme/LaunchMe" "$stage/unpacked/LaunchMe"
+    cmp "$project_dir/assets/logo-menu.cel" "$stage/unpacked/logo.cel"
+    # BannerScreen receives a retail signature trailer during packing. Compare
+    # its complete source payload, then let 3dt verify check the signed image.
+    cmp -n "$(wc -c < "$project_dir/assets/loading.banner")" \
+        "$project_dir/assets/loading.banner" "$stage/unpacked/BannerScreen"
+    if [[ -d "$stage/takeme/covers" ]]; then
+        diff -r "$stage/takeme/covers" "$stage/unpacked/covers"
+    fi
+    python3 "$project_dir/tools/verify-aif.py" "$stage/unpacked/LaunchMe"
+}
+
+install_image() {
+    cp "$stage/$name.iso" "$project_dir/iso/$name.iso"
+    # Keep a user's edited output config when rebuilding an image.
+    if [[ ! -e "$project_dir/iso/ohmy3do.ini" ]]; then
+        cp "$project_dir/ohmy3do.ini" "$project_dir/iso/ohmy3do.ini"
+    fi
+}
+
+# Keep the build's executable, generated cover catalog, runtime audit, file
+# list and SDK revision, and hashes of every input (source.sha256), so a
+# release can prove the image matches the current sources.
+record_build() {
+    cp "$stage/takeme/LaunchMe" "$record_dir/LaunchMe"
+    cp "$stage/src/cover_catalog.c" "$record_dir/cover_catalog.c"
+    cp "$stage/runtime-audit.json" "$record_dir/runtime-audit.json"
+    find "$stage/unpacked" -type f -printf '%P\n' | sort > "$record_dir/disc-files.txt"
+    cp /opt/3do-devkit.revision "$record_dir/devkit.revision"
+    sha256sum "$project_dir"/src/*.c "$project_dir"/src/*.h \
+        "$project_dir/data/save-cheats.json" "$project_dir/tools/build-save-cheats.py" \
+        "$project_dir/tools/build-menu" "$project_dir/tools/verify-aif.py" \
+        "$project_dir/tools/build-covers.py" "$project_dir/tools/prepare-cover.py" \
+        "$project_dir/tools/prepare-channel-gecko.py" "$project_dir/assets/channel-gecko-source.png" \
+        "$project_dir/assets/channel-gecko-prompt.txt" \
+        "$project_dir/tools/export-covers.py" \
+        "$project_dir/tools/prepare-runtime.py" \
+        "$project_dir"/vendor/pngle/* "$project_dir"/vendor/fonts/* \
+        "$project_dir/assets/logo-menu.cel" \
+        "$project_dir/assets/loading.banner" \
+        "$project_dir/assets/startup.cel" \
+        "$project_dir/ohmy3do.ini" \
+        "$project_dir/THIRD_PARTY.md" "$project_dir/LICENSE" \
+        > "$record_dir/source.sha256"
+    sha256sum "$record_dir/cover_catalog.c" >> "$record_dir/source.sha256"
+    if [[ -d "$stage/takeme/covers" ]]; then
+        (cd "$stage/takeme" && sha256sum covers/*) > "$record_dir/covers.sha256"
+    else
+        rm -f "$record_dir/covers.sha256"
+    fi
+}
+
+# The image's checksum file, and for the menu, the desktop app's update manifest.
+publish_checksums() {
+    (cd "$project_dir/iso" && sha256sum "$name.iso" > "$name.iso.sha256")
+    cat "$project_dir/iso/$name.iso.sha256"
+    if [[ "$mode" == menu ]]; then
+        python3 "$project_dir/tools/write-update-manifest.py" menu --artifact "$project_dir/iso/boot.iso"
+    fi
+}
+
+check_generated_tables
+stage_project
+build_executable
+prepare_iso_folder
+pack_image
+verify_image
+install_image
+record_build
+publish_checksums
 echo "Built: $project_dir/iso/$name.iso"
