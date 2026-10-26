@@ -1,3 +1,12 @@
+; Per-user Windows setup for Oh My 3DO Library, compiled by
+; tools/package-installers.py, which passes OUTPUT, VERSION, PAYLOAD (the
+; package folder), ICON, WEBVIEW (Microsoft's WebView2 bootstrapper),
+; NSIS_LICENSE, INSTALL_FILES and UNINSTALL_FILES (generated file lists).
+;
+; Installs to %LOCALAPPDATA%\Programs\OhMy3DOLibrary without administrator
+; rights, adds Start menu (and optional desktop) shortcuts and an uninstaller,
+; and installs WebView2 when it is missing. Uninstalling removes only the
+; app's own files.
 Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
