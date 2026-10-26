@@ -2632,19 +2632,29 @@ async function prepareDesktopUpdate(onExit) {
   }
 }
 
+// ---- Button handlers ----
+//
+// What each `data-action` button does (see the click listener below). A
+// handler gets the clicked button, and may return false to mean "nothing
+// was done".
+
 const handlers = {
+  // -- Drive media updates (from the drive view) --
   'drive-media-update': () => driveMediaUpdate(),
   'drive-media-review': () => reviewDriveMedia(),
   'drive-media-apply': async () => {
-    const u = state.driveUpdate;
-    if (!u?.plan || u.source !== state.prefs.library) throw new Error('Review the update again.');
-    await call('copy', { destination: u.root, drive_token: u.token });
+    const update = state.driveUpdate;
+    if (!update?.plan || update.source !== state.prefs.library)
+      throw new Error('Review the update again.');
+    await call('copy', { destination: update.root, drive_token: update.token });
     state.driveUpdate = null;
     closeDialog();
     state.coverCache.clear();
     await loadLibrary();
     toast('Drive media, descriptions and information updated.');
   },
+
+  // -- Libraries and drives --
   'library-refresh': async () => {
     state.coverCache.clear();
     await refreshDriveStatus();
@@ -2671,24 +2681,25 @@ const handlers = {
     await handlers[kind === 'drives' ? 'add-drive' : 'choose-library']();
     await manageRoots(kind);
   },
+  // Takes a library or drive off the saved list (nothing on it changes).
   'forget-root': async (button) => {
     const { kind, root } = button.dataset;
-    const p = state.prefs;
+    const prefs = state.prefs;
     if (kind === 'drives') {
-      p.browser_drives = (p.browser_drives || []).filter((r) => r !== root);
-      if (p.destination === root) p.destination = p.browser_drives[0] || '';
+      prefs.browser_drives = (prefs.browser_drives || []).filter((drive) => drive !== root);
+      if (prefs.destination === root) prefs.destination = prefs.browser_drives[0] || '';
       await preferences();
-      if (state.browseRoot === root) await switchLibrary(p.destination || '');
+      if (state.browseRoot === root) await switchLibrary(prefs.destination || '');
     } else {
-      if (p.library === root && !(await resolveDirty())) return;
-      const active = p.library === root;
+      if (prefs.library === root && !(await resolveDirty())) return;
+      const active = prefs.library === root;
       if (active) {
         rememberLibraryView();
         await flushLibraryView();
       }
-      p.libraries = (p.libraries || []).filter((r) => r !== root);
+      prefs.libraries = (prefs.libraries || []).filter((library) => library !== root);
       if (active) {
-        p.library = p.libraries[0] || '';
+        prefs.library = prefs.libraries[0] || '';
         state.coverCache.clear();
       }
       await preferences();
@@ -2714,12 +2725,14 @@ const handlers = {
       await loadLibrary();
     }
   },
+
+  // -- Selecting and filtering games --
   'add-discs': () => {
     state.page = 'import';
     render();
   },
   'select-shown': () => {
-    for (const g of visibleGames(state.groups, state.filter)) state.selected.add(g.key);
+    for (const group of visibleGames(state.groups, state.filter)) state.selected.add(group.key);
     rememberLibraryView();
     render();
   },
@@ -2747,24 +2760,38 @@ const handlers = {
     rememberLibraryView();
     render();
   },
+
+  // -- Removing and moving games --
+  // Reviews removing the selected games, from the library or the browsed drive.
   'remove-titles': async () => {
     const discs = selectedDiscs(state.groups, state.selected);
     if (!discs.length) return;
-    const titles = state.groups.filter((g) => state.selected.has(g.key)).map((g) => g.title);
-    const plan = await call('titles_remove_review', {
-      discs,
-      ...(state.browseRoot
-        ? { browser_root: state.browseRoot, drive_token: state.browser?.identity?.token }
-        : {}),
-    });
+    const titles = state.groups
+      .filter((group) => state.selected.has(group.key))
+      .map((group) => group.title);
+    const onDrive = state.browseRoot
+      ? { browser_root: state.browseRoot, drive_token: state.browser?.identity?.token }
+      : {};
+    const plan = await call('titles_remove_review', { discs, ...onDrive });
     state.removal = plan;
+
+    const body = [
+      `<p>Permanently delete ${quantity(titles.length, 'title')} (${quantity(plan.discs.length, 'disc')}) from ${pathLabel(plan.root)}?</p>`,
+      `<ul>${titles.map((title) => `<li>${escapeHtml(title)}</li>`).join('')}</ul>`,
+      `<p>${quantity(plan.files.length, 'file')} · ${bytes(plan.bytes)} to remove, including associated media that no remaining title uses.</p>`,
+      '<div class="notice">This cannot be undone. Saves, unrelated files and copies in other libraries are kept.</div>',
+      '<details class="section"><summary>Review files</summary><ul>',
+      plan.files.map((file) => `<li>${pathLabel(file.path)} · ${bytes(file.bytes)}</li>`).join(''),
+      '</ul></details>',
+    ].join('');
     dialog(
       'Remove selected titles',
-      `<p>Permanently delete ${quantity(titles.length, 'title')} (${quantity(plan.discs.length, 'disc')}) from ${pathLabel(plan.root)}?</p><ul>${titles.map((t) => `<li>${e(t)}</li>`).join('')}</ul><p>${quantity(plan.files.length, 'file')} · ${bytes(plan.bytes)} to remove, including associated media that no remaining title uses.</p><div class="notice">This cannot be undone. Saves, unrelated files and copies in other libraries are kept.</div><details class="section"><summary>Review files</summary><ul>${plan.files.map((f) => `<li>${pathLabel(f.path)} · ${bytes(f.bytes)}</li>`).join('')}</ul></details>`,
+      body,
       action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
         action('remove-titles-apply', 'Permanently remove', 'danger'),
     );
   },
+  // Carries out the reviewed removal. If it fails, the button offers a new review.
   'remove-titles-apply': async () => {
     let result;
     try {
@@ -2782,15 +2809,15 @@ const handlers = {
     state.coverCache.clear();
     closeDialog();
     await perform(loadLibrary);
-    toast(
-      `${quantity(result.discs, 'disc')} removed.${result.warnings.length ? ' ' + result.warnings.join(' ') : ''}`,
-      result.warnings.length > 0,
-    );
+    const warnings = result.warnings.length ? ' ' + result.warnings.join(' ') : '';
+    toast(`${quantity(result.discs, 'disc')} removed.${warnings}`, result.warnings.length > 0);
   },
   'move-games': async () => {
+    const choices = categories.map((category) => option(category, category, false)).join('');
     dialog(
       'Move selected games',
-      `<p>Move ${state.selected.size} complete game folders and update their metadata, media links and menu lists.</p><label class="field">Category<select id="move-category">${categories.map((c) => option(c, c, false)).join('')}</select></label>`,
+      `<p>Move ${state.selected.size} complete game folders and update their metadata, media links and menu lists.</p>` +
+        `<label class="field">Category<select id="move-category">${choices}</select></label>`,
       action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
         action('move-apply', 'Move folders', 'primary'),
     );
@@ -2802,6 +2829,8 @@ const handlers = {
     await loadLibrary();
     toast('Game folders moved. Undo is available in Settings & tools.');
   },
+
+  // -- Copying games to a drive --
   'copy-open': () => copyDialog(),
   'copy-destination': async () => {
     const folder = await pick('folder', state.prefs.destination);
@@ -2825,11 +2854,12 @@ const handlers = {
     });
     renderCopyDialog();
   },
+  // Copies, if the library and destination are still the reviewed ones.
   'copy-apply': async () => {
-    if (
+    const changed =
       state.copyRoot !== state.prefs.library ||
-      $('#copy-destination').value !== state.prefs.destination
-    ) {
+      $('#copy-destination').value !== state.prefs.destination;
+    if (changed) {
       state.copy = null;
       throw new Error('Folders changed. Review the copy again.');
     }
@@ -2841,16 +2871,19 @@ const handlers = {
     await perform(loadLibrary);
     dialog(
       'USB copy complete',
-      `<p>The reviewed files were copied and verified. Existing games, settings and saves were preserved.</p><p>${pathLabel(state.prefs.destination)}</p>`,
+      '<p>The reviewed files were copied and verified. Existing games, settings and saves were preserved.</p>' +
+        `<p>${pathLabel(state.prefs.destination)}</p>`,
       action('close-dialog', 'Close', '', 'data-dialog="main-dialog"') +
         action(
           'drive-eject',
           'Safely eject drive',
           'primary',
-          `data-root="${e(state.prefs.destination)}"`,
+          `data-root="${escapeHtml(state.prefs.destination)}"`,
         ),
     );
   },
+
+  // -- Adding discs --
   'import-files': async () => {
     const paths = await pick('discs');
     if (paths) {
@@ -2879,14 +2912,13 @@ const handlers = {
     toast('Scan complete. Review identification and selection before importing.');
   },
   'import-apply': async () => {
-    if (
-      !(await confirmAction(
-        'Import selected discs',
-        `Copy ${state.plan.entries.filter((r) => r.selected).length} discs into ${state.prefs.library}?`,
-        'Import discs',
-      ))
-    )
-      return;
+    const count = state.plan.entries.filter((entry) => entry.selected).length;
+    const confirmed = await confirmAction(
+      'Import selected discs',
+      `Copy ${count} discs into ${state.prefs.library}?`,
+      'Import discs',
+    );
+    if (!confirmed) return;
     await call('import');
     state.paths = [];
     state.plan = null;
@@ -2894,12 +2926,32 @@ const handlers = {
     await loadLibrary();
     toast('Discs imported and search indexes updated.');
   },
+  // Lets the person choose a disc's catalog release and category, or
+  // import it under a title of their own (unverified).
   'import-resolve': (button) => {
     const index = Number(button.dataset.index);
-    const r = state.plan.entries[index];
+    const entry = state.plan.entries[index];
+    const releases = state.plan.catalog.games
+      .map((game, gameIndex) => option(gameIndex, game.release, entry.game === gameIndex))
+      .join('');
+    const categoryChoices = categories
+      .map((category) => option(category, category, category === entry.category))
+      .join('');
+    const body = [
+      `<p>${pathLabel(entry.source)}</p>`,
+      '<label class="field">Catalog release<select id="resolve-game">',
+      `<option value="">Choose a release…</option>${releases}</select></label>`,
+      `<div class="row section"><label class="field grow">Category<select id="resolve-category">${categoryChoices}</select></label></div>`,
+      '<details><summary>Import an unverified title</summary>',
+      field('Title', 'resolve-title', entry.title),
+      field('Region', 'resolve-region', entry.region || 'Unknown'),
+      '<p class="note">This accepts your title explicitly without asserting checksum identification.</p>',
+      action('import-unverified', 'Accept unverified title', '', 'data-index="' + index + '"'),
+      '</details>',
+    ].join('');
     dialog(
       'Identify disc',
-      `<p>${pathLabel(r.source)}</p><label class="field">Catalog release<select id="resolve-game"><option value="">Choose a release…</option>${state.plan.catalog.games.map((g, i) => option(i, g.release, r.game === i)).join('')}</select></label><div class="row section"><label class="field grow">Category<select id="resolve-category">${categories.map((c) => option(c, c, c === r.category)).join('')}</select></label></div><details><summary>Import an unverified title</summary>${field('Title', 'resolve-title', r.title)}${field('Region', 'resolve-region', r.region || 'Unknown')}<p class="note">This accepts your title explicitly without asserting checksum identification.</p>${action('import-unverified', 'Accept unverified title', '', 'data-index="' + index + '"')}</details>`,
+      body,
       action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
         action('import-identify', 'Use selected release', 'primary', `data-index="${index}"`),
     );
@@ -2927,6 +2979,8 @@ const handlers = {
     closeDialog();
     render();
   },
+
+  // -- Save backups --
   'backup-open': async () => {
     const path = await pick('archive', state.slotDirectory);
     if (path) await openBackup(path);
@@ -2956,15 +3010,13 @@ const handlers = {
     render();
   },
   'backup-remove': async () => {
-    if (
-      !(await confirmAction(
-        'Remove save from draft',
-        `Remove ${state.entry.name} from this backup draft?`,
-        'Remove save',
-        true,
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Remove save from draft',
+      `Remove ${state.entry.name} from this backup draft?`,
+      'Remove save',
+      true,
+    );
+    if (!confirmed) return;
     state.backup = await call('backup_remove', { indices: [state.entryIndex] });
     state.entry = null;
     state.entryIndex = null;
@@ -2977,34 +3029,43 @@ const handlers = {
     await commitHex();
     const path = await pick('raw');
     if (!path) return;
-    if (
-      !(await confirmAction(
-        'Replace save bytes',
-        `Replace the raw bytes of ${state.entry.name} in this draft? Its filename and file type stay the same.`,
-        'Import bytes',
-      ))
-    )
-      return;
+    const confirmed = await confirmAction(
+      'Replace save bytes',
+      `Replace the raw bytes of ${state.entry.name} in this draft? Its filename and file type stay the same.`,
+      'Import bytes',
+    );
+    if (!confirmed) return;
     state.backup = await call('backup_import_raw', { index: state.entryIndex, path });
     state.entry = await call('backup_entry', { index: state.entryIndex });
     render();
   },
+  // Lets the person pick saves from another backup to add to this one.
   'backup-merge': async () => {
     await commitHex();
     const path = await pick('archive', state.slotDirectory);
     if (!path) return;
-    const entries = await call('backup_inspect', { path });
+    const saves = await call('backup_inspect', { path });
     state.mergePath = path;
+    const choices = saves
+      .map((save) =>
+        [
+          `<label><input type="checkbox" data-merge-index="${save.index}">`,
+          `<span><strong>${escapeHtml(save.known || save.name)}</strong>`,
+          `<small> · ${escapeHtml(save.name)} · ${bytes(save.size)}</small></span></label>`,
+        ].join(''),
+      )
+      .join('');
     dialog(
       'Add individual saves',
-      `<p>Choose saves to add to this draft. Matching filenames replace that save only; unrelated saves stay in the draft.</p><div class="stack">${entries.map((r) => `<label><input type="checkbox" data-merge-index="${r.index}"><span><strong>${e(r.known || r.name)}</strong><small> · ${e(r.name)} · ${bytes(r.size)}</small></span></label>`).join('')}</div>`,
+      '<p>Choose saves to add to this draft. Matching filenames replace that save only; unrelated saves stay in the draft.</p>' +
+        `<div class="stack">${choices}</div>`,
       action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
         action('backup-merge-apply', 'Add selected saves', 'primary'),
     );
   },
   'backup-merge-apply': async () => {
-    const indices = [...document.querySelectorAll('[data-merge-index]:checked')].map((n) =>
-      Number(n.dataset.mergeIndex),
+    const indices = [...document.querySelectorAll('[data-merge-index]:checked')].map((input) =>
+      Number(input.dataset.mergeIndex),
     );
     if (!indices.length) throw new Error('Choose at least one save.');
     state.backup = await call('backup_merge', { path: state.mergePath, indices });
@@ -3020,6 +3081,7 @@ const handlers = {
     const result = await call('backup_compare', { path });
     comparisonDialog(result, path);
   },
+  // From a comparison: opens that save in the hex editor.
   'compare-edit': async (button) => {
     state.entryIndex = Number(button.dataset.index);
     state.entry = await call('backup_entry', { index: state.entryIndex });
@@ -3032,6 +3094,8 @@ const handlers = {
       hex.scrollIntoView({ block: 'center' });
     }
   },
+
+  // -- Save slots --
   'slots-usb': async () => {
     if (!state.prefs.destination) throw new Error('Choose a USB destination in Drive setup first.');
     state.slotDirectory = state.prefs.destination.replace(/[\\/]$/, '') + '/.ohmy3do/saves';
@@ -3056,7 +3120,7 @@ const handlers = {
   'slot-open': (button) => openBackup(button.dataset.path),
   'slot-label': () => {
     if (!state.backup.path) throw new Error('Save this draft into a numbered slot first.');
-    const found = state.slots.find((s) => s.path === state.backup.path);
+    const found = state.slots.find((slot) => slot.path === state.backup.path);
     dialog(
       'Name backup slot',
       field('Slot label (24 ASCII characters)', 'slot-label-text', found?.label || ''),
@@ -3079,7 +3143,9 @@ const handlers = {
     state.notesOriginal = result.notes;
     dialog(
       'Slot notes',
-      `<p>Notes stay beside the archive and do not change console save data.</p><label class="field">Notes (up to 4096 UTF-8 bytes)<textarea id="slot-notes-text" rows="7" aria-label="Slot notes">${e(result.notes || '')}</textarea></label>`,
+      '<p>Notes stay beside the archive and do not change console save data.</p>' +
+        '<label class="field">Notes (up to 4096 UTF-8 bytes)' +
+        `<textarea id="slot-notes-text" rows="7" aria-label="Slot notes">${escapeHtml(result.notes || '')}</textarea></label>`,
       action('close-dialog', 'Cancel', '', 'data-dialog="main-dialog"') +
         action('slot-notes-save', 'Save notes', 'primary'),
     );
@@ -3094,9 +3160,12 @@ const handlers = {
     if (state.slotDirectory) await refreshSlots();
     toast('Slot notes saved. Archive contents were preserved.');
   },
+
+  // -- Game details and information --
   'game-details': () => showGameDetails(),
   'game-info-edit': (button) => openInformationEditor(button.dataset.gameKey),
   'game-info-bulk': () => openBulkInformationEditor(),
+  // Saves the information editor. Editing several games at once asks first.
   'game-info-save': async () => {
     const edit = state.informationEditor;
     const patch = informationPatch();
@@ -3105,19 +3174,18 @@ const handlers = {
       closeDialog('game-info-dialog');
       return;
     }
-    if (
-      edit.bulk &&
-      !(await confirmAction(
+    if (edit.bulk) {
+      const fieldNames = Object.keys(patch)
+        .map((key) => informationFields.find(([field]) => field === key)[1])
+        .join(', ');
+      const confirmed = await confirmAction(
         'Apply shared information',
-        `Apply ${Object.keys(patch)
-          .map((k) => informationFields.find(([key]) => key === k)[1])
-          .join(
-            ', ',
-          )} to ${edit.gameCount} selected games (${quantity(edit.records.length, 'disc')})? Unchecked fields are kept. Blank applied values will clear those fields.`,
+        `Apply ${fieldNames} to ${edit.gameCount} selected games (${quantity(edit.records.length, 'disc')})? ` +
+          'Unchecked fields are kept. Blank applied values will clear those fields.',
         'Save information',
-      ))
-    )
-      return;
+      );
+      if (!confirmed) return;
+    }
     await call('game_info_save', {
       original: edit.records,
       patch,
