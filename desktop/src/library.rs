@@ -1,3 +1,23 @@
+//! The PC library: importing discs into it, and keeping its database and
+//! the console's index files up to date.
+//!
+//! - Identifying: [`scan`] finds discs in the chosen files and folders,
+//!   matches each to a catalog release (by checksum, or by name), and works
+//!   out its category and where it goes in the library
+//!   (Category/Region/Title/disc).
+//! - Changing files safely: every change to a library or drive goes through
+//!   a [`Journal`], which records how to undo it, so an interruption or a
+//!   failure can always be rolled back (or finished).
+//! - Indexes: the console menu reads small index files instead of scanning
+//!   the drive: `library.3di` (every disc, for Find), `metadata.3di` (each
+//!   disc's details), and the cover and preview indexes.
+//! - The database (`.ohmy3do/library.json`) records every disc, where it
+//!   came from, and its media and information.
+//! - [`import`] copies the chosen discs in; the media functions prepare
+//!   covers and previews for discs already in the library; and
+//!   [`configure_categories`] and [`recategorize`] move discs between
+//!   category folders.
+
 use crate::{
     categories,
     disc::{self as d, rx},
@@ -15,6 +35,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Takes the library's lock, so only one job changes it at a time. The lock
+/// is a file in the cache named by a checksum of the library's path, held
+/// until the returned file is dropped. Fails at once if another job holds
+/// it.
 pub fn lock_library(root: &Path, cache: &Path) -> Result<fs::File> {
     let directory = cache.join("native-locks");
     fs::create_dir_all(&directory)?;
@@ -29,137 +53,173 @@ pub fn lock_library(root: &Path, cache: &Path) -> Result<fs::File> {
         .context("Another native operation is already using this library; wait for it to finish")?;
     Ok(file)
 }
+
+// ---- Categories ----
+
+/// Evidence for a category: a pattern in the release name, or a LaunchBox
+/// release type or genre.
+struct CategoryEvidence {
+    category: &'static str,
+    name_pattern: &'static str,
+    types_and_genres: &'static [&'static str],
+}
+
+const CATEGORY_EVIDENCE: [CategoryEvidence; 5] = [
+    CategoryEvidence {
+        category: "Bonus Discs",
+        name_pattern: r"(?i)\bbonus\s+(?:disc|cd)\b",
+        types_and_genres: &["bonus disc", "bonus cd"],
+    },
+    CategoryEvidence {
+        category: "Samplers",
+        name_pattern: r"(?i)\b(?:sampler|sample\s+(?:disc|cd))\b",
+        types_and_genres: &["sampler"],
+    },
+    CategoryEvidence {
+        category: "Demos",
+        name_pattern: r"(?i)\((?:demo|demonstration|trial)[^)]*\)|\b(?:demo|demonstration|trial\s+version)\b",
+        types_and_genres: &["demo", "demonstration", "trial"],
+    },
+    CategoryEvidence {
+        category: "Applications",
+        name_pattern: r"(?i)\b(?:storage\s+manager|system\s+utility|utilities|operating\s+system)\b",
+        types_and_genres: &[
+            "utility",
+            "utilities",
+            "application",
+            "applications",
+            "operating system",
+        ],
+    },
+    CategoryEvidence {
+        category: "Multimedia",
+        name_pattern: r"(?i)\b(?:atlas|almanac|encyclop(?:e|ae)dia|dictionary|museum|art\s+gallery|documentary|photo\s*(?:cd|shoot)|slide\s*show|interactive\s+(?:book|magazine)|music\s+video|karaoke)\b",
+        types_and_genres: &[
+            "multimedia",
+            "reference",
+            "documentary",
+            "encyclopedia",
+            "music video",
+            "karaoke",
+        ],
+    },
+];
+
+/// LaunchBox genres that mean a disc is a game.
+const GAME_GENRES: [&str; 23] = [
+    "action",
+    "adventure",
+    "arcade",
+    "board game",
+    "casino",
+    "compilation",
+    "fighting",
+    "flight simulator",
+    "horror",
+    "pinball",
+    "platform",
+    "puzzle",
+    "racing",
+    "role-playing",
+    "shooter",
+    "simulation",
+    "sports",
+    "strategy",
+    "visual novel",
+    "quiz",
+    "sandbox",
+    "party",
+    "construction and management simulation",
+];
+
+/// LaunchBox genres that mean a disc is not a game, even if it also has a
+/// game genre.
+const NON_GAME_GENRES: [&str; 6] = [
+    "education",
+    "educational",
+    "multimedia",
+    "reference",
+    "documentary",
+    "encyclopedia",
+];
+
+/// The library category for a release, and why. The category is "" when
+/// the evidence is missing or contradictory and the person must choose.
+///
+/// Redump's own category is used when it names one of the library's
+/// categories (or an alias). Otherwise the release name and LaunchBox's
+/// release type and genres are weighed: exactly one kind of evidence
+/// decides the category; a game genre with no other evidence means Games.
 pub fn classify(game: &Game) -> (String, String) {
-    let cat = game.category.to_lowercase();
-    let known = CATEGORIES
+    let redump_category = game.category.to_lowercase();
+    let library_category = CATEGORIES
         .iter()
-        .find(|c| c.to_lowercase() == cat)
-        .copied()
-        .or_else(|| match cat.as_str() {
-            "video" | "audio" => Some("Multimedia"),
-            "coverdiscs" => Some("Samplers"),
-            "add-ons" => Some("Games"),
-            _ => None,
-        });
-    if let Some(c) = known {
-        return (c.into(), format!("Redump category: {}", game.category));
+        .find(|category| category.to_lowercase() == redump_category)
+        .copied();
+    let redump_alias = match redump_category.as_str() {
+        "video" | "audio" => Some("Multimedia"),
+        "coverdiscs" => Some("Samplers"),
+        "add-ons" => Some("Games"),
+        _ => None,
+    };
+    if let Some(category) = library_category.or(redump_alias) {
+        return (
+            category.into(),
+            format!("Redump category: {}", game.category),
+        );
     }
-    let genres = game.metadata["genre"]
+
+    let genres: HashSet<String> = game.metadata["genre"]
         .as_str()
         .unwrap_or("")
         .split([';', ','])
-        .map(|s| s.trim().to_lowercase())
-        .collect::<HashSet<_>>();
-    let release = game.metadata["release_type"]
+        .map(|genre| genre.trim().to_lowercase())
+        .collect();
+    let release_type = game.metadata["release_type"]
         .as_str()
         .unwrap_or("")
         .to_lowercase();
+
+    // Every category with some evidence for it.
     let mut evidence = HashSet::new();
-    for (category, pattern, types) in [
-        (
-            "Bonus Discs",
-            r"(?i)\bbonus\s+(?:disc|cd)\b",
-            &["bonus disc", "bonus cd"][..],
-        ),
-        (
-            "Samplers",
-            r"(?i)\b(?:sampler|sample\s+(?:disc|cd))\b",
-            &["sampler"][..],
-        ),
-        (
-            "Demos",
-            r"(?i)\((?:demo|demonstration|trial)[^)]*\)|\b(?:demo|demonstration|trial\s+version)\b",
-            &["demo", "demonstration", "trial"][..],
-        ),
-        (
-            "Applications",
-            r"(?i)\b(?:storage\s+manager|system\s+utility|utilities|operating\s+system)\b",
-            &[
-                "utility",
-                "utilities",
-                "application",
-                "applications",
-                "operating system",
-            ][..],
-        ),
-        (
-            "Multimedia",
-            r"(?i)\b(?:atlas|almanac|encyclop(?:e|ae)dia|dictionary|museum|art\s+gallery|documentary|photo\s*(?:cd|shoot)|slide\s*show|interactive\s+(?:book|magazine)|music\s+video|karaoke)\b",
-            &[
-                "multimedia",
-                "reference",
-                "documentary",
-                "encyclopedia",
-                "music video",
-                "karaoke",
-            ][..],
-        ),
-    ] {
-        if rx(pattern).is_match(&game.release)
-            || types.contains(&release.as_str())
-            || types.iter().any(|s| genres.contains(*s))
+    for rule in &CATEGORY_EVIDENCE {
+        if rx(rule.name_pattern).is_match(&game.release)
+            || rule.types_and_genres.contains(&release_type.as_str())
+            || rule
+                .types_and_genres
+                .iter()
+                .any(|kind| genres.contains(*kind))
         {
-            evidence.insert(category);
+            evidence.insert(rule.category);
         }
     }
-    if (genres.contains("education")
+
+    // Educational, unless it is already a demo, sampler, multimedia disc or
+    // bonus disc.
+    let looks_educational = genres.contains("education")
         || genres.contains("educational")
-        || rx(r"(?i)\beducational\b").is_match(&game.release))
-        && !evidence
-            .iter()
-            .any(|c| ["Demos", "Samplers", "Multimedia", "Bonus Discs"].contains(c))
-    {
+        || rx(r"(?i)\beducational\b").is_match(&game.release);
+    let already_non_game = evidence
+        .iter()
+        .any(|category| ["Demos", "Samplers", "Multimedia", "Bonus Discs"].contains(category));
+    if looks_educational && !already_non_game {
         evidence.insert("Educational");
     }
-    let game_genres = [
-        "action",
-        "adventure",
-        "arcade",
-        "board game",
-        "casino",
-        "compilation",
-        "fighting",
-        "flight simulator",
-        "horror",
-        "pinball",
-        "platform",
-        "puzzle",
-        "racing",
-        "role-playing",
-        "shooter",
-        "simulation",
-        "sports",
-        "strategy",
-        "visual novel",
-        "quiz",
-        "sandbox",
-        "party",
-        "construction and management simulation",
-    ];
-    if evidence.contains("Multimedia")
-        && game_genres.iter().any(|g| genres.contains(*g))
-        && !genres.iter().any(|g| {
-            [
-                "education",
-                "educational",
-                "multimedia",
-                "reference",
-                "documentary",
-                "encyclopedia",
-            ]
-            .contains(&g.as_str())
-        })
-    {
+
+    let has_game_genre = GAME_GENRES.iter().any(|genre| genres.contains(*genre));
+    let has_non_game_genre = genres
+        .iter()
+        .any(|genre| NON_GAME_GENRES.contains(&genre.as_str()));
+    if evidence.contains("Multimedia") && has_game_genre && !has_non_game_genre {
         return (
             "".into(),
             "Conflicting game/multimedia evidence; choose a category".into(),
         );
     }
+
     if evidence.len() == 1 {
-        return (
-            evidence.into_iter().next().unwrap().into(),
-            "Catalog title/genre category".into(),
-        );
+        let category = evidence.into_iter().next().unwrap();
+        return (category.into(), "Catalog title/genre category".into());
     }
     if !evidence.is_empty() {
         return (
@@ -167,71 +227,89 @@ pub fn classify(game: &Game) -> (String, String) {
             "Mixed category evidence; choose a category".into(),
         );
     }
-    if rx(r"(?i)\((?:sample|preview)[^)]*\)").is_match(&game.release)
+
+    let maybe_software = rx(r"(?i)\((?:sample|preview)[^)]*\)").is_match(&game.release)
         || genres.contains("music")
-        || genres.contains("life simulation")
-    {
+        || genres.contains("life simulation");
+    if maybe_software {
         return ("".into(), "Choose a software category".into());
     }
-    if game_genres.iter().any(|g| genres.contains(*g)) {
+    if has_game_genre {
         return ("Games".into(), "Catalog genre identifies a game".into());
     }
     ("".into(), "Choose a category".into())
 }
+
+/// Identifies an entry as catalog release `game` (number `index` in the
+/// catalog, if it is one) and works out where its files go:
+/// Category/Region/Title/disc name. `category` overrides the release's own.
+///
+/// An entry left without a category gets no destination and is unselected.
+/// A disc with several tracks names each track file "(Track NN)".
 pub fn assign(entry: &mut Entry, game: &Game, index: Option<usize>, category: Option<&str>) {
     entry.title = game.release.clone();
     entry.region = game
         .region
         .clone()
-        .filter(|r| !r.is_empty())
+        .filter(|region| !region.is_empty())
         .unwrap_or_else(|| d::primary_region(&game.release));
-    let (c, reason) = classify(game);
-    entry.category = category.unwrap_or(&c).into();
+
+    let (classified, reason) = classify(game);
+    entry.category = category.unwrap_or(&classified).into();
     entry.category_reason = if category.is_some() {
         "Explicit category override".into()
     } else {
         reason
     };
     entry.game = index;
+
     if entry.category.is_empty() {
         entry.target.clear();
         entry.selected = false;
         entry.reason.push_str("; category needs review");
         return;
     }
-    let group = rx(r"\s*\[Variant [0-9A-F]{8}\]")
+
+    // Every disc of a set (and every variant) shares the title's folder.
+    let folder_title = rx(r"\s*\[Variant [0-9A-F]{8}\]")
         .replace_all(&d::without_disc(&entry.title), "")
         .into_owned();
-    let directory = format!(
+    let folder = format!(
         "{}/{}/{}",
         entry.category,
         d::safe_name(&entry.region, 80),
-        d::safe_name(&group, 110)
+        d::safe_name(&folder_title, 110)
     );
+
     let stem = d::disc_stem(&entry.title);
-    let count = entry.files.len();
-    for (n, file) in entry.files.iter_mut().enumerate() {
-        let ext = file
+    let file_count = entry.files.len();
+    for (index, file) in entry.files.iter_mut().enumerate() {
+        let extension = file
             .source
             .extension()
             .unwrap_or_default()
             .to_string_lossy()
             .to_ascii_lowercase();
-        let track = if n > 0 && count > 2 {
-            format!(" (Track {n:02})")
+        // The CUE sheet is file 0; with more than one track, each track
+        // file is numbered.
+        let track = if index > 0 && file_count > 2 {
+            format!(" (Track {index:02})")
         } else {
             String::new()
         };
-        file.target = format!("{directory}/{stem}{track}.{ext}");
+        file.target = format!("{folder}/{stem}{track}.{extension}");
     }
     entry.target = entry
         .files
         .first()
-        .map(|f| f.target.clone())
+        .map(|file| file.target.clone())
         .unwrap_or_default();
 }
-/// A category is also an explicit destination choice for an unmatched title.
-/// Preserve its entered name/region without claiming catalog identification.
+
+/// Sets an entry's category as the person chose it. A category is also an
+/// explicit destination choice for an unmatched title, so an unmatched
+/// entry keeps its entered name and region, without claiming it was
+/// identified.
 pub fn choose_import_category(entry: &mut Entry, catalog: &Catalog, category: &str) {
     // Changing folders may resolve an occupied destination. The caller checks
     // collisions again against the newly assigned paths.
@@ -239,6 +317,7 @@ pub fn choose_import_category(entry: &mut Entry, catalog: &Catalog, category: &s
         entry.blocked = false;
         entry.selected = false;
     }
+
     if let Some(index) = entry.game {
         assign(entry, &catalog.games[index], Some(index), Some(category));
     } else {
@@ -253,234 +332,366 @@ pub fn choose_import_category(entry: &mut Entry, catalog: &Catalog, category: &s
         entry.reason = "Title kept as entered; no catalog match verified".into();
     }
 }
+
+// ---- Identifying discs ----
+
+/// Every product code (serial) a release lists, in comparable form. A field
+/// can hold several, separated by commas, semicolons or slashes.
 fn serials(game: &Game) -> HashSet<String> {
     std::iter::once(game.serial.as_str())
-        .chain(game.roms.iter().map(|r| r.serial.as_str()))
-        .flat_map(|s| s.split([',', ';', '/']))
+        .chain(game.roms.iter().map(|rom| rom.serial.as_str()))
+        .flat_map(|field| field.split([',', ';', '/']))
         .map(serial_key)
-        .filter(|s| !s.is_empty())
+        .filter(|serial| !serial.is_empty())
         .collect()
 }
-fn serial_key(s: &str) -> String {
-    s.to_lowercase()
+
+/// A product code in comparable form: lowercase letters and digits only.
+fn serial_key(serial: &str) -> String {
+    serial
+        .to_lowercase()
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect()
 }
-fn identify(entry: &mut Entry, catalog: &Catalog, quick: bool) {
-    let data = entry
+
+/// What comparing a disc's checksums with the catalog found.
+enum ChecksumMatch {
+    /// No release matched (or the checksums were not taken).
+    None,
+    /// The disc's rebuilt raw checksum matches several different releases.
+    Ambiguous(Vec<usize>),
+    /// These releases match, with this confidence: "checksum" (every data
+    /// file), "converted-checksum" (the rebuilt raw image), or "data-track"
+    /// (only the first track of a multi-track release).
+    Matches(Vec<usize>, &'static str),
+}
+
+/// Compares a disc's file checksums with the catalog.
+///
+/// First every data file's size and SHA-1 together. Failing that, for a
+/// single ISO with a rebuilt raw checksum (see [`d::fingerprint`]): a
+/// release whose one file is that raw image, or else a multi-track release
+/// whose first track is.
+fn checksum_matches(entry: &Entry, catalog: &Catalog) -> ChecksumMatch {
+    let data_files: Vec<&DiscFile> = entry
         .files
         .iter()
-        .filter(|f| {
-            !f.source
+        .filter(|file| {
+            !file
+                .source
                 .extension()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .eq_ignore_ascii_case("cue")
         })
-        .collect::<Vec<_>>();
-    let mut exact = vec![];
-    let mut confidence = "checksum";
+        .collect();
+
+    // Every data file's (size, SHA-1), in sorted order, against each
+    // release's files.
+    let mut disc_hashes: Vec<(u64, String)> = data_files
+        .iter()
+        .map(|file| (file.fingerprint.size, file.fingerprint.sha1.clone()))
+        .collect();
+    disc_hashes.sort();
+    let exact: Vec<usize> = catalog
+        .games
+        .iter()
+        .enumerate()
+        .filter_map(|(index, game)| {
+            let mut release_hashes: Vec<(u64, String)> = game
+                .roms
+                .iter()
+                .map(|rom| (rom.size, rom.sha1.clone()))
+                .collect();
+            release_hashes.sort();
+            (release_hashes == disc_hashes).then_some(index)
+        })
+        .collect();
+    if !exact.is_empty() {
+        return ChecksumMatch::Matches(exact, "checksum");
+    }
+
+    if data_files.len() != 1 {
+        return ChecksumMatch::None;
+    }
+    let Some(raw_sha1) = &data_files[0].fingerprint.raw_sha1 else {
+        return ChecksumMatch::None;
+    };
+    let raw_size = data_files[0].fingerprint.size / 2048 * 2352;
+
+    let complete: Vec<usize> = catalog
+        .games
+        .iter()
+        .enumerate()
+        .filter(|(_, game)| {
+            game.roms.len() == 1 && game.roms[0].size == raw_size && &game.roms[0].sha1 == raw_sha1
+        })
+        .map(|(index, _)| index)
+        .collect();
+    let first_track = rx(r"(?i)(?:\(Track\s+0*1\)|\btrack0*1)\.bin$");
+    let partial: Vec<usize> = catalog
+        .games
+        .iter()
+        .enumerate()
+        .filter(|(_, game)| {
+            let matching_first_tracks = game
+                .roms
+                .iter()
+                .filter(|rom| {
+                    first_track.is_match(&rom.name) && rom.size == raw_size && &rom.sha1 == raw_sha1
+                })
+                .count();
+            game.roms.len() > 1 && matching_first_tracks == 1
+        })
+        .map(|(index, _)| index)
+        .collect();
+
+    let all: Vec<usize> = complete.iter().chain(partial.iter()).copied().collect();
+    let releases: HashSet<&String> = all
+        .iter()
+        .map(|index| &catalog.games[*index].release)
+        .collect();
+    if releases.len() > 1 {
+        return ChecksumMatch::Ambiguous(all);
+    }
+    if !complete.is_empty() {
+        ChecksumMatch::Matches(complete, "converted-checksum")
+    } else {
+        ChecksumMatch::Matches(partial, "data-track")
+    }
+}
+
+/// Identifies an entry against the catalog: by checksum unless `quick`,
+/// and by name if that finds nothing. Sets its title, category and
+/// destination if it is identified, or else its candidates and the reason
+/// the person must choose.
+fn identify(entry: &mut Entry, catalog: &Catalog, quick: bool) {
     if !quick {
-        let mut hashes = data
-            .iter()
-            .map(|f| (f.fingerprint.size, f.fingerprint.sha1.clone()))
-            .collect::<Vec<_>>();
-        hashes.sort();
-        exact = catalog
-            .games
-            .iter()
-            .enumerate()
-            .filter_map(|(n, g)| {
-                let mut h = g
-                    .roms
-                    .iter()
-                    .map(|r| (r.size, r.sha1.clone()))
-                    .collect::<Vec<_>>();
-                h.sort();
-                (h == hashes).then_some(n)
-            })
-            .collect();
-        if exact.is_empty() && data.len() == 1 {
-            if let Some(raw) = &data[0].fingerprint.raw_sha1 {
-                let size = data[0].fingerprint.size / 2048 * 2352;
-                let complete = catalog
-                    .games
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, g)| {
-                        g.roms.len() == 1 && g.roms[0].size == size && &g.roms[0].sha1 == raw
-                    })
-                    .map(|(n, _)| n)
-                    .collect::<Vec<_>>();
-                let partial = catalog
-                    .games
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, g)| {
-                        g.roms.len() > 1
-                            && g.roms
-                                .iter()
-                                .filter(|r| {
-                                    rx(r"(?i)(?:\(Track\s+0*1\)|\btrack0*1)\.bin$")
-                                        .is_match(&r.name)
-                                        && r.size == size
-                                        && &r.sha1 == raw
-                                })
-                                .count()
-                                == 1
-                    })
-                    .map(|(n, _)| n)
-                    .collect::<Vec<_>>();
-                let all = complete
-                    .iter()
-                    .chain(partial.iter())
-                    .copied()
-                    .collect::<Vec<_>>();
-                if all
-                    .iter()
-                    .map(|n| &catalog.games[*n].release)
-                    .collect::<HashSet<_>>()
-                    .len()
-                    > 1
-                {
-                    entry.candidates = all;
-                    entry.reason =
-                        "Reconstructed checksum matches multiple releases; choose explicitly"
-                            .into();
-                    return;
-                }
-                if !complete.is_empty() {
-                    exact = complete;
-                    confidence = "converted-checksum";
-                } else {
-                    exact = partial;
-                    confidence = "data-track";
-                }
+        match checksum_matches(entry, catalog) {
+            ChecksumMatch::Ambiguous(all) => {
+                entry.candidates = all;
+                entry.reason =
+                    "Reconstructed checksum matches multiple releases; choose explicitly".into();
+                return;
             }
+            ChecksumMatch::Matches(found, confidence) if !found.is_empty() => {
+                accept_checksum_match(entry, catalog, found, confidence);
+                return;
+            }
+            _ => {}
         }
     }
-    if !exact.is_empty() {
-        let names = exact
-            .iter()
-            .map(|i| &catalog.games[*i].release)
-            .collect::<HashSet<_>>();
-        if names.len() == 1 {
-            entry.confidence = confidence.into();
-            entry.reason=match confidence{"converted-checksum"=>"Complete reconstructed MODE1 checksum match; original ISO unchanged","data-track"=>"First data-track checksum matched; missing audio tracks are unverified; review required",_=>"Complete data-file SHA-1 and size match"}.into();
-            let i = exact[0];
-            assign(entry, &catalog.games[i], Some(i), None);
-            entry.selected = entry.resolvable() && confidence != "data-track";
-            return;
-        }
-        entry.candidates = exact;
+    identify_by_name(entry, catalog);
+}
+
+/// Uses a checksum match: if every matching release has the same name, the
+/// entry is that release (selected, unless only its first track was
+/// verified); otherwise the person chooses among them.
+fn accept_checksum_match(
+    entry: &mut Entry,
+    catalog: &Catalog,
+    found: Vec<usize>,
+    confidence: &'static str,
+) {
+    let releases: HashSet<&String> = found
+        .iter()
+        .map(|index| &catalog.games[*index].release)
+        .collect();
+    if releases.len() != 1 {
+        entry.candidates = found;
         entry.reason = "Checksums match multiple releases; choose one".into();
         return;
     }
+
+    entry.confidence = confidence.into();
+    entry.reason = match confidence {
+        "converted-checksum" => {
+            "Complete reconstructed MODE1 checksum match; original ISO unchanged"
+        }
+        "data-track" => {
+            "First data-track checksum matched; missing audio tracks are unverified; review required"
+        }
+        _ => "Complete data-file SHA-1 and size match",
+    }
+    .into();
+    let index = found[0];
+    assign(entry, &catalog.games[index], Some(index), None);
+    entry.selected = entry.resolvable() && confidence != "data-track";
+}
+
+/// Identifies an entry by its file name: the release with exactly that name,
+/// or else the releases with the same title key and disc number, narrowed by
+/// region (from the name, or a region-named folder above it) and by product
+/// code ([code] in the name). A single release is accepted, unselected, if
+/// its special tags (Rev, Beta, Proto, Demo, ...) agree.
+fn identify_by_name(entry: &mut Entry, catalog: &Catalog) {
     let name = entry
         .source
         .file_stem()
         .unwrap_or_default()
-        .to_string_lossy();
-    let norm = d::title_key(&name);
-    let exact = catalog
+        .to_string_lossy()
+        .into_owned();
+    let title_key = d::title_key(&name);
+
+    let same_name: Vec<usize> = catalog
         .games
         .iter()
         .enumerate()
-        .filter(|(_, g)| {
-            g.release.eq_ignore_ascii_case(&name)
-                || d::disc_stem(&g.release).eq_ignore_ascii_case(&name)
+        .filter(|(_, game)| {
+            game.release.eq_ignore_ascii_case(&name)
+                || d::disc_stem(&game.release).eq_ignore_ascii_case(&name)
         })
-        .map(|(i, _)| i)
-        .collect::<Vec<_>>();
-    let mut candidates = if exact.is_empty() {
+        .map(|(index, _)| index)
+        .collect();
+    let mut candidates: Vec<usize> = if same_name.is_empty() {
         catalog
             .games
             .iter()
             .enumerate()
-            .filter(|(_, g)| {
-                d::title_key(&g.name) == norm && d::disc_number(&g.name) == d::disc_number(&name)
+            .filter(|(_, game)| {
+                d::title_key(&game.name) == title_key
+                    && d::disc_number(&game.name) == d::disc_number(&name)
             })
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>()
+            .map(|(index, _)| index)
+            .collect()
     } else {
-        exact
+        same_name
     };
+
+    // Narrow by region: from the name, or else from the one region-named
+    // folder above the disc ("USA", or "2 - Europe").
     let mut regions = d::regions(&name);
     if regions.is_empty() {
-        let hints = entry
+        let folder_regions: HashSet<String> = entry
             .source
             .parent()
             .into_iter()
-            .flat_map(|p| p.components())
-            .filter_map(|c| {
-                let text = c.as_os_str().to_string_lossy();
-                let name = rx(r"^\d+[\s._-]+").replace(&text, "");
-                d::region(&name).map(str::to_owned)
+            .flat_map(|parent| parent.components())
+            .filter_map(|component| {
+                let text = component.as_os_str().to_string_lossy();
+                let without_number = rx(r"^\d+[\s._-]+").replace(&text, "");
+                d::region(&without_number).map(str::to_owned)
             })
-            .collect::<HashSet<_>>();
-        if hints.len() == 1 {
-            regions = hints
+            .collect();
+        if folder_regions.len() == 1 {
+            regions = folder_regions;
         }
     }
     if !regions.is_empty() {
-        candidates.retain(|i| regions.is_subset(&d::regions(&catalog.games[*i].name)));
+        candidates.retain(|index| regions.is_subset(&d::regions(&catalog.games[*index].name)));
     }
-    let codes = rx(r"\[([^]]+)\]")
+
+    // Narrow by product code: a [tag] with letters and digits that is not a
+    // variant label.
+    let codes: HashSet<String> = rx(r"\[([^]]+)\]")
         .captures_iter(&name)
-        .map(|c| c[1].to_owned())
-        .filter(|s| {
-            s.len() >= 4
-                && !s.to_lowercase().starts_with("variant ")
-                && s.chars().any(|c| c.is_ascii_alphabetic())
-                && s.chars().any(|c| c.is_ascii_digit())
+        .map(|captures| captures[1].to_owned())
+        .filter(|tag| {
+            tag.len() >= 4
+                && !tag.to_lowercase().starts_with("variant ")
+                && tag.chars().any(|c| c.is_ascii_alphabetic())
+                && tag.chars().any(|c| c.is_ascii_digit())
         })
-        .map(|s| serial_key(&s))
-        .collect::<HashSet<_>>();
+        .map(|tag| serial_key(&tag))
+        .collect();
     if !codes.is_empty() {
-        let serial = candidates
+        let with_codes: Vec<usize> = candidates
             .iter()
-            .filter(|i| codes.is_subset(&serials(&catalog.games[**i])))
+            .filter(|index| codes.is_subset(&serials(&catalog.games[**index])))
             .copied()
-            .collect::<Vec<_>>();
-        if !serial.is_empty() {
-            candidates = serial
-        } else {
+            .collect();
+        if with_codes.is_empty() {
             entry.candidates = candidates;
             entry.reason =
                 "Product code does not uniquely identify a catalog release; choose explicitly"
                     .into();
             return;
         }
+        candidates = with_codes;
     }
-    let names = candidates
+
+    let releases: HashSet<&String> = candidates
         .iter()
-        .map(|i| &catalog.games[*i].release)
-        .collect::<HashSet<_>>();
-    let tags = |s: &str| {
+        .map(|index| &catalog.games[*index].release)
+        .collect();
+    let special_tags = |text: &str| -> HashSet<String> {
         rx(r"(?i)\(([^)]*(?:rev|beta|proto|demo|sample|unl|alt)[^)]*)\)")
-            .captures_iter(s)
-            .map(|c| c[1].to_lowercase())
-            .collect::<HashSet<_>>()
+            .captures_iter(text)
+            .map(|captures| captures[1].to_lowercase())
+            .collect()
     };
-    if names.len() == 1 {
-        let i = candidates[0];
-        if tags(&name) == tags(&catalog.games[i].release) {
+    if releases.len() == 1 {
+        let index = candidates[0];
+        if special_tags(&name) == special_tags(&catalog.games[index].release) {
             entry.confidence = "filename".into();
-            entry.reason="Title/region/disc match; checksum identity is unverified. Check explicitly to accept.".into();
-            assign(entry, &catalog.games[i], Some(i), None);
+            entry.reason = "Title/region/disc match; checksum identity is unverified. \
+                            Check explicitly to accept."
+                .into();
+            assign(entry, &catalog.games[index], Some(index), None);
             entry.selected = false;
             return;
         }
     }
+
     entry.candidates = candidates;
-    if entry.candidates.is_empty() {
-        entry.reason =
-            "No safe catalog match. Choose a release or enter an unverified title.".into()
+    entry.reason = if entry.candidates.is_empty() {
+        "No safe catalog match. Choose a release or enter an unverified title.".into()
     } else {
-        entry.reason = "Several releases or variants match; choose explicitly".into()
+        "Several releases or variants match; choose explicitly".into()
+    };
+}
+
+/// A new, unidentified entry for the disc at `source`.
+fn new_entry(source: &Path) -> Entry {
+    Entry {
+        source: source.to_owned(),
+        title: source
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        category: "".into(),
+        region: "Unknown".into(),
+        target: "".into(),
+        confidence: "unmatched".into(),
+        reason: "".into(),
+        selected: false,
+        files: vec![],
+        candidates: vec![],
+        game: None,
+        cover: None,
+        preview: None,
+        category_reason: "".into(),
+        blocked: false,
     }
 }
+
+/// Whether a disc is a CUE sheet whose tracks are all audio (a music CD).
+fn is_audio_only(source: &Path) -> Result<bool> {
+    let is_cue = source
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .eq_ignore_ascii_case("cue");
+    if !is_cue {
+        return Ok(false);
+    }
+    let (text, _) = d::cue_refs(source)?;
+    let modes: Vec<String> = rx(r"(?im)^\s*TRACK\s+\d+\s+(\S+)")
+        .captures_iter(&text)
+        .map(|captures| captures[1].to_ascii_uppercase())
+        .collect();
+    Ok(!modes.is_empty() && modes.iter().all(|mode| mode == "AUDIO"))
+}
+
+/// Finds the discs in `inputs` and identifies each for importing into the
+/// library at `root`.
+///
+/// A `quick` scan reads only file sizes and times, and identifies by name.
+/// A full scan checksums every file, and for a lone ISO whose raw size
+/// could match a catalog release, also the checksum of its rebuilt raw
+/// image (see [`d::fingerprint`]).
 pub fn scan(
     root: &Path,
     inputs: &[PathBuf],
@@ -493,67 +704,39 @@ pub fn scan(
     if sets.is_empty() {
         bail!("No disc entries found")
     }
-    let sizes = catalog
+    // Every file size in the catalog, to tell which ISOs are worth
+    // rebuilding as raw images.
+    let catalog_sizes: HashSet<u64> = catalog
         .games
         .iter()
-        .flat_map(|g| g.roms.iter())
-        .map(|r| r.size)
-        .collect::<HashSet<_>>();
+        .flat_map(|game| game.roms.iter())
+        .map(|rom| rom.size)
+        .collect();
+
     let mut entries = vec![];
-    for (n, (source, files)) in sets.iter().enumerate() {
+    for (index, (source, files)) in sets.iter().enumerate() {
         job.check()?;
         job.say(format!(
             "Scanning {}/{}: {}",
-            n + 1,
+            index + 1,
             sets.len(),
             source.display()
         ));
-        let mut entry = Entry {
-            source: source.clone(),
-            title: source
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            category: "".into(),
-            region: "Unknown".into(),
-            target: "".into(),
-            confidence: "unmatched".into(),
-            reason: "".into(),
-            selected: false,
-            files: vec![],
-            candidates: vec![],
-            game: None,
-            cover: None,
-            preview: None,
-            category_reason: "".into(),
-            blocked: false,
-        };
-        let mut audio_only = false;
-        if source
-            .extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .eq_ignore_ascii_case("cue")
-        {
-            let (text, _) = d::cue_refs(source)?;
-            let modes = rx(r"(?im)^\s*TRACK\s+\d+\s+(\S+)")
-                .captures_iter(&text)
-                .map(|c| c[1].to_ascii_uppercase())
-                .collect::<Vec<_>>();
-            audio_only = !modes.is_empty() && modes.iter().all(|m| m == "AUDIO");
-        }
+        let mut entry = new_entry(source);
+        let audio_only = is_audio_only(source)?;
+
         for file in files {
             let size = fs::metadata(file)?.len();
-            let reconstruct = !quick
+            let is_iso = file
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("iso");
+            let rebuild_raw = !quick
                 && files.len() == 1
-                && file
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case("iso")
+                && is_iso
                 && size % 2048 == 0
-                && sizes.contains(&(size / 2048 * 2352));
+                && catalog_sizes.contains(&(size / 2048 * 2352));
             let fingerprint = if quick {
                 let (size, mtime_ns) = f::stamp(file)?;
                 Fingerprint {
@@ -564,7 +747,7 @@ pub fn scan(
                     raw_sha1: None,
                 }
             } else {
-                d::fingerprint(file, reconstruct, job)?
+                d::fingerprint(file, rebuild_raw, job)?
             };
             entry.files.push(DiscFile {
                 source: file.clone(),
@@ -572,6 +755,7 @@ pub fn scan(
                 target: String::new(),
             });
         }
+
         if audio_only {
             // Keep the CUE and every track available for explicit import, but
             // do not match an audio disc against the game catalog.
@@ -585,6 +769,7 @@ pub fn scan(
         }
         entries.push(entry);
     }
+
     let mut plan = Plan {
         root,
         catalog,
@@ -597,61 +782,80 @@ pub fn scan(
     collisions(&mut plan)?;
     Ok(plan)
 }
+
+/// Moves an entry into the folder its category is configured to use (the
+/// library's categories can be renamed or merged), adjusting its
+/// destination paths.
 pub fn apply_category_defaults(entry: &mut Entry, config: &categories::Categories) {
-    if let Some(name) = config.destination(&entry.category) {
-        let name = name.to_owned();
-        if name != entry.category {
-            let old = format!("{}/", entry.category);
-            let new = format!("{name}/");
-            entry.target = entry.target.replacen(&old, &new, 1);
-            for file in &mut entry.files {
-                file.target = file.target.replacen(&old, &new, 1);
-            }
-            entry.category = name;
-        }
+    let Some(destination) = config.destination(&entry.category) else {
+        return;
+    };
+    let destination = destination.to_owned();
+    if destination == entry.category {
+        return;
     }
+
+    let old_prefix = format!("{}/", entry.category);
+    let new_prefix = format!("{destination}/");
+    entry.target = entry.target.replacen(&old_prefix, &new_prefix, 1);
+    for file in &mut entry.files {
+        file.target = file.target.replacen(&old_prefix, &new_prefix, 1);
+    }
+    entry.category = destination;
 }
+
+/// Marks entries whose destination is already taken (blocked) or shared
+/// with another entry (unselected, so the person picks one). Clears the
+/// marks from an earlier check first, so it can be run again after changes.
 pub fn collisions(plan: &mut Plan) -> Result<()> {
     for entry in &mut plan.entries {
-        if entry.reason == "Destination is occupied or shared by another selected disc"
-            || entry.reason == "Destination is already occupied"
-            || entry.reason == "Destination shared by multiple source entries; check only one"
-        {
+        let marked_before = [
+            "Destination is occupied or shared by another selected disc",
+            "Destination is already occupied",
+            "Destination shared by multiple source entries; check only one",
+        ]
+        .contains(&entry.reason.as_str());
+        if marked_before {
             entry.blocked = false;
             entry.selected = false;
             entry.reason = "Review destination and check to import".into();
         }
     }
-    let mut used: HashMap<String, usize> = HashMap::new();
+
+    // Which entry claims each destination (case-insensitively).
+    let mut claimed: HashMap<String, usize> = HashMap::new();
     let mut occupied = vec![];
     let mut shared = vec![];
-    for (i, e) in plan.entries.iter().enumerate() {
-        if e.target.is_empty() {
+    for (index, entry) in plan.entries.iter().enumerate() {
+        if entry.target.is_empty() {
             continue;
         }
-        for file in &e.files {
+        for file in &entry.files {
             if f::safe(&plan.root, &file.target)?.exists() {
-                occupied.push(i)
+                occupied.push(index);
             }
-            if let Some(other) = used.insert(f::fold(&file.target), i) {
-                if other != i {
-                    shared.extend([other, i]);
+            if let Some(other) = claimed.insert(f::fold(&file.target), index) {
+                if other != index {
+                    shared.extend([other, index]);
                 }
             }
         }
     }
-    for i in shared {
-        plan.entries[i].selected = false;
-        plan.entries[i].reason =
+
+    for index in shared {
+        plan.entries[index].selected = false;
+        plan.entries[index].reason =
             "Destination shared by multiple source entries; check only one".into();
     }
-    for i in occupied {
-        plan.entries[i].blocked = true;
-        plan.entries[i].selected = false;
-        plan.entries[i].reason = "Destination is already occupied".into();
+    for index in occupied {
+        plan.entries[index].blocked = true;
+        plan.entries[index].selected = false;
+        plan.entries[index].reason = "Destination is already occupied".into();
     }
     Ok(())
 }
+
+// ---- The journal ----
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Created {
