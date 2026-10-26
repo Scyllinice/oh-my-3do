@@ -1544,10 +1544,13 @@ def build_plan(root, catalog, quick=False, overrides=None, accept_names=False, c
 
 
 def json_bytes(value):
+    """Pretty-printed UTF-8 JSON with a final newline."""
     return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def review_bucket(row):
+    """Which tab of the report a plan row belongs to:
+    matched, problems, decisions (needs a choice) or unidentified."""
     if row["status"] in ("ready", "review", "registered"):
         return "matched"
     if row["status"] == "blocked" or (row["status"] == "unmatched" and not row.get("confidence")):
@@ -1557,89 +1560,43 @@ def review_bucket(row):
     return "unidentified"
 
 
-def report_html(plan):
-    escape = lambda value: html.escape(str(value) if value is not None else "")
-    counts = collections.Counter(review_bucket(r) for r in plan["entries"])
-    tabs = "".join(
-        '<button type="button" data-view="'
-        + key
-        + '">'
-        + label
-        + " ("
-        + str(counts[key])
-        + ")</button>"
-        for key, label in (
-            ("decisions", "Needs a choice"),
-            ("unidentified", "Unidentified"),
-            ("problems", "File problems"),
-            ("matched", "Matched"),
-        )
-    )
-    rows = []
-    for row in plan["entries"]:
-        meta = row.get("metadata", {})
-        suggestions = list(dict.fromkeys(row.get("suggestions", [])))
-        notes = escape(row["reason"])
-        if row.get("category_reason"):
-            notes += "<br><small>" + escape(row["category_reason"]) + "</small>"
-        controls = ""
-        if row["status"] == "category-review":
-            controls = (
-                '<label>Category <select class="category"><option value="">Leave in place</option>'
-                + "".join(
-                    "<option>" + escape(c) + "</option>" for c in plan.get("categories", CATEGORIES)
-                )
-                + "</select></label>"
-            )
-        elif suggestions and row["status"] == "unmatched" and row.get("confidence"):
-            controls = (
-                '<label>Release <select class="release"><option value="">Leave in place</option>'
-                + "".join("<option>" + escape(name) + "</option>" for name in suggestions)
-                + "</select></label>"
-            )
-        if suggestions:
-            notes += (
-                "<details><summary>Catalog suggestions (not selected)</summary><ul>"
-                + "".join("<li>" + escape(name) + "</li>" for name in suggestions)
-                + "</ul></details>"
-            )
-        cells = [
-            escape(row["status"]) + "<br><small>" + escape(row.get("confidence", "")) + "</small>",
-            escape(row["source"])
-            + "<br><strong>"
-            + escape(row.get("target") or "Stays in place")
-            + "</strong>",
-            escape(
-                row.get("category")
-                or ("Needs classification" if row["status"] == "category-review" else "Unknown")
-            ),
-            "<br>".join(escape(meta.get(field)) for field in ("genre", "publisher", "year")),
-            notes + controls,
-        ]
-        rows.append(
-            '<tr hidden data-bucket="'
-            + review_bucket(row)
-            + '" data-source="'
-            + escape(row["source"])
-            + '" class="'
-            + escape(row["status"])
-            + '">'
-            + "".join("<td>" + cell + "</td>" for cell in cells)
-            + "</tr>"
-        )
-    return (
-        """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Oh My 3DO — Library preview</title><style>
-body{font:16px system-ui,sans-serif;background:#101b2d;color:#e1e9f3;margin:2rem}h1{color:#3dd9ba}
-input,select,button{padding:.6rem;margin:.3rem;font:inherit;background:#243c55;color:#e1e9f3;border:1px solid #52718d;border-radius:.3rem}
-input{width:min(85%,36rem)}select{max-width:30rem;width:100%;margin:.5rem 0}button{cursor:pointer}button[aria-pressed=true]{border-color:#3dd9ba;color:#3dd9ba}
-table{border-collapse:collapse;width:100%;background:#17283e}th,td{padding:.8rem;text-align:left;border-bottom:1px solid #344960;vertical-align:top;overflow-wrap:anywhere}
-th{background:#243c55}small,summary{color:#bacbdb}.blocked td:first-child,.unmatched td:first-child{color:#ffb6a5}
-.ready td:first-child{color:#59e0bf}.review td:first-child,.category-review td:first-child{color:#ffda85}strong{font-weight:500;color:#9be7d9}
-@media(max-width:700px){body{margin:.6rem}table{font-size:13px}th,td{padding:.4rem}}
-</style><h1>Library preview</h1><p>USB root: """
-        + escape(plan["root"])
-        + """</p>
+REPORT_TABS = (
+    ("decisions", "Needs a choice"),
+    ("unidentified", "Unidentified"),
+    ("problems", "File problems"),
+    ("matched", "Matched"),
+)
+
+REPORT_STYLE = """
+body { font: 16px system-ui, sans-serif; background: #101b2d; color: #e1e9f3; margin: 2rem }
+h1 { color: #3dd9ba }
+input, select, button {
+  padding: .6rem; margin: .3rem; font: inherit; background: #243c55; color: #e1e9f3;
+  border: 1px solid #52718d; border-radius: .3rem
+}
+input { width: min(85%, 36rem) }
+select { max-width: 30rem; width: 100%; margin: .5rem 0 }
+button { cursor: pointer }
+button[aria-pressed=true] { border-color: #3dd9ba; color: #3dd9ba }
+table { border-collapse: collapse; width: 100%; background: #17283e }
+th, td {
+  padding: .8rem; text-align: left; border-bottom: 1px solid #344960; vertical-align: top;
+  overflow-wrap: anywhere
+}
+th { background: #243c55 }
+small, summary { color: #bacbdb }
+.blocked td:first-child, .unmatched td:first-child { color: #ffb6a5 }
+.ready td:first-child { color: #59e0bf }
+.review td:first-child, .category-review td:first-child { color: #ffda85 }
+strong { font-weight: 500; color: #9be7d9 }
+@media (max-width: 700px) {
+  body { margin: .6rem }
+  table { font-size: 13px }
+  th, td { padding: .4rem }
+}
+"""
+
+REPORT_INTRODUCTION = """
 <p><strong>Matched entries can be accepted as a batch.</strong> Filename matches are unverified,
 but already identify a single game/release or an explicitly marked game-level entry.
 Use <code>--accept-name-matches</code> on apply after checking a sample of their proposed paths.
@@ -1648,39 +1605,173 @@ Unidentified entries, unresolved choices and file problems stay in place; they d
 choices can be downloaded as JSON files below. Scan again with <code>--quick --overrides overrides.json --categories categories.json</code>
 to build a new plan from those choices. Only include a flag if its file was downloaded.
 Download choices before closing this page; changing this report does not edit the plan or drive.</p>
-<nav aria-label="Review groups">"""
+"""
+
+# Shows one tab's rows (filtered by the search box), counts the choices made
+# in the drop-downs, and downloads them as overrides.json / categories.json.
+REPORT_SCRIPT = """
+let view = 'decisions';
+const rows = Array.from(document.querySelectorAll('tbody tr'));
+
+function filter() {
+  const query = document.getElementById('filter').value.toLowerCase();
+  let count = 0;
+  rows.forEach((row) => {
+    row.hidden =
+      (view !== 'all' && row.dataset.bucket !== view) || !row.textContent.toLowerCase().includes(query);
+    if (!row.hidden) count++;
+  });
+  document
+    .querySelectorAll('[data-view]')
+    .forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.view === view)));
+  document.getElementById('visible').textContent =
+    count + ' entries shown. Unresolved entries may be left in place.';
+}
+
+// {disc path: chosen value} for the "release" or "category" drop-downs.
+function choices(kind) {
+  return Object.fromEntries(
+    rows.flatMap((row) => {
+      const select = row.querySelector('select.' + kind);
+      return select && select.value ? [[row.dataset.source, select.value]] : [];
+    })
+  );
+}
+
+function update() {
+  document.getElementById('choices').textContent =
+    ' ' + Object.keys(choices('release')).length + ' releases, ' +
+    Object.keys(choices('category')).length + ' categories selected';
+}
+
+function download(kind, name) {
+  const text = JSON.stringify(choices(kind), null, 2) + String.fromCharCode(10);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.querySelectorAll('[data-view]').forEach((button) =>
+  button.addEventListener('click', () => {
+    view = button.dataset.view;
+    filter();
+  })
+);
+document.getElementById('filter').addEventListener('input', filter);
+document.querySelectorAll('select').forEach((select) => select.addEventListener('change', update));
+document.getElementById('export-releases').addEventListener('click', () => download('release', 'overrides.json'));
+document.getElementById('export-categories').addEventListener('click', () => download('category', 'categories.json'));
+filter();
+update();
+"""
+
+
+def escape(value):
+    return html.escape(str(value) if value is not None else "")
+
+
+def choice_select(css_class, label, options):
+    """A labeled drop-down whose first option leaves the disc in place."""
+    items = "".join("<option>" + escape(option) + "</option>" for option in options)
+    return (
+        f'<label>{label} <select class="{css_class}"><option value="">Leave in place</option>'
+        + items
+        + "</select></label>"
+    )
+
+
+def report_row(row, categories):
+    """One <tr> of the report: status, paths, category, metadata, and notes
+    with a drop-down for any choice the person can make."""
+    meta = row.get("metadata", {})
+    suggestions = list(dict.fromkeys(row.get("suggestions", [])))
+    notes = escape(row["reason"])
+    if row.get("category_reason"):
+        notes += "<br><small>" + escape(row["category_reason"]) + "</small>"
+
+    controls = ""
+    if row["status"] == "category-review":
+        controls = choice_select("category", "Category", categories)
+    elif suggestions and row["status"] == "unmatched" and row.get("confidence"):
+        controls = choice_select("release", "Release", suggestions)
+    if suggestions:
+        notes += (
+            "<details><summary>Catalog suggestions (not selected)</summary><ul>"
+            + "".join("<li>" + escape(name) + "</li>" for name in suggestions)
+            + "</ul></details>"
+        )
+
+    if row.get("category"):
+        category = row["category"]
+    elif row["status"] == "category-review":
+        category = "Needs classification"
+    else:
+        category = "Unknown"
+    cells = [
+        escape(row["status"]) + "<br><small>" + escape(row.get("confidence", "")) + "</small>",
+        escape(row["source"])
+        + "<br><strong>"
+        + escape(row.get("target") or "Stays in place")
+        + "</strong>",
+        escape(category),
+        "<br>".join(escape(meta.get(field)) for field in ("genre", "publisher", "year")),
+        notes + controls,
+    ]
+    return (
+        f'<tr hidden data-bucket="{review_bucket(row)}" data-source="{escape(row["source"])}"'
+        f' class="{escape(row["status"])}">'
+        + "".join("<td>" + cell + "</td>" for cell in cells)
+        + "</tr>\n"
+    )
+
+
+def report_html(plan):
+    """The plan's interactive HTML report: tabs grouping the entries, a
+    search box, and drop-downs to choose releases and categories, which
+    download as files to feed back into a new scan."""
+    counts = collections.Counter(review_bucket(r) for r in plan["entries"])
+    tabs = "".join(
+        f'<button type="button" data-view="{key}">{label} ({counts[key]})</button>'
+        for key, label in REPORT_TABS
+    )
+    categories = plan.get("categories", CATEGORIES)
+    rows = "".join(report_row(row, categories) for row in plan["entries"])
+    page = (
+        '<!doctype html>\n<html lang="en">\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width">\n'
+        "<title>Oh My 3DO — Library preview</title>\n"
+        "<style>" + REPORT_STYLE + "</style>\n"
+        "<h1>Library preview</h1>\n"
+        "<p>USB root: "
+        + escape(plan["root"])
+        + "</p>\n"
+        + REPORT_INTRODUCTION
+        + '<nav aria-label="Review groups">'
         + tabs
-        + """<button type="button" data-view="all">All</button></nav>
-<input id="filter" type="search" placeholder="Filter this group by title, category, region or publisher" aria-label="Filter library">
-<p id="visible" aria-live="polite"></p><button id="export-releases" type="button">Download release choices</button>
-<button id="export-categories" type="button">Download category choices</button><span id="choices" aria-live="polite"></span>
-<noscript><p>Enable JavaScript for filtering and choice downloads.</p><style>tr[hidden]{display:table-row}</style></noscript>
-<table><thead><tr><th>Status / match</th><th>Original → proposed path</th><th>Category</th><th>Genre / publisher / year</th><th>Notes / choice</th></tr></thead>
-<tbody>"""
-        + "".join(rows)
-        + """</tbody></table>
-<script>
-let view='decisions';
-const rows=Array.from(document.querySelectorAll('tbody tr'));
-function filter(){const q=document.getElementById('filter').value.toLowerCase();let count=0;
-rows.forEach(row=>{row.hidden=(view!=='all'&&row.dataset.bucket!==view)||!row.textContent.toLowerCase().includes(q);if(!row.hidden)count++;});
-document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));
-document.getElementById('visible').textContent=count+' entries shown. Unresolved entries may be left in place.';}
-function choices(kind){return Object.fromEntries(rows.flatMap(row=>{const select=row.querySelector('select.'+kind);return select&&select.value?[[row.dataset.source,select.value]]:[];}));}
-function update(){document.getElementById('choices').textContent=' '+Object.keys(choices('release')).length+' releases, '+Object.keys(choices('category')).length+' categories selected';}
-function download(kind,name){const blob=new Blob([JSON.stringify(choices(kind),null,2)+String.fromCharCode(10)],{type:'application/json'});
-const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>{view=b.dataset.view;filter();}));
-document.getElementById('filter').addEventListener('input',filter);
-document.querySelectorAll('select').forEach(s=>s.addEventListener('change',update));
-document.getElementById('export-releases').addEventListener('click',()=>download('release','overrides.json'));
-document.getElementById('export-categories').addEventListener('click',()=>download('category','categories.json'));
-filter();update();
-</script></html>"""
-    ).encode("utf-8")
+        + '<button type="button" data-view="all">All</button></nav>\n'
+        '<input id="filter" type="search" placeholder="Filter this group by title, category, '
+        'region or publisher" aria-label="Filter library">\n'
+        '<p id="visible" aria-live="polite"></p>\n'
+        '<button id="export-releases" type="button">Download release choices</button>\n'
+        '<button id="export-categories" type="button">Download category choices</button>\n'
+        '<span id="choices" aria-live="polite"></span>\n'
+        "<noscript><p>Enable JavaScript for filtering and choice downloads.</p>"
+        "<style>tr[hidden]{display:table-row}</style></noscript>\n"
+        "<table>\n<thead><tr><th>Status / match</th><th>Original → proposed path</th>"
+        "<th>Category</th><th>Genre / publisher / year</th><th>Notes / choice</th></tr></thead>\n"
+        "<tbody>\n" + rows + "</tbody>\n</table>\n"
+        "<script>" + REPORT_SCRIPT + "</script>\n</html>\n"
+    )
+    return page.encode("utf-8")
 
 
 def atomic_write(path, data):
+    """Write `data` to `path` through a temporary file flushed to disk, so the
+    file is always either the old or the new contents."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -1695,8 +1786,30 @@ def atomic_write(path, data):
             temporary.unlink(missing_ok=True)
 
 
+def sha256_of_file(path):
+    checksum = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(MIB), b""):
+            checksum.update(block)
+    return checksum.hexdigest()
+
+
 class Transaction:
+    """An undo journal for changes to a drive, kept as JSON under
+    .ohmy3do/transactions/.
+
+    Every change is recorded (and saved) before it is made, so even an
+    interrupted run can be undone:
+      moves         files moved, with their fingerprints
+      writes        support files written, with their previous contents
+      directories   folders created
+      folder_moves  whole folders renamed (library-maintenance.py)
+      copies        files copied onto the drive (library-maintenance.py)
+    The journal's "state" is applying, complete or undone.
+    """
+
     def __init__(self, root, plan=None, path=None):
+        """Start a new journal for `root`, or with `path` open an existing one."""
         self.root = root
         if path is not None:
             self.path = relative_path(root, path)
@@ -1720,6 +1833,7 @@ class Transaction:
         atomic_write(self.path, json_bytes(self.data))
 
     def parents(self, path):
+        """Create the missing folders above `path`, recording each first."""
         missing = []
         parent = path.parent
         while parent != self.root and not parent.exists():
@@ -1732,6 +1846,7 @@ class Transaction:
             parent.mkdir(exist_ok=True)
 
     def move(self, operation):
+        """Move a file as a plan's move describes ({source, target, fingerprint})."""
         if operation["source"] == operation["target"]:
             return
         source = relative_path(self.root, operation["source"])
@@ -1762,11 +1877,13 @@ class Transaction:
         source.rename(target)
 
     def write(self, relative, content):
+        """Replace a support file, journaling its previous contents (and the
+        new contents' hash) first. Unchanged contents are not rewritten."""
         path = relative_path(self.root, relative)
         before = path.read_bytes() if path.exists() else None
         if before == content:
             return
-        if before is not None and len(before) > 16 * 1024 * 1024:
+        if before is not None and len(before) > 16 * MIB:
             raise ValueError(f"Refusing to replace oversized support file: {relative}")
         entry = dict(
             path=relative,
@@ -1781,9 +1898,10 @@ class Transaction:
         entry["state"] = "done"
         self.save()
 
-    def undo(self):
-        if self.data["state"] == "undone":
-            raise ValueError("Transaction is already undone")
+    # Undo. Every check runs before anything is restored, so an undo either
+    # happens completely or not at all.
+
+    def _check_folder_moves(self):
         for entry in self.data.get("folder_moves", []):
             source = relative_path(self.root, entry["source"])
             target = relative_path(self.root, entry["target"])
@@ -1791,21 +1909,23 @@ class Transaction:
                 raise ValueError("Cannot undo: original folder is occupied: " + entry["source"])
             if not source.exists() and not target.is_dir():
                 raise ValueError("Cannot undo: moved folder is missing: " + entry["target"])
+
+    def _check_copies(self):
         for entry in self.data.get("copies", []):
             path = relative_path(self.root, entry["path"])
-            if path.exists():
-                h = hashlib.sha256()
-                with path.open("rb") as stream:
-                    for block in iter(lambda: stream.read(1024 * 1024), b""):
-                        h.update(block)
-                if h.hexdigest() != entry["sha256"]:
-                    raise ValueError("Cannot undo: copied file changed: " + entry["path"])
+            if path.exists() and sha256_of_file(path) != entry["sha256"]:
+                raise ValueError("Cannot undo: copied file changed: " + entry["path"])
+
+    def _check_removed_directories(self):
         for name in self.data.get("removed_directories", []):
             path = relative_path(self.root, name)
             if path.exists() and not path.is_dir():
                 raise ValueError("Cannot undo: original directory is occupied by a file: " + name)
-        # Preflight the entire undo before changing anything. Modified files are
-        # never overwritten, including covers or favorites edited after apply.
+
+    def _check_writes(self):
+        """Every written file must still hold what was written (or already be
+        back to what it was). Modified files are never overwritten, including
+        covers or favorites edited after apply."""
         restored = {}
         for entry in reversed(self.data["writes"]):
             path = relative_path(self.root, entry["path"])
@@ -1823,13 +1943,18 @@ class Transaction:
             # Validate each earlier write against the bytes the later undo will
             # restore, without changing any files during preflight.
             restored[path] = before
-        written = {}
+
+    def _check_moves(self):
+        """Every moved file must be in one place, unchanged since it moved."""
+        first_writes = {}
         for entry in self.data["writes"]:
-            written.setdefault(entry["path"], entry)
+            first_writes.setdefault(entry["path"], entry)
+
         for entry in reversed(self.data["moves"]):
             source = relative_path(self.root, entry["source"])
             target = relative_path(self.root, entry["target"])
             if source.exists():
+                # An interrupted move may have left an empty placeholder at the target.
                 if target.exists() and (entry["state"] == "done" or target.stat().st_size):
                     raise ValueError(f"Cannot undo: original path is occupied: {source}")
                 actual = source
@@ -1837,14 +1962,17 @@ class Transaction:
                 raise ValueError(f"Cannot undo: moved file is missing: {target}")
             else:
                 actual = target
+
             # A renamed CUE may also have updated FILE directives. Its original
             # bytes are in the write journal and are restored before moving it.
-            write = written.get(entry["target"]) if actual == target else None
-            original = (
-                base64.b64decode(write["before"]) if write and write["before"] is not None else None
-            )
+            write = first_writes.get(entry["target"]) if actual == target else None
+            if write and write["before"] is not None:
+                original = base64.b64decode(write["before"])
+            else:
+                original = None
             size = len(original) if original is not None else actual.stat().st_size
             sha = hashlib.sha1(original).hexdigest() if original is not None else None
+
             if size != entry["fingerprint"]["size"]:
                 raise ValueError(f"Cannot undo: moved file size changed: {actual}")
             if entry["fingerprint"].get("sha1"):
@@ -1852,14 +1980,19 @@ class Transaction:
                     raise ValueError(f"Cannot undo: moved file contents changed: {actual}")
             elif actual.stat().st_mtime_ns != entry["fingerprint"]["mtime_ns"]:
                 raise ValueError(f"Cannot undo: moved file changed: {actual}")
+
+    def _restore(self):
+        """Reverse every change, newest first."""
         for entry in reversed(self.data.get("copies", [])):
             relative_path(self.root, entry["path"]).unlink(missing_ok=True)
+
         for entry in reversed(self.data["writes"]):
             path = relative_path(self.root, entry["path"])
             if entry["before"] is None:
                 path.unlink(missing_ok=True)
             else:
                 atomic_write(path, base64.b64decode(entry["before"]))
+
         for entry in reversed(self.data["moves"]):
             source = relative_path(self.root, entry["source"])
             target = relative_path(self.root, entry["target"])
@@ -1867,104 +2000,200 @@ class Transaction:
                 source.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(target, source)
             elif target.exists() and entry["state"] == "moving" and not target.stat().st_size:
-                target.unlink()
+                target.unlink()  # the empty placeholder of an interrupted move
+
         for entry in reversed(self.data.get("folder_moves", [])):
             source = relative_path(self.root, entry["source"])
             target = relative_path(self.root, entry["target"])
             if not source.exists():
                 source.parent.mkdir(parents=True, exist_ok=True)
                 target.rename(source)
+
         for name in self.data.get("removed_directories", []):
             relative_path(self.root, name).mkdir(parents=True, exist_ok=True)
+
+        # Remove the folders this journal created, if they are empty now.
         for directory in reversed(self.data["directories"]):
             try:
                 relative_path(self.root, directory).rmdir()
             except OSError:
                 pass
+
+    def undo(self):
+        """Restore the drive to how it was before this journal's changes.
+
+        Raises ValueError, changing nothing, if anything the journal touched
+        has changed since.
+        """
+        if self.data["state"] == "undone":
+            raise ValueError("Transaction is already undone")
+        self._check_folder_moves()
+        self._check_copies()
+        self._check_removed_directories()
+        self._check_writes()
+        self._check_moves()
+        self._restore()
         self.data["state"] = "undone"
         self.save()
 
 
+MAX_MENU_LIST_BYTES = 8192
+MAX_POSITION_BYTES = 9216
+POSITION_HEADER = "OH3DO_POSITION1"
+POSITION_AT_ROOT = b"OH3DO_POSITION1\n/Storage\n\n"
+
+
+def remap_list(path, folded):
+    """favorites.txt or recent.txt with each line naming a moved disc
+    rewritten to its new path. Comments, unknown paths and the line's
+    indentation and line ending survive."""
+    raw = path.read_bytes()
+    text = raw.split(b"\0", 1)[0].decode("utf-8-sig")
+    lines = []
+    for line in text.splitlines(keepends=True):
+        # Favorites are volume-relative; comments and unknown paths survive.
+        key = line.strip()
+        replacement = folded.get(index_tools.fold(key))
+        if replacement:
+            begin = len(line) - len(line.lstrip())
+            line = line[:begin] + replacement + line[begin + len(key) :]
+        lines.append(line)
+    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+    return "".join(lines).encode(encoding)
+
+
+def check_position(raw, lines):
+    """Raise ValueError unless last-position.txt is: the header, a folder
+    under /Storage, and the highlighted entry's name, all within the menu's
+    path limits."""
+    if len(raw) >= MAX_POSITION_BYTES or len(lines) != 3 or lines[0] != POSITION_HEADER:
+        raise ValueError("Invalid saved-position header or length")
+    if lines[1] != "/Storage" and not lines[1].startswith("/Storage/"):
+        raise ValueError("Invalid saved-position root")
+    parts = lines[1][9:].split("/") if lines[1] != "/Storage" else []
+    if lines[2]:
+        parts.append(lines[2])
+    if len(lines[1].encode()) > 8192 or any(
+        not part
+        or len(part.encode()) >= 1024
+        or part in (".", "..")
+        or any(ord(c) < 32 or ord(c) == 127 or c in "/\\:" for c in part)
+        for part in parts
+    ):
+        raise ValueError("Invalid saved-position path")
+
+
+def remap_position(raw, mapping, folded):
+    """New last-position.txt contents for moved discs, or None to keep it.
+
+    The menu remembers a folder and the entry highlighted in it. If that
+    entry moved, the position follows it; if it was inside a moved folder,
+    the position resets to the drive's root.
+    """
+    lines = raw.decode("utf-8-sig").splitlines()
+    folder = lines[1][9:] if lines[1].startswith("/Storage/") else ""
+    current = (folder.rstrip("/") + "/" if folder else "") + lines[2]
+    target = folded.get(index_tools.fold(current))
+    if target:
+        return (
+            POSITION_HEADER
+            + "\n/Storage/"
+            + str(PurePosixPath(target).parent)
+            + "\n"
+            + Path(target).name
+            + "\n"
+        ).encode()
+    if any(
+        old.startswith(current.rstrip("/") + "/") or (folder and old.startswith(folder + "/"))
+        for old in mapping
+    ):
+        return POSITION_AT_ROOT
+    return None
+
+
 def prepare_text_remaps(root, mapping):
-    """Parse menu text before moving discs; firmware text ends at its first NUL."""
+    """Parse menu text before moving discs; firmware text ends at its first NUL.
+
+    `mapping` is {old disc path: new path}. Returns {support file: new
+    contents} for favorites.txt, recent.txt and last-position.txt.
+    """
     updates = {}
     folded = {index_tools.fold(k): v for k, v in mapping.items()}
     for name in ("favorites.txt", "recent.txt"):
         path = relative_path(root, support_path(root, name))
         if not path.exists():
             continue
-        raw = path.read_bytes()
-        text = raw.split(b"\0", 1)[0].decode("utf-8-sig")
-        lines = []
-        for line in text.splitlines(keepends=True):
-            # Favorites are volume-relative; comments and unknown paths survive.
-            key = line.strip()
-            replacement = folded.get(index_tools.fold(key))
-            if replacement:
-                begin = len(line) - len(line.lstrip())
-                line = line[:begin] + replacement + line[begin + len(key) :]
-            lines.append(line)
-        updated = "".join(lines).encode("utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8")
-        if len(updated) >= 8192:
+        updated = remap_list(path, folded)
+        if len(updated) >= MAX_MENU_LIST_BYTES:
             raise ValueError(f"Renamed paths exceed the menu limit for {name}")
         updates[support_path(root, name)] = updated
-    position = relative_path(root, support_path(root, "last-position.txt"))
-    if position.exists():
-        raw = position.read_bytes().split(b"\0", 1)[0]
-        try:
-            lines = raw.decode("utf-8-sig").splitlines()
-            if len(raw) >= 9216 or len(lines) != 3 or lines[0] != "OH3DO_POSITION1":
-                raise ValueError("Invalid saved-position header or length")
-            if lines[1] != "/Storage" and not lines[1].startswith("/Storage/"):
-                raise ValueError("Invalid saved-position root")
-            parts = lines[1][9:].split("/") if lines[1] != "/Storage" else []
-            if lines[2]:
-                parts.append(lines[2])
-            if len(lines[1].encode()) > 8192 or any(
-                not part
-                or len(part.encode()) >= 1024
-                or part in (".", "..")
-                or any(ord(c) < 32 or ord(c) == 127 or c in "/\\:" for c in part)
-                for part in parts
-            ):
-                raise ValueError("Invalid saved-position path")
-        except (UnicodeError, ValueError):
-            print(
-                "Warning: invalid last-position.txt; resetting the saved menu position to the USB root. Undo restores the original file."
-            )
-            updates[support_path(root, "last-position.txt")] = b"OH3DO_POSITION1\n/Storage\n\n"
-            return updates
-        folder = lines[1][9:] if lines[1].startswith("/Storage/") else ""
-        current = (folder.rstrip("/") + "/" if folder else "") + lines[2]
-        target = folded.get(index_tools.fold(current))
-        if target:
-            updates[support_path(root, "last-position.txt")] = (
-                "OH3DO_POSITION1\n/Storage/"
-                + str(PurePosixPath(target).parent)
-                + "\n"
-                + Path(target).name
-                + "\n"
-            ).encode()
-        elif any(
-            old.startswith(current.rstrip("/") + "/") or (folder and old.startswith(folder + "/"))
-            for old in mapping
-        ):
-            updates[support_path(root, "last-position.txt")] = b"OH3DO_POSITION1\n/Storage\n\n"
+
+    position_name = support_path(root, "last-position.txt")
+    position = relative_path(root, position_name)
+    if not position.exists():
+        return updates
+    raw = position.read_bytes().split(b"\0", 1)[0]
+    try:
+        check_position(raw, raw.decode("utf-8-sig").splitlines())
+    except (UnicodeError, ValueError):
+        print(
+            "Warning: invalid last-position.txt; resetting the saved menu position to the USB "
+            "root. Undo restores the original file."
+        )
+        updates[position_name] = POSITION_AT_ROOT
+        return updates
+    new_position = remap_position(raw, mapping, folded)
+    if new_position is not None:
+        updates[position_name] = new_position
     return updates
 
 
 def media_index(mapping):
+    """A covers or previews index.3di (see index-media.py) from {disc path:
+    media file name}, sorted by folded path."""
     rows = []
-    for key, name in sorted(mapping.items(), key=lambda p: index_tools.fold(p[0])):
-        key, name = key.encode() + b"\0", name.encode() + b"\0"
+    for key, name in sorted(mapping.items(), key=lambda pair: index_tools.fold(pair[0])):
+        key = key.encode() + b"\0"
+        name = name.encode() + b"\0"
         rows.append(struct.pack(">HH", len(key), len(name)) + key + name)
     data = b"".join(rows)
     if len(rows) > 2048 or len(data) > 128 * 1024:
         raise ValueError("Media index exceeds menu capacity")
-    return b"OM3DIDX1" + struct.pack(">IIII", len(rows), len(data), binascii.crc32(data), 0) + data
+    header = struct.pack(">IIII", len(rows), len(data), binascii.crc32(data), 0)
+    return b"OM3DIDX1" + header + data
+
+
+VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov", ".webm")
+
+
+def artwork_key(value):
+    """A box-art name for comparison: no space before "[" and case folded."""
+    return re.sub(r"\s+(?=\[)", "", value).casefold()
+
+
+def matching_box_art(names, row):
+    """libretro box-art names for a plan row: by exact release name, then
+    catalog name, then title within the same region."""
+    exact = [n for n in names if artwork_key(Path(n).stem) == artwork_key(row["canonical"])]
+    if not exact and row.get("catalog_name"):
+        exact = [n for n in names if Path(n).stem.casefold() == row["catalog_name"].casefold()]
+    if not exact:
+        exact = [
+            n
+            for n in names
+            if catalog_tools.title_key(Path(n).stem) == catalog_tools.title_key(row["group"])
+            and row["region"] in region_of(Path(n).stem)
+        ]
+    return exact
 
 
 def prepare_covers(rows, cache, offline=False):
+    """Download and convert libretro box art for rows without a cover.
+
+    Returns ({cover file name: contents}, warnings); each cover comes with
+    its full-screen "-large" version. Fills in the rows' "cover" and
+    "cover_source". Conversions are cached in `cache`.
+    """
     if not rows:
         return {}, []
     try:
@@ -1973,31 +2202,27 @@ def prepare_covers(rows, cache, offline=False):
         from PIL import Image  # noqa: F401
     except (OSError, ValueError, ImportError) as error:
         return {}, [f"Covers skipped: {error}. Install Pillow with: py -m pip install Pillow"]
-    prepared, warnings = {}, []
+
+    prepared = {}
+    warnings = []
     for row in rows:
         if row.get("cover"):
             continue
-        canonical, group = row["canonical"], row["group"]
-        artwork_key = lambda value: re.sub(r"\s+(?=\[)", "", value).casefold()
-        exact = [n for n in names if artwork_key(Path(n).stem) == artwork_key(canonical)]
-        if not exact and row.get("catalog_name"):
-            exact = [n for n in names if Path(n).stem.casefold() == row["catalog_name"].casefold()]
-        if not exact:
-            exact = [
-                n
-                for n in names
-                if catalog_tools.title_key(Path(n).stem) == catalog_tools.title_key(group)
-                and row["region"] in region_of(Path(n).stem)
-            ]
+        canonical = row["canonical"]
+        exact = matching_box_art(names, row)
         if not exact:
             warnings.append(f"No cover found: {canonical}")
             continue
         # Disc-specific scans may differ; only select a unique image or disc 1.
         first = [n for n in exact if disc_of(n) == 1]
-        chosen = exact[0] if len(exact) == 1 else first[0] if len(first) == 1 else None
-        if not chosen:
+        if len(exact) == 1:
+            chosen = exact[0]
+        elif len(first) == 1:
+            chosen = first[0]
+        else:
             warnings.append(f"Ambiguous cover: {canonical}")
             continue
+
         key = hashlib.sha1(chosen.encode()).hexdigest()
         output = cache / "prepared" / (key + "-fast96.3dc")
         large = cache / "prepared" / (key + "-fast192.3dc")
@@ -2005,7 +2230,7 @@ def prepare_covers(rows, cache, offline=False):
             original = catalog_tools.download(
                 catalog_tools.cover_url(chosen),
                 cache / "artwork" / (key + ".png"),
-                16 * 1024 * 1024,
+                16 * MIB,
                 offline,
             )
             if not output.exists():
@@ -2023,12 +2248,14 @@ def prepare_covers(rows, cache, offline=False):
 
 
 def local_media_files(directory, extensions):
+    """Every file with one of `extensions` in a folder and its subfolders,
+    sorted, never following links."""
     if not directory.is_dir() or directory.is_symlink():
         raise ValueError("Media directory must be a real, existing directory")
     directory = directory.resolve()
     paths = []
-    for folder, dirs, files in os.walk(directory, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if not (Path(folder) / d).is_symlink())
+    for folder, folders, files in os.walk(directory, followlinks=False):
+        folders[:] = sorted(d for d in folders if not (Path(folder) / d).is_symlink())
         for name in sorted(files):
             path = Path(folder) / name
             if path.suffix.lower() in extensions and not path.is_symlink() and path.is_file():
@@ -2036,14 +2263,21 @@ def local_media_files(directory, extensions):
     return paths
 
 
+def media_kind(name):
+    """demo, demonstration, trial, sampler, or game."""
+    match = re.search(r"\b(demo|demonstration|trial|sampler)\b", name, re.I)
+    return match[1].casefold() if match else "game"
+
+
 def local_media_matches(row, paths, *, other_regions=False):
-    """Prefer exact/compatible names; previews may fall back across regions."""
+    """Prefer exact/compatible names; previews may fall back across regions.
 
-    def kind(name):
-        match = re.search(r"\b(demo|demonstration|trial|sampler)\b", name, re.I)
-        return match[1].casefold() if match else "game"
-
-    for name in filter(None, (row["canonical"], row.get("catalog_name"), Path(row["source"]).stem)):
+    A file named exactly like the release, catalog game or disc file wins.
+    Otherwise files with the same title, kind and disc number match, limited
+    to compatible regions unless `other_regions` allows any when none fit.
+    """
+    names = (row["canonical"], row.get("catalog_name"), Path(row["source"]).stem)
+    for name in filter(None, names):
         exact = [p for p in paths if p.stem.casefold() == name.casefold()]
         if exact:
             return exact
@@ -2052,7 +2286,7 @@ def local_media_matches(row, paths, *, other_regions=False):
         p
         for p in paths
         if identification_title(p.stem) == identification_title(row["canonical"])
-        and kind(p.stem) == kind(row["canonical"])
+        and media_kind(p.stem) == media_kind(row["canonical"])
         and (disc_of(p.stem) is None or disc_of(p.stem) == row.get("disc"))
     ]
     compatible = [
@@ -2064,28 +2298,34 @@ def local_media_matches(row, paths, *, other_regions=False):
 
 
 def prepare_local_covers(rows, directory):
-    """Prepare local front-box images, with no network requests or replacements."""
+    """Prepare local front-box images, with no network requests or replacements.
+
+    Returns ({cover file name: contents}, warnings), like prepare_covers.
+    """
     resizer = module("resize-covers")
     paths = local_media_files(directory, resizer.EXTENSIONS)
     directory = directory.resolve()
-    prepared, warnings, converted = {}, [], {}
+    prepared = {}
+    warnings = []
+    converted = {}  # image -> (name, cover, large cover), so each converts once
     for row in rows:
         if row.get("cover"):
             continue
         candidates = local_media_matches(row, paths)
         if len(candidates) != 1:
-            warnings.append(
-                f'{"Ambiguous" if candidates else "No"} local cover found: {row["canonical"]}'
-            )
+            found = "Ambiguous" if candidates else "No"
+            warnings.append(f'{found} local cover found: {row["canonical"]}')
             continue
         image = candidates[0]
         try:
             if image not in converted:
                 with tempfile.TemporaryDirectory(prefix="oh3do-cover-") as temp:
-                    target, large = Path(temp) / "cover.3dc", Path(temp) / "large.3dc"
+                    target = Path(temp) / "cover.3dc"
+                    large = Path(temp) / "large.3dc"
                     resizer.fast_convert(image, target)
                     resizer.fast_convert(image, large, resizer.LARGE_SIZE)
-                    content, large_content = target.read_bytes(), large.read_bytes()
+                    content = target.read_bytes()
+                    large_content = large.read_bytes()
                 key = hashlib.sha256(content).hexdigest()[:16]
                 converted[image] = ("cover-" + key + ".3dc", content, large_content)
             basename, content, large_content = converted[image]
@@ -2099,33 +2339,38 @@ def prepare_local_covers(rows, directory):
 
 
 def prepare_previews(rows, directory, start=0, duration=None, sound=True, replace=False):
-    """Import local, already downloaded clips; ambiguous matches stay untouched."""
-    clips = local_media_files(directory, (".mp4", ".avi", ".mkv", ".mov", ".webm"))
+    """Import local, already downloaded clips; ambiguous matches stay untouched.
+
+    Converts each matching clip to the menu's 160x120 preview format.
+    Returns ({preview file name: contents}, warnings). With `replace`, rows
+    that already have a preview get a new one (the old file is kept).
+    """
+    clips = local_media_files(directory, VIDEO_EXTENSIONS)
     if not 0 <= start <= 86400:
         raise ValueError("Preview start must be 0-86400 seconds")
     directory = directory.resolve()
     converter = module("prepare-preview")
-    prepared, warnings, converted = {}, [], {}
+    prepared = {}
+    warnings = []
+    converted = {}  # clip -> (key, contents)
     for row in rows:
         if row.get("preview") and not replace:
             continue
         candidates = local_media_matches(row, clips, other_regions=True)
         if len(candidates) != 1:
-            warnings.append(
-                f'{"Ambiguous" if candidates else "No"} preview found: {row["canonical"]}'
-            )
+            found = "Ambiguous" if candidates else "No"
+            warnings.append(f'{found} preview found: {row["canonical"]}')
             continue
         clip = candidates[0]
         try:
             if clip not in converted:
                 # Conversion happens on the PC before any USB changes. Include
                 # content and settings in the name so reruns never replace art.
-                key = hashlib.sha256(
-                    (
-                        digest(clip)
-                        + f':{start}:15:{duration or "15"}:{int(sound)}:5:160x120x30:{converter.V5_BYTES//1024}k:fixed-fps:cap15'
-                    ).encode()
-                ).hexdigest()[:16]
+                settings = (
+                    f':{start}:15:{duration or "15"}:{int(sound)}:5:160x120x30:'
+                    f"{converter.V5_BYTES//1024}k:fixed-fps:cap15"
+                )
+                key = hashlib.sha256((digest(clip) + settings).encode()).hexdigest()[:16]
                 with tempfile.TemporaryDirectory(prefix="oh3do-preview-") as temp:
                     target = Path(temp) / "clip.3dv"
                     converter.convert(clip, target, start=start, duration=duration, sound=sound)
@@ -2140,76 +2385,54 @@ def prepare_previews(rows, directory, start=0, duration=None, sound=True, replac
     return prepared, warnings
 
 
-def write_database(root, tx, plan, selected):
-    previous = relative_path(root, ".ohmy3do/library.json")
-    existing = (
-        json.loads(previous.read_text(encoding="utf-8")).get("games", [])
-        if previous.exists()
-        else []
+GAMES_TABLE = (
+    "CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, "
+    "genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, "
+    "cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, "
+    "edition_unresolved INTEGER, category TEXT, category_review INTEGER, category_reason TEXT)"
+)
+
+
+def database_record(row, path, organized):
+    """The library.json record for a plan row whose disc is now at `path`."""
+    record = dict(
+        path=path,
+        title=row.get("canonical"),
+        region=row.get("region"),
+        category=row.get("category"),
+        category_review=row.get("category_review", True),
+        category_reason=row.get("category_reason"),
+        catalog_name=row.get("catalog_name"),
+        variant=row.get("variant"),
+        edition_unresolved=row.get("edition_unresolved", False),
+        disc=row.get("disc"),
+        identification=row.get("confidence", "unmatched"),
+        status="organized" if organized else row["status"],
+        metadata=row.get("metadata", {}),
+        cover=row.get("cover"),
+        cover_source=row.get("cover_source"),
+        preview=row.get("preview"),
+        preview_source=row.get("preview_source"),
+        suggestions=row.get("suggestions", []),
     )
-    mapping = {r["source"]: r["target"] for r in selected}
-    records = {r["path"]: r for r in existing}
-    for row in plan["entries"]:
-        path = mapping.get(row["source"], row["source"])
-        records.pop(row["source"], None)
-        records[path] = dict(
-            path=path,
-            title=row.get("canonical"),
-            region=row.get("region"),
-            category=row.get("category"),
-            category_review=row.get("category_review", True),
-            category_reason=row.get("category_reason"),
-            catalog_name=row.get("catalog_name"),
-            variant=row.get("variant"),
-            edition_unresolved=row.get("edition_unresolved", False),
-            disc=row.get("disc"),
-            identification=row.get("confidence", "unmatched"),
-            status="organized" if row in selected else row["status"],
-            metadata=row.get("metadata", {}),
-            cover=row.get("cover"),
-            cover_source=row.get("cover_source"),
-            preview=row.get("preview"),
-            preview_source=row.get("preview_source"),
-            suggestions=row.get("suggestions", []),
-        )
-        if row.get("registration"):
-            records[path]["registration"] = row["registration"]
-    # Do not retain stale records for discs no longer present.
-    records = [r for r in records.values() if relative_path(root, r["path"]).is_file()]
-    data = dict(
-        schema=1,
-        generated=time.time(),
-        sources=plan["sources"],
-        games=sorted(records, key=lambda r: r["path"]),
-    )
-    tx.write(".ohmy3do/library.json", json_bytes(data))
-    games = [(index_tools.fold(r["path"]), r["path"], "") for r in records]
-    titles = {index_tools.fold(r["path"]): r.get("title") or "" for r in records}
-    names, count, cache = index_tools.save_names_text(
-        root, index_tools.support_base(root), games, titles, write_cache=False
-    )
-    tx.write(".ohmy3do/save-names-cache.json", cache)
-    tx.write(".ohmy3do/save-names.txt", names.encode("ascii"))
-    print(f"Indexed {count} save names for the Save manager")
-    tx.write(
-        ".ohmy3do/metadata.3di",
-        index_tools.metadata_index(
-            records,
-            [r["path"] for r in records if Path(r["path"]).suffix.lower() in (".iso", ".cue")],
-        ),
-    )
+    if row.get("registration"):
+        record["registration"] = row["registration"]
+    return record
+
+
+def sqlite_database(records, sources):
+    """library.sqlite's bytes: a games table (one row per record) and a
+    sources table (the catalog downloads used), for other tools to query."""
     with tempfile.TemporaryDirectory(prefix="oh3do-db-") as directory:
         path = Path(directory) / "library.sqlite"
         # SQLite's transaction context commits/rolls back, but does not close
         # the connection. Close it before copying/removing the file on Windows.
         with closing(sqlite3.connect(path)) as db, db:
-            db.execute(
-                "CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, edition_unresolved INTEGER, category TEXT, category_review INTEGER, category_reason TEXT)"
-            )
+            db.execute(GAMES_TABLE)
             db.execute("CREATE TABLE sources (url TEXT, sha256 TEXT)")
             db.executemany(
                 "INSERT INTO sources VALUES (?, ?)",
-                [(s["url"], s.get("sha256")) for s in plan["sources"]],
+                [(s["url"], s.get("sha256")) for s in sources],
             )
             for record in records:
                 meta = record["metadata"]
@@ -2235,11 +2458,99 @@ def write_database(root, tx, plan, selected):
                         record.get("category_reason"),
                     ),
                 )
-        tx.write(".ohmy3do/library.sqlite", path.read_bytes())
+        return path.read_bytes()
+
+
+def write_database(root, tx, plan, selected):
+    """Update the library database and the files derived from it.
+
+    Records for the plan's entries replace earlier ones (under each disc's
+    new path when it is in `selected`, the rows being organized); records
+    for discs no longer on the drive are dropped. Writes, through the
+    journal `tx`: library.json, save-names.txt and its cache, metadata.3di
+    and library.sqlite.
+    """
+    previous = relative_path(root, ".ohmy3do/library.json")
+    if previous.exists():
+        existing = json.loads(previous.read_text(encoding="utf-8")).get("games", [])
+    else:
+        existing = []
+    mapping = {r["source"]: r["target"] for r in selected}
+    records = {r["path"]: r for r in existing}
+    for row in plan["entries"]:
+        path = mapping.get(row["source"], row["source"])
+        records.pop(row["source"], None)
+        records[path] = database_record(row, path, row in selected)
+    # Do not retain stale records for discs no longer present.
+    records = [r for r in records.values() if relative_path(root, r["path"]).is_file()]
+
+    data = dict(
+        schema=1,
+        generated=time.time(),
+        sources=plan["sources"],
+        games=sorted(records, key=lambda r: r["path"]),
+    )
+    tx.write(".ohmy3do/library.json", json_bytes(data))
+
+    games = [(index_tools.fold(r["path"]), r["path"], "") for r in records]
+    titles = {index_tools.fold(r["path"]): r.get("title") or "" for r in records}
+    names, count, cache = index_tools.save_names_text(
+        root, index_tools.support_base(root), games, titles, write_cache=False
+    )
+    tx.write(".ohmy3do/save-names-cache.json", cache)
+    tx.write(".ohmy3do/save-names.txt", names.encode("ascii"))
+    print(f"Indexed {count} save names for the Save manager")
+
+    disc_paths = [r["path"] for r in records if Path(r["path"]).suffix.lower() in (".iso", ".cue")]
+    tx.write(".ohmy3do/metadata.3di", index_tools.metadata_index(records, disc_paths))
+    tx.write(".ohmy3do/library.sqlite", sqlite_database(records, plan["sources"]))
+
+
+def build_mirror(root, mirror, media_outputs):
+    """A tiny stand-in for the drive in `mirror`, holding just what
+    index-media.py reads: each disc's first 16 bytes (or an empty CUE), the
+    first 24 bytes of each media file, and the new media indexes."""
+    for unit in scan_units(root):
+        if unit.get("invalid_data"):
+            continue
+        for file in unit["files"][:1]:
+            path = mirror / file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.suffix.lower() == ".iso":
+                # Preserve the validation prefix without copying images.
+                with relative_path(root, file).open("rb") as stream:
+                    path.write_bytes(stream.read(16))
+            else:
+                path.touch()
+    # CUE sets were validated by scan_units; no CUE parsing is needed here.
+    for folder in ("covers", "previews"):
+        usb = index_tools.support_base(root) / folder
+        if not usb.exists():
+            continue
+        target = index_tools.support_base(mirror) / folder
+        target.mkdir(parents=True, exist_ok=True)
+        for file in usb.iterdir():
+            if (
+                file.is_file()
+                and not file.is_symlink()
+                and file.suffix.lower() in (".png", ".3dc", ".3dv", ".3di")
+                and file.name != "index.3di"
+            ):
+                # Indexing reads PNG headers and index bytes only.
+                with file.open("rb") as stream:
+                    content = stream.read(24)
+                (target / file.name).write_bytes(content)
+        (target / "index.3di").write_bytes(media_outputs[folder])
 
 
 def write_indexes(root, tx, media_outputs=None):
-    """Build in a PC mirror; journal index writes without altering media files."""
+    """Build in a PC mirror; journal index writes without altering media files.
+
+    Runs index-media.py on a mirror of the drive (see build_mirror) and
+    writes the resulting library.3di and media indexes through `tx`.
+    `media_outputs` are new covers/previews index.3di contents; by default
+    the drive's current ones are kept.
+    """
     if media_outputs is None:
         media_outputs = {
             folder: media_index(index_tools.existing_index(index_tools.support_base(root) / folder))
@@ -2247,37 +2558,7 @@ def write_indexes(root, tx, media_outputs=None):
         }
     with tempfile.TemporaryDirectory(prefix="oh3do-index-") as directory:
         mirror = Path(directory)
-        for unit in scan_units(root):
-            if unit.get("invalid_data"):
-                continue
-            for file in unit["files"][:1]:
-                path = mirror / file
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if path.suffix.lower() == ".iso":
-                    # Preserve the validation prefix without copying images.
-                    with relative_path(root, file).open("rb") as stream:
-                        path.write_bytes(stream.read(16))
-                else:
-                    path.touch()
-        # CUE sets were validated by scan_units; no CUE parsing is needed here.
-        for folder in ("covers", "previews"):
-            usb = index_tools.support_base(root) / folder
-            if usb.exists():
-                target = index_tools.support_base(mirror) / folder
-                target.mkdir(parents=True, exist_ok=True)
-                for file in usb.iterdir():
-                    if (
-                        file.is_file()
-                        and not file.is_symlink()
-                        and file.suffix.lower() in (".png", ".3dc", ".3dv", ".3di")
-                    ):
-                        if file.name == "index.3di":
-                            continue
-                        # Indexing reads PNG headers and index bytes only.
-                        with file.open("rb") as stream:
-                            content = stream.read(24)
-                        (target / file.name).write_bytes(content)
-                (target / "index.3di").write_bytes(media_outputs[folder])
+        build_mirror(root, mirror, media_outputs)
         index_tools.index(mirror, include_save_names=False)
         for name in ("library.3di", "covers/index.3di", "previews/index.3di"):
             located = support_path(root, name)
@@ -2285,10 +2566,7 @@ def write_indexes(root, tx, media_outputs=None):
                 tx.write(located, (mirror / located).read_bytes())
 
 
-def register_disc(root, source, title, category, region="Unknown", apply=False):
-    """Register an existing uncatalogued disc without moving it or inventing a release."""
-    relative_path(root, source)
-    category, category_reason = classify({}, category, category_names(root))
+def check_register_title(title):
     if (
         not title.strip()
         or len(title.encode("utf-8")) >= 1024
@@ -2297,10 +2575,24 @@ def register_disc(root, source, title, category, region="Unknown", apply=False):
         raise ValueError(
             "Use a nonempty title shorter than 1024 UTF-8 bytes, without control characters"
         )
+
+
+def register_disc(root, source, title, category, region="Unknown", apply=False):
+    """Register an existing uncatalogued disc without moving it or inventing a release.
+
+    The disc keeps its place and gets a library record with the given
+    title, category and region, marked "unverified". Its files' fingerprints
+    are recorded so a later scan can tell whether it changed. Without
+    `apply`, only describes what would happen. Returns the plan row.
+    """
+    relative_path(root, source)
+    category, category_reason = classify({}, category, category_names(root))
+    check_register_title(title)
     if region != "Unknown":
         region = REGIONS.get(region.casefold())
         if not region:
             raise ValueError("Use a known region name or Unknown")
+
     units = [u for u in scan_units(root) if source in [u["source"]] + u.get("aliases", [])]
     if len(units) != 1 or units[0].get("error"):
         raise ValueError(
@@ -2314,17 +2606,18 @@ def register_disc(root, source, title, category, region="Unknown", apply=False):
             header = stream.read(7)
         if path.stat().st_size % 2048 or header != b"\x01ZZZZZ\x01":
             raise ValueError("ISO must have a 3DO volume header and whole 2048-byte sectors")
+
     previous = root / ".ohmy3do/library.json"
-    database = (
-        json.loads(previous.read_text(encoding="utf-8"))
-        if previous.exists()
-        else {"sources": [], "games": []}
-    )
+    if previous.exists():
+        database = json.loads(previous.read_text(encoding="utf-8"))
+    else:
+        database = {"sources": [], "games": []}
     existing = next((r for r in database["games"] if r["path"] == unit["source"]), {})
     if existing.get("identification") in ("checksum", "converted-checksum"):
         raise ValueError(
             "Disc already has a verified catalog identity; use index-media.py to refresh Find"
         )
+
     certificate = {name: fingerprint(relative_path(root, name)) for name in unit["files"]}
     row = dict(
         source=unit["source"],
@@ -2344,11 +2637,15 @@ def register_disc(root, source, title, category, region="Unknown", apply=False):
     for folder, key in (("covers", "cover"), ("previews", "preview")):
         row[key] = row_asset(asset_associations(root, folder), row)
     print(
-        f'{"Register" if apply else "Would register"}: {unit["source"]}\nTitle: {title.strip()}\nCategory: {category}\nCatalog identity: unverified; ISO/CUE and data files stay in place.'
+        f'{"Register" if apply else "Would register"}: {unit["source"]}\n'
+        f"Title: {title.strip()}\n"
+        f"Category: {category}\n"
+        "Catalog identity: unverified; ISO/CUE and data files stay in place."
     )
     if not apply:
         print("No changes made. Add --apply to update the database and Find.")
         return row
+
     tx = Transaction(root)
     print(f"Undo journal: {tx.path}", flush=True)
     try:
@@ -2366,6 +2663,147 @@ def register_disc(root, source, title, category, region="Unknown", apply=False):
     return row
 
 
+VERIFIED_CONFIDENCE = ("checksum", "converted-checksum", "manual")
+
+
+def check_registrations(root, plan):
+    """Every registered disc in the plan must be unchanged since the scan."""
+    for row in plan["entries"]:
+        if row.get("registration"):
+            for name, expected in row["registration"].items():
+                if fingerprint(relative_path(root, name)) != expected:
+                    raise ValueError("Registered disc changed since scan: " + name)
+
+
+def check_row(root, row, accept_names, sources, destinations):
+    """A row to organize must have a settled category matching its target,
+    a verified identity (or `accept_names`), a well-formed move group, and
+    files unchanged since the scan whose destinations are free. `sources`
+    and `destinations` collect folded paths to catch duplicates."""
+    if (
+        row.get("category_review")
+        or row.get("category") not in category_names(root)
+        or not isinstance(row.get("target"), str)
+        or PurePosixPath(row["target"]).parts[0] != row["category"]
+    ):
+        raise ValueError(
+            "Category is unresolved or does not match the destination; "
+            "scan again with a category override"
+        )
+    if row["confidence"] not in VERIFIED_CONFIDENCE and not accept_names:
+        raise ValueError(
+            "Filename and partial data-track matches need --accept-name-matches "
+            "after reviewing the plan"
+        )
+    relative_path(root, row["source"])
+    if (
+        not row.get("moves")
+        or row["moves"][0]["source"] != row["source"]
+        or row["moves"][0]["target"] != row["target"]
+    ):
+        raise ValueError("Invalid move group in plan")
+
+    for move in row["moves"]:
+        source = relative_path(root, move["source"])
+        target = relative_path(root, move["target"])
+        if move["source"].casefold() in sources or move["target"].casefold() in destinations:
+            raise ValueError("Duplicate source or destination in plan")
+        sources.add(move["source"].casefold())
+        destinations.add(move["target"].casefold())
+        actual = fingerprint(source, False)
+        if source.suffix.lower() != ".cue":
+            issue = index_tools.disc_data_issue(source)
+            if issue:
+                raise ValueError(issue + "; no files were reorganized")
+        if any(actual[k] != move["fingerprint"][k] for k in actual):
+            raise ValueError(f"Source changed since scan: {source}; scan again")
+        if target.exists() and move["source"] != move["target"]:
+            raise ValueError(f"Destination already exists: {target}")
+
+
+def rewritten_cue(root, row):
+    """A moving CUE sheet's text with its FILE lines naming the renamed
+    track files, in the sheet's original encoding."""
+    refs, text, encoding, raw = cue_files(root, row["source"])
+    renames = {Path(m["source"]).name.casefold(): Path(m["target"]).name for m in row["moves"][1:]}
+    if set(renames) != {Path(ref).name.casefold() for ref in refs}:
+        raise ValueError("CUE move group does not match its FILE references")
+
+    def directive(match):
+        new_name = renames[(match[2] or match[3]).casefold()]
+        return match[1] + '"' + new_name + '"' + match[4] + match[5]
+
+    return FILE_LINE.sub(directive, text).encode(encoding)
+
+
+def check_support_files(root):
+    """Preflight support paths too, before creating a transaction or moving discs."""
+    for name in STATE_FILES:
+        path = relative_path(root, support_path(root, name))
+        if path.exists() and (not path.is_file() or path.stat().st_size > 16 * MIB):
+            raise ValueError(f"Invalid support file: {name}")
+
+
+def gather_media(root, rows, options, cache):
+    """Covers and previews to add for the rows being organized.
+
+    Returns ({cover file: contents}, {preview file: contents}) after
+    printing any warnings and checking no existing file would be replaced
+    by different contents.
+    """
+    if options["preview_dir"] is not None:
+        preview_files, preview_warnings = prepare_previews(
+            rows,
+            options["preview_dir"],
+            options["preview_start"],
+            options["preview_duration"],
+            options["preview_sound"],
+            options["replace_previews"],
+        )
+    else:
+        preview_files, preview_warnings = {}, []
+    if options["cover_dir"] is not None:
+        covers, warnings = prepare_local_covers(rows, options["cover_dir"])
+    elif options["covers"]:
+        covers, warnings = prepare_covers(rows, cache, options["offline"])
+    else:
+        covers, warnings = {}, []
+    for warning in warnings + preview_warnings:
+        print(warning)
+
+    for name, content in covers.items():
+        path = relative_path(root, support_path(root, "covers/" + name))
+        if path.exists() and path.read_bytes() != content:
+            raise ValueError(f"Cover destination is occupied: {path}")
+    for name, content in preview_files.items():
+        path = relative_path(root, support_path(root, "previews/" + name))
+        if path.exists() and path.read_bytes() != content:
+            raise ValueError(f"Preview destination is occupied: {path}")
+    return covers, preview_files
+
+
+def new_media_indexes(root, plan, mapping, associations):
+    """The covers and previews index.3di contents after the moves: earlier
+    associations for discs that didn't move, plus each plan entry's media
+    under its new path."""
+    moved = {index_tools.fold(p) for p in mapping}
+    outputs = {}
+    for folder in ("covers", "previews"):
+        if not relative_path(root, support_path(root, folder)).exists():
+            continue
+        old = associations[folder]
+        output = {key: value for key, value in old.get("previous", {}).items() if key not in moved}
+        for row in plan["entries"]:
+            key = mapping.get(row["source"], row["source"])
+            name = row.get("cover" if folder == "covers" else "preview") or existing_asset(
+                old, row["source"]
+            )
+            if name and relative_path(root, support_path(root, folder + "/" + name)).is_file():
+                output[index_tools.fold(key)] = name
+        outputs[folder] = media_index(output)
+    return outputs
+
+
 def apply_plan(
     root,
     plan,
@@ -2380,6 +2818,15 @@ def apply_plan(
     preview_sound=True,
     replace_previews=False,
 ):
+    """Carry out a scanned plan on the drive at `root`.
+
+    Organizes the "ready" rows (and "review" rows with `accept_names`):
+    moves their files, rewrites their CUE sheets, updates favorites and the
+    saved menu position, adds covers (downloaded, or from `cover_dir`) and
+    previews (from `preview_dir`), and rebuilds the indexes and database.
+    Everything is checked first and done under one undo journal, which is
+    undone automatically if anything fails. Returns the Transaction.
+    """
     if plan.get("schema") != 2 or plan.get("root") != str(root):
         raise ValueError("Plan version or USB root does not match; scan this drive again")
     if cover_dir is not None and not covers:
@@ -2389,76 +2836,18 @@ def apply_plan(
         for r in plan["entries"]
         if r["status"] == "ready" or (accept_names and r["status"] == "review")
     ]
-    for row in plan["entries"]:
-        if row.get("registration"):
-            for name, expected in row["registration"].items():
-                if fingerprint(relative_path(root, name)) != expected:
-                    raise ValueError("Registered disc changed since scan: " + name)
-    destinations, sources, cues = set(), set(), {}
+    check_registrations(root, plan)
+
+    # Check every row and prepare rewritten CUE sheets, changing nothing yet.
+    sources = set()
+    destinations = set()
+    cues = {}
     for row in rows:
-        if (
-            row.get("category_review")
-            or row.get("category") not in category_names(root)
-            or not isinstance(row.get("target"), str)
-            or PurePosixPath(row["target"]).parts[0] != row["category"]
-        ):
-            raise ValueError(
-                "Category is unresolved or does not match the destination; scan again with a category override"
-            )
-        if (
-            row["confidence"] not in ("checksum", "converted-checksum", "manual")
-            and not accept_names
-        ):
-            raise ValueError(
-                "Filename and partial data-track matches need --accept-name-matches after reviewing the plan"
-            )
-        relative_path(root, row["source"])
-        if (
-            not row.get("moves")
-            or row["moves"][0]["source"] != row["source"]
-            or row["moves"][0]["target"] != row["target"]
-        ):
-            raise ValueError("Invalid move group in plan")
-        for move in row["moves"]:
-            source = relative_path(root, move["source"])
-            target = relative_path(root, move["target"])
-            if move["source"].casefold() in sources or move["target"].casefold() in destinations:
-                raise ValueError("Duplicate source or destination in plan")
-            sources.add(move["source"].casefold())
-            destinations.add(move["target"].casefold())
-            actual = fingerprint(source, False)
-            if source.suffix.lower() != ".cue":
-                issue = index_tools.disc_data_issue(source)
-                if issue:
-                    raise ValueError(issue + "; no files were reorganized")
-            if any(actual[k] != move["fingerprint"][k] for k in actual):
-                raise ValueError(f"Source changed since scan: {source}; scan again")
-            if target.exists() and move["source"] != move["target"]:
-                raise ValueError(f"Destination already exists: {target}")
+        check_row(root, row, accept_names, sources, destinations)
         if Path(row["source"]).suffix.lower() == ".cue":
-            refs, text, encoding, raw = cue_files(root, row["source"])
-            renames = {
-                Path(m["source"]).name.casefold(): Path(m["target"]).name for m in row["moves"][1:]
-            }
-            if set(renames) != {Path(ref).name.casefold() for ref in refs}:
-                raise ValueError("CUE move group does not match its FILE references")
+            cues[row["target"]] = rewritten_cue(root, row)
+    check_support_files(root)
 
-            def directive(match):
-                return (
-                    match[1]
-                    + '"'
-                    + renames[(match[2] or match[3]).casefold()]
-                    + '"'
-                    + match[4]
-                    + match[5]
-                )
-
-            cues[row["target"]] = FILE_LINE.sub(directive, text).encode(encoding)
-    # Preflight support paths too, before creating a transaction or moving discs.
-    for name in STATE_FILES:
-        path = relative_path(root, support_path(root, name))
-        if path.exists() and (not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
-            raise ValueError(f"Invalid support file: {name}")
     mapping = {source: r["target"] for r in rows for source in [r["source"]] + r.get("aliases", [])}
     text_updates = prepare_text_remaps(root, mapping)
     associations = {folder: asset_associations(root, folder) for folder in ("covers", "previews")}
@@ -2466,27 +2855,18 @@ def apply_plan(
     for row in rows:
         row["cover"] = row_asset(associations["covers"], row)
         row["preview"] = row_asset(associations["previews"], row)
-    preview_files, preview_warnings = (
-        prepare_previews(
-            rows, preview_dir, preview_start, preview_duration, preview_sound, replace_previews
-        )
-        if preview_dir is not None
-        else ({}, [])
+    options = dict(
+        covers=covers,
+        offline=offline,
+        cover_dir=cover_dir,
+        preview_dir=preview_dir,
+        preview_start=preview_start,
+        preview_duration=preview_duration,
+        preview_sound=preview_sound,
+        replace_previews=replace_previews,
     )
-    if cover_dir is not None:
-        prepared, warnings = prepare_local_covers(rows, cover_dir)
-    else:
-        prepared, warnings = prepare_covers(rows, cache, offline) if covers else ({}, [])
-    for warning in warnings + preview_warnings:
-        print(warning)
-    for name, content in prepared.items():
-        path = relative_path(root, support_path(root, "covers/" + name))
-        if path.exists() and path.read_bytes() != content:
-            raise ValueError(f"Cover destination is occupied: {path}")
-    for name, content in preview_files.items():
-        path = relative_path(root, support_path(root, "previews/" + name))
-        if path.exists() and path.read_bytes() != content:
-            raise ValueError(f"Preview destination is occupied: {path}")
+    prepared, preview_files = gather_media(root, rows, options, cache)
+
     tx = Transaction(root, plan)
     print(f"Undo journal: {tx.path}", flush=True)
     try:
@@ -2501,26 +2881,7 @@ def apply_plan(
             tx.write(support_path(root, "covers/" + name), content)
         for name, content in preview_files.items():
             tx.write(support_path(root, "previews/" + name), content)
-        media_outputs = {}
-        for folder in ("covers", "previews"):
-            path = relative_path(root, support_path(root, folder))
-            if not path.exists():
-                continue
-            old = associations[folder]
-            output = {
-                key: value
-                for key, value in old.get("previous", {}).items()
-                if key not in {index_tools.fold(p) for p in mapping}
-            }
-            for row in plan["entries"]:
-                key = mapping.get(row["source"], row["source"])
-                name = row.get("cover" if folder == "covers" else "preview") or existing_asset(
-                    old, row["source"]
-                )
-                if name and relative_path(root, support_path(root, folder + "/" + name)).is_file():
-                    output[index_tools.fold(key)] = name
-            media_outputs[folder] = media_index(output)
-        write_indexes(root, tx, media_outputs)
+        write_indexes(root, tx, new_media_indexes(root, plan, mapping, associations))
         write_database(root, tx, plan, rows)
         tx.data["state"] = "complete"
         tx.save()
@@ -2539,6 +2900,8 @@ def apply_plan(
 
 
 def default_cache():
+    """Where catalog downloads and converted media are cached: under
+    %LOCALAPPDATA% on Windows, else $XDG_CACHE_HOME or ~/.cache."""
     base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CACHE_HOME")
     return (Path(base) if base else Path.home() / ".cache") / "oh-my-3do"
 
@@ -2546,13 +2909,17 @@ def default_cache():
 def directory_link(path):
     # Windows junctions are reparse points but aren't always reported as
     # symlinks, especially on Python versions before Path.is_junction().
-    return path.is_symlink() or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+    return path.is_symlink() or is_reparse_point(path)
 
 
-def cleanup_empty(root, apply=False):
-    """Remove only empty directories, deepest first; never delete files."""
-    if directory_link(root) or not root.is_dir():
-        raise ValueError("USB root must be a real directory, not a link or junction")
+# Windows hidden (0x2) and system (0x4) attributes.
+HIDDEN_OR_SYSTEM = 0x6
+
+
+def empty_directories(root):
+    """Empty folders under `root`, deepest first. Folders holding only empty
+    folders count as empty; protected, hidden and system folders and links
+    are never candidates and keep their parents."""
     protected = SKIP | {"system volume information", "$recycle.bin"}
     candidates = []
 
@@ -2564,7 +2931,7 @@ def cleanup_empty(root, apply=False):
             elif (
                 path.name.casefold() in protected
                 or path.name.startswith(".")
-                or getattr(path.lstat(), "st_file_attributes", 0) & 0x6
+                or getattr(path.lstat(), "st_file_attributes", 0) & HIDDEN_OR_SYSTEM
             ):
                 empty = False
             elif not visit(path):
@@ -2574,6 +2941,18 @@ def cleanup_empty(root, apply=False):
         return empty
 
     visit(root)
+    return candidates
+
+
+def cleanup_empty(root, apply=False):
+    """Remove only empty directories, deepest first; never delete files.
+
+    Without `apply`, lists what would be removed. Returns the folders
+    removed (with `apply`) or the candidates.
+    """
+    if directory_link(root) or not root.is_dir():
+        raise ValueError("USB root must be a real directory, not a link or junction")
+    candidates = empty_directories(root)
     removed = []
     for name in candidates:
         if not apply:
@@ -2596,18 +2975,22 @@ def cleanup_empty(root, apply=False):
         print(f"Removed {len(removed)} empty directories. No files deleted.")
     else:
         print(
-            f"{len(candidates)} empty directories could be removed. No changes made. Add --apply to remove them."
+            f"{len(candidates)} empty directories could be removed. No changes made. "
+            "Add --apply to remove them."
         )
     return removed if apply else candidates
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--version", action="version", version="Oh My 3DO library organizer " + SCANNER_VERSION
     )
     parser.add_argument("--cache", type=Path, default=default_cache())
     commands = parser.add_subparsers(dest="command", required=True)
+
     report_command = commands.add_parser(
         "report", help="rebuild the interactive HTML report from an existing plan without scanning"
     )
@@ -2615,6 +2998,7 @@ def main():
     report_command.add_argument(
         "--output", type=Path, help="HTML output (default: beside the plan)"
     )
+
     register = commands.add_parser(
         "register",
         help="preview adding an uncatalogued disc to the database and Find; never move disc files",
@@ -2625,6 +3009,7 @@ def main():
     register.add_argument("--category", required=True)
     register.add_argument("--region", default="Unknown")
     register.add_argument("--apply", action="store_true")
+
     cleanup = commands.add_parser(
         "clean-empty", help="preview empty directories; add --apply to remove them"
     )
@@ -2632,6 +3017,7 @@ def main():
     cleanup.add_argument(
         "--apply", action="store_true", help="remove empty directories; never delete files"
     )
+
     scan = commands.add_parser(
         "scan", help="read the drive and write a preview plan; USB files stay unchanged"
     )
@@ -2654,6 +3040,7 @@ def main():
         "--dat", type=Path, help="use a local XML/Logiqx or clrmamepro DAT (plain text or ZIP)"
     )
     scan.add_argument("--launchbox", type=Path, help="use a local LaunchBox Metadata.zip")
+
     apply = commands.add_parser(
         "apply", help="apply a reviewed plan and build covers, database and menu indices"
     )
@@ -2686,7 +3073,8 @@ def main():
     apply.add_argument(
         "--preview-duration",
         default=None,
-        help="maximum seconds (default and overall cap: 15); clip shortens further to preserve 15 fps; requires --preview-dir",
+        help="maximum seconds (default and overall cap: 15); clip shortens further to preserve "
+        "15 fps; requires --preview-dir",
     )
     apply.add_argument(
         "--preview-silent", action="store_true", help="omit preview audio; requires --preview-dir"
@@ -2697,103 +3085,131 @@ def main():
         help="import new previews even when an association exists; keep old media files",
     )
     apply.add_argument("--offline", action="store_true")
+
     undo = commands.add_parser(
         "undo", help="restore a transaction; refuses to overwrite later edits"
     )
     undo.add_argument("usb_root", type=Path)
     undo.add_argument("journal", help="journal path relative to the USB root, printed by apply")
-    args = parser.parse_args()
-    try:
-        if args.command == "report":
-            plan = json.loads(args.plan.read_text(encoding="utf-8"))
-            if plan.get("schema") != 2:
-                raise ValueError("Unsupported plan version; scan again")
-            output = args.output or args.plan.with_suffix(".html")
-            if output.suffix.lower() != ".html":
-                raise ValueError("Report output must end in .html")
-            root = Path(plan["root"]).resolve()
-            if output.resolve() == root or root in output.resolve().parents:
-                raise ValueError("Keep the report on the PC, outside the USB root")
-            atomic_write(output, report_html(plan))
-            print(f"Open report: {output.resolve()}\nNo scan or USB changes performed.")
-            return
-        if args.usb_root.is_symlink() or not args.usb_root.is_dir():
-            raise ValueError("USB root must be a real, existing directory")
-        if args.command == "clean-empty":
-            if directory_link(args.usb_root):
-                raise ValueError("USB root must not be a link or junction")
-            cleanup_empty(args.usb_root.resolve(), args.apply)
-            return
-        root = args.usb_root.resolve()
-        if directory_link(root):
+    return parser, parser.parse_args()
+
+
+def run_report(args):
+    """Rebuild a plan's HTML report without scanning."""
+    plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    if plan.get("schema") != 2:
+        raise ValueError("Unsupported plan version; scan again")
+    output = args.output or args.plan.with_suffix(".html")
+    if output.suffix.lower() != ".html":
+        raise ValueError("Report output must end in .html")
+    root = Path(plan["root"]).resolve()
+    if output.resolve() == root or root in output.resolve().parents:
+        raise ValueError("Keep the report on the PC, outside the USB root")
+    atomic_write(output, report_html(plan))
+    print(f"Open report: {output.resolve()}\nNo scan or USB changes performed.")
+
+
+def load_json_option(path):
+    return json.loads(path.read_text(encoding="utf-8")) if path else None
+
+
+def run_scan(args, root, cache):
+    """Scan the drive, write the plan and its report, and summarize."""
+    if args.plan.suffix.lower() != ".json":
+        raise ValueError("Use a .json filename for the plan")
+    # Even report/cache files must stay off the drive in preview mode.
+    for target in (args.plan.resolve(), cache):
+        if target == root or root in target.parents:
+            raise ValueError(
+                "Keep the preview plan and download cache on the PC, outside the USB root"
+            )
+    catalog = catalog_tools.load_catalog(
+        cache, args.offline, args.refresh_catalog, args.dat, args.launchbox
+    )
+    overrides = load_json_option(args.overrides)
+    categories = load_json_option(args.categories)
+    plan = build_plan(root, catalog, args.quick, overrides, categories=categories)
+    atomic_write(args.plan, json_bytes(plan))
+    report = args.plan.with_suffix(".html")
+    atomic_write(report, report_html(plan))
+
+    counts = collections.Counter(row["status"] for row in plan["entries"])
+    groups = collections.Counter(review_bucket(row) for row in plan["entries"])
+    for row in plan["entries"]:
+        print(
+            f'{row["status"].upper():9} {row["source"]}\n          {row.get("target") or row["reason"]}'
+        )
+    print(
+        f"Plan: {args.plan.resolve()}\n"
+        f"Open preview: {report.resolve()}\n"
+        f"Counts: {dict(counts)}\n"
+        "No USB files changed. Filename matches need review and --accept-name-matches."
+    )
+    print(
+        f'Batch matches: {groups["matched"]}; choices: {groups["decisions"]}; '
+        f'unidentified: {groups["unidentified"]}; file problems: {groups["problems"]}. '
+        "Unresolved entries stay in place and do not block batch apply."
+    )
+
+
+def run_apply(args, root, cache):
+    plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    uses_preview_options = (
+        args.preview_start or args.preview_duration or args.preview_silent or args.replace_previews
+    )
+    if uses_preview_options and args.preview_dir is None:
+        raise ValueError("Preview options require --preview-dir")
+    apply_plan(
+        root,
+        plan,
+        cache,
+        not args.no_covers,
+        args.offline,
+        args.accept_name_matches,
+        args.preview_dir,
+        args.preview_start,
+        args.cover_dir,
+        args.preview_duration,
+        not args.preview_silent,
+        args.replace_previews,
+    )
+
+
+def run_command(args):
+    if args.command == "report":
+        run_report(args)
+        return
+    if args.usb_root.is_symlink() or not args.usb_root.is_dir():
+        raise ValueError("USB root must be a real, existing directory")
+    if args.command == "clean-empty":
+        if directory_link(args.usb_root):
             raise ValueError("USB root must not be a link or junction")
-        if args.command == "register":
-            register_disc(root, args.disc, args.title, args.category, args.region, args.apply)
-            return
-        cache = args.cache.resolve()
-        if cache == root or root in cache.parents:
-            raise ValueError("Keep the download cache on the PC, outside the USB root")
-        if args.command == "scan":
-            if args.plan.suffix.lower() != ".json":
-                raise ValueError("Use a .json filename for the plan")
-            # Even report/cache files must stay off the drive in preview mode.
-            for target in (args.plan.resolve(), cache):
-                if target == root or root in target.parents:
-                    raise ValueError(
-                        "Keep the preview plan and download cache on the PC, outside the USB root"
-                    )
-            catalog = catalog_tools.load_catalog(
-                cache, args.offline, args.refresh_catalog, args.dat, args.launchbox
-            )
-            overrides = (
-                json.loads(args.overrides.read_text(encoding="utf-8")) if args.overrides else None
-            )
-            categories = (
-                json.loads(args.categories.read_text(encoding="utf-8")) if args.categories else None
-            )
-            plan = build_plan(root, catalog, args.quick, overrides, categories=categories)
-            atomic_write(args.plan, json_bytes(plan))
-            report = args.plan.with_suffix(".html")
-            atomic_write(report, report_html(plan))
-            counts = collections.Counter(row["status"] for row in plan["entries"])
-            groups = collections.Counter(review_bucket(row) for row in plan["entries"])
-            for row in plan["entries"]:
-                print(
-                    f'{row["status"].upper():9} {row["source"]}\n          {row.get("target") or row["reason"]}'
-                )
-            print(
-                f"Plan: {args.plan.resolve()}\nOpen preview: {report.resolve()}\nCounts: {dict(counts)}\nNo USB files changed. Filename matches need review and --accept-name-matches."
-            )
-            print(
-                f'Batch matches: {groups["matched"]}; choices: {groups["decisions"]}; unidentified: {groups["unidentified"]}; file problems: {groups["problems"]}. Unresolved entries stay in place and do not block batch apply.'
-            )
-        elif args.command == "apply":
-            plan = json.loads(args.plan.read_text(encoding="utf-8"))
-            if (
-                args.preview_start
-                or args.preview_duration
-                or args.preview_silent
-                or args.replace_previews
-            ) and args.preview_dir is None:
-                raise ValueError("Preview options require --preview-dir")
-            apply_plan(
-                root,
-                plan,
-                cache,
-                not args.no_covers,
-                args.offline,
-                args.accept_name_matches,
-                args.preview_dir,
-                args.preview_start,
-                args.cover_dir,
-                args.preview_duration,
-                not args.preview_silent,
-                args.replace_previews,
-            )
-        else:
-            tx = Transaction(root, path=args.journal)
-            tx.undo()
-            print("Original file paths and support files restored.")
+        cleanup_empty(args.usb_root.resolve(), args.apply)
+        return
+    root = args.usb_root.resolve()
+    if directory_link(root):
+        raise ValueError("USB root must not be a link or junction")
+    if args.command == "register":
+        register_disc(root, args.disc, args.title, args.category, args.region, args.apply)
+        return
+
+    cache = args.cache.resolve()
+    if cache == root or root in cache.parents:
+        raise ValueError("Keep the download cache on the PC, outside the USB root")
+    if args.command == "scan":
+        run_scan(args, root, cache)
+    elif args.command == "apply":
+        run_apply(args, root, cache)
+    else:
+        tx = Transaction(root, path=args.journal)
+        tx.undo()
+        print("Original file paths and support files restored.")
+
+
+def main():
+    parser, args = parse_arguments()
+    try:
+        run_command(args)
     except (ValueError, OSError, sqlite3.Error, KeyError, zipfile.BadZipFile) as error:
         parser.exit(1, f"Error: {error}\n")
 
