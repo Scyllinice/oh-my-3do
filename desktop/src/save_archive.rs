@@ -316,7 +316,7 @@ pub fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 pub fn decode_hex(text: &str) -> Result<Vec<u8>> {
     let digits: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     ensure!(
-        digits.len() % 2 == 0 && digits.bytes().all(|b| b.is_ascii_hexdigit()),
+        digits.len().is_multiple_of(2) && digits.bytes().all(|b| b.is_ascii_hexdigit()),
         "Enter pairs of hexadecimal digits"
     );
     if digits.len() > MAX_BYTES * 2 {

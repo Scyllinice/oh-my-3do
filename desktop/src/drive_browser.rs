@@ -85,7 +85,7 @@ pub fn scan(root: &Path, prefs: &Preferences, job: &Job) -> Result<Value> {
     let mut records = vec![];
     let mut total = 0u64;
     job.phase("Finding games on the drive");
-    let sets = disc::collect(&[root.clone()], None, job)?;
+    let sets = disc::collect(std::slice::from_ref(&root), None, job)?;
     let total_discs = sets.len() as u64;
     job.report(0, total_discs, "Reading drive library");
     for (index, (disc, files)) in sets.into_iter().enumerate() {

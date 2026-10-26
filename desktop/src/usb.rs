@@ -1106,7 +1106,7 @@ pub fn choices(root: &Path, job: &Job) -> Result<(PathBuf, Vec<GameChoice>)> {
     let indexed = find(&f::safe(&root, ".ohmy3do/library.3di")?)?
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let sets = d::collect(&[root.clone()], None, job)?;
+    let sets = d::collect(std::slice::from_ref(&root), None, job)?;
     let actual = sets
         .iter()
         .map(|(p, _)| library::relative(&root, p))
