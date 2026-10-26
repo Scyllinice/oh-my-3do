@@ -1221,53 +1221,94 @@ pub fn undo(path: &Path) -> Result<()> {
     journal.undo()
 }
 
-pub fn relative(root: &Path, p: &Path) -> Result<String> {
+/// `path` relative to `root`, with "/" between folders (as the console and
+/// the database write paths). Works through links and different spellings
+/// of the root by comparing full paths if needed. Fails for a path outside
+/// the root or a name that is not valid Unicode.
+pub fn relative(root: &Path, path: &Path) -> Result<String> {
     let canonical_root;
     let canonical_path;
-    let relative = if let Ok(r) = p.strip_prefix(root) {
-        r
-    } else {
-        canonical_root = root.canonicalize()?;
-        canonical_path = p.canonicalize()?;
-        canonical_path.strip_prefix(&canonical_root)?
+    let relative = match path.strip_prefix(root) {
+        Ok(relative) => relative,
+        Err(_) => {
+            canonical_root = root.canonicalize()?;
+            canonical_path = path.canonicalize()?;
+            canonical_path.strip_prefix(&canonical_root)?
+        }
     };
-    Ok(relative
+
+    let parts = relative
         .components()
-        .map(|c| c.as_os_str().to_str().context("Non-UTF8 filename"))
-        .collect::<Result<Vec<_>>>()?
-        .join("/"))
+        .map(|part| part.as_os_str().to_str().context("Non-UTF8 filename"))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(parts.join("/"))
 }
 
+// ---- Cover and preview indexes ----
+
+/// The most discs the menu's indexes can hold.
+const MAX_INDEXED_DISCS: usize = 2048;
+
+/// The largest media index payload the menu accepts.
+const MAX_MEDIA_INDEX_PAYLOAD: usize = 128 * 1024;
+
+/// The longest media file name in a media index.
+const MAX_MEDIA_NAME: usize = 96;
+
+/// Appends a big-endian 32-bit number.
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+/// Appends a big-endian 16-bit length (counting the terminating zero), the
+/// text, and a zero byte: how the console's indexes store text.
+fn push_text(bytes: &mut Vec<u8>, text: &[u8]) {
+    bytes.extend_from_slice(&((text.len() + 1) as u16).to_be_bytes());
+    bytes.extend_from_slice(text);
+    bytes.push(0);
+}
+
+/// A 24-byte index header: the signature, the entry count, the payload's
+/// size and CRC-32, and a flags word (0).
+fn index_header(signature: &[u8; 8], count: usize, payload: &[u8]) -> Vec<u8> {
+    let mut header = signature.to_vec();
+    push_u32(&mut header, count as u32);
+    push_u32(&mut header, payload.len() as u32);
+    push_u32(&mut header, crc32fast::hash(payload));
+    push_u32(&mut header, 0);
+    header
+}
+
+/// A cover or preview index ("OM3DIDX1") for the menu: which media file
+/// belongs to each disc, given as (case-folded disc path, file name).
+///
+/// After the header (see [`index_header`]), each entry is the two lengths
+/// (16 bits each, counting the zero byte) and then the disc path and the
+/// file name, each ending in a zero byte.
 pub fn media_index(map: &BTreeMap<String, String>) -> Result<Vec<u8>> {
     let mut payload = vec![];
     for (key, name) in map {
-        let k = key.as_bytes();
-        let n = name.as_bytes();
-        if k.len() + 1 > u16::MAX as usize || n.len() > 96 {
+        let key = key.as_bytes();
+        let name = name.as_bytes();
+        if key.len() + 1 > u16::MAX as usize || name.len() > MAX_MEDIA_NAME {
             bail!("Oversized media index entry")
-        };
-        payload.extend_from_slice(&((k.len() + 1) as u16).to_be_bytes());
-        payload.extend_from_slice(&((n.len() + 1) as u16).to_be_bytes());
-        payload.extend_from_slice(k);
+        }
+        payload.extend_from_slice(&((key.len() + 1) as u16).to_be_bytes());
+        payload.extend_from_slice(&((name.len() + 1) as u16).to_be_bytes());
+        payload.extend_from_slice(key);
         payload.push(0);
-        payload.extend_from_slice(n);
+        payload.extend_from_slice(name);
         payload.push(0);
     }
-    if map.len() > 2048 || payload.len() > 128 * 1024 {
+    if map.len() > MAX_INDEXED_DISCS || payload.len() > MAX_MEDIA_INDEX_PAYLOAD {
         bail!("Media index exceeds menu capacity")
     }
-    let mut out = b"OM3DIDX1".to_vec();
-    for n in [
-        map.len() as u32,
-        payload.len() as u32,
-        crc32fast::hash(&payload),
-        0,
-    ] {
-        out.extend_from_slice(&n.to_be_bytes())
-    }
-    out.extend(payload);
-    Ok(out)
+
+    let mut index = index_header(b"OM3DIDX1", map.len(), &payload);
+    index.extend(payload);
+    Ok(index)
 }
+
 /// The USB drive's copy of a media index: the same entries, flagged so the
 /// menu opens each disc's media from the .ohmy3do folder beside that disc.
 /// The FCare ODE opens files relative to the current folder, so the menu
@@ -1276,19 +1317,29 @@ pub fn beside_index(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < 24 || &data[..8] != b"OM3DIDX1" {
         bail!("Invalid media index")
     }
-    let mut out = data.to_vec();
-    out[20..24].copy_from_slice(&1u32.to_be_bytes());
-    Ok(out)
+    let mut index = data.to_vec();
+    index[20..24].copy_from_slice(&1u32.to_be_bytes());
+    Ok(index)
 }
+
+/// Reads a library's cover or preview index (`folder`): file name by
+/// case-folded disc path. Empty if there is none.
 pub fn read_media_index(root: &Path, folder: &str) -> Result<BTreeMap<String, String>> {
     read_media_index_impl(root, folder, false)
 }
+
+/// Reads a prepared drive's cover or preview index, whose media sit beside
+/// each disc (see [`beside_index`]).
 pub(crate) fn read_drive_media_index(
     root: &Path,
     folder: &str,
 ) -> Result<BTreeMap<String, String>> {
     read_media_index_impl(root, folder, true)
 }
+
+/// Reads and checks a media index (see [`media_index`]): its size, CRC,
+/// layout flag (`beside`), every entry's lengths and zero bytes, safe file
+/// names, and no disc listed twice.
 fn read_media_index_impl(
     root: &Path,
     folder: &str,
@@ -1298,186 +1349,211 @@ fn read_media_index_impl(
     if !path.exists() || (beside && fs::metadata(&path)?.len() == 0) {
         return Ok(BTreeMap::new());
     }
-    if fs::metadata(&path)?.len() > 128 * 1024 + 24 {
+    if fs::metadata(&path)?.len() > (MAX_MEDIA_INDEX_PAYLOAD + 24) as u64 {
         bail!("Oversized media index")
     }
     let data = fs::read(path)?;
     if data.len() < 24 || &data[..8] != b"OM3DIDX1" {
         bail!("Invalid {folder} index")
     }
-    let word = |p| u32::from_be_bytes(data[p..p + 4].try_into().unwrap()) as usize;
-    if word(20) == 1 && !beside {
-        bail!("This is a prepared USB drive with media beside each game. Edit the staging library, then prepare the drive again.")
-    }
+
+    let word = |position: usize| {
+        u32::from_be_bytes(data[position..position + 4].try_into().unwrap()) as usize
+    };
     let count = word(8);
-    if count > 2048
-        || word(12) > 128 * 1024
-        || word(12) + 24 != data.len()
-        || word(20) != u32::from(beside) as usize
+    let payload_size = word(12);
+    let flags = word(20);
+    if flags == 1 && !beside {
+        bail!(
+            "This is a prepared USB drive with media beside each game. \
+             Edit the staging library, then prepare the drive again."
+        )
+    }
+    if count > MAX_INDEXED_DISCS
+        || payload_size > MAX_MEDIA_INDEX_PAYLOAD
+        || payload_size + 24 != data.len()
+        || flags != u32::from(beside) as usize
         || crc32fast::hash(&data[24..]) as usize != word(16)
     {
         bail!("Invalid {folder} index checksum or bounds")
     }
+
     let mut map = BTreeMap::new();
-    let mut pos = 24;
+    let mut position = 24;
     for _ in 0..count {
-        if pos + 4 > data.len() {
+        if position + 4 > data.len() {
             bail!("Truncated media index")
-        };
-        let a = u16::from_be_bytes(data[pos..pos + 2].try_into().unwrap()) as usize;
-        let b = u16::from_be_bytes(data[pos + 2..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        if a < 2 || b < 6 || pos + a + b > data.len() {
+        }
+        let key_length =
+            u16::from_be_bytes(data[position..position + 2].try_into().unwrap()) as usize;
+        let name_length =
+            u16::from_be_bytes(data[position + 2..position + 4].try_into().unwrap()) as usize;
+        position += 4;
+        // The shortest name is "x.3dc" plus its zero byte.
+        if key_length < 2 || name_length < 6 || position + key_length + name_length > data.len() {
             bail!("Invalid media index string")
-        };
-        let key = &data[pos..pos + a];
-        let name = &data[pos + a..pos + a + b];
-        if key[a - 1] != 0
-            || name[b - 1] != 0
-            || key[..a - 1].contains(&0)
-            || name[..b - 1].contains(&0)
-        {
+        }
+
+        let key = &data[position..position + key_length];
+        let name = &data[position + key_length..position + key_length + name_length];
+        let properly_ended = key[key_length - 1] == 0
+            && name[name_length - 1] == 0
+            && !key[..key_length - 1].contains(&0)
+            && !name[..name_length - 1].contains(&0);
+        if !properly_ended {
             bail!("Invalid media index terminator")
-        };
-        let key = std::str::from_utf8(&key[..a - 1])?;
-        let name = std::str::from_utf8(&name[..b - 1])?;
-        if name.len() > 96 || name.contains(['/', '\\', ':', '|']) || name.starts_with('.') {
+        }
+
+        let key = std::str::from_utf8(&key[..key_length - 1])?;
+        let name = std::str::from_utf8(&name[..name_length - 1])?;
+        if name.len() > MAX_MEDIA_NAME
+            || name.contains(['/', '\\', ':', '|'])
+            || name.starts_with('.')
+        {
             bail!("Unsafe media name")
-        };
+        }
         f::safe(root, &format!(".ohmy3do/{folder}/{name}"))?;
         if map.insert(f::fold(key), name.into()).is_some() {
             bail!("Duplicate media association")
-        };
-        pos += a + b;
+        }
+        position += key_length + name_length;
     }
-    if pos != data.len() {
+
+    if position != data.len() {
         bail!("Trailing media index data")
-    };
+    }
     Ok(map)
 }
-pub fn build_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
-    crate::setup::ensure_navigation(root, tx, job)?;
-    build_indexes_impl(root, tx, job, false, true)
+
+// ---- The menu's index files ----
+
+/// Rebuilds every index the menu reads (see [`build_indexes_impl`]), and
+/// adds any missing folder navigation helpers.
+pub fn build_indexes(root: &Path, journal: &mut Journal, job: &Job) -> Result<()> {
+    crate::setup::ensure_navigation(root, journal, job)?;
+    build_indexes_impl(root, journal, job, false, true)
 }
-/// Complete a minimal drive without replacing existing user indexes or name mappings.
-pub fn build_missing_indexes(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
-    if [
+
+/// Complete a minimal drive without replacing existing user indexes or name
+/// mappings: only index files that are missing or empty are written.
+pub fn build_missing_indexes(root: &Path, journal: &mut Journal, job: &Job) -> Result<()> {
+    let all_present = [
         ".ohmy3do/library.3di",
         ".ohmy3do/metadata.3di",
         ".ohmy3do/save-names.txt",
     ]
     .iter()
     .all(|name| {
-        f::safe(root, name).is_ok_and(|p| p.is_file() && p.metadata().is_ok_and(|m| m.len() > 0))
-    }) {
+        f::safe(root, name).is_ok_and(|path| {
+            path.is_file() && path.metadata().is_ok_and(|metadata| metadata.len() > 0)
+        })
+    });
+    if all_present {
         return Ok(());
     }
-    build_indexes_impl(root, tx, job, true, true)
+    build_indexes_impl(root, journal, job, true, true)
 }
+
+/// Writes an index file through the journal; with `missing_only`, only if
+/// it is missing or empty.
 fn write_index(
     root: &Path,
-    tx: &mut Journal,
+    journal: &mut Journal,
     name: &str,
     data: &[u8],
     missing_only: bool,
 ) -> Result<()> {
-    if missing_only
-        && f::safe(root, name)?
+    if missing_only {
+        let present = f::safe(root, name)?
             .metadata()
-            .is_ok_and(|m| m.is_file() && m.len() > 0)
-    {
-        return Ok(());
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+        if present {
+            return Ok(());
+        }
     }
-    tx.write(name, data)
+    journal.write(name, data)
 }
+
 /// Removing discs adds no save names. Keep the existing mappings because the
 /// saves themselves remain, and avoid rereading every remaining disc.
-pub fn build_indexes_after_removal(root: &Path, tx: &mut Journal, job: &Job) -> Result<()> {
-    crate::setup::ensure_navigation(root, tx, job)?;
-    build_indexes_impl(root, tx, job, false, false)
+pub fn build_indexes_after_removal(root: &Path, journal: &mut Journal, job: &Job) -> Result<()> {
+    crate::setup::ensure_navigation(root, journal, job)?;
+    build_indexes_impl(root, journal, job, false, false)
 }
+
+/// Writes the menu's index files for the discs under `root`:
+///
+/// - `library.3di`: every disc's path, for Find (see [`find_index`]);
+/// - each disc's description file (see `game_info::files`);
+/// - `metadata.3di`: each disc's genre, publisher and date
+///   (see [`metadata_bytes`]);
+/// - with `scan_save_names`, `save-names.txt` and its cache: the save file
+///   names each game uses, for the Save manager (see `saves`).
+///
+/// With `missing_only`, existing non-empty files are kept.
 fn build_indexes_impl(
     root: &Path,
-    tx: &mut Journal,
+    journal: &mut Journal,
     job: &Job,
     missing_only: bool,
     scan_save_names: bool,
 ) -> Result<()> {
-    let sets = d::collect(&[root.to_owned()], None, job)?;
-    let mut names = sets
+    let discs = d::collect(&[root.to_owned()], None, job)?;
+    let mut names = discs
         .iter()
-        .map(|(p, _)| relative(root, p))
+        .map(|(path, _)| relative(root, path))
         .collect::<Result<Vec<_>>>()?;
-    names.sort_by_key(|s| f::fold(s));
-    if names
-        .iter()
-        .map(|s| f::fold(s))
-        .collect::<HashSet<_>>()
-        .len()
-        != names.len()
-    {
+    names.sort_by_key(|name| f::fold(name));
+    let distinct: HashSet<String> = names.iter().map(|name| f::fold(name)).collect();
+    if distinct.len() != names.len() {
         bail!("Case-colliding disc names")
     }
-    let mut payload = vec![];
-    for name in &names {
-        if name.len() > 8192 || name.split('/').count() > 33 {
-            bail!("Disc path exceeds navigation limits")
-        };
-        payload.extend_from_slice(&((name.len() + 1) as u16).to_be_bytes());
-        payload.extend_from_slice(name.as_bytes());
-        payload.push(0);
-    }
-    if names.len() > 2048 || payload.len() + 9 * names.len() > 128 * 1024 {
-        bail!("Find index exceeds menu capacity")
-    }
-    let mut data = b"OM3DLIB1".to_vec();
-    for n in [
-        names.len() as u32,
-        payload.len() as u32,
-        crc32fast::hash(&payload),
-        0,
-    ] {
-        data.extend_from_slice(&n.to_be_bytes())
-    }
-    data.extend(payload);
-    data.extend_from_slice(b"END3DL01");
-    write_index(root, tx, ".ohmy3do/library.3di", &data, missing_only)?;
-    let db = database(root)?;
-    for (name, data) in crate::game_info::files(&db)? {
-        write_index(root, tx, &name, &data, missing_only)?;
+
+    write_index(
+        root,
+        journal,
+        ".ohmy3do/library.3di",
+        &find_index(&names)?,
+        missing_only,
+    )?;
+
+    let database = database(root)?;
+    for (name, data) in crate::game_info::files(&database)? {
+        write_index(root, journal, &name, &data, missing_only)?;
     }
     write_index(
         root,
-        tx,
+        journal,
         ".ohmy3do/metadata.3di",
-        &metadata_bytes(&db, &names)?,
+        &metadata_bytes(&database, &names)?,
         missing_only,
     )?;
+
     if !scan_save_names {
         return Ok(());
     }
-    let titles = db["games"]
+    let titles = database["games"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|g| {
+        .filter_map(|game| {
             Some((
-                f::fold(g["path"].as_str()?),
-                g["title"].as_str()?.to_owned(),
+                f::fold(game["path"].as_str()?),
+                game["title"].as_str()?.to_owned(),
             ))
         })
         .collect();
     let saves = crate::saves::save_names_text(root, &names, &titles, job)?;
     write_index(
         root,
-        tx,
+        journal,
         ".ohmy3do/save-names-cache.json",
         &saves.cache,
         missing_only,
     )?;
     write_index(
         root,
-        tx,
+        journal,
         ".ohmy3do/save-names.txt",
         saves.text.as_bytes(),
         missing_only,
@@ -1489,65 +1565,96 @@ fn build_indexes_impl(
     Ok(())
 }
 
+/// The Find index ("OM3DLIB1"): the header (see [`index_header`]), each
+/// disc's path as text (see [`push_text`]) in case-folded order, and
+/// "END3DL01". Checks the menu's limits: path length and depth, and the
+/// index's size with room for the menu's own per-disc data.
+fn find_index(names: &[String]) -> Result<Vec<u8>> {
+    let mut payload = vec![];
+    for name in names {
+        if name.len() > 8192 || name.split('/').count() > 33 {
+            bail!("Disc path exceeds navigation limits")
+        }
+        push_text(&mut payload, name.as_bytes());
+    }
+    if names.len() > MAX_INDEXED_DISCS || payload.len() + 9 * names.len() > 128 * 1024 {
+        bail!("Find index exceeds menu capacity")
+    }
+
+    let mut index = index_header(b"OM3DLIB1", names.len(), &payload);
+    index.extend(payload);
+    index.extend_from_slice(b"END3DL01");
+    Ok(index)
+}
+
+/// The longest metadata text field, in characters.
+const MAX_METADATA_TEXT: usize = 96;
+
+/// The largest metadata index payload, with room for the menu's own
+/// per-disc data.
+const MAX_METADATA_PAYLOAD: usize = 192 * 1024;
+
+/// A metadata field as the console's font can show it: plain ASCII
+/// (accents dropped, control characters as spaces), single-spaced, at most
+/// 96 characters.
 fn metadata_text(value: &Value) -> String {
     use unicode_normalization::UnicodeNormalization;
-    let text: String = value
+    let ascii: String = value
         .as_str()
         .unwrap_or("")
         .nfkd()
-        .filter_map(|c| {
-            c.is_ascii()
-                .then_some(if c.is_ascii_control() { ' ' } else { c })
-        })
+        .filter(|c| c.is_ascii())
+        .map(|c| if c.is_ascii_control() { ' ' } else { c })
         .collect();
-    text.split_whitespace()
+    ascii
+        .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
-        .take(96)
+        .take(MAX_METADATA_TEXT)
         .collect()
 }
+
+/// A disc's release date for the console: "YYYY-MM-DD" if the metadata has
+/// a real calendar date, else its year if sensible (1000-2999), else "".
 fn metadata_date(meta: &Value) -> String {
-    if let Some(date) = meta["release_date"].as_str().and_then(|s| s.get(..10)) {
-        if rx(r"^\d{4}-\d{2}-\d{2}$").is_match(date) {
-            let year = date[..4].parse::<u32>().unwrap_or(0);
-            let month = date[5..7].parse::<usize>().unwrap_or(0);
-            let day = date[8..10].parse::<u32>().unwrap_or(0);
-            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-            let days = [
-                0,
-                31,
-                if leap { 29 } else { 28 },
-                31,
-                30,
-                31,
-                30,
-                31,
-                31,
-                30,
-                31,
-                30,
-                31,
-            ];
-            if year > 0 && month <= 12 && day > 0 && day <= days[month] {
-                return date.into();
-            }
+    let date = meta["release_date"]
+        .as_str()
+        .and_then(|text| text.get(..10))
+        .filter(|date| rx(r"^\d{4}-\d{2}-\d{2}$").is_match(date));
+    if let Some(date) = date {
+        let year = date[..4].parse::<u32>().unwrap_or(0);
+        let month = date[5..7].parse::<usize>().unwrap_or(0);
+        let day = date[8..10].parse::<u32>().unwrap_or(0);
+        let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let february = if leap_year { 29 } else { 28 };
+        // Days in each month; index 0 is unused.
+        let days_in_month = [0, 31, february, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        if year > 0 && month <= 12 && day > 0 && day <= days_in_month[month] {
+            return date.into();
         }
     }
+
     let year = meta["year"]
         .as_i64()
-        .or_else(|| meta["year"].as_str().and_then(|s| s.parse().ok()));
-    year.filter(|y| (1000..3000).contains(y))
-        .map(|y| y.to_string())
+        .or_else(|| meta["year"].as_str().and_then(|text| text.parse().ok()));
+    year.filter(|year| (1000..3000).contains(year))
+        .map(|year| year.to_string())
         .unwrap_or_default()
 }
-pub fn metadata_bytes(db: &Value, names: &[String]) -> Result<Vec<u8>> {
-    let allowed = names
-        .iter()
-        .map(|p| (f::fold(p), p))
-        .collect::<HashMap<_, _>>();
-    // Folder recognition needs every disc, even without a catalog record.
-    let mut records = names
+
+/// The metadata index ("OM3DMET1") for the discs `names`: for each, in
+/// case-folded path order, its path, genre, publisher and release date (see
+/// [`push_text`]). After the header (see [`index_header`]) come the entries
+/// and "END3DM01".
+///
+/// Every disc gets an entry, even without a database record (the menu uses
+/// it to recognize folders); its fields are then empty. The result is
+/// checked with [`metadata_paths`] before it is returned.
+pub fn metadata_bytes(database: &Value, names: &[String]) -> Result<Vec<u8>> {
+    let disc_paths: HashMap<String, &String> =
+        names.iter().map(|path| (f::fold(path), path)).collect();
+    let mut records: BTreeMap<String, (String, [String; 3])> = names
         .iter()
         .map(|path| {
             (
@@ -1555,11 +1662,15 @@ pub fn metadata_bytes(db: &Value, names: &[String]) -> Result<Vec<u8>> {
                 (path.clone(), [String::new(), String::new(), String::new()]),
             )
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect();
+
     let mut seen = HashSet::new();
-    for record in db["games"].as_array().context("Invalid library records")? {
+    for record in database["games"]
+        .as_array()
+        .context("Invalid library records")?
+    {
         let key = f::fold(record["path"].as_str().unwrap_or(""));
-        let Some(path) = allowed.get(&key) else {
+        let Some(path) = disc_paths.get(&key) else {
             continue;
         };
         let meta = &record["metadata"];
@@ -1573,6 +1684,7 @@ pub fn metadata_bytes(db: &Value, names: &[String]) -> Result<Vec<u8>> {
         }
         records.insert(key, ((*path).clone(), fields));
     }
+
     let count = records.len();
     let mut payload = vec![];
     for (path, fields) in records.values() {
@@ -1580,56 +1692,58 @@ pub fn metadata_bytes(db: &Value, names: &[String]) -> Result<Vec<u8>> {
             if field.len() > 8192 || field.contains('\0') {
                 bail!("Invalid metadata field");
             }
-            payload.extend_from_slice(&((field.len() + 1) as u16).to_be_bytes());
-            payload.extend_from_slice(field.as_bytes());
-            payload.push(0);
+            push_text(&mut payload, field.as_bytes());
         }
     }
-    if count > 2048 || payload.len() + 16 * count > 192 * 1024 {
+    if count > MAX_INDEXED_DISCS || payload.len() + 16 * count > MAX_METADATA_PAYLOAD {
         bail!("Console metadata index exceeds capacity");
     }
-    let mut result = b"OM3DMET1".to_vec();
-    for n in [
-        count as u32,
-        payload.len() as u32,
-        crc32fast::hash(&payload),
-        0,
-    ] {
-        result.extend_from_slice(&n.to_be_bytes());
-    }
-    result.extend_from_slice(&payload);
-    result.extend_from_slice(b"END3DM01");
-    metadata_paths(&result)?;
-    Ok(result)
+
+    let mut index = index_header(b"OM3DMET1", count, &payload);
+    index.extend_from_slice(&payload);
+    index.extend_from_slice(b"END3DM01");
+    metadata_paths(&index)?;
+    Ok(index)
 }
+
+/// Checks a metadata index as the menu does (sizes, CRC, every text field,
+/// safe paths in strictly increasing case-folded order) and returns the
+/// disc paths it lists.
 pub fn metadata_paths(data: &[u8]) -> Result<Vec<String>> {
     if data.len() < 32 || &data[..8] != b"OM3DMET1" || &data[data.len() - 8..] != b"END3DM01" {
         bail!("Invalid metadata header/footer");
     }
-    let word = |i| u32::from_be_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+    let word = |position: usize| {
+        u32::from_be_bytes(data[position..position + 4].try_into().unwrap()) as usize
+    };
     let count = word(8);
-    let bytes = word(12);
-    if count > 2048
-        || bytes > 192 * 1024
-        || bytes + 16 * count > 192 * 1024
-        || data.len() != bytes + 32
+    let payload_size = word(12);
+    if count > MAX_INDEXED_DISCS
+        || payload_size > MAX_METADATA_PAYLOAD
+        || payload_size + 16 * count > MAX_METADATA_PAYLOAD
+        || data.len() != payload_size + 32
         || word(20) != 0
         || crc32fast::hash(&data[24..data.len() - 8]) as usize != word(16)
     {
         bail!("Invalid metadata checksum/bounds");
     }
+
+    let end_of_entries = data.len() - 8;
     let mut paths = Vec::<String>::new();
-    let mut pos = 24;
+    let mut position = 24;
     for _ in 0..count {
+        // Four fields: path, genre, publisher, date.
         for field in 0..4 {
-            let length = data.get(pos..pos + 2).context("Truncated metadata")?;
+            let length = data
+                .get(position..position + 2)
+                .context("Truncated metadata")?;
             let length = u16::from_be_bytes(length.try_into().unwrap()) as usize;
-            pos += 2;
+            position += 2;
             let text = data
-                .get(pos..pos + length)
+                .get(position..position + length)
                 .context("Truncated metadata string")?;
-            pos += length;
-            if pos > data.len() - 8
+            position += length;
+            if position > end_of_entries
                 || length == 0
                 || text[length - 1] != 0
                 || text[..length - 1].contains(&0)
@@ -1637,116 +1751,167 @@ pub fn metadata_paths(data: &[u8]) -> Result<Vec<String>> {
                 bail!("Invalid metadata string");
             }
             let text = &text[..length - 1];
+
             if field == 0 {
                 let path = std::str::from_utf8(text)?;
-                if text.len() > 8192
-                    || path.split('/').count() > 33
-                    || path
-                        .split('/')
-                        .any(|p| p.is_empty() || p == "." || p == ".." || p.len() >= 1024)
-                    || path
-                        .chars()
-                        .any(|c| c.is_control() || c == '\\' || c == ':')
-                    || ![".iso", ".cue"].iter().any(|e| f::fold(path).ends_with(e))
-                    || paths.last().is_some_and(|p| f::fold(p) >= f::fold(path))
-                {
+                if !is_valid_metadata_path(path, paths.last()) {
                     bail!("Invalid or unsorted metadata path");
                 }
                 paths.push(path.into());
-            } else if length > 97 || text.iter().any(|b| !(32..=126).contains(b)) {
+            } else if length > MAX_METADATA_TEXT + 1
+                || text.iter().any(|byte| !(32..=126).contains(byte))
+            {
                 bail!("Invalid metadata text");
             }
         }
     }
-    if pos != data.len() - 8 {
+
+    if position != end_of_entries {
         bail!("Trailing metadata");
     }
     Ok(paths)
 }
+
+/// Whether a metadata index path is one the menu can use: a relative path
+/// to an ISO or CUE, at most 33 levels and 8 KiB long, with no empty, "."
+/// or ".." parts, no part of 1 KiB or more, no control characters, "\" or
+/// ":", and after `previous` in case-folded order.
+fn is_valid_metadata_path(path: &str, previous: Option<&String>) -> bool {
+    let parts_valid = path
+        .split('/')
+        .all(|part| !part.is_empty() && part != "." && part != ".." && part.len() < 1024);
+    let characters_valid = !path
+        .chars()
+        .any(|c| c.is_control() || c == '\\' || c == ':');
+    let folded = f::fold(path);
+    let is_disc = folded.ends_with(".iso") || folded.ends_with(".cue");
+    let in_order = previous.is_none_or(|previous| f::fold(previous) < folded);
+
+    path.len() <= 8192
+        && path.split('/').count() <= 33
+        && parts_valid
+        && characters_valid
+        && is_disc
+        && in_order
+}
+
+// ---- The library database ----
+
+/// The largest library database accepted.
+const MAX_DATABASE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Reads the library database (`.ohmy3do/library.json`), or an empty one if
+/// it does not exist yet.
 pub fn database(root: &Path) -> Result<Value> {
     let path = f::safe(root, ".ohmy3do/library.json")?;
     if !path.exists() {
-        return Ok(json!({"schema":1,"sources":[],"games":[]}));
+        return Ok(json!({"schema": 1, "sources": [], "games": []}));
     }
-    if fs::metadata(&path)?.len() > 16 * 1024 * 1024 {
+    if fs::metadata(&path)?.len() > MAX_DATABASE_BYTES {
         bail!("Oversized library database")
-    };
+    }
     let data: Value = serde_json::from_slice(&fs::read(path)?)?;
     if data["schema"] != 1 || !data["games"].is_array() {
         bail!("Invalid library database")
-    };
+    }
     Ok(data)
 }
+
+/// Saves the library database through the journal: `records` replace any
+/// record with the same path (or are added), records are sorted by path,
+/// and new `sources` are added. Also writes `library.sqlite`, the same
+/// records as an SQLite database for people who want to query them.
 pub fn write_database(
-    tx: &mut Journal,
-    mut db: Value,
+    journal: &mut Journal,
+    mut database: Value,
     records: Vec<Value>,
     sources: &[Value],
 ) -> Result<()> {
-    let games = db["games"]
+    let games = database["games"]
         .as_array_mut()
         .context("Invalid library records")?;
     for record in records {
         let path = record["path"].as_str().context("Missing disc path")?;
-        games.retain(|r| r["path"].as_str() != Some(path));
+        games.retain(|existing| existing["path"].as_str() != Some(path));
         games.push(record);
     }
     games.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
-    let urls = db["sources"]
+
+    let known_sources = database["sources"]
         .as_array_mut()
         .context("Missing database sources")?;
     for source in sources {
-        if !urls.contains(source) {
-            urls.push(source.clone())
+        if !known_sources.contains(source) {
+            known_sources.push(source.clone());
         }
     }
-    db["generated"] = json!(std::time::SystemTime::now()
+
+    database["generated"] = json!(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs_f64());
-    tx.write(".ohmy3do/library.json", &serde_json::to_vec_pretty(&db)?)?;
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("library.sqlite");
+    journal.write(
+        ".ohmy3do/library.json",
+        &serde_json::to_vec_pretty(&database)?,
+    )?;
+
+    let sqlite = sqlite_copy(&database)?;
+    journal.write(".ohmy3do/library.sqlite", &sqlite)?;
+    Ok(())
+}
+
+/// The database's records and sources as an SQLite file's bytes.
+fn sqlite_copy(database: &Value) -> Result<Vec<u8>> {
+    let folder = tempfile::tempdir()?;
+    let path = folder.path().join("library.sqlite");
     {
-        let mut sql = rusqlite::Connection::open(&path)?;
-        let transaction = sql.transaction()?;
-        transaction.execute_batch("CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, edition_unresolved INTEGER, category TEXT, category_review INTEGER, category_reason TEXT); CREATE TABLE sources (url TEXT, sha256 TEXT);")?;
-        for source in db["sources"].as_array().unwrap() {
+        let mut connection = rusqlite::Connection::open(&path)?;
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE games (path TEXT PRIMARY KEY, title TEXT, region TEXT, disc INTEGER, \
+             genre TEXT, publisher TEXT, year INTEGER, developer TEXT, identification TEXT, \
+             cover TEXT, metadata_source TEXT, variant TEXT, catalog_name TEXT, \
+             edition_unresolved INTEGER, category TEXT, category_review INTEGER, \
+             category_reason TEXT); \
+             CREATE TABLE sources (url TEXT, sha256 TEXT);",
+        )?;
+
+        for source in database["sources"].as_array().unwrap() {
             transaction.execute(
                 "INSERT INTO sources VALUES (?,?)",
                 rusqlite::params![source["url"].as_str(), source["sha256"].as_str()],
             )?;
         }
-        for record in db["games"].as_array().unwrap() {
-            let r = record;
-            let meta = &r["metadata"];
+
+        for record in database["games"].as_array().unwrap() {
+            let meta = &record["metadata"];
             transaction.execute(
                 "INSERT INTO games VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rusqlite::params![
-                    r["path"].as_str(),
-                    r["title"].as_str(),
-                    r["region"].as_str(),
-                    r["disc"].as_i64(),
+                    record["path"].as_str(),
+                    record["title"].as_str(),
+                    record["region"].as_str(),
+                    record["disc"].as_i64(),
                     meta["genre"].as_str(),
                     meta["publisher"].as_str(),
                     meta["year"].as_i64(),
                     meta["developer"].as_str(),
-                    r["identification"].as_str(),
-                    r["cover"].as_str(),
+                    record["identification"].as_str(),
+                    record["cover"].as_str(),
                     meta["source"].as_str(),
-                    r["variant"].as_str(),
-                    r["catalog_name"].as_str(),
-                    r["edition_unresolved"].as_bool().unwrap_or(false) as i32,
-                    r["category"].as_str(),
-                    r["category_review"].as_bool().unwrap_or(true) as i32,
-                    r["category_reason"].as_str()
+                    record["variant"].as_str(),
+                    record["catalog_name"].as_str(),
+                    record["edition_unresolved"].as_bool().unwrap_or(false) as i32,
+                    record["category"].as_str(),
+                    record["category_review"].as_bool().unwrap_or(true) as i32,
+                    record["category_reason"].as_str()
                 ],
             )?;
         }
         transaction.commit()?;
     }
-    tx.write(".ohmy3do/library.sqlite", &fs::read(path)?)?;
-    Ok(())
+    Ok(fs::read(path)?)
 }
+
 /// Adds a prepared media file; an existing file with other contents is an error.
 fn write_asset(tx: &mut Journal, root: &Path, relative: &str, source: &Path) -> Result<()> {
     let bytes = fs::read(source)?;
