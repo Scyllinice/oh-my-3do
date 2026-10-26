@@ -2698,55 +2698,76 @@ fn update_media_mode(
     Ok(journal.path)
 }
 
-/// Text with every whole-line path in `map` replaced; menu text ends at its first NUL.
+// ---- Moving discs between categories ----
+
+/// The menu's text up to its first zero byte (the menu may leave zero
+/// padding at the end of a file).
+fn menu_text(raw: &[u8]) -> String {
+    let before_padding = raw.split(|byte| *byte == 0).next().unwrap_or(&[]);
+    String::from_utf8_lossy(before_padding).into_owned()
+}
+
+/// A list of disc paths (favorites, recent games) with every line that is a
+/// moved disc's old path changed to its new path (`map`: case-folded old
+/// path to new path). None if nothing changed. Spacing and line endings
+/// are kept; a byte-order mark at the start of a line is ignored when
+/// matching.
 pub fn remap_lines(raw: &[u8], map: &HashMap<String, String>) -> Option<Vec<u8>> {
-    let text = String::from_utf8_lossy(raw.split(|b| *b == 0).next().unwrap_or(&[])).into_owned();
+    let text = menu_text(raw);
     let mut changed = false;
-    let out: String = text
+    let remapped: String = text
         .split_inclusive('\n')
         .map(|line| {
-            let key = line.trim();
-            match map.get(&f::fold(key.trim_start_matches('\u{feff}'))) {
-                Some(new) => {
+            let path = line.trim().trim_start_matches('\u{feff}');
+            match map.get(&f::fold(path)) {
+                Some(new_path) => {
                     changed = true;
-                    line.replacen(key.trim_start_matches('\u{feff}'), new, 1)
+                    line.replacen(path, new_path, 1)
                 }
                 None => line.to_owned(),
             }
         })
         .collect();
-    changed.then(|| out.into_bytes())
+    changed.then(|| remapped.into_bytes())
 }
+
+/// What `last-position.txt` holds to reopen the menu at the drive's top.
+const TOP_POSITION: &[u8] = b"OH3DO_POSITION1\n/Storage\n\n";
 
 /// The saved menu position after discs move: it follows a moved disc, and
 /// returns to the USB root when it was inside a moved folder.
+///
+/// The file is three lines: "OH3DO_POSITION1", the folder ("/Storage" or
+/// "/Storage/Category/..."), and the selected item's name. Returns None if
+/// it needs no change (or is not a position file).
 pub fn remap_position(
     raw: &[u8],
     map: &HashMap<String, String>,
     folders: &[String],
 ) -> Option<Vec<u8>> {
-    let text = String::from_utf8_lossy(raw.split(|b| *b == 0).next().unwrap_or(&[])).into_owned();
+    let text = menu_text(raw);
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() != 3 || lines[0] != "OH3DO_POSITION1" {
         return None;
     }
+
     let folder = lines[1].strip_prefix("/Storage/").unwrap_or("");
-    let current = if folder.is_empty() {
+    let selected = if folder.is_empty() {
         lines[2].to_owned()
     } else {
         format!("{folder}/{}", lines[2])
     };
-    if let Some(new) = map.get(&f::fold(&current)) {
-        let (dir, name) = new.rsplit_once('/').unwrap_or(("", new));
-        return Some(format!("OH3DO_POSITION1\n/Storage/{dir}\n{name}\n").into_bytes());
+
+    if let Some(new_path) = map.get(&f::fold(&selected)) {
+        let (new_folder, name) = new_path.rsplit_once('/').unwrap_or(("", new_path));
+        return Some(format!("OH3DO_POSITION1\n/Storage/{new_folder}\n{name}\n").into_bytes());
     }
-    folders
-        .iter()
-        .any(|old| {
-            f::fold(&current).starts_with(&f::fold(&format!("{old}/")))
-                || f::fold(folder) == f::fold(old)
-        })
-        .then(|| b"OH3DO_POSITION1\n/Storage\n\n".to_vec())
+
+    let inside_moved_folder = folders.iter().any(|old| {
+        f::fold(&selected).starts_with(&f::fold(&format!("{old}/")))
+            || f::fold(folder) == f::fold(old)
+    });
+    inside_moved_folder.then(|| TOP_POSITION.to_vec())
 }
 
 /// Moves whole game folders (Category/Region/Game) to another category,
@@ -2763,12 +2784,14 @@ pub fn recategorize(
     let category = config
         .categories
         .iter()
-        .find(|c| c.name.eq_ignore_ascii_case(category))
+        .find(|known| known.name.eq_ignore_ascii_case(category))
         .context("Unknown category")?
         .name
         .as_str();
     let _lock = lock_library(root, cache)?;
-    let db = database(root)?;
+    let database = database(root)?;
+
+    // Each game folder to move: Category/Region/Game to NewCategory/Region/Game.
     let mut folders = BTreeMap::new();
     for disc in discs {
         let parts: Vec<&str> = disc.split('/').collect();
@@ -2776,17 +2799,21 @@ pub fn recategorize(
             bail!("Not in a Category/Region/Game folder: {disc}")
         }
         if parts[0] != category {
-            folders.insert(
-                parts[..3].join("/"),
-                format!("{category}/{}", parts[1..3].join("/")),
-            );
+            let game_folder = parts[..3].join("/");
+            let new_folder = format!("{category}/{}", parts[1..3].join("/"));
+            folders.insert(game_folder, new_folder);
         }
     }
     if folders.is_empty() {
         bail!("Already in {category}")
     }
-    move_category_folders(root, db, folders, None, cache, job)
+    move_category_folders(root, database, folders, None, cache, job)
 }
+
+/// Saves edited categories (`new`, edited from `old`): renamed categories'
+/// folders are renamed, and removed categories' folders (which must be
+/// empty) are moved out of the way. Refuses if the categories on disk are
+/// no longer `old`.
 pub fn configure_categories(
     root: &Path,
     old: &categories::Categories,
@@ -2799,6 +2826,7 @@ pub fn configure_categories(
         &categories::load(root)? == old,
         "Categories changed on disk; reopen the editor"
     );
+
     let mut folders = BTreeMap::new();
     for category in &old.categories {
         let previous = f::safe(root, &category.name)?;
@@ -2807,155 +2835,206 @@ pub fn configure_categories(
             "Category path is occupied by a file: {}",
             category.name
         );
-        if let Some(next) = new.categories.iter().find(|c| c.id == category.id) {
-            if next.name != category.name && previous.exists() {
-                anyhow::ensure!(
-                    !f::safe(root, &next.name)?.exists(),
-                    "Destination category already exists: {}",
-                    next.name
-                );
-                folders.insert(category.name.clone(), next.name.clone());
+
+        let kept = new.categories.iter().find(|next| next.id == category.id);
+        match kept {
+            Some(next) => {
+                if next.name != category.name && previous.exists() {
+                    anyhow::ensure!(
+                        !f::safe(root, &next.name)?.exists(),
+                        "Destination category already exists: {}",
+                        next.name
+                    );
+                    folders.insert(category.name.clone(), next.name.clone());
+                }
             }
-        } else {
-            anyhow::ensure!(
-                !previous.exists()
-                    || (previous.is_dir() && fs::read_dir(&previous)?.next().is_none()),
-                "Move games out of {} before removing it",
-                category.name
-            );
-            if previous.exists() {
-                folders.insert(
-                    category.name.clone(),
-                    format!(".ohmy3do/removed-categories/{}", uuid::Uuid::new_v4()),
+            None => {
+                let is_empty = previous.is_dir() && fs::read_dir(&previous)?.next().is_none();
+                anyhow::ensure!(
+                    !previous.exists() || is_empty,
+                    "Move games out of {} before removing it",
+                    category.name
                 );
+                if previous.exists() {
+                    let out_of_the_way =
+                        format!(".ohmy3do/removed-categories/{}", uuid::Uuid::new_v4());
+                    folders.insert(category.name.clone(), out_of_the_way);
+                }
             }
         }
     }
     move_category_folders(root, database(root)?, folders, Some(new), cache, job)
 }
+
+/// Moves folders (old path to new path) and updates everything that names
+/// the discs inside them, through one journal: the database (paths and
+/// categories), the categories file (`config`, if given), the media indexes,
+/// favorites, recent games, the saved menu position, and the menu's
+/// indexes. Any failure undoes it all.
 fn move_category_folders(
     root: &Path,
-    mut db: Value,
+    mut database: Value,
     folders: BTreeMap<String, String>,
     config: Option<&categories::Categories>,
     cache: &Path,
     job: &Job,
 ) -> Result<PathBuf> {
-    let mut map = HashMap::new();
-    for record in db["games"]
+    // Update each moved disc's record, remembering old path to new path.
+    let mut moved_paths = HashMap::new();
+    for record in database["games"]
         .as_array_mut()
         .context("Invalid library records")?
     {
         let path = record["path"].as_str().unwrap_or("").to_owned();
-        if let Some((old, new)) = folders
+        let Some((old, new)) = folders
             .iter()
             .find(|(old, _)| path.starts_with(&format!("{old}/")))
-        {
-            let moved = format!("{new}{}", &path[old.len()..]);
-            map.insert(f::fold(&path), moved.clone());
-            record["path"] = json!(moved);
-            record["category"] = json!(new.split('/').next().unwrap());
-            record["category_reason"] = json!("Explicit category override");
-            record["category_review"] = json!(false);
-        }
+        else {
+            continue;
+        };
+        let moved = format!("{new}{}", &path[old.len()..]);
+        moved_paths.insert(f::fold(&path), moved.clone());
+        record["path"] = json!(moved);
+        record["category"] = json!(new.split('/').next().unwrap());
+        record["category_reason"] = json!("Explicit category override");
+        record["category_review"] = json!(false);
     }
+
     let mut covers = read_media_index(root, "covers")?;
     let mut previews = read_media_index(root, "previews")?;
-    let mut tx = Journal::new(root, cache)?;
-    job.say(format!("Undo journal: {}", tx.path.display()));
+    let mut journal = Journal::new(root, cache)?;
+    job.say(format!("Undo journal: {}", journal.path.display()));
+
     let result = (|| -> Result<()> {
         for (old, new) in &folders {
             job.check()?;
             job.say(format!("Moving {old} to {new}"));
-            tx.rename(old, new)?;
+            journal.rename(old, new)?;
         }
         if let Some(config) = config {
-            tx.write(categories::PATH, &config.encode()?)?;
+            journal.write(categories::PATH, &config.encode()?)?;
         }
-        write_database(&mut tx, db, vec![], &[])?;
+        write_database(&mut journal, database, vec![], &[])?;
+
+        // Re-key the moved discs' media.
         for (folder, index) in [("covers", &mut covers), ("previews", &mut previews)] {
             let moved: Vec<(String, String)> = index
                 .iter()
                 .filter_map(|(game, media)| {
-                    Some((f::fold(map.get(&f::fold(game))?), media.clone()))
+                    let new_path = moved_paths.get(&f::fold(game))?;
+                    Some((f::fold(new_path), media.clone()))
                 })
                 .collect();
             if !moved.is_empty() {
-                index.retain(|game, _| !map.contains_key(&f::fold(game)));
+                index.retain(|game, _| !moved_paths.contains_key(&f::fold(game)));
                 index.extend(moved);
-                tx.write(
+                journal.write(
                     &format!(".ohmy3do/{folder}/index.3di"),
                     &media_index(index)?,
                 )?;
             }
         }
+
         for name in ["favorites.txt", "recent.txt"] {
-            let path = f::safe(root, &format!(".ohmy3do/{name}"))?;
-            if let Some(text) = path
-                .is_file()
-                .then(|| fs::read(&path))
-                .transpose()?
-                .and_then(|raw| remap_lines(&raw, &map))
-            {
-                tx.write(&format!(".ohmy3do/{name}"), &text)?;
+            let relative = format!(".ohmy3do/{name}");
+            let path = f::safe(root, &relative)?;
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(text) = remap_lines(&fs::read(&path)?, &moved_paths) {
+                journal.write(&relative, &text)?;
             }
         }
+
         let position = f::safe(root, ".ohmy3do/last-position.txt")?;
         if position.is_file() {
-            let moved: Vec<String> = folders.keys().cloned().collect();
-            if let Some(text) = remap_position(&fs::read(&position)?, &map, &moved) {
-                tx.write(".ohmy3do/last-position.txt", &text)?;
+            let moved_folders: Vec<String> = folders.keys().cloned().collect();
+            if let Some(text) = remap_position(&fs::read(&position)?, &moved_paths, &moved_folders)
+            {
+                journal.write(".ohmy3do/last-position.txt", &text)?;
             }
         }
-        build_indexes(root, &mut tx, job)
+
+        build_indexes(root, &mut journal, job)
     })();
-    if let Err(e) = result {
-        tx.save()?;
-        let _ = tx.undo();
-        return Err(e);
+
+    if let Err(error) = result {
+        journal.save()?;
+        let _ = journal.undo();
+        return Err(error);
     }
-    tx.finish()?;
-    Ok(tx.path.clone())
+    journal.finish()?;
+    Ok(journal.path.clone())
 }
 
+// ---- The artwork review page ----
+
+/// Escapes text for HTML.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// The review page's start: styles, the heading, a search box and a
+/// "missing only" toggle, and the table's header.
+const REVIEW_PAGE_START: &str = "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width\"><title>3DO artwork review</title>\
+<style>body{font:16px system-ui;background:#101c28;color:#e2eaf0;margin:2rem}\
+table{width:100%;border-collapse:collapse}\
+td,th{padding:.8rem;border:1px solid #486273;text-align:left}\
+img{width:84px;height:105px}input,button{font:inherit;padding:.5rem}</style>\
+<h1>3DO artwork review</h1>\
+<input id=\"q\" placeholder=\"Find a title or path\" oninput=\"filter()\">\
+<button onclick=\"missing=!missing;filter()\">Toggle missing only</button>\
+<table><thead><tr><th>Cover</th><th>Game / disc</th><th>Preview</th></tr></thead><tbody>";
+
+/// The review page's end, with the script for searching and the toggle.
+const REVIEW_PAGE_END: &str = "</tbody></table><script>let missing=false;\
+function filter(){const q=document.getElementById('q').value.toLowerCase();\
+document.querySelectorAll('tbody tr').forEach(r=>r.hidden=\
+(missing&&r.dataset.missing!=='true')||!r.textContent.toLowerCase().includes(q));}\
+</script></html>";
+
+/// Writes a web page listing every disc with its cover (embedded) and
+/// preview name, so missing artwork is easy to spot. Returns its path in
+/// the cache's `reports` folder.
 pub fn review(root: &Path, cache: &Path) -> Result<PathBuf> {
     use base64::Engine;
-    let db = database(root)?;
-    let mut page=String::from("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>3DO artwork review</title><style>body{font:16px system-ui;background:#101c28;color:#e2eaf0;margin:2rem}table{width:100%;border-collapse:collapse}td,th{padding:.8rem;border:1px solid #486273;text-align:left}img{width:84px;height:105px}input,button{font:inherit;padding:.5rem}</style><h1>3DO artwork review</h1><input id=\"q\" placeholder=\"Find a title or path\" oninput=\"filter()\"><button onclick=\"missing=!missing;filter()\">Toggle missing only</button><table><thead><tr><th>Cover</th><th>Game / disc</th><th>Preview</th></tr></thead><tbody>");
-    let cover = read_media_index(root, "covers")?;
-    let preview = read_media_index(root, "previews")?;
-    let esc = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-    };
-    for r in db["games"].as_array().context("Invalid library")? {
-        let path = r["path"].as_str().context("Missing path")?;
-        let image = cover.get(&f::fold(path));
+
+    let database = database(root)?;
+    let covers = read_media_index(root, "covers")?;
+    let previews = read_media_index(root, "previews")?;
+    let mut page = String::from(REVIEW_PAGE_START);
+
+    for record in database["games"].as_array().context("Invalid library")? {
+        let path = record["path"].as_str().context("Missing path")?;
+
+        let cover = covers.get(&f::fold(path));
         let mut thumbnail = String::from("Missing cover");
-        if let Some(name) = image {
+        if let Some(name) = cover {
             let file = f::safe(root, &format!(".ohmy3do/covers/{name}"))?;
             if fs::metadata(&file)?.len() < 512 * 1024 {
                 let mut png = std::io::Cursor::new(Vec::new());
                 media::cover_display(&file)?.write_to(&mut png, image::ImageFormat::Png)?;
-                thumbnail = format!(
-                    "<img alt=\"Cover\" src=\"data:image/png;base64,{}\">",
-                    base64::engine::general_purpose::STANDARD.encode(png.get_ref())
-                );
+                let encoded = base64::engine::general_purpose::STANDARD.encode(png.get_ref());
+                thumbnail = format!("<img alt=\"Cover\" src=\"data:image/png;base64,{encoded}\">");
             }
         }
-        let clip = preview.get(&f::fold(path));
+
+        let preview = previews.get(&f::fold(path));
         page.push_str(&format!(
             "<tr data-missing=\"{}\"><td>{}</td><td>{}<br><small>{}</small></td><td>{}</td></tr>",
-            image.is_none() || clip.is_none(),
+            cover.is_none() || preview.is_none(),
             thumbnail,
-            esc(r["title"].as_str().unwrap_or(path)),
-            esc(path),
-            esc(clip.map(String::as_str).unwrap_or("Missing preview"))
+            escape_html(record["title"].as_str().unwrap_or(path)),
+            escape_html(path),
+            escape_html(preview.map(String::as_str).unwrap_or("Missing preview"))
         ));
     }
-    page.push_str("</tbody></table><script>let missing=false;function filter(){const q=document.getElementById('q').value.toLowerCase();document.querySelectorAll('tbody tr').forEach(r=>r.hidden=(missing&&r.dataset.missing!=='true')||!r.textContent.toLowerCase().includes(q));}</script></html>");
+
+    page.push_str(REVIEW_PAGE_END);
     let path = cache.join("reports/artwork-review.html");
     f::atomic(&path, page.as_bytes())?;
     Ok(path)
