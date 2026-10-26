@@ -857,23 +857,44 @@ pub fn collisions(plan: &mut Plan) -> Result<()> {
 
 // ---- The journal ----
 
+/// The largest support file the journal will back up (it keeps the old
+/// contents in the journal itself).
+const MAX_JOURNALED_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A new file the journal copied in: undo deletes it, if it is unchanged.
 #[derive(Clone, Serialize, Deserialize)]
 struct Created {
     path: String,
     sha256: String,
 }
+
+/// A small file the journal wrote or removed: undo puts back `before`
+/// (deleting the file if it did not exist), if the file is still as the
+/// journal left it.
 #[derive(Clone, Serialize, Deserialize)]
 struct Written {
     path: String,
     before: Option<Vec<u8>>,
+    /// SHA-256 of what was written, or "" for a removed file.
     after: String,
 }
-/// A folder renamed within the library, such as a game changing category.
+
+/// A file or folder renamed within the library, such as a game changing
+/// category: undo renames it back.
 #[derive(Clone, Serialize, Deserialize)]
 struct Moved {
     from: String,
     to: String,
 }
+
+/// A record of every change one job makes to a library or drive, saved to
+/// the cache before each change is made, so the job can always be undone
+/// (by [`Journal::undo`], or later by [`undo`] from the saved file).
+///
+/// Its `state` is "applying" while the job runs, "complete" when it
+/// finished, "undone" after an undo, or "removal-committed" once title
+/// removal has passed the point where it can only be finished (see
+/// `title_removal`).
 #[derive(Serialize, Deserialize)]
 pub struct Journal {
     schema: u32,
@@ -881,19 +902,25 @@ pub struct Journal {
     pub state: String,
     created: Vec<Created>,
     writes: Vec<Written>,
+    /// Folders the journal created, so undo can remove them if empty.
     directories: Vec<String>,
     #[serde(default)]
     moves: Vec<Moved>,
+    /// Where the journal is saved (not part of the saved file).
     #[serde(skip)]
     pub path: PathBuf,
 }
+
 impl Journal {
+    /// Starts a journal for changes to `root`, saved in the cache's
+    /// `native-transactions` folder. Backs up the person's own game
+    /// information first.
     pub fn new(root: &Path, cache: &Path) -> Result<Self> {
         crate::game_info::backup_custom(root, cache)?;
         let path = cache
             .join("native-transactions")
             .join(format!("{}.json", uuid::Uuid::new_v4()));
-        let j = Self {
+        let journal = Self {
             schema: 1,
             root: f::root(root)?,
             state: "applying".into(),
@@ -903,31 +930,40 @@ impl Journal {
             moves: vec![],
             path,
         };
-        j.save()?;
-        Ok(j)
+        journal.save()?;
+        Ok(journal)
     }
+
+    /// Saves the journal (replacing the saved file in one step).
     pub fn save(&self) -> Result<()> {
         f::atomic(&self.path, &serde_json::to_vec_pretty(self)?)?;
         Ok(())
     }
+
+    /// Creates the missing folders above `path`, top first, recording each
+    /// before it is made.
     fn parents(&mut self, path: &Path) -> Result<()> {
         let mut missing = vec![];
-        let mut p = path.parent();
-        while let Some(q) = p {
-            if q == self.root || q.exists() {
+        let mut parent = path.parent();
+        while let Some(folder) = parent {
+            if folder == self.root || folder.exists() {
                 break;
             }
-            missing.push(q.to_owned());
-            p = q.parent();
+            missing.push(folder.to_owned());
+            parent = folder.parent();
         }
-        for p in missing.into_iter().rev() {
-            let name = relative(&self.root, &p)?;
+
+        for folder in missing.into_iter().rev() {
+            let name = relative(&self.root, &folder)?;
             self.directories.push(name);
             self.save()?;
-            fs::create_dir(&p)?;
+            fs::create_dir(&folder)?;
         }
         Ok(())
     }
+
+    /// Makes sure folder `name` exists, creating it (and its parents) if
+    /// needed.
     pub fn ensure_directory(&mut self, name: &str) -> Result<()> {
         let path = f::safe(&self.root, name)?;
         if path.exists() {
@@ -938,49 +974,61 @@ impl Journal {
         }
         self.parents(&path.join("placeholder"))
     }
+
+    /// Writes a small file (at most 16 MiB), keeping its old contents for
+    /// undo. Does nothing if it already holds `data`.
     pub fn write(&mut self, name: &str, data: &[u8]) -> Result<()> {
-        let p = f::safe(&self.root, name)?;
-        if p.exists() && !p.is_file() {
+        let path = f::safe(&self.root, name)?;
+        if path.exists() && !path.is_file() {
             bail!("Expected a regular file: {name}")
         }
-        let before = if p.is_file() {
-            if fs::metadata(&p)?.len() > 16 * 1024 * 1024 {
+
+        let before = if path.is_file() {
+            if fs::metadata(&path)?.len() > MAX_JOURNALED_FILE_BYTES {
                 bail!("Oversized support file")
-            };
-            Some(fs::read(&p)?)
+            }
+            Some(fs::read(&path)?)
         } else {
             None
         };
         if before.as_deref() == Some(data) {
             return Ok(());
         }
-        self.parents(&p)?;
+
+        self.parents(&path)?;
         self.writes.push(Written {
             path: name.into(),
             before,
             after: format!("{:x}", Sha256::digest(data)),
         });
         self.save()?;
-        f::atomic(&p, data)
+        f::atomic(&path, data)
     }
+
     /// Deletes a small file; undo writes it back.
     pub fn remove(&mut self, name: &str) -> Result<()> {
-        let p = f::safe(&self.root, name)?;
-        if !p.is_file() {
+        let path = f::safe(&self.root, name)?;
+        if !path.is_file() {
             bail!("Expected a regular file: {name}")
         }
-        if fs::metadata(&p)?.len() > 16 * 1024 * 1024 {
+        if fs::metadata(&path)?.len() > MAX_JOURNALED_FILE_BYTES {
             bail!("Oversized support file")
-        };
+        }
+
         self.writes.push(Written {
             path: name.into(),
-            before: Some(fs::read(&p)?),
+            before: Some(fs::read(&path)?),
             after: String::new(),
         });
         self.save()?;
-        fs::remove_file(p)?;
+        fs::remove_file(path)?;
         Ok(())
     }
+
+    /// Copies `source` to the new file `name` (never over an existing one),
+    /// checking the copy has the SHA-256 `expected`, or the source's
+    /// checksum taken first if none is given. Fails if the source changed
+    /// since it was scanned.
     pub fn copy(
         &mut self,
         source: &Path,
@@ -988,46 +1036,52 @@ impl Journal {
         expected: Option<&str>,
         job: &Job,
     ) -> Result<()> {
-        let p = f::safe(&self.root, name)?;
-        if p.exists() {
-            bail!("Refusing to overwrite {}", p.display())
+        let path = f::safe(&self.root, name)?;
+        if path.exists() {
+            bail!("Refusing to overwrite {}", path.display())
         }
-        self.parents(&p)?;
+        self.parents(&path)?;
+
         let mut copy_job = job.clone();
-        let hash = if let Some(h) = expected.filter(|h| !h.is_empty()) {
-            h.to_owned()
-        } else {
-            // Journal creation hashes first; include that pass so the copy bar
-            // does not reach the end and restart before transfer/readback.
-            let bytes = fs::metadata(source)?.len().max(1);
-            copy_job =
-                job.progress_range(bytes, bytes * 2, bytes * 3, "Copying and verifying file");
-            f::sha256(
-                source,
-                &job.progress_range(0, bytes, bytes * 3, "Copying and verifying file"),
-            )?
+        let hash = match expected.filter(|hash| !hash.is_empty()) {
+            Some(hash) => hash.to_owned(),
+            None => {
+                // Hashing first is a third of the work: show it in the same
+                // progress bar, so the bar does not reach the end and
+                // restart before the copy and its check.
+                let bytes = fs::metadata(source)?.len().max(1);
+                copy_job =
+                    job.progress_range(bytes, bytes * 2, bytes * 3, "Copying and verifying file");
+                let hashing_job =
+                    job.progress_range(0, bytes, bytes * 3, "Copying and verifying file");
+                f::sha256(source, &hashing_job)?
+            }
         };
+
         self.created.push(Created {
             path: name.into(),
             sha256: hash.clone(),
         });
         self.save()?;
-        let actual = f::copy_new(source, &p, &copy_job, Some(&hash))?;
+        let actual = f::copy_new(source, &path, &copy_job, Some(&hash))?;
         if actual != hash {
             bail!("Source contents changed since scan: {}", source.display())
         }
         self.save()?;
         Ok(())
     }
+
     /// Renames a file or folder within the root; undo renames it back.
     pub fn rename(&mut self, from: &str, to: &str) -> Result<()> {
-        let (source, target) = (f::safe(&self.root, from)?, f::safe(&self.root, to)?);
+        let source = f::safe(&self.root, from)?;
+        let target = f::safe(&self.root, to)?;
         if !source.exists() || f::is_link(&source) {
             bail!("Missing or linked: {from}")
         }
         if target.exists() {
             bail!("Destination is already occupied: {to}")
         }
+
         self.parents(&target)?;
         self.moves.push(Moved {
             from: from.into(),
@@ -1037,10 +1091,20 @@ impl Journal {
         fs::rename(&source, &target)?;
         Ok(())
     }
+
+    /// Marks the job complete.
     pub fn finish(&mut self) -> Result<()> {
         self.state = "complete".into();
         self.save()
     }
+
+    /// Undoes every change, newest first: written files get their old
+    /// contents, copied files are deleted, renames are reversed, and created
+    /// folders are removed if empty.
+    ///
+    /// Everything is checked before anything is changed: if any file has
+    /// been changed by something else since the journal wrote it, nothing is
+    /// undone, so the person's newer work is never lost.
     pub fn undo(&mut self) -> Result<()> {
         anyhow::ensure!(
             self.state != "removal-committed",
@@ -1049,59 +1113,26 @@ impl Journal {
         if self.state == "undone" {
             bail!("Transaction is already undone")
         }
-        let job = Job::default();
-        let mut simulated: HashMap<String, Option<Vec<u8>>> = HashMap::new();
-        for entry in self.writes.iter().rev() {
-            let path = f::safe(&self.root, &entry.path)?;
-            let current = simulated
-                .entry(entry.path.clone())
-                .or_insert(if path.exists() {
-                    Some(fs::read(&path)?)
-                } else {
-                    None
-                });
-            // An empty `after` marks a removed file.
-            let after = (!entry.after.is_empty()).then(|| entry.after.clone());
-            if *current != entry.before
-                && current.as_ref().map(|b| format!("{:x}", Sha256::digest(b))) != after
-            {
-                bail!("Undo refused: file changed after import: {}", entry.path)
-            }
-            *current = entry.before.clone();
-        }
-        for entry in &self.created {
-            let path = f::safe(&self.root, &entry.path)?;
-            if path.exists() {
-                let original = simulated.get(&entry.path);
-                let actual = match original {
-                    Some(Some(b)) => format!("{:x}", Sha256::digest(b)),
-                    Some(None) => String::new(),
-                    None => f::sha256(&path, &job)?,
-                };
-                if actual != entry.sha256 {
-                    bail!("Undo refused: imported file changed: {}", entry.path)
-                }
-            }
-        }
+
+        self.check_undo_is_safe()?;
+
         for entry in self.writes.iter().rev() {
             let path = f::safe(&self.root, &entry.path)?;
             if let Some(before) = &entry.before {
-                f::atomic(&path, before)?
+                f::atomic(&path, before)?;
             } else if path.exists() {
-                fs::remove_file(path)?
+                fs::remove_file(path)?;
             }
         }
         for entry in self.created.iter().rev() {
             let path = f::safe(&self.root, &entry.path)?;
             if path.exists() {
-                fs::remove_file(path)?
+                fs::remove_file(path)?;
             }
         }
         for entry in self.moves.iter().rev() {
-            let (from, to) = (
-                f::safe(&self.root, &entry.from)?,
-                f::safe(&self.root, &entry.to)?,
-            );
+            let from = f::safe(&self.root, &entry.from)?;
+            let to = f::safe(&self.root, &entry.to)?;
             if to.exists() && !from.exists() {
                 fs::rename(to, from)?;
             } else if !from.exists() {
@@ -1114,16 +1145,70 @@ impl Journal {
                 let _ = fs::remove_dir(path);
             }
         }
+
         self.state = "undone".into();
         self.save()
     }
+
+    /// Checks every written and copied file is as the journal left it,
+    /// without changing anything.
+    ///
+    /// A file can be written more than once, so the writes are replayed
+    /// backwards in memory: each must find either its `before` contents
+    /// (already undone by a later write) or its `after` contents. A copied
+    /// file that a write also touched is checked against the replayed
+    /// contents.
+    fn check_undo_is_safe(&self) -> Result<()> {
+        let job = Job::default();
+        let mut replayed: HashMap<String, Option<Vec<u8>>> = HashMap::new();
+
+        for entry in self.writes.iter().rev() {
+            let path = f::safe(&self.root, &entry.path)?;
+            let current = replayed
+                .entry(entry.path.clone())
+                .or_insert(if path.exists() {
+                    Some(fs::read(&path)?)
+                } else {
+                    None
+                });
+            // An empty `after` marks a removed file.
+            let after = (!entry.after.is_empty()).then(|| entry.after.clone());
+            let current_hash = current
+                .as_ref()
+                .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
+            if *current != entry.before && current_hash != after {
+                bail!("Undo refused: file changed after import: {}", entry.path)
+            }
+            *current = entry.before.clone();
+        }
+
+        for entry in &self.created {
+            let path = f::safe(&self.root, &entry.path)?;
+            if !path.exists() {
+                continue;
+            }
+            let actual = match replayed.get(&entry.path) {
+                Some(Some(bytes)) => format!("{:x}", Sha256::digest(bytes)),
+                Some(None) => String::new(),
+                None => f::sha256(&path, &job)?,
+            };
+            if actual != entry.sha256 {
+                bail!("Undo refused: imported file changed: {}", entry.path)
+            }
+        }
+        Ok(())
+    }
 }
+
+/// Undoes the job recorded in the saved journal at `path` (in the cache's
+/// `native-transactions` folder), holding the library's lock.
 pub fn undo(path: &Path) -> Result<()> {
     let mut journal: Journal = serde_json::from_slice(&fs::read(path)?)?;
     journal.path = path.to_owned();
     if journal.schema != 1 {
         bail!("Unsupported native transaction version")
     }
+
     let cache = path
         .parent()
         .and_then(Path::parent)
@@ -1131,10 +1216,11 @@ pub fn undo(path: &Path) -> Result<()> {
     let _lock = lock_library(&journal.root, cache)?;
     if f::root(&journal.root)? != journal.root {
         bail!("Transaction root changed")
-    };
+    }
     crate::game_info::backup_custom(&journal.root, cache)?;
     journal.undo()
 }
+
 pub fn relative(root: &Path, p: &Path) -> Result<String> {
     let canonical_root;
     let canonical_path;
