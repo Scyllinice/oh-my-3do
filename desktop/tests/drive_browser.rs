@@ -1,3 +1,6 @@
+//! Browsing a drive: listing the discs actually on it (not the database's
+//! idea of them), reporting bad indexes, and media beside each disc.
+
 use oh_my_3do_library::{drive_browser, fsutil, game_info, library, model::Preferences, Job};
 use std::{collections::BTreeMap, fs, path::Path};
 fn write(root: &Path, name: &str, bytes: &[u8]) {

@@ -1,3 +1,6 @@
+//! Reading save names from discs reports progress per disc and can be
+//! cancelled.
+
 use oh_my_3do_library::{saves, Job};
 use std::{
     collections::HashMap,

@@ -1,3 +1,6 @@
+//! Restoring game information: one field or a whole game, previewed first,
+//! undoable, and never writing when the edit is stale or the data missing.
+
 use oh_my_3do_library::{catalog, game_info, library, model::Preferences, Job};
 use serde_json::{json, Value};
 use std::{

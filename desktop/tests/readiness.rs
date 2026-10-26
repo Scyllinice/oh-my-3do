@@ -1,3 +1,6 @@
+//! The drive readiness check: what it reports (errors, missing media, stale
+//! catalogs), and that it never changes the drive.
+
 use oh_my_3do_library::{
     console_config::Settings,
     library, readiness,

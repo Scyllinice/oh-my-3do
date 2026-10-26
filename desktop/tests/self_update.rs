@@ -1,3 +1,6 @@
+//! Updating the desktop app itself: staging only the verified file, refusing
+//! changed or wrong files, cancellation, recovery and failure reports.
+
 use oh_my_3do_library::{fsutil as f, self_update, Job};
 use std::{fs, io::Write, path::Path};
 fn package(root: &Path, name: &str, data: &[u8]) -> std::path::PathBuf {

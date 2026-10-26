@@ -1,3 +1,6 @@
+//! Free-space accounting for copies: multi-track games, media, files already
+//! there, and the 1% reserve.
+
 use oh_my_3do_library::usb::{estimate_with_space, CopyItem, CopyPlan};
 use std::collections::BTreeMap;
 fn plan() -> CopyPlan {

@@ -1,4 +1,13 @@
-use oh_my_3do_library::{catalog, disc, fsutil as f, library, media, model::*, usb, Job};
+//! The library engine end to end: identifying discs (by checksum, rebuilt
+//! sectors or name), importing and organizing them with undo, CUE sheets,
+//! covers and previews, copying to a drive, and the safety checks along the
+//! way (path guards, cancellation, hash mismatches, locking).
+
+// Tests pass one-item slices as &[path.clone()], which reads more plainly than
+// std::slice::from_ref(&path); the copy is free at test scale.
+#![allow(clippy::cloned_ref_to_slice_refs)]
+
+use oh_my_3do_library::{catalog, disc, fsutil, library, media, model::*, usb, Job};
 use serde_json::json;
 use sha1::{Digest, Sha1};
 use std::{
@@ -483,7 +492,7 @@ fn path_guards_reject_traversal_case_collisions_and_fat_names() {
         "games/other.iso",
         "/absolute",
     ] {
-        assert!(f::safe(t.path(), name).is_err(), "{name}")
+        assert!(fsutil::safe(t.path(), name).is_err(), "{name}")
     }
 }
 #[test]
@@ -636,7 +645,7 @@ fn preview_encoder_fills_its_budget_and_validates() {
     let mut bad = valid.clone();
     bad[50] ^= 1; // checksum
     bads.push(bad);
-    if video.len() % 4 != 0 {
+    if !video.len().is_multiple_of(4) {
         let mut bad = valid.clone();
         let end = bad.len() - 9;
         bad[end] = 1; // padding after the packets must be zero
@@ -1250,7 +1259,7 @@ fn native_missing_media_uses_foreign_preview_but_not_cover_and_preserves_existin
     );
     let cache = t.path().join("cache");
     // Seed a validated conversion so the integration test needs no FFmpeg.
-    let hash = f::sha256(&source, &Job::default()).unwrap();
+    let hash = fsutil::sha256(&source, &Job::default()).unwrap();
     let key = format!(
         "{:x}",
         Sha256::digest(format!("{hash}:preview:{}", media::PREVIEW_KEY).as_bytes())
@@ -1459,7 +1468,7 @@ fn save_names_come_from_disc_programs_and_are_cached() {
         "Games/USA/Road Rash (USA)/Road Rash (USA).iso".to_string(),
         "Other.iso".to_string(),
     ];
-    let titles = [(f::fold(&discs[0]), "Road Rash (USA)".to_string())]
+    let titles = [(fsutil::fold(&discs[0]), "Road Rash (USA)".to_string())]
         .into_iter()
         .collect();
     let out =
@@ -1532,9 +1541,8 @@ fn recategorize_moves_game_folders_with_every_reference_then_undoes() {
 
     let journal =
         library::recategorize(&root, &[disc.clone()], "adult", &cache, &Job::default()).unwrap();
-    let moved = format!(
-        "Adult/Japan/Virtual Cameraman Part 1 (Japan)/Virtual Cameraman Part 1 (Japan).iso"
-    );
+    let moved = "Adult/Japan/Virtual Cameraman Part 1 (Japan)/Virtual Cameraman Part 1 (Japan).iso"
+        .to_string();
     assert!(root.join(&moved).is_file() && !root.join(old).exists());
     assert!(root
         .join("Adult/Japan/Virtual Cameraman Part 1 (Japan)/.ohmy3do/notes.txt")
@@ -1551,7 +1559,7 @@ fn recategorize_moves_game_folders_with_every_reference_then_undoes() {
     assert_eq!(
         library::read_media_index(&root, "covers")
             .unwrap()
-            .get(&f::fold(&moved))
+            .get(&fsutil::fold(&moved))
             .map(String::as_str),
         Some("vc1.png")
     );
@@ -1773,8 +1781,8 @@ fn selected_usb_copy_keeps_multidisc_cue_tracks_media_and_undo() {
         &root,
         ".ohmy3do/previews/index.3di",
         &library::media_index(&BTreeMap::from([
-            (f::fold(first), "yes.3dv".into()),
-            (f::fold(second), "yes.3dv".into()),
+            (fsutil::fold(first), "yes.3dv".into()),
+            (fsutil::fold(second), "yes.3dv".into()),
             (
                 "games/usa/unselected/other.iso".into(),
                 "missing.3dv".into(),
@@ -1837,8 +1845,8 @@ fn selected_usb_copy_is_additive_and_preserves_existing_metadata_media_and_saves
         &root,
         ".ohmy3do/previews/index.3di",
         &library::media_index(&BTreeMap::from([
-            (f::fold(first), "one.3dv".into()),
-            (f::fold(second), "two.3dv".into()),
+            (fsutil::fold(first), "one.3dv".into()),
+            (fsutil::fold(second), "two.3dv".into()),
         ]))
         .unwrap(),
     );
@@ -1859,7 +1867,7 @@ fn selected_usb_copy_is_additive_and_preserves_existing_metadata_media_and_saves
     put(
         &root,
         ".ohmy3do/previews/index.3di",
-        &library::media_index(&BTreeMap::from([(f::fold(second), "two.3dv".into())])).unwrap(),
+        &library::media_index(&BTreeMap::from([(fsutil::fold(second), "two.3dv".into())])).unwrap(),
     );
     usb_selection_fixture(&root, &cache);
     let before = snapshot(&dest);
@@ -1919,8 +1927,8 @@ fn copying_one_game_keeps_the_verified_record_of_the_others() {
         &root,
         ".ohmy3do/previews/index.3di",
         &library::media_index(&BTreeMap::from([
-            (f::fold(first), "one.3dv".into()),
-            (f::fold(second), "two.3dv".into()),
+            (fsutil::fold(first), "one.3dv".into()),
+            (fsutil::fold(second), "two.3dv".into()),
         ]))
         .unwrap(),
     );
@@ -2036,7 +2044,8 @@ fn selected_usb_moves_only_checked_titles_and_remaps_retained_media() {
         &dest,
         ".ohmy3do/previews/index.3di",
         &library::beside_index(
-            &library::media_index(&BTreeMap::from([(f::fold(old), "keep.3dv".into())])).unwrap(),
+            &library::media_index(&BTreeMap::from([(fsutil::fold(old), "keep.3dv".into())]))
+                .unwrap(),
         )
         .unwrap(),
     );
@@ -2058,7 +2067,9 @@ fn selected_usb_moves_only_checked_titles_and_remaps_retained_media() {
     assert!(names.contains(&new.into()));
     assert!(!names.contains(&old.into()));
     let raw = fs::read(dest.join(".ohmy3do/previews/index.3di")).unwrap();
-    assert!(raw.windows(new.len()).any(|s| s == f::fold(new).as_bytes()));
+    assert!(raw
+        .windows(new.len())
+        .any(|s| s == fsutil::fold(new).as_bytes()));
     assert!(dest.join("Adult/Japan/Moved/.ohmy3do/keep.3dv").is_file());
     assert_eq!(
         fs::read_to_string(dest.join(".ohmy3do/favorites.txt")).unwrap(),

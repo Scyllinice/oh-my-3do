@@ -1,3 +1,6 @@
+//! Reading a drive's files: path checks that stay valid across refreshes and
+//! catch new collisions and links.
+
 use oh_my_3do_library::{
     drive_browser::PresenceScan,
     fsutil::{safe, ReadPaths},

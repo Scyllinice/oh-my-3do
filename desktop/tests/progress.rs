@@ -1,3 +1,6 @@
+//! Progress reporting and cancellation for copies: nested ranges, readback,
+//! and never publishing a partial file.
+
 use oh_my_3do_library::{fsutil, Job, Progress};
 use std::sync::{
     atomic::{AtomicBool, Ordering},

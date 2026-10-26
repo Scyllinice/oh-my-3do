@@ -1,3 +1,7 @@
+//! The save cheat database: its console file format, installing it on a
+//! drive with undo, merging upstream profiles with custom ones, and the
+//! console's own code reading what the desktop writes.
+
 use oh_my_3do_library::{
     library,
     save_archive::Entry,

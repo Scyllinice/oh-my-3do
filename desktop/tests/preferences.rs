@@ -1,3 +1,6 @@
+//! Desktop preferences: library views and the optional text size round trip,
+//! with older preference files still loading.
+
 use oh_my_3do_library::model::{LibraryView, Preferences};
 #[test]
 fn library_views_round_trip_independently_and_previous_preferences_default_to_no_selections() {

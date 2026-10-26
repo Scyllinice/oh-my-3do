@@ -1,3 +1,6 @@
+//! Save backup tools: comparing two backups, naming slots and their labels,
+//! and building a backup from chosen saves.
+
 use oh_my_3do_library::{
     backup::{self, Labels, State},
     save_archive::{Archive, Entry},

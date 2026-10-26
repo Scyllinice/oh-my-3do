@@ -1,3 +1,7 @@
+//! Save archives (.3ds): the format round trip, damaged records, capacity,
+//! the DOOM save editor, hex input, compatibility with the console's own
+//! code, and safe overwrites with recovery copies.
+
 use oh_my_3do_library::{
     save_archive::{Archive, Entry, MAX_BYTES},
     save_editor::DoomPrefs,

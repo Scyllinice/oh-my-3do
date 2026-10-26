@@ -1,3 +1,7 @@
+//! Categories: validating names and ids, renaming and removing categories
+//! (with every index, favorite and media file following, and undo), and
+//! carrying categories and their visibility over when copying to a drive.
+
 use oh_my_3do_library::{
     categories::{self, Categories, Category},
     library,
@@ -65,7 +69,9 @@ fn renaming_a_category_updates_folders_indexes_favorites_media_and_undoes() {
     put(
         r,
         ".ohmy3do/last-position.txt",
-        format!("OH3DO_POSITION1\n/Storage/Games/USA\nExample\n").as_bytes(),
+        "OH3DO_POSITION1\n/Storage/Games/USA\nExample\n"
+            .to_string()
+            .as_bytes(),
     );
     let mut index = std::collections::BTreeMap::new();
     index.insert(path.to_ascii_lowercase(), "cover.3dc".into());

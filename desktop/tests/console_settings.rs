@@ -1,3 +1,8 @@
+//! The menu settings file (ohmy3do.ini): every setting round trips in the
+//! console's format, bad files are rejected, edits are undoable and never
+//! overwrite a file changed elsewhere, and the console's C parser accepts
+//! what the desktop writes.
+
 use oh_my_3do_library::{
     console_config::{self as config, Settings},
     library, usb, Job,

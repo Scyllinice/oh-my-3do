@@ -1,3 +1,7 @@
+//! Checking for and installing updates: version and release-tag rules,
+//! download pinning, checksum files, boot image updates with undo, and
+//! offline installs from local files.
+
 use oh_my_3do_library::{
     fsutil, library,
     updates::{self, BootState, Release},

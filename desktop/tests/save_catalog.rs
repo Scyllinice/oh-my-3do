@@ -1,3 +1,6 @@
+//! The save catalog: finding slots, games and labels without changing
+//! archives, refusing changed sources, and the built-in save names.
+
 use oh_my_3do_library::{
     backup::Labels,
     library::Journal,

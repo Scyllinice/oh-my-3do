@@ -1,3 +1,6 @@
+//! Conveniences: naming a drive, notes on backups, game descriptions,
+//! preparing missing media for selected games, and the information editor.
+
 use oh_my_3do_library::{
     drive_identity as drive, game_info, library,
     model::Preferences,

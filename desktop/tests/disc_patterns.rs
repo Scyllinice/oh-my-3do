@@ -1,3 +1,6 @@
+//! Finding discs: cached name patterns, CUE sheet inventories, and
+//! collecting discs once across wrappers and multi-track sets.
+
 use oh_my_3do_library::disc;
 use std::fs;
 

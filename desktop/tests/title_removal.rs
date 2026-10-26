@@ -1,3 +1,6 @@
+//! Removing games from a drive: keeping saves, other games and shared media,
+//! refreshing the indexes, and restoring everything if a step fails.
+
 use oh_my_3do_library::{fsutil as f, library, title_removal as removal, Job};
 use serde_json::json;
 use std::{

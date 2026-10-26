@@ -1,3 +1,11 @@
+//! Setting up a drive: installing the menu and its support files, folder
+//! navigation helpers, repairing a drive, and leaving it unchanged on
+//! cancellation or failure.
+
+// Tests pass one-item slices as &[path.clone()], which reads more plainly than
+// std::slice::from_ref(&path); the copy is free at test scale.
+#![allow(clippy::cloned_ref_to_slice_refs)]
+
 use oh_my_3do_library::{
     console_config::{self, Settings},
     library, setup, Job,

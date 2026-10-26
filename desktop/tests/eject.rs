@@ -1,3 +1,6 @@
+//! Ejecting a drive: only an exact removable mount, never powering off after
+//! a failed unmount.
+
 #![cfg(target_os = "linux")]
 use oh_my_3do_library::eject::{linux_remove, linux_target, LinuxTarget};
 use serde_json::json;

@@ -1,3 +1,6 @@
+//! The support report: what it contains (and doesn't, like save data), and
+//! never replacing other files.
+
 use oh_my_3do_library::{console_config::Settings, setup, support_report, Job};
 use std::{collections::BTreeMap, fs, path::Path};
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {

@@ -1,3 +1,6 @@
+//! Cleaning up recovery copies of saves: only copies the app made, all or
+//! nothing, and never live slots, links or other backups.
+
 use oh_my_3do_library::{
     recovery,
     save_archive::{Archive, Entry},

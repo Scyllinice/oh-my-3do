@@ -1,3 +1,10 @@
+//! Importing discs the catalog doesn't know into a chosen category,
+//! including audio CDs with all their tracks.
+
+// Tests pass one-item slices as &[path.clone()], which reads more plainly than
+// std::slice::from_ref(&path); the copy is free at test scale.
+#![allow(clippy::cloned_ref_to_slice_refs)]
+
 use oh_my_3do_library::{
     categories, disc, library,
     model::{Catalog, Preferences},

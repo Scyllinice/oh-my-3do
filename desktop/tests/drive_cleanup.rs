@@ -1,3 +1,6 @@
+//! Cleaning a drive: removing only the menu's files, copying save backups to
+//! the PC first, and refusing drives that hold a library or changed.
+
 use oh_my_3do_library::{drive_cleanup, setup, Job};
 use std::{
     fs,
