@@ -21,6 +21,8 @@ makes it behave like the real firmware:
 - file opens create missing files, as `FA_OPEN_ALWAYS` does;
 - reads report the requested length even at end of file;
 - `OPERA_FCARE_TOC_BUG=1` reproduces the firmware's same-folder-ID bug.
+- `OPERA_FCARE_LOG_QUEUE=1` prints each disc the menu queues (`fcare queue N: PATH`)
+  to the run's `log.txt`, to check multi-disc queues without playing to a disc swap.
 
 ### Setup (once)
 

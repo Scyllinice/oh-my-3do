@@ -1,5 +1,5 @@
 diff --git a/libopera/opera_cdrom.c b/libopera/opera_cdrom.c
-index d33de65..939fcd0 100644
+index d33de65..6badb02 100644
 --- a/libopera/opera_cdrom.c
 +++ b/libopera/opera_cdrom.c
 @@ -45,6 +45,7 @@
@@ -55,7 +55,18 @@ index d33de65..939fcd0 100644
      }
  
    ode_status(cd_,cd_->cmd[0],NULL,0);
-@@ -3130,6 +3146,16 @@ ode_open_file(cdrom_device_t *cd_)
+@@ -3032,6 +3048,10 @@ ode_add_playlist(cdrom_device_t *cd_)
+                        sizeof(g_CDROM_STATE.ode.playlist[g_CDROM_STATE.ode.playlist_count]));
+           g_CDROM_STATE.ode.playlist_count++;
+           payload[1] = 1;
++          /* For tests: OPERA_FCARE_LOG_QUEUE=1 prints each disc queued. */
++          if(getenv("OPERA_FCARE_LOG_QUEUE"))
++            fprintf(stderr,"fcare queue %u: %s\n",
++                    (unsigned)g_CDROM_STATE.ode.playlist_count,path);
+         }
+     }
+ 
+@@ -3130,6 +3150,16 @@ ode_open_file(cdrom_device_t *cd_)
          path[0] = 0;
      }
  
@@ -72,7 +83,7 @@ index d33de65..939fcd0 100644
    if((path[0] != 0) && ode_path_is_under_root(path))
      {
        g_CDROM_STATE.ode.file = filestream_open(path,
-@@ -3143,6 +3169,8 @@ ode_open_file(cdrom_device_t *cd_)
+@@ -3143,6 +3173,8 @@ ode_open_file(cdrom_device_t *cd_)
                                                   RETRO_VFS_FILE_ACCESS_READ_WRITE,
                                                   RETRO_VFS_FILE_ACCESS_HINT_NONE);
        payload[0] = (g_CDROM_STATE.ode.file != NULL);
@@ -81,7 +92,7 @@ index d33de65..939fcd0 100644
        if(g_CDROM_STATE.ode.file != NULL)
          {
            ode_str_copy(g_CDROM_STATE.ode.file_path,path,sizeof(g_CDROM_STATE.ode.file_path));
-@@ -3194,7 +3222,8 @@ ode_read_file(cdrom_device_t *cd_)
+@@ -3194,7 +3226,8 @@ ode_read_file(cdrom_device_t *cd_)
        if(result < 0)
          cd_->xbus_status |= CDROM_STATUS_ERROR;
        else
