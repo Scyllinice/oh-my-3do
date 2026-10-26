@@ -65,7 +65,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "1.0.3"
+#define MENU_VERSION "1.0.4"
 
 /* Rows in the game list with normal titles (large titles fit fewer). */
 #define ROWS 10

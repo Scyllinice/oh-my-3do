@@ -65,7 +65,7 @@ def module(name):
 catalog_tools = module("library-catalog")
 index_tools = module("index-media")
 sector_tools = module("sector-codec")
-SCANNER_VERSION = "1.0.3"
+SCANNER_VERSION = "1.0.4"
 
 # Top-level folders that never hold games to organize.
 SKIP = {".ohmy3do", "$boot", "system"}
