@@ -149,6 +149,10 @@ MOCK_SCRIPT = r"""
         if (a.selected !== undefined) entry.selected = a.selected;
         return mock.plan;
       }
+      case 'select_import':
+        for (const entry of mock.plan.entries)
+          entry.selected = a.selected && !entry.blocked && !!entry.category && !!entry.target;
+        return mock.plan;
       case 'drive_inspect':
         return { root: a.root, token: 'fixture', identity: { name: 'Fixture drive' }, mismatch: false };
       case 'copy_preview':

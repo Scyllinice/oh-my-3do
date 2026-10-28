@@ -459,6 +459,7 @@ fn dispatch(request: &Request, inner: &mut Inner, action: &str) -> Result<Value>
         "categories_save" => categories_save(request, inner),
         "scan" => scan(request, inner),
         "edit_import" => edit_import(request, inner),
+        "select_import" => select_import(request, inner),
         "import" => import(request, inner),
         "move" => move_to_category(request, inner),
         "titles_remove_review" => titles_remove_review(request, inner),
@@ -759,6 +760,17 @@ fn edit_import(request: &Request, inner: &mut Inner) -> Result<Value> {
         entry.selected = selected;
     }
 
+    library::collisions(plan)?;
+    Ok(json!(plan))
+}
+
+/// Selects, or clears, every scanned disc that can be imported.
+fn select_import(request: &Request, inner: &mut Inner) -> Result<Value> {
+    let selected = request.args["selected"].as_bool().context("Choose select or clear")?;
+    let plan = inner.import.as_mut().context("Scan discs first")?;
+    for entry in &mut plan.entries {
+        entry.selected = selected && entry.resolvable();
+    }
     library::collisions(plan)?;
     Ok(json!(plan))
 }
