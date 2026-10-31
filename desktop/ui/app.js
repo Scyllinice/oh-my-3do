@@ -721,7 +721,16 @@ function render() {
     else button.removeAttribute('aria-current');
   });
 
+  // Scrolled tables are rebuilt too; on the same page they keep their place.
+  const scrolled = [...content.querySelectorAll('.table-wrap')].map((wrap) => wrap.scrollTop);
+  const pageScroll = content.scrollTop;
   content.innerHTML = (pageViews[state.page] || pageViews.library)();
+  if (!pageChanged) {
+    content.querySelectorAll('.table-wrap').forEach((wrap, index) => {
+      wrap.scrollTop = scrolled[index] || 0;
+    });
+    content.scrollTop = pageScroll;
+  }
   loadCovers();
   resizeSelectionBar();
   if (pageChanged || (focus && !restoreFocus(focus, content))) focusHeading(content);
@@ -1698,6 +1707,9 @@ function importView() {
 /** The scanned import: one row per disc, with its identification, category and destination. */
 function importReview(entries) {
   const selectedCount = entries.filter((entry) => entry.selected).length;
+  const readyCount = entries.filter(importReady).length;
+  const allSelected = readyCount > 0 && selectedCount >= readyCount;
+  const selectAll = `<input type="checkbox" data-import-all aria-label="Select all discs" ${allSelected ? 'checked' : ''} ${!readyCount ? 'disabled' : ''}>`;
   const row = (entry, index) => {
     const title = escapeHtml(entry.title);
     const badge = entry.blocked ? 'error' : entry.confidence === 'sha1' ? '' : 'warning';
@@ -1725,7 +1737,7 @@ function importReview(entries) {
     ),
     '</div>',
     '<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable table"><table>',
-    '<thead><tr><th></th><th>Game / identification</th><th>Category</th><th>Destination</th><th></th></tr></thead>',
+    `<thead><tr><th>${selectAll}</th><th>Game / identification</th><th>Category</th><th>Destination</th><th></th></tr></thead>`,
     `<tbody>${entries.map(row).join('')}</tbody>`,
     '</table></div>',
   ].join('');
@@ -4348,6 +4360,10 @@ document.addEventListener('change', (event) => {
     // Pages' own fields.
     if (control.id === 'media-game') {
       state.mediaDisc = control.value;
+      render();
+    }
+    if (control.dataset.importAll !== undefined) {
+      state.plan = await call('select_import', { selected: control.checked });
       render();
     }
     if (control.dataset.importCheck !== undefined) {
