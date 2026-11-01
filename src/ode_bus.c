@@ -14,9 +14,9 @@
 #include <string.h>
 
 /*
- * The XBUS unit the drive is on. Internal MEI-compatible drive emulators,
- * the FCare (SataTo3DO) included, are unit 0. Only change it for a known
- * compatible device on another unit.
+ * The XBUS unit tried first. Internal MEI-compatible drive emulators, the
+ * FCare (SataTo3DO) included, are unit 0; a drive on the rear expansion port
+ * is found by ode_bus_select_unit.
  */
 #ifndef ODE_XBUS_UNIT
 #define ODE_XBUS_UNIT 0
@@ -35,6 +35,16 @@
 
 /* How long any one request may take, in milliseconds. */
 #define REQUEST_TIMEOUT_MS 3000UL
+
+/* Units ode_bus_select_unit asks, and how long each may take to answer. */
+#define PROBE_UNITS      4
+#define PROBE_TIMEOUT_MS 300UL
+#define CMD_IDENTIFY     0x93
+#define IDENTIFY_REPLY   12
+
+/* The unit ode_bus_select_unit chose; later connections (the preview
+ * reader's) start on it too. */
+static int selected_unit = ODE_XBUS_UNIT;
 
 /* How many quick checks to make before starting to sleep between them. */
 #define QUICK_CHECKS 128
@@ -56,6 +66,7 @@ int ode_bus_open(OdeBus *bus)
 {
     memset(bus, 0, sizeof(*bus));
     bus->data_request = bus->request = bus->timer = bus->device = -1;
+    bus->unit = selected_unit;
 
     bus->device = FindAndOpenDevice("xbus");
     if (bus->device < 0) {
@@ -80,6 +91,63 @@ static int bus_failure(OdeBus *bus, Err error)
     bus->failed_status = bus->last_length ? bus->last_reply[bus->last_length - 1] : 0;
     bus->failure_error = error;
     return -1;
+}
+
+/*
+ * Asks one unit to identify itself. Returns 1 if it answered like an ODE:
+ * the identify reply's full length, its tag, and no error bit. A unit that
+ * does not answer in time is abandoned; nothing more is sent to it.
+ */
+static int probe_unit(OdeBus *bus, int unit)
+{
+    static const unsigned char identify[7] = {CMD_IDENTIFY, 0, 0, 0, 0, 0, 0};
+    unsigned char reply[32];
+    IOInfo info;
+    IOReq *finished;
+    unsigned long started;
+
+    memset(&info, 0, sizeof(info));
+    memset(reply, 0, sizeof(reply));
+    info.ioi_Command = XBUSCMD_COMMAND;
+    info.ioi_Unit = unit;
+    info.ioi_Send.iob_Buffer = (void *)identify;
+    info.ioi_Send.iob_Len = 7;
+    info.ioi_Recv.iob_Buffer = reply;
+    info.ioi_Recv.iob_Len = (s32)sizeof(reply);
+    started = (unsigned long)GetMSecTime(bus->timer);
+    if (SendIO(bus->request, &info) < 0)
+        return 0; /* no such unit */
+    while (!CheckIO(bus->request)) {
+        if ((unsigned long)GetMSecTime(bus->timer) - started >= PROBE_TIMEOUT_MS) {
+            AbortIO(bus->request);
+            WaitIO(bus->request);
+            return 0;
+        }
+        SleepMSec(bus->timer, 1);
+    }
+    if (WaitIO(bus->request) < 0)
+        return 0;
+    finished = (IOReq *)LookupItem(bus->request);
+    return finished && finished->io_Error >= 0 && finished->io_Actual == IDENTIFY_REPLY &&
+           reply[0] == CMD_IDENTIFY && !(reply[IDENTIFY_REPLY - 1] & STATUS_ERROR);
+}
+
+int ode_bus_select_unit(OdeBus *bus)
+{
+    int unit;
+
+    if (bus->request < 0 || bus->timer < 0)
+        return bus->unit;
+    selected_unit = ODE_XBUS_UNIT;
+    if (!probe_unit(bus, ODE_XBUS_UNIT)) {
+        for (unit = 0; unit < PROBE_UNITS; ++unit) {
+            if (unit != ODE_XBUS_UNIT && probe_unit(bus, unit)) {
+                selected_unit = unit;
+                break;
+            }
+        }
+    }
+    return bus->unit = selected_unit;
 }
 
 int ode_bus_kind(unsigned char command)
@@ -122,7 +190,7 @@ int ode_bus_transfer(void *context, const unsigned char *command, unsigned char 
     /* Send the 7 command bytes; receive up to `capacity` status bytes. */
     memset(&info, 0, sizeof(info));
     info.ioi_Command = XBUSCMD_COMMAND;
-    info.ioi_Unit = ODE_XBUS_UNIT;
+    info.ioi_Unit = bus->unit;
     info.ioi_Send.iob_Buffer = (void *)command;
     info.ioi_Send.iob_Len = 7;
     info.ioi_Recv.iob_Buffer = reply;
@@ -213,7 +281,7 @@ int ode_bus_read_buffer(void *context, unsigned char *data, size_t size)
      */
     memset(&info, 0, sizeof(info));
     info.ioi_Command = CMD_READ;
-    info.ioi_Unit = ODE_XBUS_UNIT;
+    info.ioi_Unit = bus->unit;
     info.ioi_Recv.iob_Buffer = data;
     info.ioi_Recv.iob_Len = (s32)size;
     error = SendIO(data_request, &info);

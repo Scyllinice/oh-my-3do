@@ -61,6 +61,8 @@ static void draw(Menu *m) {
 void menu_categories_reset(void) {}
 void menu_config_defaults(MenuConfig *p) { memset(p,0,sizeof(*p)); p->remember_position=1; }
 static int ode_bus_open(void *p) { (void)p; return fail_stage==1 ? -1 : 0; }
+static int unit_selections;
+static int ode_bus_select_unit(void *p) { (void)p; ++unit_selections; return 0; }
 int ode_identify(Ode *p) { strcpy(p->identity,"LOCODE"); return fail_stage==2 ? -1 : 0; }
 int ode_change_directory(Ode *p,unsigned long id) { (void)p; assert(!id); return 0; }
 static int GetControlPad(int a,int b,ControlPadEventData *p) { (void)a;(void)b;p->cped_ButtonBits=recovery ? ControlX : 0;return 0; }
@@ -84,9 +86,11 @@ int main(void) {
     for(failure=0;failure<=4;++failure) {
         memset(&menu,0,sizeof(menu));menu.bus.request=-1;menu.splash=NULL_SPLASH;
         menu.root_known=1;
-        fail_stage=failure;recovery=configured=positioned=shown=splash_draws=0;
+        fail_stage=failure;recovery=configured=positioned=shown=splash_draws=unit_selections=0;
         connect_ode(&menu);
         assert(!menu.booting && !menu.splash && shown==1 && splash_draws);
+        /* The ODE's unit is found once, right after the bus opens. */
+        assert(unit_selections==(failure==1 ? 0 : 1));
         assert(!startup_menu && menu.boot_stage>=1);
         assert(!menu.root_known);
         if(!failure) assert(positioned==1 && menu.saved_config.screen_margin==12 && menu.boot_stage==4);
@@ -95,7 +99,7 @@ int main(void) {
     fail_stage=0;recovery=1;configured=positioned=shown=splash_draws=0;
     connect_ode(&menu);
     assert(!configured && !positioned && menu.config_result==2 && shown==1);
-    puts("Startup: splash hides default layout; saved settings and folder precede menu; failures and X recovery passed");
+    puts("Startup: splash hides default layout; ODE unit found after opening; saved settings and folder precede menu; failures and X recovery passed");
     return 0;
 }
 """

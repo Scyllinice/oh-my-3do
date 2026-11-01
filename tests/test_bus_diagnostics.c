@@ -9,6 +9,9 @@ static long error, clock_ms;
 static int busy;
 static int created, deleted, aborted, data_reads, short_read;
 static int verify_order;
+/* Unit selection: which unit is an ODE (-1: none), whether unit 0 is a
+ * plain drive that rejects identify, and the unit of the last request. */
+static int ode_unit = 0, plain_unit0, last_unit = -1, last_data_unit = -1, probes;
 static Item armed_data;
 Item FindAndOpenDevice(char *name)
 {
@@ -54,12 +57,30 @@ Err SendIO(Item req, IOInfo *info)
     if (info->ioi_Command == CMD_READ) {
         assert(!packet && info->ioi_Recv.iob_Len == 2048 && !armed_data);
         armed_data = req;
+        last_data_unit = info->ioi_Unit;
         memset(reply, 0x5a, 2048);
         requests[req].io_Actual = short_read ? 2047 : 2048;
         ++data_reads;
         return 0;
     }
     assert(packet && info->ioi_Send.iob_Len == 7);
+    last_unit = info->ioi_Unit;
+    if (packet[0] == 0x93) {
+        ++probes;
+        if (info->ioi_Unit > 3)
+            return -1; /* no such unit */
+        reply[0] = 0x93;
+        if (info->ioi_Unit == ode_unit) {
+            memset(reply + 1, 0, 11);
+            memcpy(reply + 2, "3DODE ", 6);
+            requests[req].io_Actual = 12;
+        } else if (info->ioi_Unit == 0 && plain_unit0) {
+            reply[1] = 0x10; /* a plain drive: unknown command */
+        } else {
+            return -1; /* nothing on this unit */
+        }
+        return 0;
+    }
     if (verify_order && packet[0] == 0xe7)
         assert(armed_data && req != armed_data);
     reply[0] = packet[0];
@@ -148,7 +169,41 @@ int main(void)
         ode_bus_close(&bus);
         assert(deleted == before_deletes + 3);
     }
-    puts("Diagnostics: actual bus capture, retained failures, launch status and timeout gating "
-         "passed");
+    {
+        short_read = 0;
+        /* An ODE on unit 0 (internal) is kept, after one identify. */
+        assert(!ode_bus_open(&bus));
+        probes = 0;
+        assert(ode_bus_select_unit(&bus) == 0 && bus.unit == 0 && probes == 1);
+        ode_bus_close(&bus);
+
+        /* A plain drive on unit 0 and an ODE on the expansion port (unit 1). */
+        ode_unit = 1;
+        plain_unit0 = 1;
+        assert(!ode_bus_open(&bus));
+        probes = 0;
+        assert(ode_bus_select_unit(&bus) == 1 && bus.unit == 1 && probes == 2);
+        packet[0] = 0xe5;
+        assert(!ode_bus_transfer(&bus, packet, reply, 32, &len) && last_unit == 1);
+        {
+            unsigned char block[2048];
+            assert(!ode_bus_read_buffer(&bus, block, sizeof(block)) && last_unit == 1 &&
+                   last_data_unit == 1);
+        }
+        ode_bus_close(&bus);
+
+        /* A later connection (the preview reader's) starts on that unit. */
+        assert(!ode_bus_open(&bus) && bus.unit == 1);
+        ode_bus_close(&bus);
+
+        /* No ODE anywhere: the default unit, after asking units 0 to 3. */
+        ode_unit = -1;
+        assert(!ode_bus_open(&bus));
+        probes = 0;
+        assert(ode_bus_select_unit(&bus) == 0 && probes == 4);
+        ode_bus_close(&bus);
+    }
+    puts("Diagnostics: actual bus capture, retained failures, launch status, timeout gating "
+         "and ODE unit selection passed");
     return 0;
 }

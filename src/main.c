@@ -4484,9 +4484,13 @@ static void connect_ode(Menu *menu)
 
     menu->message = "Connecting to ODE...";
     draw(menu);
-    if (menu->bus.request < 0 && ode_bus_open(&menu->bus) < 0) {
-        menu->message = "Cannot open XBUS. C: View demo";
-        goto done;
+    if (menu->bus.request < 0) {
+        if (ode_bus_open(&menu->bus) < 0) {
+            menu->message = "Cannot open XBUS. C: View demo";
+            goto done;
+        }
+        /* Internal ODEs are unit 0; one on the expansion port is a later unit. */
+        ode_bus_select_unit(&menu->bus);
     }
     if (ode_identify(&menu->ode) < 0 || ode_change_directory(&menu->ode, 0) < 0) {
         menu->message =

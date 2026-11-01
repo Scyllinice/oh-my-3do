@@ -19,6 +19,7 @@ typedef struct OdeBus {
     Item request;      /* I/O request for commands and their status replies */
     Item data_request; /* I/O request for the data channel (see ode_bus_read_buffer) */
     Item timer;        /* for timing and short sleeps */
+    int unit;          /* the XBUS unit the ODE is on (see ode_bus_select_unit) */
 
     /*
      * Set when a request ran out of time or a two-part exchange was cut
@@ -52,6 +53,16 @@ int ode_bus_kind(unsigned char command);
 
 /* Opens the XBUS device and the requests it needs. Returns 0, or -1. */
 int ode_bus_open(OdeBus *bus);
+
+/*
+ * Finds the ODE's XBUS unit: an internal drive emulator is unit 0, a drive on
+ * the rear expansion port is a later unit (1 behind the internal drive). Asks
+ * units 0 to 3 to identify themselves, ODE_XBUS_UNIT first, and keeps the
+ * first that answers like an ODE. If none does, the unit stays ODE_XBUS_UNIT.
+ * Call it once, right after ode_bus_open; later ode_bus_open calls start on
+ * the unit chosen. Returns the unit chosen.
+ */
+int ode_bus_select_unit(OdeBus *bus);
 
 /* Closes everything ode_bus_open opened. */
 void ode_bus_close(OdeBus *bus);
