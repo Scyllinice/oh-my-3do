@@ -65,7 +65,7 @@
 #include "stdlib.h"
 #include <string.h>
 
-#define MENU_VERSION "1.0.4"
+#define MENU_VERSION "1.0.5"
 
 /* Rows in the game list with normal titles (large titles fit fewer). */
 #define ROWS 10
@@ -7201,7 +7201,7 @@ static void draw_diagnostics_ode(Menu *menu)
 {
     char line[80];
     const unsigned char *reply = menu->ode.identity_reply;
-    format(line, "Menu %s / XBUS unit 0", MENU_VERSION);
+    format(line, "Menu %s / XBUS unit %u", MENU_VERSION, (unsigned int)menu->bus.unit);
     tool_line(menu, 0, line, TEXT);
     format(line, "ODE ID: %.6s", menu->ode.identity[0] ? menu->ode.identity : "------");
     tool_line(menu, 1, line, TEXT);
