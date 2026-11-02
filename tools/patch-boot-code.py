@@ -9,9 +9,16 @@ returns DIPIR_RETURN_EXT_EJECT (6) when lde.device != BootDeviceUnit(). An
 internal drive emulator is unit 0, but an ODE on the rear expansion port sits
 behind the internal drive (unit 1), so the disc ejected itself there.
 
-This removes only that check, the three instructions documented for this
-CD-DIPIR version (5996 bytes) at https://3dodev.com/documentation/dipir_patching:
-  0xcd4 teq r0,r1 ; 0xcd8 movne r0,#6 ; 0xcdc bne ...  ->  mov r0,r0 (no-op) x3
+This removes only that check's eject, in this CD-DIPIR version (5996 bytes; see
+https://3dodev.com/documentation/dipir_patching):
+  0xcd4 teq r0,r1 (kept) ; 0xcd8 movne r0,#6 ; 0xcdc bne ...  ->  mov r0,r0 x2
+The teq stays: with it replaced too, as 3dodev lists, the disc is still ejected
+at unit 1 under the FZ-10, FZ-10 Anvil, GoldStar and Sanyo BIOSes in emulator
+tests (only the FZ-1 accepts it). The SDK file is also padded to 8192 bytes;
+retail discs carry this version as 5996 bytes (code to 0x16ec, then the two
+64-byte signatures), and the padded file stalls those BIOSes even at unit 0.
+So the patched code is trimmed to 5996 bytes. With both, the menu boots at
+unit 0 and unit 1 under all five BIOSes, as the XPort's own menu disc does.
 It runs after prepare-runtime.py has checked the staged file is the SDK's,
 and refuses any other boot_code. The SDK copy carries signatures that no
 longer match once patched, so its two signature slots are cleared; 3dt pack
@@ -29,10 +36,12 @@ import sys
 import tempfile
 
 SDK_SHA256 = "65943649afeef92c210e61e75f0a28db1984f19b8ac68ea9b9564060d2dab3c9"
-PATCHED_SHA256 = "db2c27f10a8ae24c5c584faf76584bc5314e53a233cc67c49162e538cea0835c"
-UNIT_CHECK = {0xCD4: 0xE1300001, 0xCD8: 0x13A00006, 0xCDC: 0x1A00014E}
+PATCHED_SHA256 = "4eb9f7f2a10777bd98637510eec64919c729e4d3a4c07bafa5cb3e99cc8ed43d"
+TEQ = (0xCD4, 0xE1300001)  # teq r0,r1: checked, left in place
+UNIT_CHECK = {0xCD8: 0x13A00006, 0xCDC: 0x1A00014E}  # movne r0,#6 ; bne -> no-ops
 NOP = 0xE1A00000  # mov r0,r0
 SIGNATURE_SLOTS = 128  # inner and outer 64-byte signatures, re-made by 3dt pack
+CODE_BYTES = 0x16EC  # this CD-DIPIR's code; with its signatures, the 5996-byte retail size
 
 
 def run_3dt(command, path):
@@ -48,6 +57,8 @@ def patch(boot_code, audit):
         shutil.copyfile(boot_code, code)
         run_3dt("decrypt-file", code)
         data = bytearray(code.read_bytes())
+        if struct.unpack_from(">I", data, TEQ[0])[0] != TEQ[1]:
+            raise SystemExit(f"Unexpected instruction at {TEQ[0]:#x}")
         for offset, expected in UNIT_CHECK.items():
             found = struct.unpack_from(">I", data, offset)[0]
             if found != expected:
@@ -56,7 +67,7 @@ def patch(boot_code, audit):
         code.write_bytes(data)
         run_3dt("encrypt-file", code)
         data = bytearray(code.read_bytes())
-    data[-SIGNATURE_SLOTS:] = bytes(SIGNATURE_SLOTS)
+    data = data[:CODE_BYTES] + bytes(SIGNATURE_SLOTS)
     if hashlib.sha256(data).hexdigest() != PATCHED_SHA256:
         raise SystemExit("Patched boot_code does not match the tested result")
     boot_code.write_bytes(data)
@@ -65,7 +76,8 @@ def patch(boot_code, audit):
     record.setdefault("modifications", []).append({
         "path": "System/Kernel/boot_code",
         "change": "CD-DIPIR boot-unit check removed so an ODE on any XBUS unit can boot "
-                  "(instructions at 0xcd4-0xcdc replaced with no-ops); signature slots "
+                  "(movne/bne at 0xcd8-0xcdc replaced with no-ops; teq at 0xcd4 kept); trimmed to "
+                  "the 5996-byte retail size; signature slots "
                   "cleared for 3dt pack to sign",
         "reference": "https://3dodev.com/documentation/dipir_patching",
         "sdk_sha256": SDK_SHA256,
