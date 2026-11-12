@@ -288,3 +288,278 @@ pub fn save(loaded: &Loaded, settings: &Settings, cache: &Path, job: &Job) -> Re
         journal: tx.path,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_file_gives_the_menu_defaults() {
+        for empty in [b"".as_slice(), b"\r\n", b"; only a comment\r\n"] {
+            assert_eq!(Settings::parse(empty).unwrap(), Settings::default());
+        }
+    }
+
+    #[test]
+    fn each_setting_is_read_and_booleans_are_any_nonzero_digit() {
+        let settings = Settings::parse(
+            b"folder_workaround=2\nusb_covers=1\nscreen_margin=12\nlarge_titles=1\n\
+              remember_position=0\nrecent_games=0\nvideo_previews=1\npreview_sound=0\n\
+              hide_adult=1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            settings,
+            Settings {
+                folder_workaround: 2,
+                usb_covers: true,
+                screen_margin: 12,
+                large_titles: true,
+                remember_position: false,
+                recent_games: false,
+                video_previews: true,
+                preview_sound: false,
+                hide_adult: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_missing_setting_keeps_its_default() {
+        // hide_adult came last and may be absent from an older file.
+        let settings = Settings::parse(b"hide_adult=1\n").unwrap();
+        assert!(settings.hide_adult);
+        assert!(settings.usb_covers, "the others keep the menu's defaults");
+        assert_eq!(settings.screen_margin, 0);
+    }
+
+    #[test]
+    fn section_headers_comments_and_blank_lines_are_ignored() {
+        let text = b"; a comment\n# another\n[audio]\n[compatibility]\n[artwork]\n[display]\n\
+                     [library]\n\nusb_covers=0\n; trailing\n";
+        let settings = Settings::parse(text).unwrap();
+        assert!(!settings.usb_covers);
+    }
+
+    #[test]
+    fn surrounding_blanks_and_a_value_comment_are_tolerated() {
+        let settings =
+            Settings::parse(b"  \tusb_covers = 0 \t; off\r\n\tscreen_margin\t=\t7 ; wide\r\n")
+                .unwrap();
+        assert!(!settings.usb_covers);
+        assert_eq!(settings.screen_margin, 7);
+    }
+
+    #[test]
+    fn a_utf8_byte_order_mark_is_allowed_and_counted_towards_the_limit() {
+        let settings = Settings::parse("\u{feff}usb_covers=0\n".as_bytes()).unwrap();
+        assert!(!settings.usb_covers);
+    }
+
+    #[test]
+    fn the_first_nul_ends_the_file_as_the_console_does() {
+        // The ODE cannot shorten a file, so bytes written earlier may follow.
+        let settings = Settings::parse(b"usb_covers=0\n\0usb_covers=1\n").unwrap();
+        assert!(!settings.usb_covers);
+    }
+
+    #[test]
+    fn the_range_checks_are_the_menu_s() {
+        // Booleans take 0 or 1; two settings have their own ranges.
+        for key in ["usb_covers", "large_titles", "recent_games", "hide_adult"] {
+            assert!(
+                Settings::parse(format!("{key}=2").as_bytes()).is_err(),
+                "{key}=2"
+            );
+        }
+        assert!(Settings::parse(b"folder_workaround=3").is_err());
+        assert!(Settings::parse(b"screen_margin=13").is_err());
+        assert!(Settings::parse(b"folder_workaround=2").is_ok());
+        assert!(Settings::parse(b"screen_margin=12").is_ok());
+    }
+
+    #[test]
+    fn a_value_needs_one_or_two_digits_and_nothing_else_after_them() {
+        for value in ["", "abc", "0x1", "1.5", "1e0", "123", "-1", "+1"] {
+            assert!(
+                Settings::parse(format!("screen_margin={value}").as_bytes()).is_err(),
+                "{value:?}"
+            );
+        }
+        // Two digits is the widest a setting goes.
+        assert_eq!(
+            Settings::parse(b"screen_margin=10").unwrap().screen_margin,
+            10
+        );
+    }
+
+    #[test]
+    fn unknown_and_repeated_keys_are_errors() {
+        let error = Settings::parse(b"cover_flow=1\n").unwrap_err().to_string();
+        assert!(error.contains("Unknown configuration key"), "{error}");
+        let error = Settings::parse(b"usb_covers=1\nusb_covers=0\n")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Duplicate configuration key"), "{error}");
+    }
+
+    #[test]
+    fn a_line_without_an_equals_is_an_error() {
+        let error = Settings::parse(b"usb_covers\n").unwrap_err().to_string();
+        assert!(error.contains("Invalid configuration line"), "{error}");
+    }
+
+    #[test]
+    fn a_file_filling_the_buffer_needs_the_end_marker() {
+        // The menu reads a fixed buffer, so a file that exactly fills it is
+        // only accepted when the end marker proves nothing was cut off.
+        let written = Settings::default().encode().unwrap();
+        assert!(written.len() < LIMIT, "the fixture should leave room");
+
+        // Cut off before the end marker and padded to exactly the limit: refused.
+        let mut cut_off = written[..written.len() - END.len() - 2].to_vec();
+        cut_off.resize(LIMIT, b' ');
+        assert_eq!(cut_off.len(), LIMIT);
+        let error = Settings::parse(&cut_off).unwrap_err().to_string();
+        assert!(error.contains("end marker"), "{error}");
+
+        // The same length with the end marker present: accepted.
+        let mut complete = written.clone();
+        complete.resize(LIMIT, b' ');
+        assert_eq!(complete.len(), LIMIT);
+        Settings::parse(&complete).unwrap();
+    }
+
+    #[test]
+    fn a_file_over_the_buffer_is_refused_without_parsing_it() {
+        let oversized = vec![b';'; LIMIT + 1];
+        let error = Settings::parse(&oversized).unwrap_err().to_string();
+        assert!(error.contains("512 bytes"), "{error}");
+    }
+
+    #[test]
+    fn an_end_marker_before_every_setting_is_written_is_refused() {
+        // A generated file that stops early would silently lose settings.
+        let error = Settings::parse(format!("usb_covers=0\n{END}\n").as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Incomplete generated configuration"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_end_marker_is_not_required_for_a_hand_written_file() {
+        // The marker only guards files the app or menu wrote in full.
+        assert!(Settings::parse(b"usb_covers=0\nhide_adult=1\n").is_ok());
+    }
+
+    #[test]
+    fn every_setting_survives_a_round_trip_through_encode() {
+        let settings = Settings {
+            folder_workaround: 2,
+            usb_covers: false,
+            screen_margin: 9,
+            large_titles: true,
+            remember_position: false,
+            recent_games: false,
+            video_previews: false,
+            preview_sound: true,
+            hide_adult: true,
+        };
+        let bytes = settings.encode().unwrap();
+        assert_eq!(Settings::parse(&bytes).unwrap(), settings);
+        // encode() checks its own output by parsing it.
+        Settings::default().encode().unwrap();
+    }
+
+    #[test]
+    fn an_encoded_file_ends_its_lines_with_crlf_as_the_console_expects() {
+        let bytes = Settings::default().encode().unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("\r\nfolder_workaround="), "{text}");
+        assert!(text.ends_with(&format!("{END}\r\n")));
+        // Every setting the menu knows about appears exactly once.
+        for key in KEYS {
+            assert_eq!(
+                text.matches(&format!("{key}=")).count(),
+                1,
+                "{key} in {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_library_without_a_settings_file_reports_that_it_has_none() {
+        let temp = TempDir::new("console-config");
+        let loaded = load(temp.path()).unwrap();
+        assert!(!loaded.exists());
+        assert_eq!(loaded.settings, Settings::default());
+    }
+
+    #[test]
+    fn a_settings_file_on_disk_is_found_and_read() {
+        let temp = TempDir::new("console-config-read");
+        temp.write(PATH, &Settings::default().encode().unwrap());
+        let loaded = load(temp.path()).unwrap();
+        assert!(loaded.exists());
+        assert_eq!(loaded.settings, Settings::default());
+    }
+
+    #[test]
+    fn an_invalid_settings_file_on_disk_is_reported_rather_than_ignored() {
+        let temp = TempDir::new("console-config-bad");
+        temp.write(PATH, b"not_a_setting=1\n");
+        assert!(load(temp.path()).is_err());
+    }
+
+    #[test]
+    fn a_settings_file_larger_than_the_buffer_is_refused_on_read() {
+        let temp = TempDir::new("console-config-oversize");
+        // Written on disk beyond what the menu would read.
+        temp.write(PATH, &vec![b';'; LIMIT + 1]);
+        let error = match load(temp.path()) {
+            Ok(_) => panic!("an over-long settings file should be refused"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("512 bytes"), "{error}");
+    }
+
+    /// A fresh folder that is removed when the test ends, so no test here can
+    /// reach a real library or drive.
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            use std::cell::Cell;
+            thread_local! {
+                static COUNTER: Cell<u32> = const { Cell::new(0) };
+            }
+            let n = COUNTER.with(|c| {
+                let n = c.get();
+                c.set(n + 1);
+                n
+            });
+            let path = std::env::temp_dir().join(format!(
+                "ohmy3do-console-{}-{label}-{n}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(path.join(".ohmy3do")).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+        fn write(&self, name: &str, data: &[u8]) {
+            let target = self.0.join(name);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, data).unwrap();
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
