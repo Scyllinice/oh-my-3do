@@ -813,3 +813,513 @@ pub fn fingerprint(path: &Path, reconstruct: bool, job: &Job) -> Result<Fingerpr
         raw_sha1: rebuild_raw.then(|| format!("{:x}", raw_sha1.finalize())),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_title_key_drops_tags_article_and_punctuation() {
+        assert_eq!(title_key("Road Rash (USA)"), "roadrash");
+        // The article moves but the key is the same either way.
+        assert_eq!(title_key("The Horde (USA)"), "horde");
+        assert_eq!(title_key("Horde, The"), "horde");
+        assert_eq!(
+            title_key("A Day at the Fair"),
+            "dayatthe fair".replace(' ', "")
+        );
+        // Disc numbers are tags too, so a multi-disc title keeps its base key.
+        assert_eq!(title_key("Need for Speed (Disc 2)"), "needforspeed");
+        // Brackets such as Redump's "[!]" are dropped as well.
+        assert_eq!(title_key("Instalker [!]"), "instalker");
+    }
+
+    #[test]
+    fn a_title_key_removes_accents_and_lowercases() {
+        assert_eq!(title_key("Rayman Origins"), "raymanorigins");
+        assert_eq!(title_key("Klonoa"), title_key("KLONOA"));
+        // An accented letter matches its plain form.
+        assert_eq!(title_key("Baldies\u{301}"), title_key("Baldies"));
+        assert_eq!(title_key("Étoile"), "etoile");
+    }
+
+    #[test]
+    fn a_title_key_keeps_digits_and_drops_other_punctuation() {
+        assert_eq!(title_key("Flash: The Quest - 2!"), "flashthequest2");
+        assert_eq!(title_key(""), "");
+    }
+
+    #[test]
+    fn a_disc_number_is_found_in_the_two_written_forms() {
+        // In parentheses.
+        assert_eq!(disc_number("Game (Disc 2)"), Some(2));
+        assert_eq!(disc_number("Game (Disk 3)"), Some(3));
+        assert_eq!(disc_number("Game (CD 02 of 3)"), Some(2));
+        // At the end, after a separator.
+        assert_eq!(disc_number("Game - Disc 2"), Some(2));
+        assert_eq!(disc_number("Game_disk02"), Some(2));
+        assert_eq!(disc_number("Game CD 2 of 3"), Some(2));
+    }
+
+    #[test]
+    fn a_disc_number_must_be_at_the_end_or_in_parentheses() {
+        // A bare number in the middle is not a disc label.
+        assert_eq!(disc_number("Disc 2 of Battle"), None);
+        assert_eq!(disc_number("Game (Disc)"), None);
+        assert_eq!(disc_number("Game"), None);
+    }
+
+    #[test]
+    fn removing_a_disc_label_leaves_a_clean_title() {
+        assert_eq!(without_disc("Game (Disc 2)"), "Game");
+        assert_eq!(without_disc("Game - CD2"), "Game");
+        assert_eq!(without_disc("Game (CD 1 of 3)"), "Game");
+        // Nothing to remove.
+        assert_eq!(without_disc("Game"), "Game");
+    }
+
+    #[test]
+    fn a_region_tag_is_named_the_standard_way() {
+        assert_eq!(region("us"), Some("USA"));
+        assert_eq!(region("USA"), Some("USA"));
+        assert_eq!(region("na"), Some("USA"));
+        assert_eq!(region("PAL"), Some("Europe"));
+        assert_eq!(region("uk"), Some("Europe"));
+        assert_eq!(region("Japan"), Some("Japan"));
+        assert_eq!(region(" kr "), Some("Korea"));
+        // Not a region.
+        assert_eq!(region("Unreleased"), None);
+        assert_eq!(region(""), None);
+    }
+
+    #[test]
+    fn every_region_in_a_name_is_found_even_when_listed_together() {
+        let all = regions("Game (USA, Europe)");
+        assert!(all.contains("USA") && all.contains("Europe"));
+        assert_eq!(all.len(), 2);
+
+        let slashed = regions("Game (Japan/Korea)");
+        assert!(slashed.contains("Japan") && slashed.contains("Korea"));
+
+        // Several tags: all are collected.
+        let two_tags = regions("Game (USA) (Europe)");
+        assert!(two_tags.contains("USA") && two_tags.contains("Europe"));
+
+        // A tag with no region contributes nothing.
+        assert!(regions("Game [!]").is_empty());
+    }
+
+    #[test]
+    fn the_primary_region_is_the_first_item_of_the_first_region_tag() {
+        assert_eq!(primary_region("Game (USA, Europe)"), "USA");
+        assert_eq!(primary_region("Game (Europe, USA)"), "Europe");
+        // A non-region tag is skipped in favour of a later region tag.
+        assert_eq!(primary_region("Game [!] (Japan)"), "Japan");
+        assert_eq!(primary_region("Game"), "Unknown");
+    }
+
+    #[test]
+    fn a_safe_name_replaces_characters_windows_forbids() {
+        assert_eq!(safe_name("A/B:C*D?E\"F|G<H>I", 100), "A_B_C_D_E_F_G_H_I");
+        // Control characters become underscores too.
+        assert_eq!(safe_name("tab\there", 100), "tab_here");
+    }
+
+    #[test]
+    fn a_safe_name_trims_spaces_and_dots_and_names_an_empty_one() {
+        assert_eq!(safe_name("  Padded  ", 100), "Padded");
+        assert_eq!(safe_name("Trailing...", 100), "Trailing");
+        assert_eq!(safe_name("", 100), "Untitled");
+        assert_eq!(safe_name("   ", 100), "Untitled");
+    }
+
+    #[test]
+    fn a_safe_name_escapes_windows_reserved_device_names() {
+        for device in ["CON", "PRN", "AUX", "NUL", "COM1", "LPT9"] {
+            let safe = safe_name(device, 100);
+            assert_eq!(safe, format!("_{device}"), "{device}");
+            // And a name merely starting with one is left alone.
+            assert_eq!(
+                safe_name(&format!("{device}sole"), 100),
+                format!("{device}sole")
+            );
+        }
+        // Case does not matter, and a device name with an extension is escaped.
+        assert_eq!(safe_name("con.txt", 100), "_con.txt");
+    }
+
+    #[test]
+    fn an_over_long_safe_name_is_cut_and_tagged_with_a_hash() {
+        let long = "x".repeat(200);
+        let safe = safe_name(&long, 60);
+        assert_eq!(safe.len(), 60);
+        assert!(safe.starts_with('x'));
+        // The suffix is "-" plus 8 hex digits.
+        let suffix = &safe[safe.len() - 9..];
+        assert!(suffix.starts_with('-'));
+        assert!(suffix[1..].bytes().all(|b| b.is_ascii_hexdigit()));
+
+        // Two long names sharing a prefix stay different, but the same name is
+        // shortened the same way twice.
+        let other = format!("{}y", "x".repeat(199));
+        assert_ne!(safe_name(&long, 60), safe_name(&other, 60));
+        assert_eq!(safe_name(&long, 60), safe_name(&long, 60));
+    }
+
+    #[test]
+    fn an_over_long_safe_name_is_cut_on_a_character_boundary() {
+        // A multi-byte character must not be split by the cut.
+        let name = format!("{}é", "x".repeat(58));
+        let safe = safe_name(&name, 60);
+        assert!(safe.len() <= 60);
+        assert!(std::str::from_utf8(safe.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_disc_stem_is_never_longer_than_the_limit() {
+        for name in [
+            "A".repeat(300),
+            format!("{} (Disc 9)", "B".repeat(200)),
+            format!("{} [{}]", "C".repeat(150), "z".repeat(40)),
+        ] {
+            let stem = disc_stem(&name);
+            assert!(
+                stem.len() <= MAX_DISC_STEM,
+                "{} bytes for {name:?}",
+                stem.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_cue_sheets_text_is_read_as_utf8_or_windows_1252() {
+        // Plain UTF-8.
+        assert_eq!(
+            decode_cue(b"FILE \"a.bin\" BINARY").unwrap(),
+            "FILE \"a.bin\" BINARY"
+        );
+        // A byte-order mark is removed.
+        assert_eq!(decode_cue("\u{feff}TRACK 1".as_bytes()).unwrap(), "TRACK 1");
+        // Windows-1252: 0xE9 is é, which is not valid UTF-8 on its own.
+        assert_eq!(decode_cue(&[b'T', b'\xe9']).unwrap(), "Té");
+    }
+
+    #[test]
+    fn a_cue_sheet_is_never_rejected_for_its_text_encoding() {
+        // decode_cue has an "Unsupported CUE text encoding" error, but it is
+        // unreachable: Windows-1252 decodes every byte (the five positions the
+        // standard leaves undefined become U+0081 and friends), so
+        // had_errors is never set. This records that rather than asserting an
+        // error that cannot happen.
+        for bytes in [vec![0x81, 0x8d], vec![0x8f, 0x90, 0x9d]] {
+            let text = decode_cue(&bytes).expect("decodes without error");
+            assert!(
+                text.chars().all(|c| ('\u{80}'..'\u{a0}').contains(&c)),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_disc_stem_writes_a_trailing_disc_number_the_standard_way() {
+        // The disc label has to be at the end of the name for it to be found,
+        // so a trailing [tag] after it is left as written.
+        assert_eq!(disc_stem("Game - CD2"), "Game (Disc 2)");
+        assert_eq!(disc_stem("Game (Disc 3)"), "Game (Disc 3)");
+        // With the tag first, both the tag and the standard disc label survive.
+        assert_eq!(disc_stem("Game (Disc 2) [!]"), "Game [!] (Disc 2)");
+        // No disc number: just the cleaned name.
+        assert_eq!(disc_stem("Road Rash (USA)"), "Road Rash (USA)");
+    }
+
+    #[test]
+    fn a_disc_stem_keeps_trailing_tags_only_when_they_leave_room() {
+        // A short title keeps its tags.
+        let kept = disc_stem("Short [!][b]");
+        assert!(kept.contains("[!]"), "{kept}");
+        // A long title is cut, and the tag rides along after the hash suffix.
+        let long_title = "L".repeat(120);
+        let cut = disc_stem(&format!("{long_title} [!]"));
+        assert!(cut.len() <= MAX_DISC_STEM, "{} bytes", cut.len());
+        assert!(cut.contains("[!]"), "{cut}");
+        // The title itself is shortened rather than the tag dropped.
+        assert!(cut.contains('-'), "expected a hash suffix in {cut}");
+    }
+
+    #[test]
+    fn an_empty_or_archive_like_file_is_not_accepted_as_a_disc() {
+        let temp = TempDir::new("issue");
+
+        let empty = temp.path().join("empty.iso");
+        fs::write(&empty, b"").unwrap();
+        assert!(issue(&empty).is_err(), "an empty disc");
+
+        // Each archive signature the app recognises.
+        for (label, bytes) in [
+            ("zip", &b"PK\x03\x04extra"[..]),
+            ("zip-empty", &b"PK\x05\x06"[..]),
+            ("7z", &b"7z\xbc\xaf\x27\x1cextra"[..]),
+            ("rar", &b"Rar!\x1a\x07extra"[..]),
+            ("gzip", &b"\x1f\x8bextra"[..]),
+            ("bz2", &b"BZh9extra"[..]),
+            ("xz", &b"\xfd7zXZ\x00extra"[..]),
+        ] {
+            let path = temp.path().join(format!("{label}.iso"));
+            fs::write(&path, bytes).unwrap();
+            assert!(issue(&path).is_err(), "{label} disguised as a disc");
+        }
+
+        // A real ISO header is accepted.
+        let iso = temp.path().join("real.iso");
+        fs::write(&iso, [0u8; 16]).unwrap();
+        issue(&iso).unwrap();
+    }
+
+    #[test]
+    fn a_redundant_cue_describing_a_plain_iso_points_at_the_iso() {
+        let temp = TempDir::new("redundant");
+        let iso = temp.path().join("Game.iso");
+        fs::write(&iso, [0u8; 2048]).unwrap();
+
+        let cue = temp.path().join("Game.cue");
+        fs::write(
+            &cue,
+            "FILE \"Game.iso\" BINARY\n  TRACK 01 MODE1/2048\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), Some(iso.clone()));
+
+        // Comments and descriptive lines are allowed around it.
+        fs::write(
+            &cue,
+            "REM generated by a tool\nCATALOG 1234567890123\nTITLE \"Game\"\n\
+             FILE \"Game.iso\" BINARY\nTRACK 1 MODE1/2048\nINDEX 1 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), Some(iso));
+    }
+
+    #[test]
+    fn a_cue_that_is_more_than_a_plain_iso_wrapper_is_kept() {
+        let temp = TempDir::new("not-redundant");
+        let bin = temp.path().join("Game.bin");
+        fs::write(&bin, [0u8; 2352]).unwrap();
+
+        // A BIN rather than an ISO.
+        let cue = temp.path().join("Game.cue");
+        fs::write(
+            &cue,
+            "FILE \"Game.bin\" BINARY\nTRACK 1 MODE1/2048\nINDEX 1 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), None);
+
+        // A second track.
+        let iso = temp.path().join("Game.iso");
+        fs::write(&iso, [0u8; 2048]).unwrap();
+        let audio = temp.path().join("track2.wav");
+        fs::write(&audio, [0u8; 100]).unwrap();
+        fs::write(
+            &cue,
+            "FILE \"Game.iso\" BINARY\nTRACK 1 MODE1/2048\nINDEX 1 00:00:00\n\
+             TRACK 2 AUDIO\nINDEX 1 04:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), None);
+
+        // The directives in the wrong order.
+        fs::write(
+            &cue,
+            "TRACK 1 MODE1/2048\nFILE \"Game.iso\" BINARY\nINDEX 1 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), None);
+
+        // An audio index, which is not the plain data layout.
+        fs::write(
+            &cue,
+            "FILE \"Game.iso\" BINARY\nTRACK 1 MODE1/2048\nINDEX 1 03:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), None);
+    }
+
+    #[test]
+    fn a_cue_that_cannot_be_read_is_not_redundant_rather_than_an_error() {
+        let temp = TempDir::new("broken-redundant");
+        let cue = temp.path().join("Broken.cue");
+        // Names a file that is not there.
+        fs::write(
+            &cue,
+            "FILE \"missing.iso\" BINARY\nTRACK 1 MODE1/2048\nINDEX 1 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(redundant_cue(&cue).unwrap(), None);
+    }
+
+    #[test]
+    fn a_raw_sector_carries_the_sync_header_data_and_checksum() {
+        let cooked = vec![0x5au8; DATA_BYTES];
+        let sector = encode_sector(&cooked, 0).unwrap();
+        assert_eq!(sector.len(), RAW_SECTOR_BYTES);
+
+        // Sync pattern: 00, ten FFs, 00.
+        assert_eq!(sector[0], 0);
+        assert!(sector[1..11].iter().all(|&b| b == 0xff));
+        assert_eq!(sector[11], 0);
+
+        // Header: BCD address for sector 0 (150 with the lead-in), mode 1.
+        assert_eq!(&sector[12..16], &[0x00, 0x02, 0x00, 0x01]);
+        // The next sector advances the frame.
+        let next = encode_sector(&cooked, 1).unwrap();
+        assert_eq!(&next[12..16], &[0x00, 0x02, 0x01, 0x01]);
+
+        // The data appears unchanged at offset 16.
+        assert!(sector[16..2064].iter().all(|&b| b == 0x5a));
+        // The gap between the EDC and the ECC is zero.
+        assert!(sector[2068..2076].iter().all(|&b| b == 0));
+
+        // A different sector number changes the header and so the EDC.
+        let edc =
+            |s: &[u8; RAW_SECTOR_BYTES]| u32::from_le_bytes(s[2064..2068].try_into().unwrap());
+        assert_ne!(edc(&sector), edc(&next));
+
+        // The EDC really is the CRC-32 of the bytes before it.
+        let tables = sector_tables();
+        let mut crc = 0u32;
+        for byte in &sector[..2064] {
+            crc = (crc >> 8) ^ tables.crc[((crc ^ *byte as u32) & 0xff) as usize];
+        }
+        assert_eq!(edc(&sector), crc);
+    }
+
+    #[test]
+    fn a_raw_sector_is_stable_and_depends_on_its_data() {
+        let one = encode_sector(&vec![1u8; DATA_BYTES], 5).unwrap();
+        let same = encode_sector(&vec![1u8; DATA_BYTES], 5).unwrap();
+        assert_eq!(one, same);
+
+        let other_data = encode_sector(&vec![2u8; DATA_BYTES], 5).unwrap();
+        assert_ne!(one, other_data);
+
+        // The whole raw block is filled in: nothing past the EDC gap is left
+        // zero by accident.
+        assert!(one[2076..RAW_SECTOR_BYTES].iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn an_invalid_sector_is_refused() {
+        // The data must be exactly one MODE1 block.
+        assert!(encode_sector(&vec![0u8; DATA_BYTES - 1], 0).is_err());
+        assert!(encode_sector(&vec![0u8; DATA_BYTES + 1], 0).is_err());
+        // And the sector number must fit on a disc.
+        assert!(encode_sector(&vec![0u8; DATA_BYTES], MAX_SECTORS).is_err());
+        encode_sector(&vec![0u8; DATA_BYTES], MAX_SECTORS - 1).unwrap();
+    }
+
+    #[test]
+    fn a_fingerprint_reports_the_checksums_of_a_small_image() {
+        let temp = TempDir::new("fingerprint");
+        let path = temp.path().join("small.iso");
+        let data = b"not really an iso, but 2048 bytes of something".to_vec();
+        fs::write(&path, &data).unwrap();
+
+        let print = fingerprint(&path, false, &Job::default()).unwrap();
+        assert_eq!(print.size, data.len() as u64);
+        assert_eq!(print.sha1, format!("{:x}", Sha1::digest(&data)));
+        assert_eq!(print.sha256, format!("{:x}", Sha256::digest(&data)));
+        // Not asked to reconstruct, so no raw checksum.
+        assert_eq!(print.raw_sha1, None);
+    }
+
+    #[test]
+    fn a_fingerprint_can_rebuild_the_raw_image_checksum_for_a_sector_image() {
+        let temp = TempDir::new("fingerprint-raw");
+        // Exactly two 2048-byte sectors.
+        let path = temp.path().join("two-sectors.iso");
+        let data: Vec<u8> = (0..DATA_BYTES * 2).map(|i| (i % 251) as u8).collect();
+        fs::write(&path, &data).unwrap();
+
+        let print = fingerprint(&path, true, &Job::default()).unwrap();
+        let expected_raw: Vec<u8> = data
+            .chunks(DATA_BYTES)
+            .enumerate()
+            .flat_map(|(lba, chunk)| encode_sector(chunk, lba as u32).unwrap())
+            .collect();
+        assert_eq!(
+            print.raw_sha1,
+            Some(format!("{:x}", Sha1::digest(&expected_raw)))
+        );
+    }
+
+    #[test]
+    fn a_fingerprint_does_not_rebuild_raw_sectors_for_a_partially_filled_image() {
+        let temp = TempDir::new("fingerprint-partial");
+        // Not a whole number of sectors, so there is no raw form to build.
+        let path = temp.path().join("odd.iso");
+        fs::write(&path, vec![7u8; DATA_BYTES + 1]).unwrap();
+
+        let print = fingerprint(&path, true, &Job::default()).unwrap();
+        assert_eq!(print.raw_sha1, None);
+    }
+
+    #[test]
+    fn a_fingerprint_refuses_an_empty_or_archive_like_file() {
+        let temp = TempDir::new("fingerprint-bad");
+        let empty = temp.path().join("empty.iso");
+        fs::write(&empty, b"").unwrap();
+        assert!(fingerprint(&empty, false, &Job::default()).is_err());
+
+        let archive = temp.path().join("zip.iso");
+        fs::write(&archive, b"PK\x03\x04not a disc").unwrap();
+        assert!(fingerprint(&archive, true, &Job::default()).is_err());
+    }
+
+    #[test]
+    fn a_fingerprint_reads_a_file_larger_than_its_read_chunk() {
+        let temp = TempDir::new("fingerprint-chunked");
+        // Bigger than one chunk, so the checksum is built from several reads.
+        let data = vec![2u8; READ_CHUNK_BYTES * 2 + 7];
+        let big = temp.path().join("big.iso");
+        fs::write(&big, &data).unwrap();
+        let print = fingerprint(&big, false, &Job::default()).unwrap();
+        assert_eq!(print.size, data.len() as u64);
+        assert_eq!(print.sha1, format!("{:x}", Sha1::digest(&data)));
+
+        // The stamp is taken again after reading, so a file changed during the
+        // scan would be caught; an unchanged one reads cleanly.
+        let path = temp.path().join("small.iso");
+        fs::write(&path, vec![3u8; DATA_BYTES]).unwrap();
+        fingerprint(&path, false, &Job::default()).unwrap();
+    }
+
+    /// A fresh folder removed when the test ends, so no test here can reach a
+    /// real library or drive.
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            use std::cell::Cell;
+            thread_local! {
+                static COUNTER: Cell<u32> = const { Cell::new(0) };
+            }
+            let n = COUNTER.with(|c| {
+                let n = c.get();
+                c.set(n + 1);
+                n
+            });
+            let path = std::env::temp_dir()
+                .join(format!("ohmy3do-disc-{}-{label}-{n}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}

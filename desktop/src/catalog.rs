@@ -762,3 +762,403 @@ pub fn load(cache: &Path, offline: bool, job: &Job) -> Result<Catalog> {
     prepare(&mut catalog);
     Ok(catalog)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A one-file game, for the release-name and variant tests.
+    fn game(name: &str, file: &str, size: u64, sha1: &str) -> Game {
+        Game {
+            name: name.into(),
+            roms: vec![Rom {
+                name: file.into(),
+                size,
+                sha1: sha1.into(),
+                serial: String::new(),
+            }],
+            ..Default::default()
+        }
+    }
+    fn catalog_of(games: Vec<Game>) -> Catalog {
+        Catalog {
+            games,
+            sources: vec![],
+            complete_catalog: true,
+        }
+    }
+
+    #[test]
+    fn an_xml_dat_gives_each_release_its_files_and_fields() {
+        let text = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <logiqx>
+              <game name="Road Rash (USA)">
+                <category>Games</category>
+                <serial>FZ-KS01</serial>
+                <region>USA</region>
+                <rom name="Road Rash (USA).bin" size="12345" sha1="AABBCC"/>
+              </game>
+            </logiqx>"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].name, "Road Rash (USA)");
+        assert_eq!(games[0].category, "Games");
+        assert_eq!(games[0].serial, "FZ-KS01");
+        assert_eq!(games[0].region.as_deref(), Some("USA"));
+        assert_eq!(games[0].roms.len(), 1);
+        assert_eq!(games[0].roms[0].size, 12345);
+        // Checksums are kept lower case so they match a person's own files.
+        assert_eq!(games[0].roms[0].sha1, "aabbcc");
+    }
+
+    #[test]
+    fn an_xml_dat_may_use_machine_in_place_of_game() {
+        let text = r#"<logiqx><machine name="Instalker (Europe)">
+            <rom name="Instalker (Europe).bin" size="10" sha1="ab"/></machine></logiqx>"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games[0].name, "Instalker (Europe)");
+    }
+
+    #[test]
+    fn xml_entities_in_a_name_are_decoded() {
+        let text = r#"<logiqx><game name="Rayman &amp; Rabbids">
+            <rom name="r.bin" size="10" sha1="ab"/></game></logiqx>"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games[0].name, "Rayman & Rabbids");
+    }
+
+    #[test]
+    fn a_multi_disc_release_keeps_every_disc_file() {
+        let text = r#"<logiqx><game name="Need for Speed (Disc 2)">
+            <rom name=" NFS (Disc 2) (Track 1).bin" size="10" sha1="aa"/>
+            <rom name=" NFS (Disc 2) (Track 2).bin" size="20" sha1="bb"/>
+        </game></logiqx>"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games[0].roms.len(), 2);
+    }
+
+    #[test]
+    fn a_clrmamepro_text_dat_is_read_as_well_as_xml() {
+        let text = r#"game (
+            name "Road Rash (USA)"
+            category "Games"
+            rom ( name "Road Rash (USA).bin" size 12345 sha1 AABBCC )
+        )"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].name, "Road Rash (USA)");
+        assert_eq!(games[0].category, "Games");
+        assert_eq!(games[0].roms[0].size, 12345);
+        assert_eq!(games[0].roms[0].sha1, "aabbcc");
+    }
+
+    #[test]
+    fn a_text_dat_keeps_quoted_names_with_escapes_and_brackets() {
+        let text = r#"game (
+            name "A \"quoted\" (odd) name"
+            rom ( name "f.bin" size 5 sha1 ab )
+        )"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games[0].name, "A \"quoted\" (odd) name");
+    }
+
+    #[test]
+    fn a_text_dat_needs_a_size_for_each_file() {
+        let text = r#"game ( name "No Size" rom ( name "f.bin" sha1 ab ) )"#;
+        assert!(parse_dat(text).is_err());
+    }
+
+    #[test]
+    fn cue_sheets_are_dropped_because_their_checksums_never_match() {
+        // A generated CUE sheet beside the real disc image.
+        let xml = r#"<logiqx><game name="Road Rash (USA)">
+            <rom name="Road Rash (USA).cue" size="500" sha1="aa"/>
+            <rom name="Road Rash (USA).bin" size="12345" sha1="bb"/>
+        </game></logiqx>"#;
+        let games = parse_dat(xml).unwrap();
+        assert_eq!(games[0].roms.len(), 1);
+        assert!(games[0].roms[0].name.ends_with(".bin"));
+
+        let text = r#"game ( name "Road Rash" rom ( name "a.CUE" size 5 sha1 aa )
+            rom ( name "a.bin" size 6 sha1 bb ) )"#;
+        let games = parse_dat(text).unwrap();
+        assert_eq!(games[0].roms.len(), 1);
+        assert!(games[0].roms[0].name.ends_with(".bin"));
+    }
+
+    #[test]
+    fn a_release_left_with_only_a_cue_sheet_makes_the_whole_dat_unusable() {
+        let xml = r#"<logiqx><game name="Cue Only">
+            <rom name="only.cue" size="500" sha1="aa"/></game></logiqx>"#;
+        let error = parse_dat(xml).unwrap_err().to_string();
+        assert!(error.contains("no usable disc records"), "{error}");
+    }
+
+    #[test]
+    fn an_empty_dat_or_one_without_a_name_is_refused() {
+        assert!(parse_dat("").is_err());
+        assert!(parse_dat("<logiqx></logiqx>").is_err());
+        let unnamed = r#"<logiqx><game name="">
+            <rom name="f.bin" size="5" sha1="ab"/></game></logiqx>"#;
+        assert!(parse_dat(unnamed).is_err());
+    }
+
+    #[test]
+    fn a_byte_order_mark_or_leading_blanks_do_not_hide_an_xml_dat() {
+        let text = "\u{feff}\r\n  <logiqx><game name=\"G\">\n<rom name=\"f.bin\" size=\"5\" sha1=\"ab\"/></game></logiqx>";
+        assert_eq!(parse_dat(text).unwrap()[0].name, "G");
+    }
+
+    #[test]
+    fn a_truncated_text_block_is_refused() {
+        assert!(parse_dat("game ( name \"Cut off\" rom (").is_err());
+        // A closing bracket with nothing open.
+        assert!(parse_dat("game )").is_err());
+    }
+
+    #[test]
+    fn the_release_name_follows_the_files_when_they_agree_with_the_game() {
+        // Redump sometimes writes the game name differently from its files;
+        // the file stem is used when it names the same title and disc.
+        let mut catalog = catalog_of(vec![game("Road Rash (USA)", "Road Rash.bin", 10, "aa")]);
+        prepare(&mut catalog);
+        assert_eq!(catalog.games[0].release, "Road Rash");
+        assert_eq!(catalog.games[0].variant, None);
+    }
+
+    #[test]
+    fn a_track_number_is_not_part_of_the_release_name() {
+        let mut one = Game {
+            name: "Need for Speed (Disc 1)".into(),
+            roms: vec![
+                Rom {
+                    name: "Need for Speed (Disc 1) (Track 1).bin".into(),
+                    size: 10,
+                    sha1: "aa".into(),
+                    serial: String::new(),
+                },
+                Rom {
+                    name: "Need for Speed (Disc 1) (Track 2).bin".into(),
+                    size: 20,
+                    sha1: "bb".into(),
+                    serial: String::new(),
+                },
+            ],
+            ..Default::default()
+        };
+        let stem = release_name(&one);
+        assert_eq!(stem, "Need for Speed (Disc 1)");
+
+        // A different disc in the file names does not match the game.
+        one.name = "Need for Speed (Disc 1)".into();
+        one.roms[0].name = "Need for Speed (Disc 2) (Track 1).bin".into();
+        one.roms.remove(1);
+        assert_eq!(release_name(&one), "Need for Speed (Disc 1)");
+    }
+
+    #[test]
+    fn the_game_name_is_kept_when_its_files_disagree() {
+        // Two files with different stems: no single release name to take.
+        let mut catalog = catalog_of(vec![Game {
+            name: "Multi File".into(),
+            roms: vec![
+                Rom {
+                    name: "First.bin".into(),
+                    size: 10,
+                    sha1: "aa".into(),
+                    serial: String::new(),
+                },
+                Rom {
+                    name: "Second.bin".into(),
+                    size: 20,
+                    sha1: "bb".into(),
+                    serial: String::new(),
+                },
+            ],
+            ..Default::default()
+        }]);
+        prepare(&mut catalog);
+        assert_eq!(catalog.games[0].release, "Multi File");
+    }
+
+    #[test]
+    fn releases_sharing_a_name_but_not_their_data_are_marked_as_variants() {
+        let mut catalog = catalog_of(vec![
+            game("Road Rash (USA)", "Road Rash.bin", 100, "aaaa"),
+            game("Road Rash (USA)", "Road Rash.bin", 200, "bbbb"),
+        ]);
+        prepare(&mut catalog);
+
+        for game in &catalog.games {
+            assert!(game.release.contains("[Variant "), "{:?}", game.release);
+            let variant = game.variant.clone().unwrap();
+            assert_eq!(variant.len(), 8);
+            assert!(variant
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)));
+            // The tag sits inside the release name, and the variant is recorded.
+            assert!(game.release.starts_with("Road Rash"));
+        }
+        // The two are told apart, and neither keeps its original name.
+        assert_ne!(catalog.games[0].release, catalog.games[1].release);
+    }
+
+    #[test]
+    fn the_variant_code_is_stable_and_comes_from_the_files_data() {
+        let first = || {
+            let mut catalog = catalog_of(vec![
+                game("Same Name", "a.bin", 100, "aaaa"),
+                game("Same Name", "b.bin", 200, "bbbb"),
+            ]);
+            prepare(&mut catalog);
+            catalog
+                .games
+                .iter()
+                .map(|g| g.release.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(first(), first());
+
+        // Renaming the files but keeping their sizes and checksums leaves the
+        // variants alone, since only the data identifies them.
+        let mut catalog = catalog_of(vec![
+            game("Same Name", "renamed-one.bin", 100, "aaaa"),
+            game("Same Name", "renamed-two.bin", 200, "bbbb"),
+        ]);
+        prepare(&mut catalog);
+        assert_eq!(
+            first(),
+            catalog
+                .games
+                .iter()
+                .map(|g| g.release.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn releases_sharing_a_name_and_their_data_are_not_variants() {
+        // Identical data under one name is a duplicate, not a variant. The
+        // file stems agree with the game name so the release name comes from
+        // them; only differing data splits a name into variants.
+        let mut catalog = catalog_of(vec![
+            game("Road Rash (USA)", "Road Rash.bin", 100, "aaaa"),
+            game("Road Rash (USA)", "Road Rash.bin", 100, "aaaa"),
+        ]);
+        prepare(&mut catalog);
+        for game in &catalog.games {
+            assert_eq!(game.release, "Road Rash");
+            assert_eq!(game.variant, None);
+        }
+    }
+
+    #[test]
+    fn a_variant_keeps_its_disc_number_after_the_variant_tag() {
+        let mut catalog = catalog_of(vec![
+            game("Speed Game (Disc 1)", "a.bin", 100, "aaaa"),
+            game("Speed Game (Disc 1)", "b.bin", 200, "bbbb"),
+        ]);
+        prepare(&mut catalog);
+        for game in &catalog.games {
+            assert!(game.release.ends_with("(Disc 1)"), "{:?}", game.release);
+            assert!(game.release.contains("[Variant "));
+        }
+    }
+
+    #[test]
+    fn the_variant_tag_is_added_before_the_disc_number_not_after_it() {
+        // The order matters for sorting and for matching a folder name.
+        let mut catalog = catalog_of(vec![
+            game("Speed Game (Disc 2)", "a.bin", 100, "aaaa"),
+            game("Speed Game (Disc 2)", "b.bin", 200, "bbbb"),
+        ]);
+        prepare(&mut catalog);
+        let release = &catalog.games[0].release;
+        let variant_at = release.find("[Variant ").unwrap();
+        let disc_at = release.find("(Disc 2)").unwrap();
+        assert!(variant_at < disc_at, "{release}");
+    }
+
+    #[test]
+    fn the_data_signature_ignores_the_order_of_a_release_s_files() {
+        let one = Game {
+            name: "G".into(),
+            roms: vec![
+                Rom {
+                    name: "a.bin".into(),
+                    size: 10,
+                    sha1: "aa".into(),
+                    serial: String::new(),
+                },
+                Rom {
+                    name: "b.bin".into(),
+                    size: 20,
+                    sha1: "bb".into(),
+                    serial: String::new(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut other = one.clone();
+        other.roms.reverse();
+        assert_eq!(data_signature(&one), data_signature(&other));
+
+        // A different size or checksum is a different signature.
+        let mut changed = one.clone();
+        changed.roms[0].size = 11;
+        assert_ne!(data_signature(&one), data_signature(&changed));
+    }
+
+    #[test]
+    fn a_file_without_a_checksum_still_gets_a_distinct_signature() {
+        let missing = game("G", "a.bin", 10, "");
+        let other = game("G", "a.bin", 10, "aa");
+        assert_ne!(data_signature(&missing), data_signature(&other));
+        // Two releases that both lack a checksum are the same as each other.
+        assert_eq!(
+            data_signature(&missing),
+            data_signature(&game("H", "b.bin", 10, ""))
+        );
+    }
+
+    #[test]
+    fn only_titles_matching_exactly_one_game_are_kept() {
+        let mut candidates: HashMap<String, Vec<Value>> = HashMap::new();
+        candidates.insert("unique".into(), vec![json!({"title": "One"})]);
+        candidates.insert(
+            "ambiguous".into(),
+            vec![json!({"title": "Two"}), json!({"title": "Three"})],
+        );
+
+        let kept = only_unique(candidates);
+        assert!(kept.contains_key("unique"));
+        assert!(
+            !kept.contains_key("ambiguous"),
+            "never guess between two games"
+        );
+    }
+
+    #[test]
+    fn prepare_is_idempotent_when_run_twice() {
+        // Loading a cached catalog runs prepare again, so it must not stack
+        // variant tags on a name that already has one.
+        let mut catalog = catalog_of(vec![
+            game("Road Rash (USA)", "a.bin", 100, "aaaa"),
+            game("Road Rash (USA)", "b.bin", 200, "bbbb"),
+        ]);
+        prepare(&mut catalog);
+        let once = catalog
+            .games
+            .iter()
+            .map(|g| g.release.clone())
+            .collect::<Vec<_>>();
+
+        prepare(&mut catalog);
+        let twice = catalog
+            .games
+            .iter()
+            .map(|g| g.release.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(once, twice, "prepare applied twice");
+    }
+}
