@@ -231,3 +231,305 @@ pub fn for_transfer(source: &Path, target: &Path) -> Result<Categories> {
     )?;
     Ok(config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// A fresh folder that is removed when the test ends, so no test here
+    /// can reach a real library or drive.
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            thread_local! {
+                static COUNTER: Cell<u32> = const { Cell::new(0) };
+            }
+            let n = COUNTER.with(|c| {
+                let n = c.get();
+                c.set(n + 1);
+                n
+            });
+            let path = std::env::temp_dir().join(format!(
+                "ohmy3do-categories-{}-{}-{n}",
+                std::process::id(),
+                label
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+        /// Writes categories.json under .ohmy3do/, as the console leaves it:
+        /// padded with zero bytes, since the ODE cannot shorten a file.
+        fn write_padded(&self, json: &str) {
+            let dir = self.0.join(".ohmy3do");
+            fs::create_dir_all(&dir).unwrap();
+            let mut bytes = json.as_bytes().to_vec();
+            bytes.resize(LIMIT, 0);
+            fs::write(dir.join("categories.json"), bytes).unwrap();
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_default_categories_are_the_built_in_ones_each_its_own_destination() {
+        let config = Categories::default();
+        assert_eq!(config.schema, 1);
+        assert_eq!(
+            config.names(),
+            CATEGORIES.iter().map(|n| n.to_string()).collect::<Vec<_>>()
+        );
+        assert_eq!(config.categories.len(), CATEGORIES.len());
+        for (i, c) in config.categories.iter().enumerate() {
+            assert_eq!(c.id, format!("category-{i}"));
+            assert!(!c.hidden);
+        }
+        // Every built-in role imports into the category of the same name.
+        for name in CATEGORIES {
+            assert_eq!(config.destination(name), Some(name));
+        }
+    }
+
+    #[test]
+    fn a_renamed_category_keeps_import_destinations_that_point_at_its_id() {
+        let mut config = Categories::default();
+        config.categories[0].name = "Retail".into();
+        config.validate().unwrap();
+        assert_eq!(config.destination("Games"), Some("Retail"));
+        // The old name is no longer a folder on the drive.
+        assert!(!config.contains("Games"));
+        assert!(config.contains("RETAIL"));
+    }
+
+    #[test]
+    fn an_import_destination_naming_an_unknown_id_is_refused() {
+        let mut config = Categories::default();
+        config
+            .defaults
+            .insert("Games".into(), "no-such-category".into());
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("Games"), "{error}");
+    }
+
+    #[test]
+    fn destination_of_an_unknown_role_is_none() {
+        assert_eq!(Categories::default().destination("Not A Category"), None);
+    }
+
+    #[test]
+    fn names_are_compared_ignoring_case() {
+        let config = Categories::default();
+        assert!(config.contains("games"));
+        assert!(config.contains("Bonus Discs"));
+        assert!(!config.contains("Games2"));
+    }
+
+    #[test]
+    fn encoding_writes_a_trailing_newline_and_load_reads_it_back() {
+        let temp = TempDir::new("roundtrip");
+        let config = Categories::default();
+        let bytes = config.encode().unwrap();
+        assert_eq!(*bytes.last().unwrap(), b'\n');
+
+        let dir = temp.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("categories.json"), &bytes).unwrap();
+        assert_eq!(load(temp.path()).unwrap(), config);
+    }
+
+    #[test]
+    fn a_file_the_console_padded_with_zero_bytes_loads() {
+        let temp = TempDir::new("padded");
+        let mut config = Categories::default();
+        config.categories[0].hidden = true;
+        temp.write_padded(&serde_json::to_string(&config).unwrap());
+        let loaded = load(temp.path()).unwrap();
+        assert_eq!(loaded, config);
+        // The padding is not part of the configuration.
+        assert_eq!(loaded.categories.len(), CATEGORIES.len());
+    }
+
+    #[test]
+    fn a_library_without_the_file_gets_the_built_in_categories() {
+        let temp = TempDir::new("absent");
+        assert_eq!(load(temp.path()).unwrap(), Categories::default());
+    }
+
+    #[test]
+    fn an_over_large_file_is_refused_before_it_is_parsed() {
+        let temp = TempDir::new("oversize");
+        let dir = temp.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("categories.json"), vec![b' '; LIMIT + 1]).unwrap();
+        let error = load(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("8 KiB"), "{error}");
+    }
+
+    #[test]
+    fn malformed_json_is_reported_as_an_invalid_file() {
+        let temp = TempDir::new("malformed");
+        let dir = temp.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("categories.json"), b"{ not json").unwrap();
+        let error = load(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("Invalid categories.json"), "{error}");
+    }
+
+    #[test]
+    fn a_file_that_parses_but_does_not_validate_is_refused() {
+        let temp = TempDir::new("unvalidated");
+        let dir = temp.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        // Two categories sharing a name, which validate() rejects.
+        fs::write(
+            dir.join("categories.json"),
+            r#"{"schema":1,"categories":[
+                {"id":"a","name":"Games","hidden":false},
+                {"id":"b","name":"games","hidden":false}
+            ],"defaults":{}}"#,
+        )
+        .unwrap();
+        assert!(load(temp.path()).is_err());
+    }
+
+    #[test]
+    fn the_largest_valid_categories_file_still_fits_the_console_buffer() {
+        // encode() refuses a file over the console's 8 KiB buffer. This records
+        // how much room that leaves: with IDs at their 40-character maximum and
+        // names at 48, and the most categories validate() allows (32), the file
+        // is still well under the limit. So encode() cannot reject a set of
+        // categories that validate() has accepted; the size check only matters
+        // for a file written elsewhere, which load() checks against LIMIT.
+        let mut config = Categories::default();
+        let largest = |i: usize| {
+            (
+                format!("{i}{}", "z".repeat(40 - i.to_string().len())),
+                format!("{i}{}", "w".repeat(48 - i.to_string().len())),
+            )
+        };
+        for i in 0..32 {
+            let (id, name) = largest(i);
+            if let Some(category) = config.categories.get_mut(i) {
+                category.id = id;
+                category.name = name;
+            } else {
+                config.categories.push(Category {
+                    id,
+                    name,
+                    hidden: false,
+                });
+            }
+        }
+        for (role, category) in CATEGORIES.iter().zip(&config.categories) {
+            config
+                .defaults
+                .insert((*role).to_string(), category.id.clone());
+        }
+        assert_eq!(config.categories.len(), 32);
+        assert!(config.categories.iter().all(|c| c.id.len() == 40));
+        assert!(config.categories.iter().all(|c| c.name.len() == 48));
+        config.validate().unwrap();
+
+        let bytes = config.encode().unwrap();
+        assert_eq!(
+            bytes.len(),
+            serde_json::to_vec_pretty(&config).unwrap().len() + 1
+        );
+        assert!(bytes.len() < LIMIT, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn a_transfer_keeps_what_the_drive_chose_to_hide() {
+        let source = TempDir::new("src");
+        let target = TempDir::new("dst-hidden");
+        // The library hides nothing; the drive has hidden Demos.
+        let mut library_config = Categories::default();
+        library_config.categories[1].name = "Demos".into();
+        let dir = source.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("categories.json"),
+            serde_json::to_vec(&library_config).unwrap(),
+        )
+        .unwrap();
+
+        let mut drive_config = Categories::default();
+        drive_config.categories[1].hidden = true;
+        let dir = target.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("categories.json"),
+            serde_json::to_vec(&drive_config).unwrap(),
+        )
+        .unwrap();
+
+        let merged = for_transfer(source.path(), target.path()).unwrap();
+        assert!(merged.categories[1].hidden, "the drive's choice is kept");
+        assert!(!merged.categories[0].hidden);
+    }
+
+    #[test]
+    fn a_transfer_keeps_a_category_that_exists_only_on_the_drive() {
+        let source = TempDir::new("src-only");
+        let target = TempDir::new("dst-extra");
+        let dir = source.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("categories.json"),
+            serde_json::to_vec(&Categories::default()).unwrap(),
+        )
+        .unwrap();
+
+        // The drive has an extra category the library does not know about.
+        let mut drive_config = Categories::default();
+        drive_config.categories.push(Category {
+            id: "drive-only".into(),
+            name: "Homebrew".into(),
+            hidden: true,
+        });
+        let dir = target.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("categories.json"),
+            serde_json::to_vec(&drive_config).unwrap(),
+        )
+        .unwrap();
+
+        let merged = for_transfer(source.path(), target.path()).unwrap();
+        assert!(merged.contains("Homebrew"));
+        let kept = merged
+            .categories
+            .iter()
+            .find(|c| c.id == "drive-only")
+            .unwrap();
+        assert!(kept.hidden);
+    }
+
+    #[test]
+    fn a_transfer_carries_the_libraries_categories_when_the_drive_is_unconfigured() {
+        // A drive with no categories.json: hiding is not carried over from
+        // the built-in defaults, only from a category the drive really has.
+        let source = TempDir::new("src-hide");
+        let target = TempDir::new("dst-bare");
+        let mut library_config = Categories::default();
+        library_config.categories[1].hidden = true;
+        let dir = source.path().join(".ohmy3do");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("categories.json"),
+            serde_json::to_vec(&library_config).unwrap(),
+        )
+        .unwrap();
+
+        let merged = for_transfer(source.path(), target.path()).unwrap();
+        assert!(merged.categories[1].hidden, "the library's choice applies");
+        assert_eq!(merged.categories.len(), CATEGORIES.len());
+    }
+}
